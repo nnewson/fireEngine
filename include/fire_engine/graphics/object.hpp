@@ -18,7 +18,6 @@ class Material;
 class Resources;
 class Skin;
 struct GeometryDescriptorInfo;
-struct MaterialUBO;
 
 class Object
 {
@@ -32,7 +31,8 @@ public:
     Object& operator=(Object&&) noexcept = default;
 
     void addGeometry(const Geometry& geometry);
-    void addVariantMaterial(std::size_t geometryIndex, std::size_t variantIndex, const Material* material);
+    void addVariantMaterial(std::size_t geometryIndex, std::size_t variantIndex,
+                            const Material* material);
     void load(Resources& resources);
     void activeVariant(std::optional<std::size_t> variantIndex);
     [[nodiscard]] bool hasVariant(std::size_t variantIndex) const noexcept;
@@ -76,8 +76,6 @@ private:
                                                                              NullDescriptorSet};
     };
 
-    static MaterialUBO toMaterialUBO(const Material& mat);
-    [[nodiscard]] static bool materialsEquivalent(const Material& a, const Material& b);
     static void applyMaterialTextures(GeometryDescriptorInfo& geoInfo, const Material& mat,
                                       Resources& resources);
 

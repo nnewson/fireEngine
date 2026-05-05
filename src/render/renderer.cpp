@@ -16,6 +16,65 @@
 namespace fire_engine
 {
 
+namespace
+{
+
+struct CameraBasis
+{
+    Vec3 forward;
+    Vec3 right;
+    Vec3 up;
+};
+
+[[nodiscard]]
+CameraBasis cameraBasis(Vec3 cameraPosition, Vec3 cameraTarget)
+{
+    const Vec3 forward = Vec3::normalise(cameraTarget - cameraPosition);
+    const Vec3 worldUp{0.0f, 1.0f, 0.0f};
+    const Vec3 right = Vec3::normalise(Vec3::crossProduct(forward, worldUp));
+    const Vec3 up = Vec3::crossProduct(right, forward);
+    return {forward, right, up};
+}
+
+[[nodiscard]]
+const Lighting* primaryDirectionalLight(std::span<const Lighting> lights) noexcept
+{
+    for (const Lighting& light : lights)
+    {
+        if (light.type == 0)
+        {
+            return &light;
+        }
+    }
+    return nullptr;
+}
+
+void packLight(LightUBO& lightData, int& slot, const Lighting& light) noexcept
+{
+    if (slot >= MAX_LIGHTS)
+    {
+        return;
+    }
+
+    LightData& dst = lightData.lights[slot++];
+    dst.position[0] = light.worldPosition.x();
+    dst.position[1] = light.worldPosition.y();
+    dst.position[2] = light.worldPosition.z();
+    dst.position[3] = static_cast<float>(light.type);
+    dst.direction[0] = light.worldDirection.x();
+    dst.direction[1] = light.worldDirection.y();
+    dst.direction[2] = light.worldDirection.z();
+    dst.direction[3] = light.range;
+    dst.colour[0] = light.colour.r();
+    dst.colour[1] = light.colour.g();
+    dst.colour[2] = light.colour.b();
+    dst.colour[3] = light.intensity;
+    dst.cone[0] = light.innerConeCos;
+    dst.cone[1] = light.outerConeCos;
+}
+
+} // namespace
+
 Renderer::Renderer(const Window& window, std::string environmentPath)
     : device_(window),
       swapchain_(device_, window),
@@ -72,15 +131,7 @@ void Renderer::updateLightData(Vec3 cameraPosition, Vec3 cameraTarget, float asp
     // order wins. If no directional is in the scene, the cascade fit still
     // runs against a sane default direction (light contributes nothing
     // because lightCount == 0 unless there are non-directionals).
-    const Lighting* primaryDirectional = nullptr;
-    for (const auto& l : lights)
-    {
-        if (l.type == 0)
-        {
-            primaryDirectional = &l;
-            break;
-        }
-    }
+    const Lighting* primaryDirectional = primaryDirectionalLight(lights);
     const Vec3 lightDir = primaryDirectional != nullptr
                               ? Vec3::normalise(Vec3{-primaryDirectional->worldDirection.x(),
                                                      -primaryDirectional->worldDirection.y(),
@@ -89,10 +140,8 @@ void Renderer::updateLightData(Vec3 cameraPosition, Vec3 cameraTarget, float asp
 
     // Camera basis + light basis (shared by every cascade fit).
     const float tanHalfFov = std::tan(cameraFovRadians * 0.5f);
-    const Vec3 forward = Vec3::normalise(cameraTarget - cameraPosition);
+    const CameraBasis basis = cameraBasis(cameraPosition, cameraTarget);
     const Vec3 worldUp{0.0f, 1.0f, 0.0f};
-    const Vec3 right = Vec3::normalise(Vec3::crossProduct(forward, worldUp));
-    const Vec3 camUp = Vec3::crossProduct(right, forward);
 
     Vec3 lightUp = worldUp;
     if (std::abs(Vec3::dotProduct(lightDir, lightUp)) > 0.99f)
@@ -112,17 +161,17 @@ void Renderer::updateLightData(Vec3 cameraPosition, Vec3 cameraTarget, float asp
         const float farH = tanHalfFov * sliceFar;
         const float farW = farH * aspect;
 
-        const Vec3 sliceNearCentre = cameraPosition + forward * sliceNear;
-        const Vec3 sliceFarCentre = cameraPosition + forward * sliceFar;
+        const Vec3 sliceNearCentre = cameraPosition + basis.forward * sliceNear;
+        const Vec3 sliceFarCentre = cameraPosition + basis.forward * sliceFar;
 
-        const std::array<Vec3, 8> corners{sliceNearCentre - right * nearW - camUp * nearH,
-                                          sliceNearCentre + right * nearW - camUp * nearH,
-                                          sliceNearCentre + right * nearW + camUp * nearH,
-                                          sliceNearCentre - right * nearW + camUp * nearH,
-                                          sliceFarCentre - right * farW - camUp * farH,
-                                          sliceFarCentre + right * farW - camUp * farH,
-                                          sliceFarCentre + right * farW + camUp * farH,
-                                          sliceFarCentre - right * farW + camUp * farH};
+        const std::array<Vec3, 8> corners{sliceNearCentre - basis.right * nearW - basis.up * nearH,
+                                          sliceNearCentre + basis.right * nearW - basis.up * nearH,
+                                          sliceNearCentre + basis.right * nearW + basis.up * nearH,
+                                          sliceNearCentre - basis.right * nearW + basis.up * nearH,
+                                          sliceFarCentre - basis.right * farW - basis.up * farH,
+                                          sliceFarCentre + basis.right * farW - basis.up * farH,
+                                          sliceFarCentre + basis.right * farW + basis.up * farH,
+                                          sliceFarCentre - basis.right * farW + basis.up * farH};
 
         Vec3 frustumCentre{0.0f, 0.0f, 0.0f};
         for (const auto& c : corners)
@@ -187,31 +236,9 @@ void Renderer::updateLightData(Vec3 cameraPosition, Vec3 cameraTarget, float asp
     // Pack lights into the UBO array. The primary directional (CSM source)
     // goes first so the shader can branch on i==0 for the shadow lookup.
     int slot = 0;
-    auto pack = [&](const Lighting& L)
-    {
-        if (slot >= MAX_LIGHTS)
-        {
-            return;
-        }
-        LightData& dst = lightData.lights[slot++];
-        dst.position[0] = L.worldPosition.x();
-        dst.position[1] = L.worldPosition.y();
-        dst.position[2] = L.worldPosition.z();
-        dst.position[3] = static_cast<float>(L.type);
-        dst.direction[0] = L.worldDirection.x();
-        dst.direction[1] = L.worldDirection.y();
-        dst.direction[2] = L.worldDirection.z();
-        dst.direction[3] = L.range;
-        dst.colour[0] = L.colour.r();
-        dst.colour[1] = L.colour.g();
-        dst.colour[2] = L.colour.b();
-        dst.colour[3] = L.intensity;
-        dst.cone[0] = L.innerConeCos;
-        dst.cone[1] = L.outerConeCos;
-    };
     if (primaryDirectional != nullptr)
     {
-        pack(*primaryDirectional);
+        packLight(lightData, slot, *primaryDirectional);
     }
     for (const auto& L : lights)
     {
@@ -219,7 +246,7 @@ void Renderer::updateLightData(Vec3 cameraPosition, Vec3 cameraTarget, float asp
         {
             continue;
         }
-        pack(L);
+        packLight(lightData, slot, L);
     }
     lightData.lightCount = slot;
     uint32_t mipLevels = prefilteredCubemapHandle_ != NullTexture
@@ -465,10 +492,7 @@ void Renderer::submitAndPresent(Window& display, vk::CommandBuffer cmd, uint32_t
 void Renderer::recordSkybox(Vec3 cameraPosition, Vec3 cameraTarget,
                             std::vector<DrawCommand>& drawCommands)
 {
-    Vec3 worldUp{0.0f, 1.0f, 0.0f};
-    Vec3 forward = Vec3::normalise(cameraTarget - cameraPosition);
-    Vec3 right = Vec3::normalise(Vec3::crossProduct(forward, worldUp));
-    Vec3 up = Vec3::crossProduct(right, forward);
+    const CameraBasis basis = cameraBasis(cameraPosition, cameraTarget);
 
     constexpr float skyboxFov = cameraFovRadians;
     auto extent = swapchain_.extent();
@@ -476,15 +500,15 @@ void Renderer::recordSkybox(Vec3 cameraPosition, Vec3 cameraTarget,
     float tanHalfFov = std::tan(skyboxFov * 0.5f);
 
     SkyboxUBO data{};
-    data.cameraForward[0] = forward.x();
-    data.cameraForward[1] = forward.y();
-    data.cameraForward[2] = forward.z();
-    data.cameraRight[0] = right.x();
-    data.cameraRight[1] = right.y();
-    data.cameraRight[2] = right.z();
-    data.cameraUp[0] = up.x();
-    data.cameraUp[1] = up.y();
-    data.cameraUp[2] = up.z();
+    data.cameraForward[0] = basis.forward.x();
+    data.cameraForward[1] = basis.forward.y();
+    data.cameraForward[2] = basis.forward.z();
+    data.cameraRight[0] = basis.right.x();
+    data.cameraRight[1] = basis.right.y();
+    data.cameraRight[2] = basis.right.z();
+    data.cameraUp[0] = basis.up.x();
+    data.cameraUp[1] = basis.up.y();
+    data.cameraUp[2] = basis.up.z();
     data.viewParams[0] = tanHalfFov;
     data.viewParams[1] = aspect;
     std::memcpy(skyboxUbo_.mapped[currentFrame_], &data, sizeof(data));

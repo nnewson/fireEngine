@@ -9,6 +9,7 @@
 
 #include <fire_engine/graphics/gpu_handle.hpp>
 #include <fire_engine/render/constants.hpp>
+#include <fire_engine/render/descriptor_bindings.hpp>
 
 namespace fire_engine
 {
@@ -30,16 +31,9 @@ struct GeometryDescriptorInfo
     std::array<BufferHandle, MAX_FRAMES_IN_FLIGHT> morphUboBufs{NullBuffer, NullBuffer};
     BufferHandle morphSsbo{NullBuffer};
     std::size_t morphSsboSize{0};
-    TextureHandle texture{NullTexture};
-    TextureHandle emissiveTexture{NullTexture};
-    TextureHandle normalTexture{NullTexture};
-    TextureHandle metallicRoughnessTexture{NullTexture};
-    TextureHandle occlusionTexture{NullTexture};
-    TextureHandle transmissionTexture{NullTexture};
-    TextureHandle clearcoatTexture{NullTexture};
-    TextureHandle clearcoatRoughnessTexture{NullTexture};
-    TextureHandle clearcoatNormalTexture{NullTexture};
-    TextureHandle thicknessTexture{NullTexture};
+    std::array<TextureHandle, materialTextureSlotCount> materialTextures{
+        NullTexture, NullTexture, NullTexture, NullTexture, NullTexture,
+        NullTexture, NullTexture, NullTexture, NullTexture, NullTexture};
 };
 
 struct ObjectDescriptorRequest
@@ -93,7 +87,8 @@ public:
 
     [[nodiscard]] ObjectDescriptorResult
     createObjectDescriptors(const ObjectDescriptorRequest& req);
-    void updateObjectGeometryTextures(DescriptorSetHandle set, const GeometryDescriptorInfo& geometry);
+    void updateObjectGeometryTextures(DescriptorSetHandle set,
+                                      const GeometryDescriptorInfo& geometry);
     [[nodiscard]] ShadowDescriptorResult
     createShadowDescriptors(const ShadowDescriptorRequest& req);
 

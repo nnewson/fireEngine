@@ -2,6 +2,7 @@
 
 #include <fire_engine/core/shader_loader.hpp>
 #include <fire_engine/graphics/vertex.hpp>
+#include <fire_engine/render/descriptor_bindings.hpp>
 #include <fire_engine/render/pipeline.hpp>
 #include <fire_engine/render/ubo.hpp>
 
@@ -17,41 +18,46 @@ Pipeline::Pipeline(const Device& device, const PipelineConfig& config)
 
 PipelineConfig Pipeline::forwardConfig(vk::RenderPass renderPass)
 {
+    auto uniform = [](ForwardBinding binding, vk::ShaderStageFlags stages)
+    {
+        return vk::DescriptorSetLayoutBinding{bindingIndex(binding),
+                                              vk::DescriptorType::eUniformBuffer, 1, stages};
+    };
+    auto sampler = [](ForwardBinding binding)
+    {
+        return vk::DescriptorSetLayoutBinding{bindingIndex(binding),
+                                              vk::DescriptorType::eCombinedImageSampler, 1,
+                                              vk::ShaderStageFlagBits::eFragment};
+    };
+
     PipelineConfig config;
     config.vertShaderPath = "shader.vert.spv";
     config.fragShaderPath = "shader.frag.spv";
     config.bindings = {
-        {0, vk::DescriptorType::eUniformBuffer, 1,
-         vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment},
-        {1, vk::DescriptorType::eUniformBuffer, 1, vk::ShaderStageFlagBits::eFragment},
-        {2, vk::DescriptorType::eCombinedImageSampler, 1, vk::ShaderStageFlagBits::eFragment},
-        {3, vk::DescriptorType::eUniformBuffer, 1, vk::ShaderStageFlagBits::eVertex},
-        {4, vk::DescriptorType::eUniformBuffer, 1, vk::ShaderStageFlagBits::eVertex},
-        {5, vk::DescriptorType::eStorageBuffer, 1, vk::ShaderStageFlagBits::eVertex},
-        {6, vk::DescriptorType::eCombinedImageSampler, 1, vk::ShaderStageFlagBits::eFragment},
-        {7, vk::DescriptorType::eCombinedImageSampler, 1, vk::ShaderStageFlagBits::eFragment},
-        {8, vk::DescriptorType::eCombinedImageSampler, 1, vk::ShaderStageFlagBits::eFragment},
-        {9, vk::DescriptorType::eCombinedImageSampler, 1, vk::ShaderStageFlagBits::eFragment},
-        {10, vk::DescriptorType::eCombinedImageSampler, 1, vk::ShaderStageFlagBits::eFragment},
-        {11, vk::DescriptorType::eUniformBuffer, 1, vk::ShaderStageFlagBits::eFragment},
-        {12, vk::DescriptorType::eCombinedImageSampler, 1, vk::ShaderStageFlagBits::eFragment},
-        {13, vk::DescriptorType::eCombinedImageSampler, 1, vk::ShaderStageFlagBits::eFragment},
-        {14, vk::DescriptorType::eCombinedImageSampler, 1, vk::ShaderStageFlagBits::eFragment},
-        // 15: shadow map again, but with a non-comparison sampler so PCSS can
-        // read raw depths during the blocker search.
-        {15, vk::DescriptorType::eCombinedImageSampler, 1, vk::ShaderStageFlagBits::eFragment},
-        // 16: KHR_materials_transmission texture (red channel).
-        {16, vk::DescriptorType::eCombinedImageSampler, 1, vk::ShaderStageFlagBits::eFragment},
-        // 17, 18, 19: KHR_materials_clearcoat — factor (R), roughness (G),
-        // normal (RGB).
-        {17, vk::DescriptorType::eCombinedImageSampler, 1, vk::ShaderStageFlagBits::eFragment},
-        {18, vk::DescriptorType::eCombinedImageSampler, 1, vk::ShaderStageFlagBits::eFragment},
-        {19, vk::DescriptorType::eCombinedImageSampler, 1, vk::ShaderStageFlagBits::eFragment},
-        // 20: sceneColor mip chain — captured post-opaque HDR target used for
-        // KHR_materials_transmission F3 (screen-space refraction).
-        {20, vk::DescriptorType::eCombinedImageSampler, 1, vk::ShaderStageFlagBits::eFragment},
-        // 21: KHR_materials_volume thickness texture (G channel multiplies factor).
-        {21, vk::DescriptorType::eCombinedImageSampler, 1, vk::ShaderStageFlagBits::eFragment},
+        uniform(ForwardBinding::Frame,
+                vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment),
+        uniform(ForwardBinding::Material, vk::ShaderStageFlagBits::eFragment),
+        sampler(ForwardBinding::BaseColourTexture),
+        uniform(ForwardBinding::Skin, vk::ShaderStageFlagBits::eVertex),
+        uniform(ForwardBinding::Morph, vk::ShaderStageFlagBits::eVertex),
+        {bindingIndex(ForwardBinding::MorphTargets), vk::DescriptorType::eStorageBuffer, 1,
+         vk::ShaderStageFlagBits::eVertex},
+        sampler(ForwardBinding::EmissiveTexture),
+        sampler(ForwardBinding::NormalTexture),
+        sampler(ForwardBinding::MetallicRoughnessTexture),
+        sampler(ForwardBinding::OcclusionTexture),
+        sampler(ForwardBinding::ShadowMap),
+        uniform(ForwardBinding::Light, vk::ShaderStageFlagBits::eFragment),
+        sampler(ForwardBinding::IrradianceMap),
+        sampler(ForwardBinding::PrefilteredMap),
+        sampler(ForwardBinding::BrdfLut),
+        sampler(ForwardBinding::ShadowDepthMap),
+        sampler(ForwardBinding::TransmissionTexture),
+        sampler(ForwardBinding::ClearcoatTexture),
+        sampler(ForwardBinding::ClearcoatRoughnessTexture),
+        sampler(ForwardBinding::ClearcoatNormalTexture),
+        sampler(ForwardBinding::SceneColour),
+        sampler(ForwardBinding::ThicknessTexture),
     };
     config.renderPass = renderPass;
     return config;
@@ -83,10 +89,14 @@ PipelineConfig Pipeline::shadowConfig(vk::RenderPass renderPass)
     config.vertShaderPath = "shadow.vert.spv";
     config.fragShaderPath = "shadow.frag.spv";
     config.bindings = {
-        {0, vk::DescriptorType::eUniformBuffer, 1, vk::ShaderStageFlagBits::eVertex},
-        {1, vk::DescriptorType::eUniformBuffer, 1, vk::ShaderStageFlagBits::eVertex},
-        {2, vk::DescriptorType::eUniformBuffer, 1, vk::ShaderStageFlagBits::eVertex},
-        {3, vk::DescriptorType::eStorageBuffer, 1, vk::ShaderStageFlagBits::eVertex},
+        {bindingIndex(ShadowBinding::Shadow), vk::DescriptorType::eUniformBuffer, 1,
+         vk::ShaderStageFlagBits::eVertex},
+        {bindingIndex(ShadowBinding::Skin), vk::DescriptorType::eUniformBuffer, 1,
+         vk::ShaderStageFlagBits::eVertex},
+        {bindingIndex(ShadowBinding::Morph), vk::DescriptorType::eUniformBuffer, 1,
+         vk::ShaderStageFlagBits::eVertex},
+        {bindingIndex(ShadowBinding::MorphTargets), vk::DescriptorType::eStorageBuffer, 1,
+         vk::ShaderStageFlagBits::eVertex},
     };
     // Cascade index pushed by the renderer once per shadow-pass iteration so
     // the shadow vertex shader picks the matching lightViewProj[] entry.
@@ -109,9 +119,11 @@ PipelineConfig Pipeline::postProcessConfig(vk::RenderPass renderPass)
     config.vertShaderPath = "postprocess.vert.spv";
     config.fragShaderPath = "postprocess.frag.spv";
     config.bindings = {
-        {0, vk::DescriptorType::eCombinedImageSampler, 1, vk::ShaderStageFlagBits::eFragment},
+        {bindingIndex(PostProcessBinding::HdrInput), vk::DescriptorType::eCombinedImageSampler, 1,
+         vk::ShaderStageFlagBits::eFragment},
         // 1: bloom mip 0 — added by Stage 6.
-        {1, vk::DescriptorType::eCombinedImageSampler, 1, vk::ShaderStageFlagBits::eFragment},
+        {bindingIndex(PostProcessBinding::BloomInput), vk::DescriptorType::eCombinedImageSampler, 1,
+         vk::ShaderStageFlagBits::eFragment},
     };
     config.pushConstantRanges.emplace_back(vk::ShaderStageFlagBits::eFragment, 0,
                                            static_cast<uint32_t>(sizeof(PostProcessPushConstants)));
@@ -161,9 +173,12 @@ PipelineConfig Pipeline::skyboxConfig(vk::RenderPass renderPass)
     config.vertShaderPath = "skybox.vert.spv";
     config.fragShaderPath = "skybox.frag.spv";
     config.bindings = {
-        {0, vk::DescriptorType::eUniformBuffer, 1, vk::ShaderStageFlagBits::eFragment},
-        {1, vk::DescriptorType::eCombinedImageSampler, 1, vk::ShaderStageFlagBits::eFragment},
-        {2, vk::DescriptorType::eUniformBuffer, 1, vk::ShaderStageFlagBits::eFragment},
+        {bindingIndex(SkyboxBinding::Skybox), vk::DescriptorType::eUniformBuffer, 1,
+         vk::ShaderStageFlagBits::eFragment},
+        {bindingIndex(SkyboxBinding::Cubemap), vk::DescriptorType::eCombinedImageSampler, 1,
+         vk::ShaderStageFlagBits::eFragment},
+        {bindingIndex(SkyboxBinding::Light), vk::DescriptorType::eUniformBuffer, 1,
+         vk::ShaderStageFlagBits::eFragment},
     };
     config.renderPass = renderPass;
     config.useVertexInput = false;

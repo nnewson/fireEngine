@@ -27,7 +27,7 @@ I've no doubt these are all solved problems nowadays with the Unreal engine et a
 - **Scenegraph architecture** — tree of Nodes with Component variants (Camera, Animator, Mesh, Empty, **Light**) that propagate transforms, an `InputState` bundle, and draw commands. Node transforms store rotation as a quaternion so orientations from glTF round-trip exactly
 - **Custom collision and physics path** — glTF `extras.Physics` can create `Static`, `Kinematic`, and `Dynamic` bodies with layer/mask filtering, authored AABB/box/sphere/capsule proxy shapes, linear velocity, mass, restitution, friction, and gravity scale. `PhysicsWorld` owns body/collider state, `SweepAndPruneBroadPhase` gathers AABB candidate pairs, `NarrowPhase` performs swept-AABB time-of-impact tests, and `SceneGraph::submitPhysics` / `SceneGraph::applyPhysics` bridge scene-authored and physics-authored transforms each frame
 - **Backend-decoupled graphics layer** — graphics classes use opaque handles (`BufferHandle`, `TextureHandle`, `DescriptorSetHandle`, `PipelineHandle`) and emit `DrawCommand` structs with no Vulkan dependencies. IBL cubemaps, BRDF LUT, shadow map, bloom chain are all owned by the render layer and referenced through the same handle types
-- **Vulkan rendering** via vulkan.hpp C++ bindings with a 17-binding forward descriptor set, plus separate descriptor layouts for skybox, shadow, post-process, and bloom passes
+- **Vulkan rendering** via vulkan.hpp C++ bindings with a 22-binding forward descriptor set, plus separate descriptor layouts for skybox, shadow, post-process, and bloom passes
 - **Single source of truth for tunables** — every rendering knob (light intensity, IBL strengths, shadow biases, bloom strength, cascade count, PCSS light size, IBL extents, camera FOV) lives in `include/fire_engine/render/constants.hpp`
 - **Texture mapping** via [stb_image](https://github.com/nothings/stb), including HDR equirectangular loading for the skybox; uploaded to GPU through staging buffers
 - **First-person camera** with keyboard (WASD + E/F for vertical) and mouse controls
@@ -91,10 +91,10 @@ The `graphics/` layer is fully decoupled from Vulkan:
 - Otherwise, the node maps directly with its transform and mesh data.
 - Skin data (joint references and inverse bind matrices) is loaded and attached to the relevant Mesh nodes.
 - Morph target deltas (position, normal, **and tangent**) are stored per-geometry and uploaded as a single packed SSBO.
-- Materials gather up to six textures (base-colour, emissive, normal, metallic-roughness, occlusion, **transmission**), each with its own `SamplerSettings`, a `TextureEncoding` (Srgb or Linear), a per-slot UV-set index (TEXCOORD_0 or TEXCOORD_1), and a per-slot `UvTransform` from KHR_texture_transform (offset / scale / rotation; identity by default).
+- Materials gather texture slots for base-colour, emissive, normal, metallic-roughness, occlusion, **transmission**, clearcoat, clearcoat roughness, clearcoat normal, and thickness. Each slot carries its own `SamplerSettings`, `TextureEncoding` (Srgb or Linear), UV-set index (TEXCOORD_0 / TEXCOORD_1), and `UvTransform` from KHR_texture_transform (offset / scale / rotation; identity by default).
 - **Smooth-normal fallback** runs when the source mesh omits the `NORMAL` attribute (Fox.gltf and similar). A static `GltfLoader::generateSmoothNormals` builds per-vertex normals from positions + indices via area-weighted accumulate-and-normalize, with an up-pointing fallback for unreferenced vertices.
 - **Tangent generation** runs automatically when a material has a normal texture and the glTF did not already supply TANGENT data. A custom per-triangle routine computes T and B from UV derivatives, Gram-Schmidts T against the vertex normal, and writes handedness into `tangent.w`. Degenerate UVs fall back to a normal-derived tangent so the mesh still shades reasonably.
-- **Material extensions** — `KHR_materials_emissive_strength` is multiplied into emissive at load time so HDR emissives reach the bloom chain at the authored magnitude. `KHR_materials_unlit` flips a flag on the Material that the fragment shader uses to skip BRDF/IBL/shadow. `KHR_texture_transform` is read per slot and applied in shader before each sample. **`KHR_materials_transmission`** populates `transmissionFactor`, `transmissionTexture`, per-slot UV-set + `UvTransform`; the fragment shader attenuates the diffuse lobe by `(1 − transmission)` and adds a separate transmission lobe (basecolor pass-through with a small irradiance tint) on top.
+- **Material extensions** — `KHR_materials_emissive_strength` is multiplied into emissive at load time so HDR emissives reach the bloom chain at the authored magnitude. `KHR_materials_unlit` flips a flag on the Material that the fragment shader uses to skip BRDF/IBL/shadow. `KHR_texture_transform` is read per slot and applied in shader before each sample. **`KHR_materials_transmission`**, `KHR_materials_ior`, `KHR_materials_clearcoat`, and `KHR_materials_volume` populate the extra transmission, clearcoat, and thickness slots consumed by the forward shader.
 - **Light extensions** — `KHR_lights_punctual.lights` are loaded into the asset's lights array; nodes carrying a `lightIndex` get a `Light` component (skipped with a warning if the node already holds a Mesh / Animator). Type / colour / intensity / range / cone angles all map directly. `FireEngine::loadScene` checks `SceneGraph::hasDirectionalLight()` after load and seeds a default Sun only when no directional was authored.
 - **Camera extension** — `GltfLoader::cameraViewFromMatrix` resolves a node's accumulated world transform into a `(position, target)` viewpoint (glTF cameras look down −Z in local space). FOV / near / far stay engine-side; first-cut adoption is position + look direction only.
 - **Physics extras** — `extras.Physics` can create `Static`, `Kinematic`, or `Dynamic` bodies. Supported custom fields include `Layer`, `Mask`, `Velocity`, `Mass`, `Restitution`, `Friction`, `GravityScale`, `Shape`, `Center`, `HalfExtents`, `Radius`, and `HalfHeight`. If no shape is supplied, the loader uses the mesh POSITION bounds as an AABB proxy.
@@ -130,7 +130,7 @@ The transient pipelines are destroyed once the bake completes; only the resultin
 
 ### Rendering Pipeline
 
-- Forward descriptor set with **17 bindings**:
+- Forward descriptor set with **22 bindings**:
   - 0 model/view/projection + camera position UBO
   - 1 Material UBO — `diffuseAlpha`, `emissiveRoughness`, `materialParams` (metallic, normalScale, alphaCutoff, occlusionStrength), `textureFlags` (base/emissive/normal/MR present), `extraFlags` (occlusion present, occlusion's UV-set, **unlit flag**), `texCoordIndices` (per-slot UV-set), `uvBaseColor / uvEmissive / uvNormal / uvMetallicRoughness / uvOcclusion / uvTransmission` (KHR_texture_transform offset+scale per slot), `uvRotations` + `uvRotationsExtra` (per-slot rotations, occlusion in `.x`, transmission in `.y`), `transmissionParams` (factor, texture-present flag, texCoord index)
   - 2 base-colour sampler
@@ -148,6 +148,11 @@ The transient pipelines are destroyed once the bake completes; only the resultin
   - 14 BRDF integration LUT (2D)
   - **15 cascaded shadow map again, but with a non-comparison sampler so PCSS can read raw depths during the blocker search**
   - **16 transmission sampler (KHR_materials_transmission)**
+  - **17 clearcoat factor sampler (KHR_materials_clearcoat)**
+  - **18 clearcoat roughness sampler (KHR_materials_clearcoat)**
+  - **19 clearcoat normal sampler (KHR_materials_clearcoat)**
+  - **20 captured scene-colour mip chain for screen-space transmission/refraction**
+  - **21 thickness sampler (KHR_materials_volume)**
 - Separate descriptor layouts for the skybox (SkyboxUBO + samplerCube + LightUBO), shadow (ShadowUBO with `lightViewProj[4]` + SkinUBO + MorphUBO + MorphTargets SSBO, plus `ShadowPushConstants { int cascadeIndex }` on the vertex stage), post-process (HDR sampler at 0 + bloom mip 0 sampler at 1, plus `PostProcessPushConstants { float bloomStrength }`), and bloom-down / bloom-up (single input mip sampler + `BloomPushConstants` on the fragment stage)
 - Three forward pipeline variants share the shader + binding layout but differ in cull mode, blend, and depth-write state:
   - **opaque** (cull back, no blend, depth write) — OPAQUE and MASK materials with `doubleSided=false`
@@ -191,7 +196,7 @@ Build:
 cmake --build build
 ```
 
-Run the tests (912 tests):
+Run the tests (953 tests):
 
 ```bash
 ./build/test_fire_engine

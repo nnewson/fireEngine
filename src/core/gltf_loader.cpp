@@ -24,8 +24,8 @@
 #include <fire_engine/animation/animation.hpp>
 #include <fire_engine/graphics/assets.hpp>
 #include <fire_engine/graphics/geometry.hpp>
-#include <fire_engine/graphics/material.hpp>
 #include <fire_engine/graphics/ktx_image.hpp>
+#include <fire_engine/graphics/material.hpp>
 #include <fire_engine/graphics/object.hpp>
 #include <fire_engine/graphics/sampler_settings.hpp>
 #include <fire_engine/graphics/skin.hpp>
@@ -379,12 +379,13 @@ void validatePhysicsTarget(
     const std::unordered_map<std::size_t, GltfLoader::PhysicsConfig>& physicsNodeConfigs,
     const fastgltf::Node& gltfNode)
 {
-    if (!physicsNodeConfigs.contains(nodeIndex))
+    const auto config = physicsNodeConfigs.find(nodeIndex);
+    if (config == physicsNodeConfigs.end())
     {
         return;
     }
-    const auto config = physicsNodeConfigs.find(nodeIndex);
-    if (config != physicsNodeConfigs.end() && config->second.bodyType == PhysicsBodyType::Dynamic &&
+
+    if (config->second.bodyType == PhysicsBodyType::Dynamic &&
         controllableNodeIndices.contains(nodeIndex))
     {
         throw std::runtime_error("glTF node '" + std::string(gltfNode.name) +
@@ -750,8 +751,7 @@ GltfLoader::parseAsset(const std::filesystem::path& gltfPath,
     constexpr fastgltf::Extensions enabledExtensions =
         fastgltf::Extensions::KHR_materials_emissive_strength |
         fastgltf::Extensions::KHR_texture_transform | fastgltf::Extensions::KHR_texture_basisu |
-        fastgltf::Extensions::KHR_materials_variants |
-        fastgltf::Extensions::KHR_materials_unlit |
+        fastgltf::Extensions::KHR_materials_variants | fastgltf::Extensions::KHR_materials_unlit |
         fastgltf::Extensions::KHR_lights_punctual |
         fastgltf::Extensions::KHR_materials_transmission | fastgltf::Extensions::KHR_materials_ior |
         fastgltf::Extensions::KHR_materials_clearcoat | fastgltf::Extensions::KHR_materials_volume;
@@ -883,6 +883,23 @@ Node* GltfLoader::loadScene(const std::string& path, SceneGraph& scene, Resource
     return activeCamera;
 }
 
+Mesh& GltfLoader::attachMeshToNode(
+    const fastgltf::Asset& asset, std::size_t nodeIndex, std::size_t meshIndex, Node& meshNode,
+    Node& physicsNode, const std::string& baseDir, Resources& resources, Assets& assets,
+    MeshMap& meshMap, const std::unordered_map<std::size_t, PhysicsConfig>& physicsNodeConfigs,
+    PhysicsWorld& physics)
+{
+    const auto& gltfMesh = asset.meshes[meshIndex];
+    auto object = loadMesh(asset, gltfMesh, baseDir, resources, assets, meshIndex);
+    meshNode.component().emplace<Mesh>(std::move(object));
+
+    auto& mesh = std::get<Mesh>(meshNode.component());
+    mesh.variantNames(asset.materialVariants);
+    applyPhysicsConfig(nodeIndex, physicsNodeConfigs, asset, gltfMesh, physicsNode, physics);
+    meshMap[nodeIndex] = &mesh;
+    return mesh;
+}
+
 void GltfLoader::configureAnimatedNode(
     const fastgltf::Asset& asset, std::size_t nodeIndex, Node& node, const std::string& baseDir,
     Resources& resources, Assets& assets, NodeMap& nodeMap, MeshMap& meshMap,
@@ -982,16 +999,12 @@ void GltfLoader::configureAnimatedNode(
                                                          : std::string(gltfMesh.name);
             auto meshNode = std::make_unique<Node>(std::move(meshName));
             auto& meshRef = node.addChild(std::move(meshNode));
-            auto object =
-                loadMesh(asset, gltfMesh, baseDir, resources, assets, gltfNode.meshIndex.value());
-            meshRef.component().emplace<Mesh>(std::move(object));
-            std::get<Mesh>(meshRef.component()).variantNames(asset.materialVariants);
-            applyPhysicsConfig(nodeIndex, physicsNodeConfigs, asset, gltfMesh, node, physics);
-            meshMap[nodeIndex] = &std::get<Mesh>(meshRef.component());
+            Mesh& mesh =
+                attachMeshToNode(asset, nodeIndex, gltfNode.meshIndex.value(), meshRef, node,
+                                 baseDir, resources, assets, meshMap, physicsNodeConfigs, physics);
 
             if (hasWeightAnim)
             {
-                auto& mesh = std::get<Mesh>(meshRef.component());
                 for (const auto& [animId, anim] : nodeAnimations)
                 {
                     mesh.addMorphAnimation(animId, anim);
@@ -1004,13 +1017,9 @@ void GltfLoader::configureAnimatedNode(
     {
         // Only weight animation -- mesh goes directly on this node
         const auto& gltfMesh = asset.meshes[gltfNode.meshIndex.value()];
-        auto object =
-            loadMesh(asset, gltfMesh, baseDir, resources, assets, gltfNode.meshIndex.value());
-        node.component().emplace<Mesh>(std::move(object));
-        std::get<Mesh>(node.component()).variantNames(asset.materialVariants);
-        applyPhysicsConfig(nodeIndex, physicsNodeConfigs, asset, gltfMesh, node, physics);
-        auto& mesh = std::get<Mesh>(node.component());
-        meshMap[nodeIndex] = &mesh;
+        Mesh& mesh =
+            attachMeshToNode(asset, nodeIndex, gltfNode.meshIndex.value(), node, node, baseDir,
+                             resources, assets, meshMap, physicsNodeConfigs, physics);
 
         if (hasWeightAnim)
         {
@@ -1068,12 +1077,9 @@ void GltfLoader::loadNode(const fastgltf::Asset& asset, std::size_t nodeIndex, N
     if (gltfNode.meshIndex.has_value())
     {
         const auto& gltfMesh = asset.meshes[gltfNode.meshIndex.value()];
-        auto object =
-            loadMesh(asset, gltfMesh, baseDir, resources, assets, gltfNode.meshIndex.value());
-        node.component().emplace<Mesh>(std::move(object));
-        std::get<Mesh>(node.component()).variantNames(asset.materialVariants);
-        applyPhysicsConfig(nodeIndex, physicsNodeConfigs, asset, gltfMesh, node, physics);
-        meshMap[nodeIndex] = &std::get<Mesh>(node.component());
+        Mesh& mesh =
+            attachMeshToNode(asset, nodeIndex, gltfNode.meshIndex.value(), node, node, baseDir,
+                             resources, assets, meshMap, physicsNodeConfigs, physics);
 
         // Static meshes with morph targets still honour mesh.weights (e.g.
         // MorphPrimitivesTest). Without this, weights stay at zero and the
@@ -1081,7 +1087,6 @@ void GltfLoader::loadNode(const fastgltf::Asset& asset, std::size_t nodeIndex, N
         std::size_t numMorphTargets = countMorphTargets(gltfMesh);
         if (numMorphTargets > 0)
         {
-            auto& mesh = std::get<Mesh>(node.component());
             mesh.initialMorphWeights(initialMorphWeights(gltfMesh, numMorphTargets));
         }
     }
@@ -1251,7 +1256,8 @@ KtxImage GltfLoader::loadKtxImage(const fastgltf::Asset& asset, std::size_t imag
     const auto& image = asset.images[imageIndex];
 
     if (auto* uri = std::get_if<fastgltf::sources::URI>(&image.data);
-        uri != nullptr && uri->uri.isLocalPath() && !uri->uri.isDataUri() && uri->fileByteOffset == 0)
+        uri != nullptr && uri->uri.isLocalPath() && !uri->uri.isDataUri() &&
+        uri->fileByteOffset == 0)
     {
         return KtxImage::load_from_file(
             (std::filesystem::path(baseDir) / uri->uri.fspath()).string());
@@ -1269,9 +1275,10 @@ KtxImage GltfLoader::loadKtxImage(const fastgltf::Asset& asset, std::size_t imag
                                       "image[" + std::to_string(imageIndex) + "]");
 }
 
-const Texture* GltfLoader::resolveTextureIndex(const fastgltf::Asset& asset, std::size_t textureIndex,
-                                               const std::string& baseDir, Resources& resources,
-                                               Assets& assets, TextureEncoding encoding)
+const Texture* GltfLoader::resolveTextureIndex(const fastgltf::Asset& asset,
+                                               std::size_t textureIndex, const std::string& baseDir,
+                                               Resources& resources, Assets& assets,
+                                               TextureEncoding encoding)
 {
     auto& tex = assets.texture(textureIndex);
     if (!tex.loaded())
@@ -1432,10 +1439,9 @@ const Texture* GltfLoader::resolveClearcoatTexture(const fastgltf::Asset& asset,
     return nullptr;
 }
 
-const Texture* GltfLoader::resolveClearcoatRoughnessTexture(const fastgltf::Asset& asset,
-                                                            std::optional<std::size_t> materialIndex,
-                                                            const std::string& baseDir,
-                                                            Resources& resources, Assets& assets)
+const Texture* GltfLoader::resolveClearcoatRoughnessTexture(
+    const fastgltf::Asset& asset, std::optional<std::size_t> materialIndex,
+    const std::string& baseDir, Resources& resources, Assets& assets)
 {
     if (materialIndex.has_value())
     {
@@ -1471,8 +1477,8 @@ const Texture* GltfLoader::resolveClearcoatNormalTexture(const fastgltf::Asset& 
 
 const Texture* GltfLoader::resolveThicknessTexture(const fastgltf::Asset& asset,
                                                    std::optional<std::size_t> materialIndex,
-                                                   const std::string& baseDir,
-                                                   Resources& resources, Assets& assets)
+                                                   const std::string& baseDir, Resources& resources,
+                                                   Assets& assets)
 {
     if (materialIndex.has_value())
     {
@@ -1824,9 +1830,11 @@ TangentGenerationResult GltfLoader::loadGeometry(const fastgltf::Asset& asset,
 
 namespace
 {
-bool materialHasNormalTexture(const fastgltf::Asset& asset, std::optional<std::size_t> materialIndex)
+bool materialHasNormalTexture(const fastgltf::Asset& asset,
+                              std::optional<std::size_t> materialIndex)
 {
-    return materialIndex.has_value() && asset.materials[materialIndex.value()].normalTexture.has_value();
+    return materialIndex.has_value() &&
+           asset.materials[materialIndex.value()].normalTexture.has_value();
 }
 } // namespace
 
@@ -1848,7 +1856,8 @@ Object GltfLoader::loadMesh(const fastgltf::Asset& asset, const fastgltf::Mesh& 
         const auto baseMaterialIndex = primitive.materialIndex;
         auto materialData = loadMaterial(asset, baseMaterialIndex);
 
-        const Texture* texPtr = resolveTexture(asset, baseMaterialIndex, baseDir, resources, assets);
+        const Texture* texPtr =
+            resolveTexture(asset, baseMaterialIndex, baseDir, resources, assets);
         const Texture* emissiveTexPtr =
             resolveEmissiveTexture(asset, baseMaterialIndex, baseDir, resources, assets);
         const Texture* normalTexPtr =
@@ -1947,18 +1956,18 @@ Object GltfLoader::loadMesh(const fastgltf::Asset& asset, const fastgltf::Mesh& 
                 resolveEmissiveTexture(asset, mappedMaterialIndex, baseDir, resources, assets);
             const Texture* variantNormalTexPtr =
                 resolveNormalTexture(asset, mappedMaterialIndex, baseDir, resources, assets);
-            const Texture* variantMrTexPtr =
-                resolveMetallicRoughnessTexture(asset, mappedMaterialIndex, baseDir, resources, assets);
+            const Texture* variantMrTexPtr = resolveMetallicRoughnessTexture(
+                asset, mappedMaterialIndex, baseDir, resources, assets);
             const Texture* variantOccTexPtr =
                 resolveOcclusionTexture(asset, mappedMaterialIndex, baseDir, resources, assets);
             const Texture* variantTransTexPtr =
                 resolveTransmissionTexture(asset, mappedMaterialIndex, baseDir, resources, assets);
             const Texture* variantCcTexPtr =
                 resolveClearcoatTexture(asset, mappedMaterialIndex, baseDir, resources, assets);
-            const Texture* variantCcRoughTexPtr =
-                resolveClearcoatRoughnessTexture(asset, mappedMaterialIndex, baseDir, resources, assets);
-            const Texture* variantCcNormalTexPtr =
-                resolveClearcoatNormalTexture(asset, mappedMaterialIndex, baseDir, resources, assets);
+            const Texture* variantCcRoughTexPtr = resolveClearcoatRoughnessTexture(
+                asset, mappedMaterialIndex, baseDir, resources, assets);
+            const Texture* variantCcNormalTexPtr = resolveClearcoatNormalTexture(
+                asset, mappedMaterialIndex, baseDir, resources, assets);
             const Texture* variantThicknessTexPtr =
                 resolveThicknessTexture(asset, mappedMaterialIndex, baseDir, resources, assets);
 
@@ -2006,8 +2015,9 @@ Object GltfLoader::loadMesh(const fastgltf::Asset& asset, const fastgltf::Mesh& 
                 }
                 else
                 {
-                    std::string meshName = mesh.name.empty() ? "mesh[" + std::to_string(meshIndex) + "]"
-                                                             : std::string(mesh.name);
+                    std::string meshName = mesh.name.empty()
+                                               ? "mesh[" + std::to_string(meshIndex) + "]"
+                                               : std::string(mesh.name);
                     std::cerr << "Warning: Skipping tangent-space normal map for " << meshName
                               << " primitive " << primIdx << " variant " << variantIndex << ": "
                               << tangentResult.reason << '\n';

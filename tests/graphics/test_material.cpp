@@ -3,7 +3,9 @@
 #include <cmath>
 
 #include <fire_engine/graphics/material.hpp>
+#include <fire_engine/graphics/material_binding.hpp>
 #include <fire_engine/graphics/texture.hpp>
+#include <fire_engine/render/ubo.hpp>
 
 using namespace fire_engine;
 
@@ -85,6 +87,41 @@ TEST(Material, TexturePointersRoundTrip)
     EXPECT_TRUE(mat.hasMetallicRoughnessTexture());
     EXPECT_TRUE(mat.hasOcclusionTexture());
     EXPECT_TRUE(mat.hasTransmissionTexture());
+}
+
+TEST(MaterialBinding, ToMaterialUboPacksCoreFields)
+{
+    Material mat;
+    mat.diffuse({0.8f, 0.6f, 0.4f});
+    mat.emissive({0.1f, 0.2f, 0.3f});
+    mat.roughness(0.75f);
+    mat.metallic(0.5f);
+    mat.alpha(0.25f);
+    mat.normalScale(0.9f);
+    mat.alphaMode(AlphaMode::Mask);
+    mat.alphaCutoff(0.2f);
+    mat.occlusionStrength(0.7f);
+
+    const MaterialUBO ubo = toMaterialUBO(mat);
+
+    EXPECT_FLOAT_EQ(ubo.diffuseAlpha[0], 0.8f);
+    EXPECT_FLOAT_EQ(ubo.diffuseAlpha[3], 0.25f);
+    EXPECT_FLOAT_EQ(ubo.emissiveRoughness[2], 0.3f);
+    EXPECT_FLOAT_EQ(ubo.emissiveRoughness[3], 0.75f);
+    EXPECT_FLOAT_EQ(ubo.materialParams[0], 0.5f);
+    EXPECT_FLOAT_EQ(ubo.materialParams[1], 0.9f);
+    EXPECT_FLOAT_EQ(ubo.materialParams[2], 0.2f);
+    EXPECT_FLOAT_EQ(ubo.materialParams[3], 0.7f);
+}
+
+TEST(MaterialBinding, MissingTextureHandlesPackAsNull)
+{
+    const auto handles = materialTextureHandles(Material{});
+
+    for (TextureHandle handle : handles)
+    {
+        EXPECT_EQ(handle, NullTexture);
+    }
 }
 
 TEST(Material, TransmissionFactorRoundTrip)

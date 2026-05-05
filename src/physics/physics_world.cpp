@@ -325,7 +325,8 @@ std::vector<PhysicsWorld::SolverContact> PhysicsWorld::contacts()
     return result;
 }
 
-std::optional<PhysicsWorld::SolverContact> PhysicsWorld::contactForPair(const CollisionPair& pair)
+std::optional<PhysicsWorld::ContactCandidate>
+PhysicsWorld::contactCandidateForPair(const CollisionPair& pair)
 {
     ColliderEntry* firstCollider = findCollider(pair.first);
     ColliderEntry* secondCollider = findCollider(pair.second);
@@ -346,33 +347,30 @@ std::optional<PhysicsWorld::SolverContact> PhysicsWorld::contactForPair(const Co
     ColliderEntry* movingCollider = nullptr;
     ColliderEntry* targetCollider = nullptr;
 
+    auto select = [&](BodyEntry* selectedMoving, BodyEntry* selectedTarget,
+                      ColliderEntry* selectedMovingCollider, ColliderEntry* selectedTargetCollider)
+    {
+        moving = selectedMoving;
+        target = selectedTarget;
+        movingCollider = selectedMovingCollider;
+        targetCollider = selectedTargetCollider;
+    };
+
     if (firstBody->body.type() == PhysicsBodyType::Dynamic)
     {
-        moving = firstBody;
-        target = secondBody;
-        movingCollider = firstCollider;
-        targetCollider = secondCollider;
+        select(firstBody, secondBody, firstCollider, secondCollider);
     }
     else if (secondBody->body.type() == PhysicsBodyType::Dynamic)
     {
-        moving = secondBody;
-        target = firstBody;
-        movingCollider = secondCollider;
-        targetCollider = firstCollider;
+        select(secondBody, firstBody, secondCollider, firstCollider);
     }
     else if (firstBody->body.type() == PhysicsBodyType::Kinematic)
     {
-        moving = firstBody;
-        target = secondBody;
-        movingCollider = firstCollider;
-        targetCollider = secondCollider;
+        select(firstBody, secondBody, firstCollider, secondCollider);
     }
     else if (secondBody->body.type() == PhysicsBodyType::Kinematic)
     {
-        moving = secondBody;
-        target = firstBody;
-        movingCollider = secondCollider;
-        targetCollider = firstCollider;
+        select(secondBody, firstBody, secondCollider, firstCollider);
     }
 
     if (moving == nullptr || target == nullptr || !movable(*moving))
@@ -380,20 +378,32 @@ std::optional<PhysicsWorld::SolverContact> PhysicsWorld::contactForPair(const Co
         return std::nullopt;
     }
 
-    auto contact = narrowPhase_.sweptAabb(movingCollider->collider, targetCollider->collider);
+    return ContactCandidate{moving, target, movingCollider, targetCollider};
+}
+
+std::optional<PhysicsWorld::SolverContact> PhysicsWorld::contactForPair(const CollisionPair& pair)
+{
+    auto candidate = contactCandidateForPair(pair);
+    if (!candidate.has_value())
+    {
+        return std::nullopt;
+    }
+
+    auto contact = narrowPhase_.sweptAabb(candidate->movingCollider->collider,
+                                          candidate->targetCollider->collider);
     if (!contact.has_value())
     {
         return std::nullopt;
     }
 
-    const Vec3 relativeDelta = frameDelta(*moving) - frameDelta(*target);
+    const Vec3 relativeDelta = frameDelta(*candidate->moving) - frameDelta(*candidate->target);
     if (Vec3::dotProduct(relativeDelta, contact->normal) >= 0.0f)
     {
         return std::nullopt;
     }
 
-    return SolverContact{contact->toi, contact->normal, moving,
-                         target,       movingCollider,  targetCollider};
+    return SolverContact{contact->toi,      contact->normal,           candidate->moving,
+                         candidate->target, candidate->movingCollider, candidate->targetCollider};
 }
 
 bool PhysicsWorld::applyResponses(std::vector<SolverContact>& contacts)

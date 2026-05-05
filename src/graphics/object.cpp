@@ -1,12 +1,11 @@
 #include <fire_engine/graphics/object.hpp>
 
-#include <cmath>
 #include <cstring>
 
 #include <fire_engine/graphics/geometry.hpp>
 #include <fire_engine/graphics/material.hpp>
+#include <fire_engine/graphics/material_binding.hpp>
 #include <fire_engine/graphics/skin.hpp>
-#include <fire_engine/graphics/texture.hpp>
 #include <fire_engine/math/constants.hpp>
 #include <fire_engine/render/constants.hpp>
 #include <fire_engine/render/resources.hpp>
@@ -15,20 +14,66 @@
 namespace fire_engine
 {
 
-bool sameTextureSlot(bool hasA, bool hasB, const Texture& texA, const Texture& texB) noexcept
+namespace
 {
-    if (hasA != hasB)
+
+[[nodiscard]]
+Resources::FallbackTextureKind fallbackForSlot(MaterialTextureSlot slot) noexcept
+{
+    using Kind = Resources::FallbackTextureKind;
+    switch (slot)
     {
-        return false;
+    case MaterialTextureSlot::BaseColour:
+    case MaterialTextureSlot::Clearcoat:
+    case MaterialTextureSlot::ClearcoatRoughness:
+    case MaterialTextureSlot::Thickness:
+        return Kind::BaseColour;
+    case MaterialTextureSlot::Emissive:
+        return Kind::Emissive;
+    case MaterialTextureSlot::Normal:
+    case MaterialTextureSlot::ClearcoatNormal:
+        return Kind::Normal;
+    case MaterialTextureSlot::MetallicRoughness:
+        return Kind::MetallicRoughness;
+    case MaterialTextureSlot::Occlusion:
+    case MaterialTextureSlot::Transmission:
+        return Kind::Occlusion;
     }
 
-    if (!hasA)
-    {
-        return true;
-    }
-
-    return texA.handle() == texB.handle();
+    return Kind::BaseColour;
 }
+
+[[nodiscard]]
+std::vector<float> packMorphTargetDeltas(const Geometry& geometry)
+{
+    const auto numTargets = geometry.morphTargetCount();
+    const auto numVerts = geometry.vertices().size();
+    const std::size_t totalEntries = numTargets * numVerts * 3;
+    std::vector<float> ssboData(totalEntries * 4, 0.0f);
+    float* dst = ssboData.data();
+
+    auto writeDeltas = [&](const std::vector<std::vector<Vec3>>& src)
+    {
+        for (std::size_t t = 0; t < numTargets; ++t)
+        {
+            for (std::size_t v = 0; v < numVerts; ++v)
+            {
+                const Vec3& delta = (t < src.size() && v < src[t].size()) ? src[t][v] : Vec3{};
+                *dst++ = delta.x();
+                *dst++ = delta.y();
+                *dst++ = delta.z();
+                *dst++ = 0.0f;
+            }
+        }
+    };
+
+    writeDeltas(geometry.morphPositions());
+    writeDeltas(geometry.morphNormals());
+    writeDeltas(geometry.morphTangents());
+    return ssboData;
+}
+
+} // namespace
 
 void Object::addGeometry(const Geometry& geometry)
 {
@@ -38,7 +83,8 @@ void Object::addGeometry(const Geometry& geometry)
     binding.activeMaterial = &geometry.material();
 }
 
-void Object::addVariantMaterial(std::size_t geometryIndex, std::size_t variantIndex, const Material* material)
+void Object::addVariantMaterial(std::size_t geometryIndex, std::size_t variantIndex,
+                                const Material* material)
 {
     if (geometryIndex >= bindings_.size() || material == nullptr)
     {
@@ -128,36 +174,8 @@ void Object::load(Resources& resources)
         }
         else
         {
-            // Pack pos/normal/tangent deltas as vec4 (xyz + 0). Layout:
-            // [pos0..N, norm0..N, tang0..N]. Tangents may be all-zeros when
-            // the source asset doesn't ship morph TANGENT data.
-            std::size_t totalEntries = numTargets * numVerts * 3;
-            std::size_t ssboSize = totalEntries * sizeof(float) * 4;
-            std::vector<float> ssboData(totalEntries * 4, 0.0f);
-            float* dst = ssboData.data();
-
-            const auto& morphPositions = binding.geometry->morphPositions();
-            const auto& morphNormals = binding.geometry->morphNormals();
-            const auto& morphTangents = binding.geometry->morphTangents();
-
-            auto writeDeltas = [&](const std::vector<std::vector<Vec3>>& src)
-            {
-                for (std::size_t t = 0; t < numTargets; ++t)
-                {
-                    for (std::size_t v = 0; v < numVerts; ++v)
-                    {
-                        const Vec3& d = (t < src.size() && v < src[t].size()) ? src[t][v] : Vec3{};
-                        *dst++ = d.x();
-                        *dst++ = d.y();
-                        *dst++ = d.z();
-                        *dst++ = 0.0f;
-                    }
-                }
-            };
-            writeDeltas(morphPositions);
-            writeDeltas(morphNormals);
-            writeDeltas(morphTangents);
-
+            std::vector<float> ssboData = packMorphTargetDeltas(*binding.geometry);
+            const std::size_t ssboSize = ssboData.size() * sizeof(float);
             auto ssboSet = resources.createMappedStorageBuffer(ssboSize, ssboData.data());
             geoInfo.morphSsbo = ssboSet.buffers[0];
             geoInfo.morphSsboSize = ssboSize;
@@ -267,169 +285,18 @@ bool Object::wouldChangeVariant(std::optional<std::size_t> variantIndex) const n
     return false;
 }
 
-bool Object::materialsEquivalent(const Material& a, const Material& b)
-{
-    const MaterialUBO aUbo = toMaterialUBO(a);
-    const MaterialUBO bUbo = toMaterialUBO(b);
-
-    if (std::memcmp(&aUbo, &bUbo, sizeof(MaterialUBO)) != 0)
-    {
-        return false;
-    }
-
-    return sameTextureSlot(a.hasTexture(), b.hasTexture(), a.texture(), b.texture()) &&
-           sameTextureSlot(a.hasEmissiveTexture(), b.hasEmissiveTexture(), a.emissiveTexture(),
-                           b.emissiveTexture()) &&
-           sameTextureSlot(a.hasNormalTexture(), b.hasNormalTexture(), a.normalTexture(),
-                           b.normalTexture()) &&
-           sameTextureSlot(a.hasMetallicRoughnessTexture(), b.hasMetallicRoughnessTexture(),
-                           a.metallicRoughnessTexture(), b.metallicRoughnessTexture()) &&
-           sameTextureSlot(a.hasOcclusionTexture(), b.hasOcclusionTexture(), a.occlusionTexture(),
-                           b.occlusionTexture()) &&
-           sameTextureSlot(a.hasTransmissionTexture(), b.hasTransmissionTexture(),
-                           a.transmissionTexture(), b.transmissionTexture()) &&
-           sameTextureSlot(a.hasClearcoatTexture(), b.hasClearcoatTexture(), a.clearcoatTexture(),
-                           b.clearcoatTexture()) &&
-           sameTextureSlot(a.hasClearcoatRoughnessTexture(), b.hasClearcoatRoughnessTexture(),
-                           a.clearcoatRoughnessTexture(), b.clearcoatRoughnessTexture()) &&
-           sameTextureSlot(a.hasClearcoatNormalTexture(), b.hasClearcoatNormalTexture(),
-                           a.clearcoatNormalTexture(), b.clearcoatNormalTexture()) &&
-           sameTextureSlot(a.hasThicknessTexture(), b.hasThicknessTexture(), a.thicknessTexture(),
-                           b.thicknessTexture());
-}
-
-MaterialUBO Object::toMaterialUBO(const Material& mat)
-{
-    MaterialUBO ubo{};
-    ubo.diffuseAlpha[0] = mat.diffuse().r();
-    ubo.diffuseAlpha[1] = mat.diffuse().g();
-    ubo.diffuseAlpha[2] = mat.diffuse().b();
-    ubo.diffuseAlpha[3] = mat.alpha();
-    ubo.emissiveRoughness[0] = mat.emissive().r();
-    ubo.emissiveRoughness[1] = mat.emissive().g();
-    ubo.emissiveRoughness[2] = mat.emissive().b();
-    ubo.emissiveRoughness[3] = mat.roughness();
-    ubo.materialParams[0] = mat.metallic();
-    ubo.materialParams[1] = mat.normalScale();
-    ubo.materialParams[2] = (mat.alphaMode() == AlphaMode::Mask) ? mat.alphaCutoff() : 0.0f;
-    ubo.materialParams[3] = mat.occlusionStrength();
-    ubo.textureFlags[0] = mat.hasTexture() ? 1 : 0;
-    ubo.textureFlags[1] = mat.hasEmissiveTexture() ? 1 : 0;
-    ubo.textureFlags[2] = mat.hasNormalTexture() ? 1 : 0;
-    ubo.textureFlags[3] = mat.hasMetallicRoughnessTexture() ? 1 : 0;
-    ubo.extraFlags[0] = mat.hasOcclusionTexture() ? 1 : 0;
-    ubo.extraFlags[1] = mat.occlusionTexCoord();
-    ubo.extraFlags[2] = mat.unlit() ? 1 : 0;
-    ubo.texCoordIndices[0] = mat.baseColorTexCoord();
-    ubo.texCoordIndices[1] = mat.emissiveTexCoord();
-    ubo.texCoordIndices[2] = mat.normalTexCoord();
-    ubo.texCoordIndices[3] = mat.metallicRoughnessTexCoord();
-
-    auto packUv = [](float* dst, const UvTransform& t) noexcept
-    {
-        dst[0] = t.offsetX;
-        dst[1] = t.offsetY;
-        dst[2] = t.scaleX;
-        dst[3] = t.scaleY;
-    };
-    packUv(ubo.uvBaseColor, mat.baseColorUvTransform());
-    packUv(ubo.uvEmissive, mat.emissiveUvTransform());
-    packUv(ubo.uvNormal, mat.normalUvTransform());
-    packUv(ubo.uvMetallicRoughness, mat.metallicRoughnessUvTransform());
-    packUv(ubo.uvOcclusion, mat.occlusionUvTransform());
-    packUv(ubo.uvTransmission, mat.transmissionUvTransform());
-    ubo.uvRotations[0] = mat.baseColorUvTransform().rotation;
-    ubo.uvRotations[1] = mat.emissiveUvTransform().rotation;
-    ubo.uvRotations[2] = mat.normalUvTransform().rotation;
-    ubo.uvRotations[3] = mat.metallicRoughnessUvTransform().rotation;
-    ubo.uvRotationsExtra[0] = mat.occlusionUvTransform().rotation;
-    ubo.uvRotationsExtra[1] = mat.transmissionUvTransform().rotation;
-
-    // KHR_materials_transmission + KHR_materials_ior.
-    // .x = factor, .y = texture-present flag, .z = texCoord index, .w = ior.
-    ubo.transmissionParams[0] = mat.transmissionFactor();
-    ubo.transmissionParams[1] = mat.hasTransmissionTexture() ? 1.0f : 0.0f;
-    ubo.transmissionParams[2] = static_cast<float>(mat.transmissionTexCoord());
-    ubo.transmissionParams[3] = mat.ior();
-
-    // KHR_materials_clearcoat. factor / roughness / normalScale, presence
-    // flags, per-slot texCoord + per-slot UV transforms (offset/scale + the
-    // rotation packed separately).
-    ubo.clearcoatParams[0] = mat.clearcoatFactor();
-    ubo.clearcoatParams[1] = mat.clearcoatRoughness();
-    ubo.clearcoatParams[2] = mat.clearcoatNormalScale();
-    ubo.clearcoatFlags[0] = mat.hasClearcoatTexture() ? 1.0f : 0.0f;
-    ubo.clearcoatFlags[1] = mat.hasClearcoatRoughnessTexture() ? 1.0f : 0.0f;
-    ubo.clearcoatFlags[2] = mat.hasClearcoatNormalTexture() ? 1.0f : 0.0f;
-    ubo.clearcoatTexCoords[0] = static_cast<float>(mat.clearcoatTexCoord());
-    ubo.clearcoatTexCoords[1] = static_cast<float>(mat.clearcoatRoughnessTexCoord());
-    ubo.clearcoatTexCoords[2] = static_cast<float>(mat.clearcoatNormalTexCoord());
-    packUv(ubo.uvClearcoat, mat.clearcoatUvTransform());
-    packUv(ubo.uvClearcoatRoughness, mat.clearcoatRoughnessUvTransform());
-    packUv(ubo.uvClearcoatNormal, mat.clearcoatNormalUvTransform());
-    ubo.clearcoatRotations[0] = mat.clearcoatUvTransform().rotation;
-    ubo.clearcoatRotations[1] = mat.clearcoatRoughnessUvTransform().rotation;
-    ubo.clearcoatRotations[2] = mat.clearcoatNormalUvTransform().rotation;
-
-    // KHR_materials_volume.
-    ubo.volumeParams[0] = mat.thicknessFactor();
-    ubo.volumeParams[1] = mat.hasThicknessTexture() ? 1.0f : 0.0f;
-    ubo.volumeParams[2] = static_cast<float>(mat.thicknessTexCoord());
-    ubo.volumeParams[3] = mat.thicknessUvTransform().rotation;
-    ubo.attenuation[0] = mat.attenuationColor().r();
-    ubo.attenuation[1] = mat.attenuationColor().g();
-    ubo.attenuation[2] = mat.attenuationColor().b();
-    // Spec defaults attenuationDistance to +inf (no absorption). Pack as a
-    // very large finite number so the shader's exp(-coeff * d) collapses to
-    // ~1 without inf propagating through GLSL.
-    const float ad = mat.attenuationDistance();
-    ubo.attenuation[3] = (ad <= 0.0f || !std::isfinite(ad)) ? 1.0e6f : ad;
-    packUv(ubo.uvThickness, mat.thicknessUvTransform());
-    return ubo;
-}
-
 void Object::applyMaterialTextures(GeometryDescriptorInfo& geoInfo, const Material& mat,
                                    Resources& resources)
 {
-    geoInfo.texture = mat.hasTexture()
-                          ? mat.texture().handle()
-                          : resources.fallbackTexture(Resources::FallbackTextureKind::BaseColour);
-    geoInfo.emissiveTexture =
-        mat.hasEmissiveTexture()
-            ? mat.emissiveTexture().handle()
-            : resources.fallbackTexture(Resources::FallbackTextureKind::Emissive);
-    geoInfo.normalTexture =
-        mat.hasNormalTexture()
-            ? mat.normalTexture().handle()
-            : resources.fallbackTexture(Resources::FallbackTextureKind::Normal);
-    geoInfo.metallicRoughnessTexture =
-        mat.hasMetallicRoughnessTexture()
-            ? mat.metallicRoughnessTexture().handle()
-            : resources.fallbackTexture(Resources::FallbackTextureKind::MetallicRoughness);
-    geoInfo.occlusionTexture =
-        mat.hasOcclusionTexture()
-            ? mat.occlusionTexture().handle()
-            : resources.fallbackTexture(Resources::FallbackTextureKind::Occlusion);
-    geoInfo.transmissionTexture =
-        mat.hasTransmissionTexture()
-            ? mat.transmissionTexture().handle()
-            : resources.fallbackTexture(Resources::FallbackTextureKind::Occlusion);
-    geoInfo.clearcoatTexture =
-        mat.hasClearcoatTexture()
-            ? mat.clearcoatTexture().handle()
-            : resources.fallbackTexture(Resources::FallbackTextureKind::BaseColour);
-    geoInfo.clearcoatRoughnessTexture =
-        mat.hasClearcoatRoughnessTexture()
-            ? mat.clearcoatRoughnessTexture().handle()
-            : resources.fallbackTexture(Resources::FallbackTextureKind::BaseColour);
-    geoInfo.clearcoatNormalTexture =
-        mat.hasClearcoatNormalTexture()
-            ? mat.clearcoatNormalTexture().handle()
-            : resources.fallbackTexture(Resources::FallbackTextureKind::Normal);
-    geoInfo.thicknessTexture =
-        mat.hasThicknessTexture()
-            ? mat.thicknessTexture().handle()
-            : resources.fallbackTexture(Resources::FallbackTextureKind::BaseColour);
+    geoInfo.materialTextures = materialTextureHandles(mat);
+    for (const MaterialTextureBinding& binding : materialTextureBindings)
+    {
+        TextureHandle& handle = geoInfo.materialTextures[slotIndex(binding.slot)];
+        if (handle == NullTexture)
+        {
+            handle = resources.fallbackTexture(fallbackForSlot(binding.slot));
+        }
+    }
 }
 
 void Object::updateSkin()

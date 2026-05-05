@@ -2,9 +2,12 @@
 
 #include <algorithm>
 
+#include <fire_engine/render/descriptor_bindings.hpp>
 #include <fire_engine/render/pipeline.hpp>
 #include <fire_engine/render/ubo.hpp>
 
+using fire_engine::bindingIndex;
+using fire_engine::ForwardBinding;
 using fire_engine::Pipeline;
 
 TEST(PipelineConfig, ForwardConfigIncludesIblBindings)
@@ -13,27 +16,27 @@ TEST(PipelineConfig, ForwardConfigIncludesIblBindings)
 
     EXPECT_EQ(config.bindings.size(), 22u);
 
-    auto hasBinding = [&](uint32_t binding)
+    auto hasBinding = [&](ForwardBinding binding)
     {
-        return std::any_of(config.bindings.begin(), config.bindings.end(),
-                           [&](const auto& entry) { return entry.binding == binding; });
+        return std::any_of(config.bindings.begin(), config.bindings.end(), [&](const auto& entry)
+                           { return entry.binding == bindingIndex(binding); });
     };
 
-    EXPECT_TRUE(hasBinding(12));
-    EXPECT_TRUE(hasBinding(13));
-    EXPECT_TRUE(hasBinding(14));
+    EXPECT_TRUE(hasBinding(ForwardBinding::IrradianceMap));
+    EXPECT_TRUE(hasBinding(ForwardBinding::PrefilteredMap));
+    EXPECT_TRUE(hasBinding(ForwardBinding::BrdfLut));
     // PCSS: non-comparison sampler over the shadow image for blocker search.
-    EXPECT_TRUE(hasBinding(15));
+    EXPECT_TRUE(hasBinding(ForwardBinding::ShadowDepthMap));
     // KHR_materials_transmission texture.
-    EXPECT_TRUE(hasBinding(16));
+    EXPECT_TRUE(hasBinding(ForwardBinding::TransmissionTexture));
     // KHR_materials_clearcoat: factor (R), roughness (G), normal (RGB).
-    EXPECT_TRUE(hasBinding(17));
-    EXPECT_TRUE(hasBinding(18));
-    EXPECT_TRUE(hasBinding(19));
+    EXPECT_TRUE(hasBinding(ForwardBinding::ClearcoatTexture));
+    EXPECT_TRUE(hasBinding(ForwardBinding::ClearcoatRoughnessTexture));
+    EXPECT_TRUE(hasBinding(ForwardBinding::ClearcoatNormalTexture));
     // KHR_materials_transmission F3 — sceneColor mip chain.
-    EXPECT_TRUE(hasBinding(20));
+    EXPECT_TRUE(hasBinding(ForwardBinding::SceneColour));
     // KHR_materials_volume — thickness texture (G channel).
-    EXPECT_TRUE(hasBinding(21));
+    EXPECT_TRUE(hasBinding(ForwardBinding::ThicknessTexture));
 }
 
 TEST(PipelineConfig, SkyboxConfigIncludesCubemapSamplerBinding)

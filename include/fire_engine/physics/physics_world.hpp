@@ -96,6 +96,14 @@ private:
         bool active{true};
     };
 
+    struct ContactCandidate
+    {
+        BodyEntry* moving{nullptr};
+        BodyEntry* target{nullptr};
+        ColliderEntry* movingCollider{nullptr};
+        ColliderEntry* targetCollider{nullptr};
+    };
+
     struct SolverContact
     {
         float toi{0.0f};
@@ -143,6 +151,9 @@ private:
 
     [[nodiscard]]
     std::optional<SolverContact> contactForPair(const CollisionPair& pair);
+
+    [[nodiscard]]
+    std::optional<ContactCandidate> contactCandidateForPair(const CollisionPair& pair);
 
     [[nodiscard]]
     bool applyResponses(std::vector<SolverContact>& contacts);

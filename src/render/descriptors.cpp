@@ -8,6 +8,18 @@
 namespace fire_engine
 {
 
+namespace
+{
+
+[[nodiscard]]
+TextureHandle materialTexture(const GeometryDescriptorInfo& geometry,
+                              MaterialTextureSlot slot) noexcept
+{
+    return geometry.materialTextures[slotIndex(slot)];
+}
+
+} // namespace
+
 vk::DescriptorBufferInfo Descriptors::makeDescriptorBufferInfo(vk::Buffer buffer,
                                                                vk::DeviceSize range)
 {
@@ -111,9 +123,15 @@ ObjectDescriptorResult Descriptors::createObjectDescriptors(const ObjectDescript
                 resources_->vulkanBuffer(req.uniformBufs[i]), sizeof(UniformBufferObject));
             vk::DescriptorBufferInfo matBufInfo = makeDescriptorBufferInfo(
                 resources_->vulkanBuffer(geo.materialBufs[i]), sizeof(MaterialUBO));
-            vk::DescriptorImageInfo texInfo = makeDescriptorImageInfo(
-                resources_->vulkanSampler(geo.texture), resources_->vulkanImageView(geo.texture),
-                vk::ImageLayout::eShaderReadOnlyOptimal);
+            auto materialImageInfo = [&](MaterialTextureSlot slot)
+            {
+                const TextureHandle texture = materialTexture(geo, slot);
+                return makeDescriptorImageInfo(resources_->vulkanSampler(texture),
+                                               resources_->vulkanImageView(texture),
+                                               vk::ImageLayout::eShaderReadOnlyOptimal);
+            };
+
+            vk::DescriptorImageInfo texInfo = materialImageInfo(MaterialTextureSlot::BaseColour);
             vk::DescriptorBufferInfo skinBufInfo = makeDescriptorBufferInfo(
                 resources_->vulkanBuffer(geo.skinBufs[i]), sizeof(SkinUBO));
             vk::DescriptorBufferInfo morphUboBufInfo = makeDescriptorBufferInfo(
@@ -126,45 +144,24 @@ ObjectDescriptorResult Descriptors::createObjectDescriptors(const ObjectDescript
                 makeDescriptorBufferInfo(resources_->vulkanBuffer(geo.morphSsbo), ssboSize);
 
             vk::DescriptorImageInfo emissiveTexInfo =
-                makeDescriptorImageInfo(resources_->vulkanSampler(geo.emissiveTexture),
-                                        resources_->vulkanImageView(geo.emissiveTexture),
-                                        vk::ImageLayout::eShaderReadOnlyOptimal);
-            vk::DescriptorImageInfo normalTexInfo =
-                makeDescriptorImageInfo(resources_->vulkanSampler(geo.normalTexture),
-                                        resources_->vulkanImageView(geo.normalTexture),
-                                        vk::ImageLayout::eShaderReadOnlyOptimal);
+                materialImageInfo(MaterialTextureSlot::Emissive);
+            vk::DescriptorImageInfo normalTexInfo = materialImageInfo(MaterialTextureSlot::Normal);
             vk::DescriptorImageInfo mrTexInfo =
-                makeDescriptorImageInfo(resources_->vulkanSampler(geo.metallicRoughnessTexture),
-                                        resources_->vulkanImageView(geo.metallicRoughnessTexture),
-                                        vk::ImageLayout::eShaderReadOnlyOptimal);
-            vk::DescriptorImageInfo occTexInfo =
-                makeDescriptorImageInfo(resources_->vulkanSampler(geo.occlusionTexture),
-                                        resources_->vulkanImageView(geo.occlusionTexture),
-                                        vk::ImageLayout::eShaderReadOnlyOptimal);
+                materialImageInfo(MaterialTextureSlot::MetallicRoughness);
+            vk::DescriptorImageInfo occTexInfo = materialImageInfo(MaterialTextureSlot::Occlusion);
             vk::DescriptorImageInfo transTexInfo =
-                makeDescriptorImageInfo(resources_->vulkanSampler(geo.transmissionTexture),
-                                        resources_->vulkanImageView(geo.transmissionTexture),
-                                        vk::ImageLayout::eShaderReadOnlyOptimal);
-            vk::DescriptorImageInfo ccTexInfo =
-                makeDescriptorImageInfo(resources_->vulkanSampler(geo.clearcoatTexture),
-                                        resources_->vulkanImageView(geo.clearcoatTexture),
-                                        vk::ImageLayout::eShaderReadOnlyOptimal);
+                materialImageInfo(MaterialTextureSlot::Transmission);
+            vk::DescriptorImageInfo ccTexInfo = materialImageInfo(MaterialTextureSlot::Clearcoat);
             vk::DescriptorImageInfo ccRoughTexInfo =
-                makeDescriptorImageInfo(resources_->vulkanSampler(geo.clearcoatRoughnessTexture),
-                                        resources_->vulkanImageView(geo.clearcoatRoughnessTexture),
-                                        vk::ImageLayout::eShaderReadOnlyOptimal);
+                materialImageInfo(MaterialTextureSlot::ClearcoatRoughness);
             vk::DescriptorImageInfo ccNormalTexInfo =
-                makeDescriptorImageInfo(resources_->vulkanSampler(geo.clearcoatNormalTexture),
-                                        resources_->vulkanImageView(geo.clearcoatNormalTexture),
-                                        vk::ImageLayout::eShaderReadOnlyOptimal);
+                materialImageInfo(MaterialTextureSlot::ClearcoatNormal);
             vk::DescriptorImageInfo sceneColorInfo =
                 makeDescriptorImageInfo(resources_->vulkanSampler(req.sceneColor),
                                         resources_->vulkanImageView(req.sceneColor),
                                         vk::ImageLayout::eShaderReadOnlyOptimal);
             vk::DescriptorImageInfo thicknessTexInfo =
-                makeDescriptorImageInfo(resources_->vulkanSampler(geo.thicknessTexture),
-                                        resources_->vulkanImageView(geo.thicknessTexture),
-                                        vk::ImageLayout::eShaderReadOnlyOptimal);
+                materialImageInfo(MaterialTextureSlot::Thickness);
             vk::DescriptorBufferInfo lightBufInfo = makeDescriptorBufferInfo(
                 resources_->vulkanBuffer(req.lightBufs[i]), sizeof(LightUBO));
             vk::DescriptorImageInfo shadowTexInfo =
@@ -189,112 +186,117 @@ ObjectDescriptorResult Descriptors::createObjectDescriptors(const ObjectDescript
 
             std::array<vk::WriteDescriptorSet, 22> writes = {{
                 vk::WriteDescriptorSet{.dstSet = *sets[i],
-                                       .dstBinding = 0,
+                                       .dstBinding = bindingIndex(ForwardBinding::Frame),
                                        .descriptorCount = 1,
                                        .descriptorType = vk::DescriptorType::eUniformBuffer,
                                        .pBufferInfo = &uboBufInfo},
                 vk::WriteDescriptorSet{.dstSet = *sets[i],
-                                       .dstBinding = 1,
+                                       .dstBinding = bindingIndex(ForwardBinding::Material),
                                        .descriptorCount = 1,
                                        .descriptorType = vk::DescriptorType::eUniformBuffer,
                                        .pBufferInfo = &matBufInfo},
                 vk::WriteDescriptorSet{.dstSet = *sets[i],
-                                       .dstBinding = 2,
+                                       .dstBinding =
+                                           bindingIndex(ForwardBinding::BaseColourTexture),
                                        .descriptorCount = 1,
                                        .descriptorType = vk::DescriptorType::eCombinedImageSampler,
                                        .pImageInfo = &texInfo},
                 vk::WriteDescriptorSet{.dstSet = *sets[i],
-                                       .dstBinding = 3,
+                                       .dstBinding = bindingIndex(ForwardBinding::Skin),
                                        .descriptorCount = 1,
                                        .descriptorType = vk::DescriptorType::eUniformBuffer,
                                        .pBufferInfo = &skinBufInfo},
                 vk::WriteDescriptorSet{.dstSet = *sets[i],
-                                       .dstBinding = 4,
+                                       .dstBinding = bindingIndex(ForwardBinding::Morph),
                                        .descriptorCount = 1,
                                        .descriptorType = vk::DescriptorType::eUniformBuffer,
                                        .pBufferInfo = &morphUboBufInfo},
                 vk::WriteDescriptorSet{.dstSet = *sets[i],
-                                       .dstBinding = 5,
+                                       .dstBinding = bindingIndex(ForwardBinding::MorphTargets),
                                        .descriptorCount = 1,
                                        .descriptorType = vk::DescriptorType::eStorageBuffer,
                                        .pBufferInfo = &morphSsboBufInfo},
                 vk::WriteDescriptorSet{.dstSet = *sets[i],
-                                       .dstBinding = 6,
+                                       .dstBinding = bindingIndex(ForwardBinding::EmissiveTexture),
                                        .descriptorCount = 1,
                                        .descriptorType = vk::DescriptorType::eCombinedImageSampler,
                                        .pImageInfo = &emissiveTexInfo},
                 vk::WriteDescriptorSet{.dstSet = *sets[i],
-                                       .dstBinding = 7,
+                                       .dstBinding = bindingIndex(ForwardBinding::NormalTexture),
                                        .descriptorCount = 1,
                                        .descriptorType = vk::DescriptorType::eCombinedImageSampler,
                                        .pImageInfo = &normalTexInfo},
                 vk::WriteDescriptorSet{.dstSet = *sets[i],
-                                       .dstBinding = 8,
+                                       .dstBinding =
+                                           bindingIndex(ForwardBinding::MetallicRoughnessTexture),
                                        .descriptorCount = 1,
                                        .descriptorType = vk::DescriptorType::eCombinedImageSampler,
                                        .pImageInfo = &mrTexInfo},
                 vk::WriteDescriptorSet{.dstSet = *sets[i],
-                                       .dstBinding = 9,
+                                       .dstBinding = bindingIndex(ForwardBinding::OcclusionTexture),
                                        .descriptorCount = 1,
                                        .descriptorType = vk::DescriptorType::eCombinedImageSampler,
                                        .pImageInfo = &occTexInfo},
                 vk::WriteDescriptorSet{.dstSet = *sets[i],
-                                       .dstBinding = 10,
+                                       .dstBinding = bindingIndex(ForwardBinding::ShadowMap),
                                        .descriptorCount = 1,
                                        .descriptorType = vk::DescriptorType::eCombinedImageSampler,
                                        .pImageInfo = &shadowTexInfo},
                 vk::WriteDescriptorSet{.dstSet = *sets[i],
-                                       .dstBinding = 11,
+                                       .dstBinding = bindingIndex(ForwardBinding::Light),
                                        .descriptorCount = 1,
                                        .descriptorType = vk::DescriptorType::eUniformBuffer,
                                        .pBufferInfo = &lightBufInfo},
                 vk::WriteDescriptorSet{.dstSet = *sets[i],
-                                       .dstBinding = 12,
+                                       .dstBinding = bindingIndex(ForwardBinding::IrradianceMap),
                                        .descriptorCount = 1,
                                        .descriptorType = vk::DescriptorType::eCombinedImageSampler,
                                        .pImageInfo = &irradianceTexInfo},
                 vk::WriteDescriptorSet{.dstSet = *sets[i],
-                                       .dstBinding = 13,
+                                       .dstBinding = bindingIndex(ForwardBinding::PrefilteredMap),
                                        .descriptorCount = 1,
                                        .descriptorType = vk::DescriptorType::eCombinedImageSampler,
                                        .pImageInfo = &prefilteredTexInfo},
                 vk::WriteDescriptorSet{.dstSet = *sets[i],
-                                       .dstBinding = 14,
+                                       .dstBinding = bindingIndex(ForwardBinding::BrdfLut),
                                        .descriptorCount = 1,
                                        .descriptorType = vk::DescriptorType::eCombinedImageSampler,
                                        .pImageInfo = &brdfLutTexInfo},
                 vk::WriteDescriptorSet{.dstSet = *sets[i],
-                                       .dstBinding = 15,
+                                       .dstBinding = bindingIndex(ForwardBinding::ShadowDepthMap),
                                        .descriptorCount = 1,
                                        .descriptorType = vk::DescriptorType::eCombinedImageSampler,
                                        .pImageInfo = &shadowDepthTexInfo},
                 vk::WriteDescriptorSet{.dstSet = *sets[i],
-                                       .dstBinding = 16,
+                                       .dstBinding =
+                                           bindingIndex(ForwardBinding::TransmissionTexture),
                                        .descriptorCount = 1,
                                        .descriptorType = vk::DescriptorType::eCombinedImageSampler,
                                        .pImageInfo = &transTexInfo},
                 vk::WriteDescriptorSet{.dstSet = *sets[i],
-                                       .dstBinding = 17,
+                                       .dstBinding = bindingIndex(ForwardBinding::ClearcoatTexture),
                                        .descriptorCount = 1,
                                        .descriptorType = vk::DescriptorType::eCombinedImageSampler,
                                        .pImageInfo = &ccTexInfo},
                 vk::WriteDescriptorSet{.dstSet = *sets[i],
-                                       .dstBinding = 18,
+                                       .dstBinding =
+                                           bindingIndex(ForwardBinding::ClearcoatRoughnessTexture),
                                        .descriptorCount = 1,
                                        .descriptorType = vk::DescriptorType::eCombinedImageSampler,
                                        .pImageInfo = &ccRoughTexInfo},
                 vk::WriteDescriptorSet{.dstSet = *sets[i],
-                                       .dstBinding = 19,
+                                       .dstBinding =
+                                           bindingIndex(ForwardBinding::ClearcoatNormalTexture),
                                        .descriptorCount = 1,
                                        .descriptorType = vk::DescriptorType::eCombinedImageSampler,
                                        .pImageInfo = &ccNormalTexInfo},
                 vk::WriteDescriptorSet{.dstSet = *sets[i],
-                                       .dstBinding = 20,
+                                       .dstBinding = bindingIndex(ForwardBinding::SceneColour),
                                        .descriptorCount = 1,
                                        .descriptorType = vk::DescriptorType::eCombinedImageSampler,
                                        .pImageInfo = &sceneColorInfo},
                 vk::WriteDescriptorSet{.dstSet = *sets[i],
-                                       .dstBinding = 21,
+                                       .dstBinding = bindingIndex(ForwardBinding::ThicknessTexture),
                                        .descriptorCount = 1,
                                        .descriptorType = vk::DescriptorType::eCombinedImageSampler,
                                        .pImageInfo = &thicknessTexInfo},
@@ -313,94 +315,76 @@ ObjectDescriptorResult Descriptors::createObjectDescriptors(const ObjectDescript
 void Descriptors::updateObjectGeometryTextures(DescriptorSetHandle set,
                                                const GeometryDescriptorInfo& geo)
 {
-    vk::DescriptorImageInfo texInfo = makeDescriptorImageInfo(
-        resources_->vulkanSampler(geo.texture), resources_->vulkanImageView(geo.texture),
-        vk::ImageLayout::eShaderReadOnlyOptimal);
-    vk::DescriptorImageInfo emissiveTexInfo =
-        makeDescriptorImageInfo(resources_->vulkanSampler(geo.emissiveTexture),
-                                resources_->vulkanImageView(geo.emissiveTexture),
-                                vk::ImageLayout::eShaderReadOnlyOptimal);
-    vk::DescriptorImageInfo normalTexInfo =
-        makeDescriptorImageInfo(resources_->vulkanSampler(geo.normalTexture),
-                                resources_->vulkanImageView(geo.normalTexture),
-                                vk::ImageLayout::eShaderReadOnlyOptimal);
-    vk::DescriptorImageInfo mrTexInfo =
-        makeDescriptorImageInfo(resources_->vulkanSampler(geo.metallicRoughnessTexture),
-                                resources_->vulkanImageView(geo.metallicRoughnessTexture),
-                                vk::ImageLayout::eShaderReadOnlyOptimal);
-    vk::DescriptorImageInfo occTexInfo =
-        makeDescriptorImageInfo(resources_->vulkanSampler(geo.occlusionTexture),
-                                resources_->vulkanImageView(geo.occlusionTexture),
-                                vk::ImageLayout::eShaderReadOnlyOptimal);
-    vk::DescriptorImageInfo transTexInfo =
-        makeDescriptorImageInfo(resources_->vulkanSampler(geo.transmissionTexture),
-                                resources_->vulkanImageView(geo.transmissionTexture),
-                                vk::ImageLayout::eShaderReadOnlyOptimal);
-    vk::DescriptorImageInfo ccTexInfo =
-        makeDescriptorImageInfo(resources_->vulkanSampler(geo.clearcoatTexture),
-                                resources_->vulkanImageView(geo.clearcoatTexture),
-                                vk::ImageLayout::eShaderReadOnlyOptimal);
+    auto materialImageInfo = [&](MaterialTextureSlot slot)
+    {
+        const TextureHandle texture = materialTexture(geo, slot);
+        return makeDescriptorImageInfo(resources_->vulkanSampler(texture),
+                                       resources_->vulkanImageView(texture),
+                                       vk::ImageLayout::eShaderReadOnlyOptimal);
+    };
+
+    vk::DescriptorImageInfo texInfo = materialImageInfo(MaterialTextureSlot::BaseColour);
+    vk::DescriptorImageInfo emissiveTexInfo = materialImageInfo(MaterialTextureSlot::Emissive);
+    vk::DescriptorImageInfo normalTexInfo = materialImageInfo(MaterialTextureSlot::Normal);
+    vk::DescriptorImageInfo mrTexInfo = materialImageInfo(MaterialTextureSlot::MetallicRoughness);
+    vk::DescriptorImageInfo occTexInfo = materialImageInfo(MaterialTextureSlot::Occlusion);
+    vk::DescriptorImageInfo transTexInfo = materialImageInfo(MaterialTextureSlot::Transmission);
+    vk::DescriptorImageInfo ccTexInfo = materialImageInfo(MaterialTextureSlot::Clearcoat);
     vk::DescriptorImageInfo ccRoughTexInfo =
-        makeDescriptorImageInfo(resources_->vulkanSampler(geo.clearcoatRoughnessTexture),
-                                resources_->vulkanImageView(geo.clearcoatRoughnessTexture),
-                                vk::ImageLayout::eShaderReadOnlyOptimal);
+        materialImageInfo(MaterialTextureSlot::ClearcoatRoughness);
     vk::DescriptorImageInfo ccNormalTexInfo =
-        makeDescriptorImageInfo(resources_->vulkanSampler(geo.clearcoatNormalTexture),
-                                resources_->vulkanImageView(geo.clearcoatNormalTexture),
-                                vk::ImageLayout::eShaderReadOnlyOptimal);
-    vk::DescriptorImageInfo thicknessTexInfo =
-        makeDescriptorImageInfo(resources_->vulkanSampler(geo.thicknessTexture),
-                                resources_->vulkanImageView(geo.thicknessTexture),
-                                vk::ImageLayout::eShaderReadOnlyOptimal);
+        materialImageInfo(MaterialTextureSlot::ClearcoatNormal);
+    vk::DescriptorImageInfo thicknessTexInfo = materialImageInfo(MaterialTextureSlot::Thickness);
 
     std::array<vk::WriteDescriptorSet, 10> writes = {{
         vk::WriteDescriptorSet{.dstSet = descriptorSetTable_[static_cast<uint32_t>(set)],
-                               .dstBinding = 2,
+                               .dstBinding = bindingIndex(ForwardBinding::BaseColourTexture),
                                .descriptorCount = 1,
                                .descriptorType = vk::DescriptorType::eCombinedImageSampler,
                                .pImageInfo = &texInfo},
         vk::WriteDescriptorSet{.dstSet = descriptorSetTable_[static_cast<uint32_t>(set)],
-                               .dstBinding = 6,
+                               .dstBinding = bindingIndex(ForwardBinding::EmissiveTexture),
                                .descriptorCount = 1,
                                .descriptorType = vk::DescriptorType::eCombinedImageSampler,
                                .pImageInfo = &emissiveTexInfo},
         vk::WriteDescriptorSet{.dstSet = descriptorSetTable_[static_cast<uint32_t>(set)],
-                               .dstBinding = 7,
+                               .dstBinding = bindingIndex(ForwardBinding::NormalTexture),
                                .descriptorCount = 1,
                                .descriptorType = vk::DescriptorType::eCombinedImageSampler,
                                .pImageInfo = &normalTexInfo},
         vk::WriteDescriptorSet{.dstSet = descriptorSetTable_[static_cast<uint32_t>(set)],
-                               .dstBinding = 8,
+                               .dstBinding = bindingIndex(ForwardBinding::MetallicRoughnessTexture),
                                .descriptorCount = 1,
                                .descriptorType = vk::DescriptorType::eCombinedImageSampler,
                                .pImageInfo = &mrTexInfo},
         vk::WriteDescriptorSet{.dstSet = descriptorSetTable_[static_cast<uint32_t>(set)],
-                               .dstBinding = 9,
+                               .dstBinding = bindingIndex(ForwardBinding::OcclusionTexture),
                                .descriptorCount = 1,
                                .descriptorType = vk::DescriptorType::eCombinedImageSampler,
                                .pImageInfo = &occTexInfo},
         vk::WriteDescriptorSet{.dstSet = descriptorSetTable_[static_cast<uint32_t>(set)],
-                               .dstBinding = 16,
+                               .dstBinding = bindingIndex(ForwardBinding::TransmissionTexture),
                                .descriptorCount = 1,
                                .descriptorType = vk::DescriptorType::eCombinedImageSampler,
                                .pImageInfo = &transTexInfo},
         vk::WriteDescriptorSet{.dstSet = descriptorSetTable_[static_cast<uint32_t>(set)],
-                               .dstBinding = 17,
+                               .dstBinding = bindingIndex(ForwardBinding::ClearcoatTexture),
                                .descriptorCount = 1,
                                .descriptorType = vk::DescriptorType::eCombinedImageSampler,
                                .pImageInfo = &ccTexInfo},
         vk::WriteDescriptorSet{.dstSet = descriptorSetTable_[static_cast<uint32_t>(set)],
-                               .dstBinding = 18,
+                               .dstBinding =
+                                   bindingIndex(ForwardBinding::ClearcoatRoughnessTexture),
                                .descriptorCount = 1,
                                .descriptorType = vk::DescriptorType::eCombinedImageSampler,
                                .pImageInfo = &ccRoughTexInfo},
         vk::WriteDescriptorSet{.dstSet = descriptorSetTable_[static_cast<uint32_t>(set)],
-                               .dstBinding = 19,
+                               .dstBinding = bindingIndex(ForwardBinding::ClearcoatNormalTexture),
                                .descriptorCount = 1,
                                .descriptorType = vk::DescriptorType::eCombinedImageSampler,
                                .pImageInfo = &ccNormalTexInfo},
         vk::WriteDescriptorSet{.dstSet = descriptorSetTable_[static_cast<uint32_t>(set)],
-                               .dstBinding = 21,
+                               .dstBinding = bindingIndex(ForwardBinding::ThicknessTexture),
                                .descriptorCount = 1,
                                .descriptorType = vk::DescriptorType::eCombinedImageSampler,
                                .pImageInfo = &thicknessTexInfo},
@@ -444,22 +428,22 @@ ShadowDescriptorResult Descriptors::createShadowDescriptors(const ShadowDescript
 
             std::array<vk::WriteDescriptorSet, 4> writes = {{
                 vk::WriteDescriptorSet{.dstSet = *sets[i],
-                                       .dstBinding = 0,
+                                       .dstBinding = bindingIndex(ShadowBinding::Shadow),
                                        .descriptorCount = 1,
                                        .descriptorType = vk::DescriptorType::eUniformBuffer,
                                        .pBufferInfo = &shadowUboInfo},
                 vk::WriteDescriptorSet{.dstSet = *sets[i],
-                                       .dstBinding = 1,
+                                       .dstBinding = bindingIndex(ShadowBinding::Skin),
                                        .descriptorCount = 1,
                                        .descriptorType = vk::DescriptorType::eUniformBuffer,
                                        .pBufferInfo = &skinBufInfo},
                 vk::WriteDescriptorSet{.dstSet = *sets[i],
-                                       .dstBinding = 2,
+                                       .dstBinding = bindingIndex(ShadowBinding::Morph),
                                        .descriptorCount = 1,
                                        .descriptorType = vk::DescriptorType::eUniformBuffer,
                                        .pBufferInfo = &morphUboBufInfo},
                 vk::WriteDescriptorSet{.dstSet = *sets[i],
-                                       .dstBinding = 3,
+                                       .dstBinding = bindingIndex(ShadowBinding::MorphTargets),
                                        .descriptorCount = 1,
                                        .descriptorType = vk::DescriptorType::eStorageBuffer,
                                        .pBufferInfo = &morphSsboInfo},
@@ -528,12 +512,12 @@ Descriptors::createUboImageSamplerDescriptors(vk::DescriptorSetLayout layout,
             vk::ImageLayout::eShaderReadOnlyOptimal);
         std::array<vk::WriteDescriptorSet, 2> writes = {{
             vk::WriteDescriptorSet{.dstSet = *sets[i],
-                                   .dstBinding = 0,
+                                   .dstBinding = bindingIndex(SkyboxBinding::Skybox),
                                    .descriptorCount = 1,
                                    .descriptorType = vk::DescriptorType::eUniformBuffer,
                                    .pBufferInfo = &bufInfo},
             vk::WriteDescriptorSet{.dstSet = *sets[i],
-                                   .dstBinding = 1,
+                                   .dstBinding = bindingIndex(SkyboxBinding::Cubemap),
                                    .descriptorCount = 1,
                                    .descriptorType = vk::DescriptorType::eCombinedImageSampler,
                                    .pImageInfo = &texInfo},
@@ -579,7 +563,7 @@ std::array<DescriptorSetHandle, MAX_FRAMES_IN_FLIGHT> Descriptors::createSkyboxD
                                    .descriptorType = vk::DescriptorType::eCombinedImageSampler,
                                    .pImageInfo = &texInfo},
             vk::WriteDescriptorSet{.dstSet = *sets[i],
-                                   .dstBinding = 2,
+                                   .dstBinding = bindingIndex(SkyboxBinding::Light),
                                    .descriptorCount = 1,
                                    .descriptorType = vk::DescriptorType::eUniformBuffer,
                                    .pBufferInfo = &lightBufInfo},
@@ -693,12 +677,12 @@ void Descriptors::updatePostProcessDescriptors(
                                     vk::ImageLayout::eShaderReadOnlyOptimal);
         std::array<vk::WriteDescriptorSet, 2> writes = {{
             vk::WriteDescriptorSet{.dstSet = descriptorSetTable_[static_cast<uint32_t>(sets[i])],
-                                   .dstBinding = 0,
+                                   .dstBinding = bindingIndex(PostProcessBinding::HdrInput),
                                    .descriptorCount = 1,
                                    .descriptorType = vk::DescriptorType::eCombinedImageSampler,
                                    .pImageInfo = &hdrInfo},
             vk::WriteDescriptorSet{.dstSet = descriptorSetTable_[static_cast<uint32_t>(sets[i])],
-                                   .dstBinding = 1,
+                                   .dstBinding = bindingIndex(PostProcessBinding::BloomInput),
                                    .descriptorCount = 1,
                                    .descriptorType = vk::DescriptorType::eCombinedImageSampler,
                                    .pImageInfo = &bloomInfo},
