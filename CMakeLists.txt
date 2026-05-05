@@ -30,6 +30,7 @@ add_library(fireengine SHARED
     src/graphics/geometry.cpp
     src/graphics/image.cpp
     src/graphics/ktx_image.cpp
+    src/graphics/material_binding.cpp
     src/graphics/object.cpp
     src/graphics/skin.cpp
     src/graphics/texture.cpp
