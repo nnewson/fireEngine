@@ -29,6 +29,17 @@ PipelineConfig Pipeline::forwardConfig(vk::RenderPass renderPass)
                                               vk::DescriptorType::eCombinedImageSampler, 1,
                                               vk::ShaderStageFlagBits::eFragment};
     };
+    auto sampledImage = [](ForwardBinding binding)
+    {
+        return vk::DescriptorSetLayoutBinding{bindingIndex(binding),
+                                              vk::DescriptorType::eSampledImage, 1,
+                                              vk::ShaderStageFlagBits::eFragment};
+    };
+    auto plainSampler = [](ForwardBinding binding)
+    {
+        return vk::DescriptorSetLayoutBinding{bindingIndex(binding), vk::DescriptorType::eSampler,
+                                              1, vk::ShaderStageFlagBits::eFragment};
+    };
 
     PipelineConfig config;
     config.vertShaderPath = "shader.vert.spv";
@@ -46,18 +57,21 @@ PipelineConfig Pipeline::forwardConfig(vk::RenderPass renderPass)
         sampler(ForwardBinding::NormalTexture),
         sampler(ForwardBinding::MetallicRoughnessTexture),
         sampler(ForwardBinding::OcclusionTexture),
-        sampler(ForwardBinding::ShadowMap),
+        sampledImage(ForwardBinding::ShadowMap),
         uniform(ForwardBinding::Light, vk::ShaderStageFlagBits::eFragment),
         sampler(ForwardBinding::IrradianceMap),
         sampler(ForwardBinding::PrefilteredMap),
         sampler(ForwardBinding::BrdfLut),
-        sampler(ForwardBinding::ShadowDepthMap),
+        plainSampler(ForwardBinding::ShadowCompareSampler),
         sampler(ForwardBinding::TransmissionTexture),
         sampler(ForwardBinding::ClearcoatTexture),
         sampler(ForwardBinding::ClearcoatRoughnessTexture),
         sampler(ForwardBinding::ClearcoatNormalTexture),
         sampler(ForwardBinding::SceneColour),
         sampler(ForwardBinding::ThicknessTexture),
+        sampledImage(ForwardBinding::SpotShadowMap),
+        sampledImage(ForwardBinding::PointShadowMap),
+        plainSampler(ForwardBinding::ShadowLinearSampler),
     };
     config.renderPass = renderPass;
     return config;
@@ -98,10 +112,12 @@ PipelineConfig Pipeline::shadowConfig(vk::RenderPass renderPass)
         {bindingIndex(ShadowBinding::MorphTargets), vk::DescriptorType::eStorageBuffer, 1,
          vk::ShaderStageFlagBits::eVertex},
     };
-    // Cascade index pushed by the renderer once per shadow-pass iteration so
-    // the shadow vertex shader picks the matching lightViewProj[] entry.
-    config.pushConstantRanges.emplace_back(vk::ShaderStageFlagBits::eVertex, 0,
-                                           static_cast<uint32_t>(sizeof(ShadowPushConstants)));
+    // matrixIndex picks lightViewProj[] in the vertex stage. lightPosRange is
+    // consumed by the fragment shader's point-shadow branch (linear distance
+    // depth), so the push constant must be visible to both stages.
+    config.pushConstantRanges.emplace_back(
+        vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment, 0,
+        static_cast<uint32_t>(sizeof(ShadowPushConstants)));
     config.renderPass = renderPass;
     config.depthWrite = true;
     config.depthCompare = vk::CompareOp::eLessOrEqual;

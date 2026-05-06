@@ -1,13 +1,16 @@
 #version 450
 
+const int SHADOW_TOTAL_MATRIX_COUNT = 32;
+
 layout(binding = 0) uniform ShadowUBO {
     mat4 model;
-    mat4 lightViewProj[4];
+    mat4 lightViewProj[SHADOW_TOTAL_MATRIX_COUNT];
     int hasSkin;
 } shadow;
 
 layout(push_constant) uniform ShadowPushConstants {
-    int cascadeIndex;
+    int matrixIndex;
+    vec4 lightPosRange;
 } pc;
 
 layout(binding = 1) uniform SkinUBO {
@@ -34,6 +37,10 @@ layout(location = 4) in uvec4 inJoints;
 layout(location = 5) in vec4 inWeights;
 layout(location = 6) in vec4 inTangent;
 
+// Forwarded to the fragment stage so the point-shadow branch can write a
+// linear distance/range depth value via gl_FragDepth.
+layout(location = 0) out vec3 worldPos;
+
 void main() {
     vec3 pos = inPos;
 
@@ -57,6 +64,7 @@ void main() {
         transform = shadow.model;
     }
 
-    vec4 worldPos = transform * vec4(pos, 1.0);
-    gl_Position = shadow.lightViewProj[pc.cascadeIndex] * worldPos;
+    vec4 wp = transform * vec4(pos, 1.0);
+    worldPos = wp.xyz;
+    gl_Position = shadow.lightViewProj[pc.matrixIndex] * wp;
 }

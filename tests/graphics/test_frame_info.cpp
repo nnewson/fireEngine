@@ -56,11 +56,11 @@ TEST(FrameInfo, DefaultShadowPipelineIsNull)
     EXPECT_EQ(info.shadowPipeline, NullPipeline);
 }
 
-TEST(FrameInfo, DefaultCascadeViewProjsAreZero)
+TEST(FrameInfo, DefaultShadowViewProjsAreZero)
 {
     FrameInfo info;
     Mat4 zero;
-    for (const Mat4& m : info.cascadeViewProjs)
+    for (const Mat4& m : info.shadowViewProjs)
     {
         EXPECT_EQ(m, zero);
     }
@@ -73,15 +73,15 @@ TEST(FrameInfo, AssignShadowPipelineRoundTrip)
     EXPECT_EQ(info.shadowPipeline, PipelineHandle{7});
 }
 
-TEST(FrameInfo, AssignCascadeViewProjsRoundTrip)
+TEST(FrameInfo, AssignShadowViewProjsRoundTrip)
 {
     FrameInfo info;
     Mat4 id = Mat4::identity();
-    for (Mat4& m : info.cascadeViewProjs)
+    for (Mat4& m : info.shadowViewProjs)
     {
         m = id;
     }
-    for (const Mat4& m : info.cascadeViewProjs)
+    for (const Mat4& m : info.shadowViewProjs)
     {
         EXPECT_EQ(m, id);
     }

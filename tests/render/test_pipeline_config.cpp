@@ -14,7 +14,7 @@ TEST(PipelineConfig, ForwardConfigIncludesIblBindings)
 {
     auto config = Pipeline::forwardConfig({});
 
-    EXPECT_EQ(config.bindings.size(), 22u);
+    EXPECT_EQ(config.bindings.size(), 25u);
 
     auto hasBinding = [&](ForwardBinding binding)
     {
@@ -25,8 +25,10 @@ TEST(PipelineConfig, ForwardConfigIncludesIblBindings)
     EXPECT_TRUE(hasBinding(ForwardBinding::IrradianceMap));
     EXPECT_TRUE(hasBinding(ForwardBinding::PrefilteredMap));
     EXPECT_TRUE(hasBinding(ForwardBinding::BrdfLut));
-    // PCSS: non-comparison sampler over the shadow image for blocker search.
-    EXPECT_TRUE(hasBinding(ForwardBinding::ShadowDepthMap));
+    // Shared samplers — used with the SampledImage shadow bindings (10/22/23)
+    // via GLSL sampler*() constructors. Apple caps per-stage samplers at 16.
+    EXPECT_TRUE(hasBinding(ForwardBinding::ShadowCompareSampler));
+    EXPECT_TRUE(hasBinding(ForwardBinding::ShadowLinearSampler));
     // KHR_materials_transmission texture.
     EXPECT_TRUE(hasBinding(ForwardBinding::TransmissionTexture));
     // KHR_materials_clearcoat: factor (R), roughness (G), normal (RGB).
@@ -37,6 +39,9 @@ TEST(PipelineConfig, ForwardConfigIncludesIblBindings)
     EXPECT_TRUE(hasBinding(ForwardBinding::SceneColour));
     // KHR_materials_volume — thickness texture (G channel).
     EXPECT_TRUE(hasBinding(ForwardBinding::ThicknessTexture));
+    // Punctual light shadows: spot 2D-array + point cubemap-array depth maps.
+    EXPECT_TRUE(hasBinding(ForwardBinding::SpotShadowMap));
+    EXPECT_TRUE(hasBinding(ForwardBinding::PointShadowMap));
 }
 
 TEST(PipelineConfig, SkyboxConfigIncludesCubemapSamplerBinding)

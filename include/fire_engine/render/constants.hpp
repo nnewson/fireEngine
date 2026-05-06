@@ -65,6 +65,20 @@ inline constexpr float shadowFilterRadius = 1.0f;
 // further from contact points. ~0.005 is a soft sun; ~0.001 a sharp one.
 inline constexpr float pcssLightSize = 0.005f;
 
+// Shadow casters for punctual lights. Caps are independent of MAX_LIGHTS;
+// excess punctual lights remain unshadowed. First-N policy in gather order.
+// Total ShadowUBO matrix slots: 4 cascades + spot + point*6.
+inline constexpr int MAX_SPOT_SHADOW_CASTERS = 4;
+inline constexpr int MAX_POINT_SHADOW_CASTERS = 4;
+inline constexpr uint32_t spotShadowMapExtent = 1024;
+inline constexpr uint32_t pointShadowMapExtent = 512;
+inline constexpr float pointSpotShadowMinBias = 0.005f;
+inline constexpr float pointSpotShadowSlopeBias = 0.01f;
+inline constexpr float pointShadowNearPlane = 0.1f;
+// Substituted far plane for point lights with range==0 (glTF "infinite") so
+// the cube projection stays finite. Used only for shadow-map projection.
+inline constexpr float pointShadowInfiniteRangeFallback = 100.0f;
+
 // ---------------------------------------------------------------------------
 // IBL precompute extents — chosen at engine start, baked into texture sizes.
 // ---------------------------------------------------------------------------

@@ -97,13 +97,17 @@ ObjectDescriptorResult Descriptors::createObjectDescriptors(const ObjectDescript
     auto numGeometries = static_cast<uint32_t>(req.geometries.size());
     uint32_t totalSets = numGeometries * MAX_FRAMES_IN_FLIGHT;
 
-    std::array<vk::DescriptorPoolSize, 3> poolSizes = {{
+    std::array<vk::DescriptorPoolSize, 5> poolSizes = {{
         {vk::DescriptorType::eUniformBuffer, totalSets * 5},
-        // 16 samplers per set: baseColor, emissive, normal, mr, occlusion,
-        // shadowMap (compare), irradiance, prefiltered, brdfLut, shadowMapDepth,
-        // transmission, clearcoat, clearcoatRoughness, clearcoatNormal,
-        // sceneColor, thickness.
-        {vk::DescriptorType::eCombinedImageSampler, totalSets * 16},
+        // 14 combined samplers per set: baseColor, emissive, normal, mr,
+        // occlusion, irradiance, prefiltered, brdfLut, transmission,
+        // clearcoat, clearcoatRoughness, clearcoatNormal, sceneColor, thickness.
+        {vk::DescriptorType::eCombinedImageSampler, totalSets * 14},
+        // 3 sampled images per set: csm, spot, point shadow maps.
+        {vk::DescriptorType::eSampledImage, totalSets * 3},
+        // 2 standalone samplers per set: compare + linear (shared across all
+        // shadow images so we stay under Apple's 16-samplers-per-stage cap).
+        {vk::DescriptorType::eSampler, totalSets * 2},
         {vk::DescriptorType::eStorageBuffer, totalSets},
     }};
     auto& poolEntry = createDescriptorPool(poolSizes, totalSets);
@@ -164,14 +168,24 @@ ObjectDescriptorResult Descriptors::createObjectDescriptors(const ObjectDescript
                 materialImageInfo(MaterialTextureSlot::Thickness);
             vk::DescriptorBufferInfo lightBufInfo = makeDescriptorBufferInfo(
                 resources_->vulkanBuffer(req.lightBufs[i]), sizeof(LightUBO));
+            // Shadow images use plain sampledImage descriptors; the comparison
+            // and linear samplers are shared across CSM/spot/point via their
+            // own descriptor bindings (Apple's per-stage sampler limit is 16).
             vk::DescriptorImageInfo shadowTexInfo =
-                makeDescriptorImageInfo(resources_->vulkanSampler(req.shadowMap),
-                                        resources_->vulkanImageView(req.shadowMap),
+                makeDescriptorImageInfo({}, resources_->vulkanImageView(req.shadowMap),
                                         vk::ImageLayout::eDepthStencilReadOnlyOptimal);
-            vk::DescriptorImageInfo shadowDepthTexInfo =
-                makeDescriptorImageInfo(resources_->vulkanShadowSamplerLinear(req.shadowMap),
-                                        resources_->vulkanImageView(req.shadowMap),
+            vk::DescriptorImageInfo spotShadowImageInfo =
+                makeDescriptorImageInfo({}, resources_->vulkanImageView(req.spotShadowMap),
                                         vk::ImageLayout::eDepthStencilReadOnlyOptimal);
+            vk::DescriptorImageInfo pointShadowImageInfo =
+                makeDescriptorImageInfo({}, resources_->vulkanImageView(req.pointShadowMap),
+                                        vk::ImageLayout::eDepthStencilReadOnlyOptimal);
+            vk::DescriptorImageInfo shadowCompareSamplerInfo =
+                makeDescriptorImageInfo(resources_->vulkanSampler(req.shadowMap), {},
+                                        vk::ImageLayout::eUndefined);
+            vk::DescriptorImageInfo shadowLinearSamplerInfo =
+                makeDescriptorImageInfo(resources_->vulkanShadowSamplerLinear(req.shadowMap), {},
+                                        vk::ImageLayout::eUndefined);
             vk::DescriptorImageInfo irradianceTexInfo =
                 makeDescriptorImageInfo(resources_->vulkanSampler(req.irradianceMap),
                                         resources_->vulkanImageView(req.irradianceMap),
@@ -183,8 +197,7 @@ ObjectDescriptorResult Descriptors::createObjectDescriptors(const ObjectDescript
             vk::DescriptorImageInfo brdfLutTexInfo = makeDescriptorImageInfo(
                 resources_->vulkanSampler(req.brdfLut), resources_->vulkanImageView(req.brdfLut),
                 vk::ImageLayout::eShaderReadOnlyOptimal);
-
-            std::array<vk::WriteDescriptorSet, 22> writes = {{
+            std::array<vk::WriteDescriptorSet, 25> writes = {{
                 vk::WriteDescriptorSet{.dstSet = *sets[i],
                                        .dstBinding = bindingIndex(ForwardBinding::Frame),
                                        .descriptorCount = 1,
@@ -240,7 +253,7 @@ ObjectDescriptorResult Descriptors::createObjectDescriptors(const ObjectDescript
                 vk::WriteDescriptorSet{.dstSet = *sets[i],
                                        .dstBinding = bindingIndex(ForwardBinding::ShadowMap),
                                        .descriptorCount = 1,
-                                       .descriptorType = vk::DescriptorType::eCombinedImageSampler,
+                                       .descriptorType = vk::DescriptorType::eSampledImage,
                                        .pImageInfo = &shadowTexInfo},
                 vk::WriteDescriptorSet{.dstSet = *sets[i],
                                        .dstBinding = bindingIndex(ForwardBinding::Light),
@@ -262,11 +275,12 @@ ObjectDescriptorResult Descriptors::createObjectDescriptors(const ObjectDescript
                                        .descriptorCount = 1,
                                        .descriptorType = vk::DescriptorType::eCombinedImageSampler,
                                        .pImageInfo = &brdfLutTexInfo},
-                vk::WriteDescriptorSet{.dstSet = *sets[i],
-                                       .dstBinding = bindingIndex(ForwardBinding::ShadowDepthMap),
-                                       .descriptorCount = 1,
-                                       .descriptorType = vk::DescriptorType::eCombinedImageSampler,
-                                       .pImageInfo = &shadowDepthTexInfo},
+                vk::WriteDescriptorSet{
+                    .dstSet = *sets[i],
+                    .dstBinding = bindingIndex(ForwardBinding::ShadowCompareSampler),
+                    .descriptorCount = 1,
+                    .descriptorType = vk::DescriptorType::eSampler,
+                    .pImageInfo = &shadowCompareSamplerInfo},
                 vk::WriteDescriptorSet{.dstSet = *sets[i],
                                        .dstBinding =
                                            bindingIndex(ForwardBinding::TransmissionTexture),
@@ -300,6 +314,22 @@ ObjectDescriptorResult Descriptors::createObjectDescriptors(const ObjectDescript
                                        .descriptorCount = 1,
                                        .descriptorType = vk::DescriptorType::eCombinedImageSampler,
                                        .pImageInfo = &thicknessTexInfo},
+                vk::WriteDescriptorSet{.dstSet = *sets[i],
+                                       .dstBinding = bindingIndex(ForwardBinding::SpotShadowMap),
+                                       .descriptorCount = 1,
+                                       .descriptorType = vk::DescriptorType::eSampledImage,
+                                       .pImageInfo = &spotShadowImageInfo},
+                vk::WriteDescriptorSet{.dstSet = *sets[i],
+                                       .dstBinding = bindingIndex(ForwardBinding::PointShadowMap),
+                                       .descriptorCount = 1,
+                                       .descriptorType = vk::DescriptorType::eSampledImage,
+                                       .pImageInfo = &pointShadowImageInfo},
+                vk::WriteDescriptorSet{
+                    .dstSet = *sets[i],
+                    .dstBinding = bindingIndex(ForwardBinding::ShadowLinearSampler),
+                    .descriptorCount = 1,
+                    .descriptorType = vk::DescriptorType::eSampler,
+                    .pImageInfo = &shadowLinearSamplerInfo},
             }};
             device_->device().updateDescriptorSets(writes, {});
 

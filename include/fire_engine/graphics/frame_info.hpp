@@ -6,6 +6,7 @@
 #include <fire_engine/graphics/gpu_handle.hpp>
 #include <fire_engine/math/mat4.hpp>
 #include <fire_engine/math/vec3.hpp>
+#include <fire_engine/render/ubo.hpp>
 
 namespace fire_engine
 {
@@ -29,10 +30,11 @@ struct FrameInfo
     Vec3 cameraTarget;
     AlphaPipelines pipelines{};
     PipelineHandle shadowPipeline{NullPipeline};
-    // Per-cascade light-space view-projection matrices. Object::render copies
-    // all four into the per-draw ShadowUBO so the shadow vertex shader can
-    // select by push-constant cascade index.
-    std::array<Mat4, 4> cascadeViewProjs{};
+    // Light-space view-projection matrices for every shadow caster — cascades,
+    // spot lights, and the six faces of each point light. Layout matches
+    // ShadowUBO::lightViewProj. Object::render copies the full array into the
+    // per-draw ShadowUBO; the shadow vertex shader picks one via push constant.
+    std::array<Mat4, SHADOW_TOTAL_MATRIX_COUNT> shadowViewProjs{};
 };
 
 } // namespace fire_engine

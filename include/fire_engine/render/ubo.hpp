@@ -118,12 +118,17 @@ struct EnvironmentCaptureUBO
 //   colour.a      — intensity (scalar multiplier)
 //   cone.x        — cos(innerCone)
 //   cone.y        — cos(outerCone)
+//   cone.z        — shadow index. For spot lights, layer in spot 2D-array
+//                   shadow map (0..MAX_SPOT_SHADOW_CASTERS-1). For point
+//                   lights, cube layer in point cubemap-array shadow map
+//                   (0..MAX_POINT_SHADOW_CASTERS-1). -1 = no shadow caster.
+//                   Stored as float; cast int() in shader.
 struct LightData
 {
     alignas(16) float position[4]{};
     alignas(16) float direction[4]{};
     alignas(16) float colour[4]{};
-    alignas(16) float cone[4]{1.0f, 0.0f, 0.0f, 0.0f};
+    alignas(16) float cone[4]{1.0f, 0.0f, -1.0f, 0.0f};
 };
 
 struct LightUBO
@@ -132,10 +137,16 @@ struct LightUBO
     // first directional light in `lights[]` if any; otherwise against a
     // default direction so the matrices stay valid for the shadow pass.
     alignas(16) Mat4 cascadeViewProj[4]{};
+    // Spot-light view-projection matrices for shadow sampling. Indexed by
+    // LightData::cone.z (shadow index). Identity when the slot is unused.
+    alignas(16) Mat4 spotViewProj[MAX_SPOT_SHADOW_CASTERS]{};
     // View-space far-plane distances for each cascade (x..w = cascades 0..3).
     alignas(16) float cascadeSplits[4]{};
     alignas(16) float iblParams[4]{};         // x = maxReflectionLod, y/z = IBL strengths
-    alignas(16) float shadowParams[4]{};      // x = minBias, y = slopeBias, z = filterRadius
+    // x = csm minBias, y = csm slopeBias, z = filterRadius, w = pcssLightSize.
+    alignas(16) float shadowParams[4]{};
+    // x = punctual minBias, y = punctual slopeBias.
+    alignas(16) float pointSpotShadowParams[4]{};
     alignas(16) float environmentParams[4]{}; // x = skyboxIntensity, w = CSM debug tint
     // Active light count and the packed light array. Convention: lights[0] is
     // the primary directional (CSM source) when one exists. The shader loops
@@ -163,19 +174,34 @@ struct EnvironmentPrefilterPushConstants
     float _pad2{0.0f};
 };
 
+// Shadow vertex shader projects each vertex into light-space using one of
+// these matrices, picked via ShadowPushConstants::matrixIndex.
+//   [0..3]   directional cascades 0..3
+//   [4..]    spot lights, layout 4 + spotIndex
+//   [4+S..]  point lights, layout (4 + S) + 6 * cubeIndex + face
+// where S = MAX_SPOT_SHADOW_CASTERS.
+inline constexpr int SHADOW_CASCADE_MATRIX_BASE = 0;
+inline constexpr int SHADOW_SPOT_MATRIX_BASE = 4;
+inline constexpr int SHADOW_POINT_MATRIX_BASE = SHADOW_SPOT_MATRIX_BASE + MAX_SPOT_SHADOW_CASTERS;
+inline constexpr int SHADOW_TOTAL_MATRIX_COUNT =
+    SHADOW_POINT_MATRIX_BASE + 6 * MAX_POINT_SHADOW_CASTERS;
+
 struct ShadowUBO
 {
     alignas(16) Mat4 model;
-    // Per-cascade light-space view-projection matrices. The shadow vertex
-    // shader selects one via the ShadowPushConstants::cascadeIndex push
-    // constant that the renderer sets per shadow-pass iteration.
-    alignas(16) Mat4 lightViewProj[4];
+    alignas(16) Mat4 lightViewProj[SHADOW_TOTAL_MATRIX_COUNT];
     alignas(4) int hasSkin{0};
 };
 
 struct ShadowPushConstants
 {
-    alignas(4) int cascadeIndex{0};
+    // Selects which lightViewProj[] matrix the vertex shader uses.
+    alignas(4) int matrixIndex{0};
+    // Point shadow only (matrixIndex >= SHADOW_POINT_MATRIX_BASE): xyz = light
+    // world position, w = effective range. shadow.frag writes
+    // gl_FragDepth = length(worldPos - xyz)/w so the cube-array compare
+    // sampler can compare linear-distance ratios. Zero for cascade/spot.
+    alignas(16) float lightPosRange[4]{};
 };
 
 struct BloomPushConstants

@@ -9,11 +9,14 @@ layout(binding = 0) uniform SkyboxUBO {
 
 layout(binding = 1) uniform samplerCube skyboxMap;
 
+// Layout must match C++ LightUBO in include/fire_engine/render/ubo.hpp.
 layout(binding = 2) uniform LightUBO {
     mat4 cascadeViewProj[4];
+    mat4 spotViewProj[4];
     vec4 cascadeSplits;
     vec4 iblParams;
     vec4 shadowParams;
+    vec4 pointSpotShadowParams;
     vec4 environmentParams;
 } light;
 

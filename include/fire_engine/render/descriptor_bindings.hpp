@@ -19,18 +19,25 @@ enum class ForwardBinding : std::uint32_t
     NormalTexture = 7,
     MetallicRoughnessTexture = 8,
     OcclusionTexture = 9,
+    // Shadow images are bound as plain sampled images (no sampler attached) so
+    // a single comparison sampler and a single linear sampler can be reused
+    // across CSM, spot and point shadow maps. Combining each into its own
+    // CombinedImageSampler would blow past Apple's 16-samplers-per-stage limit.
     ShadowMap = 10,
     Light = 11,
     IrradianceMap = 12,
     PrefilteredMap = 13,
     BrdfLut = 14,
-    ShadowDepthMap = 15,
+    ShadowCompareSampler = 15,
     TransmissionTexture = 16,
     ClearcoatTexture = 17,
     ClearcoatRoughnessTexture = 18,
     ClearcoatNormalTexture = 19,
     SceneColour = 20,
     ThicknessTexture = 21,
+    SpotShadowMap = 22,
+    PointShadowMap = 23,
+    ShadowLinearSampler = 24,
 };
 
 enum class ShadowBinding : std::uint32_t

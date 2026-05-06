@@ -1,5 +1,6 @@
 #include <iostream>
 #include <set>
+#include <stdexcept>
 #include <string>
 
 #include <fire_engine/render/device.hpp>
@@ -173,8 +174,18 @@ void Device::createLogicalDevice()
         });
     }
 
+    auto supported = physDevice_.getFeatures();
+    if (!supported.imageCubeArray)
+    {
+        throw std::runtime_error(
+            "GPU does not support imageCubeArray (required for point shadow maps)");
+    }
+
     vk::PhysicalDeviceFeatures features{};
     features.samplerAnisotropy = vk::True;
+    // Point light shadow maps use samplerCubeArrayShadow over a cubemap-array
+    // depth image. Requires the imageCubeArray feature.
+    features.imageCubeArray = vk::True;
 
     // Shadow mapping uses sampler2DShadow (hardware PCF), which requires
     // compareEnable=VK_TRUE on the sampler. MoltenVK gates that behind the

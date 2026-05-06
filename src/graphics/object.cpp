@@ -112,6 +112,8 @@ void Object::load(Resources& resources)
     Resources::ObjectDescriptorRequest req;
     const auto& lightBufs = resources.lightBuffers();
     req.shadowMap = resources.shadowMap();
+    req.spotShadowMap = resources.spotShadowMap();
+    req.pointShadowMap = resources.pointShadowMap();
     req.irradianceMap = resources.irradianceMap();
     req.prefilteredMap = resources.prefilteredMap();
     req.brdfLut = resources.brdfLut();
@@ -381,9 +383,9 @@ std::vector<DrawCommand> Object::render(const FrameInfo& frame, const Mat4& worl
     // shadow pass and forward draws replay inside the forward pass.
     ShadowUBO shadowData{};
     shadowData.model = world;
-    for (std::size_t i = 0; i < frame.cascadeViewProjs.size(); ++i)
+    for (std::size_t i = 0; i < frame.shadowViewProjs.size(); ++i)
     {
-        shadowData.lightViewProj[i] = frame.cascadeViewProjs[i];
+        shadowData.lightViewProj[i] = frame.shadowViewProjs[i];
     }
     shadowData.hasSkin = ubo.hasSkin;
     for (auto& binding : bindings_)

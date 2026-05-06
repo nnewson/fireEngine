@@ -833,6 +833,31 @@ TextureHandle Resources::createFallbackTexture(FallbackTextureKind kind)
 
 // --- Shadow map ---
 
+// One-time transition Undefined → DepthStencilReadOnlyOptimal for every
+// subresource of a depth image. Punctual-light shadow maps need this because
+// only the layers/faces of *active* casters are touched by the shadow render
+// pass each frame; unused layers would otherwise remain in UNDEFINED, but the
+// forward shader's array sampler accesses the entire image.
+static void transitionDepthImageToReadOnly(const Device& device, vk::CommandPool pool,
+                                           vk::Image image, uint32_t layerCount)
+{
+    vk::CommandBufferAllocateInfo cmdAi = makeCommandBufferAllocateInfo(pool, 1);
+    auto cmds = device.device().allocateCommandBuffers(cmdAi);
+    auto& cmd = cmds[0];
+    cmd.begin(makeOneTimeSubmitBeginInfo());
+    vk::ImageMemoryBarrier toReadOnly = makeImageMemoryBarrier(
+        {}, vk::AccessFlagBits::eShaderRead, vk::ImageLayout::eUndefined,
+        vk::ImageLayout::eDepthStencilReadOnlyOptimal, image,
+        makeImageSubresourceRange(vk::ImageAspectFlagBits::eDepth, 0, 1, 0, layerCount));
+    cmd.pipelineBarrier(vk::PipelineStageFlagBits::eTopOfPipe,
+                        vk::PipelineStageFlagBits::eFragmentShader, {}, {}, {}, toReadOnly);
+    cmd.end();
+    vk::CommandBuffer rawCmd = *cmd;
+    vk::SubmitInfo submitInfo{.commandBufferCount = 1, .pCommandBuffers = &rawCmd};
+    device.graphicsQueue().submit(submitInfo);
+    device.graphicsQueue().waitIdle();
+}
+
 TextureHandle Resources::createShadowMap(uint32_t extent, uint32_t layerCount)
 {
     auto id = static_cast<uint32_t>(textures_.size());
@@ -893,6 +918,8 @@ TextureHandle Resources::createShadowMap(uint32_t extent, uint32_t layerCount)
         0.0f, 1.0f, vk::BorderColor::eFloatOpaqueWhite);
     entry.samplerLinear = vk::raii::Sampler(device_->device(), linearSamplerCi);
 
+    transitionDepthImageToReadOnly(*device_, *cmdPool_, *entry.image, layerCount);
+
     return TextureHandle{id};
 }
 
@@ -901,6 +928,63 @@ vk::ImageView Resources::vulkanShadowMapLayerView(TextureHandle handle,
 {
     const auto& entry = textures_[static_cast<uint32_t>(handle)];
     return *entry.faceViews[layer];
+}
+
+TextureHandle Resources::createPointShadowMap(uint32_t faceExtent, uint32_t cubeCount)
+{
+    auto id = static_cast<uint32_t>(textures_.size());
+    textures_.emplace_back();
+    auto& entry = textures_.back();
+    entry.format = vk::Format::eD32Sfloat;
+
+    const uint32_t totalLayers = 6u * cubeCount;
+    vk::ImageCreateInfo imgCi = makeImageCreateInfo(
+        vk::ImageCreateFlagBits::eCubeCompatible, vk::ImageType::e2D, entry.format,
+        vk::Extent3D{.width = faceExtent, .height = faceExtent, .depth = 1}, 1, totalLayers,
+        vk::ImageUsageFlagBits::eDepthStencilAttachment | vk::ImageUsageFlagBits::eSampled);
+    entry.image = vk::raii::Image(device_->device(), imgCi);
+
+    auto imgReq = entry.image.getMemoryRequirements();
+    vk::MemoryAllocateInfo imgAi = makeMemoryAllocateInfo(
+        imgReq,
+        device_->findMemoryType(imgReq.memoryTypeBits, vk::MemoryPropertyFlagBits::eDeviceLocal));
+    entry.memory = vk::raii::DeviceMemory(device_->device(), imgAi);
+    entry.image.bindMemory(*entry.memory, 0);
+
+    // Main view: cube array (samplerCubeArrayShadow in the forward fragment).
+    vk::ImageViewCreateInfo viewCi = makeImageViewCreateInfo(
+        *entry.image, vk::ImageViewType::eCubeArray, entry.format,
+        makeImageSubresourceRange(vk::ImageAspectFlagBits::eDepth, 0, 1, 0, totalLayers));
+    entry.view = vk::raii::ImageView(device_->device(), viewCi);
+
+    // Per-face 2D depth views — `6 * cube + face`. Used as framebuffer
+    // attachments during the depth pass (one face per render-pass invocation).
+    entry.faceViews.reserve(totalLayers);
+    for (uint32_t layer = 0; layer < totalLayers; ++layer)
+    {
+        vk::ImageViewCreateInfo faceCi = makeImageViewCreateInfo(
+            *entry.image, vk::ImageViewType::e2D, entry.format,
+            makeImageSubresourceRange(vk::ImageAspectFlagBits::eDepth, 0, 1, layer, 1));
+        entry.faceViews.emplace_back(device_->device(), faceCi);
+    }
+
+    vk::SamplerCreateInfo samplerCi = makeSamplerCreateInfo(
+        vk::Filter::eLinear, vk::Filter::eLinear, vk::SamplerMipmapMode::eNearest,
+        vk::SamplerAddressMode::eClampToEdge, vk::SamplerAddressMode::eClampToEdge,
+        vk::SamplerAddressMode::eClampToEdge, vk::False, 1.0f, vk::True, vk::CompareOp::eLess, 0.0f,
+        1.0f, vk::BorderColor::eFloatOpaqueWhite);
+    entry.sampler = vk::raii::Sampler(device_->device(), samplerCi);
+
+    transitionDepthImageToReadOnly(*device_, *cmdPool_, *entry.image, totalLayers);
+
+    return TextureHandle{id};
+}
+
+vk::ImageView Resources::vulkanPointShadowFaceView(TextureHandle handle, uint32_t cubeIndex,
+                                                   uint32_t face) const noexcept
+{
+    const auto& entry = textures_[static_cast<uint32_t>(handle)];
+    return *entry.faceViews[6u * cubeIndex + face];
 }
 
 vk::Sampler Resources::vulkanShadowSamplerLinear(TextureHandle handle) const noexcept

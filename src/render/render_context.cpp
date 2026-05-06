@@ -9,7 +9,7 @@ FrameInfo RenderContext::frameInfo() const noexcept
 {
     auto extent = swapchain.extent();
     return {currentFrame, extent.width, extent.height,  cameraPosition,
-            cameraTarget, pipelines,    shadowPipeline, cascadeViewProjs};
+            cameraTarget, pipelines,    shadowPipeline, shadowViewProjs};
 }
 
 } // namespace fire_engine

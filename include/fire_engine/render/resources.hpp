@@ -101,6 +101,17 @@ public:
     [[nodiscard]] vk::ImageView vulkanShadowMapLayerView(TextureHandle handle,
                                                          uint32_t layer) const noexcept;
 
+    // D32_SFLOAT cubemap-array depth image for point-light shadows. Total
+    // layers = 6 * cubeCount. Main view is eCubeArray (sampled via
+    // samplerCubeArrayShadow); per-face 2D views are created for framebuffer
+    // attachment, indexed as `6 * cube + face`.
+    [[nodiscard]] TextureHandle createPointShadowMap(uint32_t faceExtent, uint32_t cubeCount);
+
+    // Per-face 2D depth view on a point shadow cubemap array. cubeIndex picks
+    // the cube; face is 0..5 in Vulkan's cubemap face order (+X,-X,+Y,-Y,+Z,-Z).
+    [[nodiscard]] vk::ImageView vulkanPointShadowFaceView(TextureHandle handle, uint32_t cubeIndex,
+                                                          uint32_t face) const noexcept;
+
     // Non-comparison sampler over the shadow image — used by PCSS to read raw
     // depth values during the blocker search. Same image as vulkanSampler().
     [[nodiscard]] vk::Sampler vulkanShadowSamplerLinear(TextureHandle handle) const noexcept;
@@ -172,6 +183,26 @@ public:
     [[nodiscard]] TextureHandle shadowMap() const noexcept
     {
         return shadowMap_;
+    }
+
+    void spotShadowMap(TextureHandle handle) noexcept
+    {
+        spotShadowMap_ = handle;
+    }
+
+    [[nodiscard]] TextureHandle spotShadowMap() const noexcept
+    {
+        return spotShadowMap_;
+    }
+
+    void pointShadowMap(TextureHandle handle) noexcept
+    {
+        pointShadowMap_ = handle;
+    }
+
+    [[nodiscard]] TextureHandle pointShadowMap() const noexcept
+    {
+        return pointShadowMap_;
     }
 
     void irradianceMap(TextureHandle handle) noexcept
@@ -281,6 +312,8 @@ private:
 
     std::array<BufferHandle, MAX_FRAMES_IN_FLIGHT> lightBuffers_{NullBuffer, NullBuffer};
     TextureHandle shadowMap_{NullTexture};
+    TextureHandle spotShadowMap_{NullTexture};
+    TextureHandle pointShadowMap_{NullTexture};
     TextureHandle sceneColor_{NullTexture};
     TextureHandle irradianceMap_{NullTexture};
     TextureHandle prefilteredMap_{NullTexture};

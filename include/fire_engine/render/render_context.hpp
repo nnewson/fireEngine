@@ -10,6 +10,7 @@
 #include <fire_engine/graphics/frame_info.hpp>
 #include <fire_engine/math/mat4.hpp>
 #include <fire_engine/math/vec3.hpp>
+#include <fire_engine/render/ubo.hpp>
 
 namespace fire_engine
 {
@@ -32,7 +33,7 @@ struct RenderContext
     std::vector<DrawCommand>* drawCommands{nullptr};
     AlphaPipelines pipelines{};
     PipelineHandle shadowPipeline{NullPipeline};
-    std::array<Mat4, 4> cascadeViewProjs{};
+    std::array<Mat4, SHADOW_TOTAL_MATRIX_COUNT> shadowViewProjs{};
 
     [[nodiscard]] FrameInfo frameInfo() const noexcept;
 };

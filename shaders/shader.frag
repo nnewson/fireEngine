@@ -1,4 +1,8 @@
 #version 450
+// textureSize() and similar queries on plain texture* uniforms (no sampler
+// attached) need this — we use it for the shadow map array which is bound
+// as a sampledImage so the same image can pair with multiple samplers.
+#extension GL_EXT_samplerless_texture_functions : require
 
 layout(binding = 0) uniform UBO {
     mat4 model;
@@ -75,32 +79,41 @@ layout(binding = 20) uniform sampler2D sceneColorMap;
 // thicknessFactor). Drives both the refracted exit point and the Beer-Lambert
 // path length.
 layout(binding = 21) uniform sampler2D thicknessMap;
-layout(binding = 10) uniform sampler2DArrayShadow shadowMap;
+// Shadow images bound as plain textures so a single comparison sampler and
+// a single linear sampler can be reused across all three (Apple's per-stage
+// sampler limit is 16). Combined samplers are constructed at use time via
+// the GLSL sampler*() constructors.
+layout(binding = 10) uniform texture2DArray shadowMapTex;
+layout(binding = 22) uniform texture2DArray spotShadowMapTex;
+layout(binding = 23) uniform textureCubeArray pointShadowMapTex;
+layout(binding = 15) uniform sampler shadowCompareSampler;
+layout(binding = 24) uniform sampler shadowLinearSampler;
 layout(binding = 12) uniform samplerCube irradianceMap;
 layout(binding = 13) uniform samplerCube prefilteredMap;
 layout(binding = 14) uniform sampler2D brdfLut;
-// PCSS blocker search reads raw depths from the same shadow image via a
-// non-comparison sampler. Binding 10 is for the hardware-PCF compare path.
-layout(binding = 15) uniform sampler2DArray shadowMapDepth;
 
 struct LightData {
     // .xyz = world position (point/spot), .w = type (0=dir, 1=point, 2=spot)
     vec4 position;
-    // .xyz = world forward, .w = range (point/spot; 0 = infinite)
+    // .xyz = world forward, .w = range (point/spot; 0 = infinite). For point
+    // shadow casters, .w is the effective range used by the shadow pass.
     vec4 direction;
     // .rgb = colour, .a = intensity
     vec4 colour;
-    // .x = cos(innerCone), .y = cos(outerCone)
+    // .x = cos(innerCone), .y = cos(outerCone), .z = shadow index (-1 = none)
     vec4 cone;
 };
 
 const int MAX_LIGHTS = 8;
+const int MAX_SPOT_SHADOW_CASTERS = 4;
 
 layout(binding = 11) uniform LightUBO {
     mat4 cascadeViewProj[4];
+    mat4 spotViewProj[MAX_SPOT_SHADOW_CASTERS];
     vec4 cascadeSplits;
     vec4 iblParams;
     vec4 shadowParams;
+    vec4 pointSpotShadowParams;
     vec4 environmentParams;
     int  lightCount;
     int  _pad0;
@@ -212,7 +225,8 @@ float pcfSample(vec3 worldPos, vec3 normal, vec3 lightDir, int cascade)
     int blockerCount = 0;
     for (int i = 0; i < 16; ++i) {
         vec2 off = rot * poissonDisk[i] * searchRadius;
-        float d = texture(shadowMapDepth, vec3(proj.xy + off, float(cascade))).r;
+        float d = texture(sampler2DArray(shadowMapTex, shadowLinearSampler),
+                          vec3(proj.xy + off, float(cascade))).r;
         if (d < receiverDepth) {
             blockerSum += d;
             blockerCount++;
@@ -229,14 +243,15 @@ float pcfSample(vec3 worldPos, vec3 normal, vec3 lightDir, int cascade)
     float penumbra = (receiverDepth - avgBlocker) / max(avgBlocker, 1e-4) * lightSize;
     // Floor at one shadow texel — keeps the kernel from collapsing to a single
     // sample at razor-thin contact, which would re-introduce aliasing.
-    float texelSize = 1.0 / float(textureSize(shadowMap, 0).x);
+    float texelSize = 1.0 / float(textureSize(shadowMapTex, 0).x);
     float filterRadius = max(penumbra, texelSize);
 
     // 3. Variable-radius PCF — same Poisson kernel, hardware compare sampler.
     float vis = 0.0;
     for (int i = 0; i < 16; ++i) {
         vec2 off = rot * poissonDisk[i] * filterRadius;
-        vis += texture(shadowMap, vec4(proj.xy + off, float(cascade), receiverDepth));
+        vis += texture(sampler2DArrayShadow(shadowMapTex, shadowCompareSampler),
+                       vec4(proj.xy + off, float(cascade), receiverDepth));
     }
     return vis / 16.0;
 }
@@ -406,6 +421,34 @@ void main() {
                                          / max(L.cone.x - L.cone.y, 1e-4),
                                          0.0, 1.0);
                 attenuation *= spotFactor * spotFactor;
+            }
+
+            int shIdx = int(L.cone.z + 0.5);
+            if (shIdx >= 0 && attenuation > 0.0) {
+                float bias = light.pointSpotShadowParams.x;
+                if (type == 2) {
+                    vec4 sp = light.spotViewProj[shIdx] * vec4(fragWorldPos, 1.0);
+                    vec3 proj = sp.xyz / max(sp.w, 1e-4);
+                    proj.xy = proj.xy * 0.5 + 0.5;
+                    if (proj.z >= 0.0 && proj.z <= 1.0
+                        && all(greaterThanEqual(proj.xy, vec2(0.0)))
+                        && all(lessThanEqual(proj.xy, vec2(1.0)))) {
+                        float visibility = texture(
+                            sampler2DArrayShadow(spotShadowMapTex, shadowCompareSampler),
+                            vec4(proj.xy, float(shIdx), proj.z - bias));
+                        attenuation *= visibility;
+                    }
+                } else if (type == 1) {
+                    vec3 toFrag = fragWorldPos - L.position.xyz;
+                    float dist = length(toFrag);
+                    float range = max(L.direction.w, 1e-4);
+                    float compareValue = clamp(dist / range - bias, 0.0, 1.0);
+                    vec3 sampleDir = toFrag / max(dist, 1e-4);
+                    float visibility = texture(
+                        samplerCubeArrayShadow(pointShadowMapTex, shadowCompareSampler),
+                        vec4(sampleDir, float(shIdx)), compareValue);
+                    attenuation *= visibility;
+                }
             }
         }
 

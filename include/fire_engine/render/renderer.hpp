@@ -134,7 +134,10 @@ private:
     std::array<DescriptorSetHandle, MAX_FRAMES_IN_FLIGHT> skyboxDescSets_{};
     BufferHandle skyboxIndexBuffer_{NullBuffer};
     Resources::MappedBufferSet lightUbo_;
-    std::array<Mat4, 4> cascadeViewProjs_{};
+    std::array<Mat4, SHADOW_TOTAL_MATRIX_COUNT> shadowViewProjs_{};
+    int activeSpotCasters_{0};
+    int activePointCasters_{0};
+    std::array<PointShadowCaster, MAX_POINT_SHADOW_CASTERS> pointCasters_{};
     std::vector<vk::Fence> imagesInFlight_{};
     uint32_t currentFrame_{0};
     // Flip to true and rebuild to visualise cascade regions: red→green→blue→yellow
