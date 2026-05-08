@@ -12,7 +12,7 @@ I've no doubt these are all solved problems nowadays with the Unreal engine et a
 - **glTF 2.0 model loading** via [fastgltf](https://github.com/spnda/fastgltf) — geometry, full PBR material set (base-colour, metallic-roughness, normal, occlusion + `occlusionStrength`, emissive, **transmission**), per-texture sampler settings, **per-slot UV-set selection (TEXCOORD_0 / TEXCOORD_1)**, skeletal skins, morph targets (POSITION + NORMAL + TANGENT deltas), keyframe animations, and alpha-mode state (OPAQUE / MASK / BLEND, `alphaCutoff`, `doubleSided`). Supported extensions: `KHR_materials_emissive_strength`, `KHR_texture_transform`, `KHR_materials_unlit`, **`KHR_lights_punctual`**, **`KHR_materials_transmission`**. Authored cameras are adopted as the engine's runtime view; authored lights drive the scene. Unsupported `extensionsRequired` rejected with a clear error; non-Triangles primitives skipped with a warning
 - **Tangent-space normal mapping** — tangents generated on load when a material uses a normal texture (per-triangle UV derivatives, Gram-Schmidt orthogonalisation, handedness preserved in `tangent.w`). **Smooth-normal fallback** synthesises per-vertex normals when the source mesh omits NORMAL (e.g. Fox.gltf)
 - **Physically based shading with split-sum IBL + multi-scatter compensation** — equirectangular HDR skybox is converted to an environment cubemap (1024², 11 mip levels), a diffuse irradiance cubemap (32²), a GGX prefiltered specular cubemap (128², 8 mips, importance-sampled with 256 Hammersley samples and Filament-style mip-LOD weighting against the source cubemap's mip chain), and a BRDF integration LUT (256²) at startup. Forward fragment shader uses Fdez-Aguera multi-scatter compensation so rough conductors stay energy-conserving across the roughness range
-- **PCSS shadows on a 4-cascade CSM** — 4 cascades, 2048×2048 per cascade in a 2D-array depth image, log-uniform splits over 0.1m–50m. **Per-fragment PCSS**: 16-tap Poisson-disk **blocker search** (raw-depth read via a non-comparison sampler at binding 15) → contact-hardening **penumbra** = `(receiverDepth − avgBlocker) / avgBlocker × lightSize` → 16-tap Poisson-disk **variable-radius PCF** via `sampler2DArrayShadow` hardware comparison, with per-pixel rotation hash to break up moiré. Per-cascade bias scaling, 10% blend bands at boundaries
+- **Poisson PCF shadows on a 4-cascade CSM** — 4 cascades, 2048×2048 per cascade in a 2D-array depth image, log-uniform splits over 0.1m–50m. Directional shadows use a 16-tap rotated Poisson kernel plus a centre sample through a shared comparison sampler, with per-cascade bias scaling and 10% blend bands at cascade boundaries. Skinned meshes avoid same-map self-shadow acne by receiving from a world-only directional map plus a tightly-fit dual-depth per-object self-shadow map
 - **KHR_materials_unlit** — flagged materials skip BRDF/IBL/shadow entirely and output the textured base colour directly. Used for skybox cards, foliage, decals, UI quads
 - **KHR_texture_transform** — per-slot UV offset/scale/rotation from the extension is applied to each texture sample. Identity by default
 - **Multi-light scenegraph** — `Light` is a first-class component variant alongside Camera / Mesh / Animator / Empty. Type enum is **Directional / Point / Spot**, with colour, intensity, range, and inner/outer cone angles per spec. Each frame the scenegraph walks all lights into a packed `Lighting` array (cap `MAX_LIGHTS = 8`), the renderer picks the first directional as the CSM source, and the forward shader runs a per-fragment loop over the array. Point/spot use the KHR_lights_punctual attenuation (`windowing² / d²` with `windowing = clamp(1 − (d / range)⁴, 0, 1)`); spot adds a smooth cone factor on top
@@ -27,8 +27,8 @@ I've no doubt these are all solved problems nowadays with the Unreal engine et a
 - **Scenegraph architecture** — tree of Nodes with Component variants (Camera, Animator, Mesh, Empty, **Light**) that propagate transforms, an `InputState` bundle, and draw commands. Node transforms store rotation as a quaternion so orientations from glTF round-trip exactly
 - **Custom collision and physics path** — glTF `extras.Physics` can create `Static`, `Kinematic`, and `Dynamic` bodies with layer/mask filtering, authored AABB/box/sphere/capsule proxy shapes, linear velocity, mass, restitution, friction, and gravity scale. `PhysicsWorld` owns body/collider state, `SweepAndPruneBroadPhase` gathers AABB candidate pairs, `NarrowPhase` performs swept-AABB time-of-impact tests, and `SceneGraph::submitPhysics` / `SceneGraph::applyPhysics` bridge scene-authored and physics-authored transforms each frame
 - **Backend-decoupled graphics layer** — graphics classes use opaque handles (`BufferHandle`, `TextureHandle`, `DescriptorSetHandle`, `PipelineHandle`) and emit `DrawCommand` structs with no Vulkan dependencies. IBL cubemaps, BRDF LUT, shadow map, bloom chain are all owned by the render layer and referenced through the same handle types
-- **Vulkan rendering** via vulkan.hpp C++ bindings with a 22-binding forward descriptor set, plus separate descriptor layouts for skybox, shadow, post-process, and bloom passes
-- **Single source of truth for tunables** — every rendering knob (light intensity, IBL strengths, shadow biases, bloom strength, cascade count, PCSS light size, IBL extents, camera FOV) lives in `include/fire_engine/render/constants.hpp`
+- **Vulkan rendering** via vulkan.hpp C++ bindings with a 28-binding forward descriptor set, plus separate descriptor layouts for skybox, shadow, post-process, and bloom passes
+- **Single source of truth for tunables** — every rendering knob (light intensity, IBL strengths, shadow biases, bloom strength, cascade count, IBL extents, camera FOV) lives in `include/fire_engine/render/constants.hpp`
 - **Texture mapping** via [stb_image](https://github.com/nothings/stb), including HDR equirectangular loading for the skybox; uploaded to GPU through staging buffers
 - **First-person camera** with keyboard (WASD + E/F for vertical) and mouse controls
 - **GLSL shaders** compiled to SPIR-V at build time via `glslc`
@@ -130,7 +130,7 @@ The transient pipelines are destroyed once the bake completes; only the resultin
 
 ### Rendering Pipeline
 
-- Forward descriptor set with **22 bindings**:
+- Forward descriptor set with **28 bindings**:
   - 0 model/view/projection + camera position UBO
   - 1 Material UBO — `diffuseAlpha`, `emissiveRoughness`, `materialParams` (metallic, normalScale, alphaCutoff, occlusionStrength), `textureFlags` (base/emissive/normal/MR present), `extraFlags` (occlusion present, occlusion's UV-set, **unlit flag**), `texCoordIndices` (per-slot UV-set), `uvBaseColor / uvEmissive / uvNormal / uvMetallicRoughness / uvOcclusion / uvTransmission` (KHR_texture_transform offset+scale per slot), `uvRotations` + `uvRotationsExtra` (per-slot rotations, occlusion in `.x`, transmission in `.y`), `transmissionParams` (factor, texture-present flag, texCoord index)
   - 2 base-colour sampler
@@ -141,19 +141,25 @@ The transient pipelines are destroyed once the bake completes; only the resultin
   - 7 normal sampler
   - 8 metallic-roughness sampler
   - 9 occlusion sampler
-  - 10 cascaded shadow map (`sampler2DArrayShadow`, 4 layers, hardware PCF comparison)
-  - 11 Light UBO — `cascadeViewProj[4]`, `cascadeSplits`, IBL params, shadow params with PCSS light size, environment params with CSM debug-tint flag in `.w`, `lightCount`, and `LightData lights[MAX_LIGHTS]` (per-light position/direction/colour/cone in std140-aligned `vec4`s)
+  - 10 cascaded shadow map sampled image (`texture2DArray`, 4 layers)
+  - 11 Light UBO — `cascadeViewProj[4]`, `cascadeSplits`, IBL params, shadow bias/filter params, environment params, `lightCount`, and `LightData lights[MAX_LIGHTS]` (per-light position/direction/colour/cone in std140-aligned `vec4`s)
   - 12 irradiance cubemap
   - 13 prefiltered environment cubemap
   - 14 BRDF integration LUT (2D)
-  - **15 cascaded shadow map again, but with a non-comparison sampler so PCSS can read raw depths during the blocker search**
+  - 15 shared shadow comparison sampler used with CSM, spot, and point sampled-image bindings
   - **16 transmission sampler (KHR_materials_transmission)**
   - **17 clearcoat factor sampler (KHR_materials_clearcoat)**
   - **18 clearcoat roughness sampler (KHR_materials_clearcoat)**
   - **19 clearcoat normal sampler (KHR_materials_clearcoat)**
   - **20 captured scene-colour mip chain for screen-space transmission/refraction**
   - **21 thickness sampler (KHR_materials_volume)**
-- Separate descriptor layouts for the skybox (SkyboxUBO + samplerCube + LightUBO), shadow (ShadowUBO with `lightViewProj[4]` + SkinUBO + MorphUBO + MorphTargets SSBO, plus `ShadowPushConstants { int cascadeIndex }` on the vertex stage), post-process (HDR sampler at 0 + bloom mip 0 sampler at 1, plus `PostProcessPushConstants { float bloomStrength }`), and bloom-down / bloom-up (single input mip sampler + `BloomPushConstants` on the fragment stage)
+  - 22 spot shadow sampled image (`texture2DArray`)
+  - 23 point shadow sampled image (`textureCubeArray`)
+  - 24 shadow-depth debug sampler
+  - 25 shadow-depth debug image (`texture2DArray`)
+  - 26 world-only directional shadow map sampled image (`texture2DArray`, excludes skinned casters)
+  - 27 skinned second-depth self-shadow map sampled image (`texture2DArray`, up to 4 per-object layers)
+- Separate descriptor layouts for the skybox (SkyboxUBO + samplerCube + LightUBO), shadow (ShadowUBO with `lightViewProj[]` + SkinUBO + MorphUBO + MorphTargets SSBO + first self-shadow depth/sampler, plus `ShadowPushConstants` on the vertex/fragment stages), post-process (HDR sampler at 0 + bloom mip 0 sampler at 1, plus `PostProcessPushConstants { float bloomStrength }`), and bloom-down / bloom-up (single input mip sampler + `BloomPushConstants` on the fragment stage)
 - Three forward pipeline variants share the shader + binding layout but differ in cull mode, blend, and depth-write state:
   - **opaque** (cull back, no blend, depth write) — OPAQUE and MASK materials with `doubleSided=false`
   - **opaque-double-sided** (cull none, no blend, depth write) — OPAQUE and MASK with `doubleSided=true`
@@ -161,7 +167,7 @@ The transient pipelines are destroyed once the bake completes; only the resultin
 - Additional persistent pipelines: **skybox** (fullscreen triangle, LEQUAL depth, no write), **shadow** (front-face cull, depth bias enabled, color write off), **post-process** (bloom mix + ACES + gamma, no depth), **bloom-down** (no blend, no depth, fullscreen triangle), **bloom-up** (additive eOne/eOne blend, no depth, fullscreen triangle)
 - Transient IBL pipelines (`environment_convert`, `irradiance_convolution`, `prefilter_environment`, `brdf_integration`) exist only during the startup precompute
 - MASK is implemented via a fragment-shader `discard` when `alpha < alphaCutoff`; OPAQUE/BLEND write `alphaCutoff = 0.0` so the discard is inert
-- Resources class owns all GPU resources and exposes opaque handles (pipeline registry, IBL cubemaps, BRDF LUT, shadow map with both compare + linear samplers, **bloom chain**)
+- Resources class owns all GPU resources and exposes opaque handles (pipeline registry, IBL cubemaps, BRDF LUT, shadow maps with a shared comparison sampler, **bloom chain**)
 - Each Object creates its own descriptor pool and sets via Resources
 - Depth buffering and swapchain recreation on window resize (HDR framebuffer, bloom chain, post-process descriptors all rebuilt at new extent)
 
@@ -175,7 +181,7 @@ The transient pipelines are destroyed once the bake completes; only the resultin
 
 ### Fragment Shader
 
-The forward fragment shader picks a UV stream per sample (`pickUv(material.texCoordIndices.X)` returns TEXCOORD_0 or TEXCOORD_1), applies KHR_texture_transform (`applyUvTransform` does scale → CCW rotate → translate) and samples the right texture. If `material.extraFlags.z == 1` (KHR_materials_unlit) it writes `vec4(baseColor, alpha)` and returns immediately, skipping all lighting. Otherwise it runs a PBR Cook-Torrance BRDF (GGX + Schlick Fresnel + Smith G) **per light in a fixed-size loop over `light.lights[0..lightCount]`** — directional, point, and spot all share the same BRDF; point/spot add the KHR_lights_punctual `windowing² / d²` distance attenuation, spot adds a smooth cone factor, and only the first directional (`i == 0 && type == 0`) carries the PCSS shadow term. After the loop it adds diffuse IBL from the irradiance cubemap and specular IBL via the prefiltered cubemap + BRDF LUT split-sum **with Fdez-Aguera multi-scatter compensation** for energy-conserving rough conductors. **KHR_materials_transmission** then attenuates the diffuse lobes by `(1 − transmission)` and adds a separate transmission lobe (basecolor pass-through with a small irradiance-tint contribution from the refracted direction) on top. The PCSS shadow term is itself: 16-tap Poisson-disk blocker search (raw depths via the binding-15 sampler) → contact-hardening penumbra → 16-tap variable-radius Poisson-disk PCF rotated per pixel, picking one of 4 cascades per fragment with a 10% blend band at boundaries.
+The forward fragment shader picks a UV stream per sample (`pickUv(material.texCoordIndices.X)` returns TEXCOORD_0 or TEXCOORD_1), applies KHR_texture_transform (`applyUvTransform` does scale → CCW rotate → translate) and samples the right texture. If `material.extraFlags.z == 1` (KHR_materials_unlit) it writes `vec4(baseColor, alpha)` and returns immediately, skipping all lighting. Otherwise it runs a PBR Cook-Torrance BRDF (GGX + Schlick Fresnel + Smith G) **per light in a fixed-size loop over `light.lights[0..lightCount]`** — directional, point, and spot all share the same BRDF; point/spot add the KHR_lights_punctual `windowing² / d²` distance attenuation, spot adds a smooth cone factor, and only the first directional (`i == 0 && type == 0`) carries the CSM shadow term. After the loop it adds diffuse IBL from the irradiance cubemap and specular IBL via the prefiltered cubemap + BRDF LUT split-sum **with Fdez-Aguera multi-scatter compensation** for energy-conserving rough conductors. **KHR_materials_transmission** then attenuates the diffuse lobes by `(1 − transmission)` and adds a separate transmission lobe (basecolor pass-through with a small irradiance-tint contribution from the refracted direction) on top. The CSM shadow term uses a centre comparison plus a 16-tap Poisson-disk PCF kernel rotated per pixel, picking one of 4 cascades per fragment with a 10% blend band at boundaries.
 
 ## Setup
 
@@ -196,7 +202,7 @@ Build:
 cmake --build build
 ```
 
-Run the tests (953 tests):
+Run the tests (973 tests):
 
 ```bash
 ./build/test_fire_engine

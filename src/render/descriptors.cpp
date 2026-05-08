@@ -103,8 +103,8 @@ ObjectDescriptorResult Descriptors::createObjectDescriptors(const ObjectDescript
         // occlusion, irradiance, prefiltered, brdfLut, transmission,
         // clearcoat, clearcoatRoughness, clearcoatNormal, sceneColor, thickness.
         {vk::DescriptorType::eCombinedImageSampler, totalSets * 14},
-        // 4 sampled images per set: csm, spot, point, debug shadow colour.
-        {vk::DescriptorType::eSampledImage, totalSets * 4},
+        // 6 sampled images per set: csm, world csm, self shadow, spot, point, debug colour.
+        {vk::DescriptorType::eSampledImage, totalSets * 6},
         // 2 standalone samplers per set: compare sampler + non-compare debug sampler.
         {vk::DescriptorType::eSampler, totalSets * 2},
         {vk::DescriptorType::eStorageBuffer, totalSets},
@@ -173,6 +173,12 @@ ObjectDescriptorResult Descriptors::createObjectDescriptors(const ObjectDescript
             vk::DescriptorImageInfo shadowTexInfo =
                 makeDescriptorImageInfo({}, resources_->vulkanImageView(req.shadowMap),
                                         vk::ImageLayout::eDepthStencilReadOnlyOptimal);
+            vk::DescriptorImageInfo worldShadowTexInfo =
+                makeDescriptorImageInfo({}, resources_->vulkanImageView(req.worldShadowMap),
+                                        vk::ImageLayout::eDepthStencilReadOnlyOptimal);
+            vk::DescriptorImageInfo selfShadowTexInfo =
+                makeDescriptorImageInfo({}, resources_->vulkanImageView(req.selfShadowMap),
+                                        vk::ImageLayout::eDepthStencilReadOnlyOptimal);
             vk::DescriptorImageInfo spotShadowImageInfo =
                 makeDescriptorImageInfo({}, resources_->vulkanImageView(req.spotShadowMap),
                                         vk::ImageLayout::eDepthStencilReadOnlyOptimal);
@@ -199,7 +205,7 @@ ObjectDescriptorResult Descriptors::createObjectDescriptors(const ObjectDescript
             vk::DescriptorImageInfo brdfLutTexInfo = makeDescriptorImageInfo(
                 resources_->vulkanSampler(req.brdfLut), resources_->vulkanImageView(req.brdfLut),
                 vk::ImageLayout::eShaderReadOnlyOptimal);
-            std::array<vk::WriteDescriptorSet, 26> writes = {{
+            std::array<vk::WriteDescriptorSet, 28> writes = {{
                 vk::WriteDescriptorSet{.dstSet = *sets[i],
                                        .dstBinding = bindingIndex(ForwardBinding::Frame),
                                        .descriptorCount = 1,
@@ -337,6 +343,16 @@ ObjectDescriptorResult Descriptors::createObjectDescriptors(const ObjectDescript
                                        .descriptorCount = 1,
                                        .descriptorType = vk::DescriptorType::eSampledImage,
                                        .pImageInfo = &shadowDebugImageInfo},
+                vk::WriteDescriptorSet{.dstSet = *sets[i],
+                                       .dstBinding = bindingIndex(ForwardBinding::WorldShadowMap),
+                                       .descriptorCount = 1,
+                                       .descriptorType = vk::DescriptorType::eSampledImage,
+                                       .pImageInfo = &worldShadowTexInfo},
+                vk::WriteDescriptorSet{.dstSet = *sets[i],
+                                       .dstBinding = bindingIndex(ForwardBinding::SelfShadowMap),
+                                       .descriptorCount = 1,
+                                       .descriptorType = vk::DescriptorType::eSampledImage,
+                                       .pImageInfo = &selfShadowTexInfo},
             }};
             device_->device().updateDescriptorSets(writes, {});
 
@@ -434,9 +450,11 @@ ShadowDescriptorResult Descriptors::createShadowDescriptors(const ShadowDescript
     auto numGeometries = static_cast<uint32_t>(req.geometries.size());
     uint32_t totalSets = numGeometries * MAX_FRAMES_IN_FLIGHT;
 
-    std::array<vk::DescriptorPoolSize, 2> poolSizes = {{
+    std::array<vk::DescriptorPoolSize, 4> poolSizes = {{
         {vk::DescriptorType::eUniformBuffer, totalSets * 3},
         {vk::DescriptorType::eStorageBuffer, totalSets},
+        {vk::DescriptorType::eSampledImage, totalSets},
+        {vk::DescriptorType::eSampler, totalSets},
     }};
     auto& poolEntry = createDescriptorPool(poolSizes, totalSets);
 
@@ -462,8 +480,14 @@ ShadowDescriptorResult Descriptors::createShadowDescriptors(const ShadowDescript
                                           : sizeof(float) * 4;
             vk::DescriptorBufferInfo morphSsboInfo =
                 makeDescriptorBufferInfo(resources_->vulkanBuffer(geo.morphSsbo), ssboSize);
+            vk::DescriptorImageInfo selfShadowFirstInfo = makeDescriptorImageInfo(
+                {}, resources_->vulkanImageView(resources_->selfShadowFirstMap()),
+                vk::ImageLayout::eDepthStencilReadOnlyOptimal);
+            vk::DescriptorImageInfo selfShadowSamplerInfo =
+                makeDescriptorImageInfo(resources_->vulkanShadowDebugSampler(), {},
+                                        vk::ImageLayout::eUndefined);
 
-            std::array<vk::WriteDescriptorSet, 4> writes = {{
+            std::array<vk::WriteDescriptorSet, 6> writes = {{
                 vk::WriteDescriptorSet{.dstSet = *sets[i],
                                        .dstBinding = bindingIndex(ShadowBinding::Shadow),
                                        .descriptorCount = 1,
@@ -484,6 +508,18 @@ ShadowDescriptorResult Descriptors::createShadowDescriptors(const ShadowDescript
                                        .descriptorCount = 1,
                                        .descriptorType = vk::DescriptorType::eStorageBuffer,
                                        .pBufferInfo = &morphSsboInfo},
+                vk::WriteDescriptorSet{.dstSet = *sets[i],
+                                       .dstBinding =
+                                           bindingIndex(ShadowBinding::SelfShadowFirstMap),
+                                       .descriptorCount = 1,
+                                       .descriptorType = vk::DescriptorType::eSampledImage,
+                                       .pImageInfo = &selfShadowFirstInfo},
+                vk::WriteDescriptorSet{.dstSet = *sets[i],
+                                       .dstBinding =
+                                           bindingIndex(ShadowBinding::SelfShadowDepthSampler),
+                                       .descriptorCount = 1,
+                                       .descriptorType = vk::DescriptorType::eSampler,
+                                       .pImageInfo = &selfShadowSamplerInfo},
             }};
             device_->device().updateDescriptorSets(writes, {});
 

@@ -99,6 +99,7 @@ set(SHADER_SOURCES
     shaders/brdf_integration.frag
     shaders/shadow.vert
     shaders/shadow.frag
+    shaders/self_shadow_second.frag
     shaders/postprocess.vert
     shaders/postprocess.frag
     shaders/bloom_downsample.frag
@@ -156,6 +157,7 @@ add_executable(test_fire_engine
     tests/graphics/test_material.cpp
     tests/graphics/test_geometry.cpp
     tests/graphics/test_gpu_handle.cpp
+    tests/graphics/test_bounds.cpp
     tests/graphics/test_draw_command.cpp
     tests/graphics/test_frame_info.cpp
     tests/graphics/test_texture.cpp

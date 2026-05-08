@@ -93,6 +93,8 @@ private:
     struct DrawBuckets
     {
         std::vector<DrawCommand> shadow;
+        std::vector<DrawCommand> worldShadow;
+        std::vector<DrawCommand> selfShadow;
         std::vector<DrawCommand> opaque;
         std::vector<DrawCommand> blend;
         // KHR_materials_transmission F3 — draws deferred to the second forward
@@ -102,6 +104,7 @@ private:
 
     void updateLightData(Vec3 cameraPosition, Vec3 cameraTarget, float aspect,
                          std::span<const Lighting> lights);
+    void assignSelfShadowSlots(std::vector<DrawCommand>& drawCommands);
     [[nodiscard]] DrawBuckets buildDrawBuckets(const std::vector<DrawCommand>& drawCommands) const;
     void recordDrawBucket(vk::CommandBuffer cmd, const std::vector<DrawCommand>& bucket,
                           PipelineHandle& lastBoundPipeline) const;
@@ -138,6 +141,8 @@ private:
     BufferHandle skyboxIndexBuffer_{NullBuffer};
     Resources::MappedBufferSet lightUbo_;
     std::array<Mat4, SHADOW_TOTAL_MATRIX_COUNT> shadowViewProjs_{};
+    LightUBO lightData_{};
+    Vec3 directionalLightDir_{1.0f, -1.0f, 1.0f};
     int activeSpotCasters_{0};
     int activePointCasters_{0};
     std::array<PointShadowCaster, MAX_POINT_SHADOW_CASTERS> pointCasters_{};

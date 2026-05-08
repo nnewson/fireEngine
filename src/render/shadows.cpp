@@ -1,7 +1,6 @@
 #include <fire_engine/render/shadows.hpp>
 
 #include <array>
-#include <limits>
 
 #include <fire_engine/render/device.hpp>
 #include <fire_engine/render/ubo.hpp>
@@ -13,16 +12,16 @@ namespace
 {
 
 void recordShadowDrawBucket(vk::CommandBuffer cmd, const std::vector<DrawCommand>& shadowDraws,
-                            const Resources& resources)
+                            const Resources& resources, PipelineHandle pipelineHandle)
 {
-    auto lastBoundPipeline = PipelineHandle{std::numeric_limits<uint32_t>::max()};
+    bool pipelineBound = false;
     for (const auto& dc : shadowDraws)
     {
-        if (dc.pipeline != lastBoundPipeline)
+        if (!pipelineBound)
         {
             cmd.bindPipeline(vk::PipelineBindPoint::eGraphics,
-                             resources.vulkanPipeline(dc.pipeline));
-            lastBoundPipeline = dc.pipeline;
+                             resources.vulkanPipeline(pipelineHandle));
+            pipelineBound = true;
         }
         if (dc.vertexBuffer != NullBuffer)
         {
@@ -35,9 +34,25 @@ void recordShadowDrawBucket(vk::CommandBuffer cmd, const std::vector<DrawCommand
 
         vk::DescriptorSet ds = resources.vulkanDescriptorSet(dc.descriptorSet);
         cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
-                               resources.vulkanPipelineLayout(dc.pipeline), 0, ds, {});
+                               resources.vulkanPipelineLayout(pipelineHandle), 0, ds, {});
         cmd.drawIndexed(dc.indexCount, 1, 0, 0, 0);
     }
+}
+
+void createLayeredShadowFramebuffer(const Device& device, Resources& resources, RenderPass& pass,
+                                    TextureHandle depthHandle, TextureHandle colourHandle,
+                                    uint32_t extent, uint32_t layerCount)
+{
+    std::vector<vk::ImageView> depthViews;
+    std::vector<vk::ImageView> colourViews;
+    depthViews.reserve(layerCount);
+    colourViews.reserve(layerCount);
+    for (uint32_t layer = 0; layer < layerCount; ++layer)
+    {
+        depthViews.push_back(resources.vulkanShadowMapLayerView(depthHandle, layer));
+        colourViews.push_back(resources.vulkanShadowColourLayerView(colourHandle, layer));
+    }
+    pass.createShadowFramebuffer(device, colourViews, depthViews, extent);
 }
 
 } // namespace
@@ -47,27 +62,48 @@ Shadows::Shadows(const Device& device, Resources& resources)
       resources_{&resources},
       shadowPass_(RenderPass::createShadow(device)),
       shadowPipeline_(device, Pipeline::shadowConfig(shadowPass_.renderPass())),
+      selfShadowFirstPipeline_(device, Pipeline::selfShadowFirstConfig(shadowPass_.renderPass())),
+      selfShadowSecondPipeline_(device, Pipeline::selfShadowSecondConfig(shadowPass_.renderPass())),
       spotShadowPass_(RenderPass::createShadow(device)),
-      pointShadowPass_(RenderPass::createShadow(device))
+      pointShadowPass_(RenderPass::createShadow(device)),
+      worldShadowPass_(RenderPass::createShadow(device)),
+      selfShadowFirstPass_(RenderPass::createShadow(device)),
+      selfShadowSecondPass_(RenderPass::createShadow(device))
 {
     shadowPipelineHandle_ =
         resources_->registerPipeline(shadowPipeline_.pipeline(), shadowPipeline_.pipelineLayout());
+    selfShadowFirstPipelineHandle_ = resources_->registerPipeline(
+        selfShadowFirstPipeline_.pipeline(), selfShadowFirstPipeline_.pipelineLayout());
+    selfShadowSecondPipelineHandle_ = resources_->registerPipeline(
+        selfShadowSecondPipeline_.pipeline(), selfShadowSecondPipeline_.pipelineLayout());
     shadowMapHandle_ = resources_->createShadowMap(shadowMapExtent, shadowCascadeCount);
     shadowColourHandle_ =
         resources_->createShadowColourAttachment(shadowMapExtent, shadowCascadeCount, true);
+    createLayeredShadowFramebuffer(*device_, *resources_, shadowPass_, shadowMapHandle_,
+                                   shadowColourHandle_, shadowMapExtent, shadowCascadeCount);
 
-    std::vector<vk::ImageView> cascadeDepthViews;
-    std::vector<vk::ImageView> cascadeColourViews;
-    cascadeDepthViews.reserve(shadowCascadeCount);
-    cascadeColourViews.reserve(shadowCascadeCount);
-    for (uint32_t layer = 0; layer < shadowCascadeCount; ++layer)
-    {
-        cascadeDepthViews.push_back(resources_->vulkanShadowMapLayerView(shadowMapHandle_, layer));
-        cascadeColourViews.push_back(resources_->vulkanShadowColourLayerView(shadowColourHandle_, layer));
-    }
+    worldShadowMapHandle_ = resources_->createShadowMap(shadowMapExtent, shadowCascadeCount);
+    worldShadowColourHandle_ =
+        resources_->createShadowColourAttachment(shadowMapExtent, shadowCascadeCount, false);
+    createLayeredShadowFramebuffer(*device_, *resources_, worldShadowPass_,
+                                   worldShadowMapHandle_, worldShadowColourHandle_,
+                                   shadowMapExtent, shadowCascadeCount);
 
-    shadowPass_.createShadowFramebuffer(*device_, cascadeColourViews, cascadeDepthViews,
-                                        shadowMapExtent);
+    selfShadowFirstMapHandle_ =
+        resources_->createShadowMap(skinnedSelfShadowMapExtent, MAX_SKINNED_SELF_SHADOW_CASTERS);
+    selfShadowFirstColourHandle_ = resources_->createShadowColourAttachment(
+        skinnedSelfShadowMapExtent, MAX_SKINNED_SELF_SHADOW_CASTERS, false);
+    createLayeredShadowFramebuffer(*device_, *resources_, selfShadowFirstPass_,
+                                   selfShadowFirstMapHandle_, selfShadowFirstColourHandle_,
+                                   skinnedSelfShadowMapExtent, MAX_SKINNED_SELF_SHADOW_CASTERS);
+
+    selfShadowMapHandle_ =
+        resources_->createShadowMap(skinnedSelfShadowMapExtent, MAX_SKINNED_SELF_SHADOW_CASTERS);
+    selfShadowColourHandle_ = resources_->createShadowColourAttachment(
+        skinnedSelfShadowMapExtent, MAX_SKINNED_SELF_SHADOW_CASTERS, false);
+    createLayeredShadowFramebuffer(*device_, *resources_, selfShadowSecondPass_,
+                                   selfShadowMapHandle_, selfShadowColourHandle_,
+                                   skinnedSelfShadowMapExtent, MAX_SKINNED_SELF_SHADOW_CASTERS);
 
     // Spot casters share a 2D-array depth image, one layer per caster.
     spotShadowMapHandle_ =
@@ -105,12 +141,17 @@ Shadows::Shadows(const Device& device, Resources& resources)
 
     resources_->descriptors().shadowDescriptorSetLayout(shadowPipeline_.descriptorSetLayout());
     resources_->shadowMap(shadowMapHandle_);
+    resources_->worldShadowMap(worldShadowMapHandle_);
+    resources_->selfShadowFirstMap(selfShadowFirstMapHandle_);
+    resources_->selfShadowMap(selfShadowMapHandle_);
     resources_->spotShadowMap(spotShadowMapHandle_);
     resources_->pointShadowMap(pointShadowMapHandle_);
     resources_->shadowDebugImage(shadowColourHandle_);
 }
 
 void Shadows::recordPass(vk::CommandBuffer cmd, const std::vector<DrawCommand>& shadowDraws,
+                         const std::vector<DrawCommand>& worldOnlyShadowDraws,
+                         const std::vector<DrawCommand>& selfShadowDraws,
                          int activeSpotCasters,
                          std::span<const PointShadowCaster> pointCasters) const
 {
@@ -119,11 +160,10 @@ void Shadows::recordPass(vk::CommandBuffer cmd, const std::vector<DrawCommand>& 
         vk::ClearValue{.depthStencil = vk::ClearDepthStencilValue{.depth = 1.0f, .stencil = 0}},
     };
 
-    const vk::PipelineLayout shadowPipelineLayout =
-        resources_->vulkanPipelineLayout(shadowPipelineHandle_);
-
     auto recordShadowIteration = [&](vk::RenderPass renderPass, vk::Framebuffer framebuffer,
                                      uint32_t extent, const ShadowPushConstants& pc,
+                                     const std::vector<DrawCommand>& draws,
+                                     PipelineHandle pipelineHandle,
                                      float depthBiasConstant, float depthBiasSlope)
     {
         vk::Viewport vp{
@@ -149,10 +189,12 @@ void Shadows::recordPass(vk::CommandBuffer cmd, const std::vector<DrawCommand>& 
         cmd.setViewport(0, vp);
         cmd.setScissor(0, scissor);
         cmd.setDepthBias(depthBiasConstant, 0.0f, depthBiasSlope);
+        const vk::PipelineLayout shadowPipelineLayout =
+            resources_->vulkanPipelineLayout(pipelineHandle);
         cmd.pushConstants<ShadowPushConstants>(
             shadowPipelineLayout,
             vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment, 0, pc);
-        recordShadowDrawBucket(cmd, shadowDraws, *resources_);
+        recordShadowDrawBucket(cmd, draws, *resources_, pipelineHandle);
         cmd.endRenderPass();
     };
 
@@ -161,8 +203,43 @@ void Shadows::recordPass(vk::CommandBuffer cmd, const std::vector<DrawCommand>& 
         ShadowPushConstants pc{};
         pc.matrixIndex = SHADOW_CASCADE_MATRIX_BASE + static_cast<int>(cascade);
         recordShadowIteration(shadowPass_.renderPass(), shadowPass_.framebuffer(cascade),
-                              shadowMapExtent, pc, directionalShadowRasterBiasConstant,
+                              shadowMapExtent, pc, shadowDraws, shadowPipelineHandle_,
+                              directionalShadowRasterBiasConstant,
                               directionalShadowRasterBiasSlope);
+        recordShadowIteration(worldShadowPass_.renderPass(), worldShadowPass_.framebuffer(cascade),
+                              shadowMapExtent, pc, worldOnlyShadowDraws, shadowPipelineHandle_,
+                              directionalShadowRasterBiasConstant,
+                              directionalShadowRasterBiasSlope);
+    }
+
+    std::array<std::vector<DrawCommand>, MAX_SKINNED_SELF_SHADOW_CASTERS> selfShadowSlotDraws;
+    for (const auto& dc : selfShadowDraws)
+    {
+        if (dc.selfShadowSlot >= 0 && dc.selfShadowSlot < MAX_SKINNED_SELF_SHADOW_CASTERS)
+        {
+            selfShadowSlotDraws[static_cast<std::size_t>(dc.selfShadowSlot)].push_back(dc);
+        }
+    }
+
+    for (int slot = 0; slot < MAX_SKINNED_SELF_SHADOW_CASTERS; ++slot)
+    {
+        const std::vector<DrawCommand>& slotDraws =
+            selfShadowSlotDraws[static_cast<std::size_t>(slot)];
+        ShadowPushConstants pc{};
+        pc.matrixIndex = -1;
+        pc.selfShadowSlot = slot;
+        if (!slotDraws.empty())
+        {
+            pc.lightViewProj = slotDraws.front().selfShadowViewProj;
+        }
+        recordShadowIteration(selfShadowFirstPass_.renderPass(),
+                              selfShadowFirstPass_.framebuffer(static_cast<std::size_t>(slot)),
+                              skinnedSelfShadowMapExtent, pc, slotDraws,
+                              selfShadowFirstPipelineHandle_, 0.0f, 0.0f);
+        recordShadowIteration(selfShadowSecondPass_.renderPass(),
+                              selfShadowSecondPass_.framebuffer(static_cast<std::size_t>(slot)),
+                              skinnedSelfShadowMapExtent, pc, slotDraws,
+                              selfShadowSecondPipelineHandle_, 0.0f, 0.0f);
     }
 
     for (int s = 0; s < activeSpotCasters && s < MAX_SPOT_SHADOW_CASTERS; ++s)
@@ -171,7 +248,8 @@ void Shadows::recordPass(vk::CommandBuffer cmd, const std::vector<DrawCommand>& 
         pc.matrixIndex = SHADOW_SPOT_MATRIX_BASE + s;
         recordShadowIteration(spotShadowPass_.renderPass(),
                               spotShadowPass_.framebuffer(static_cast<std::size_t>(s)),
-                              spotShadowMapExtent, pc, punctualShadowRasterBiasConstant,
+                              spotShadowMapExtent, pc, shadowDraws, shadowPipelineHandle_,
+                              punctualShadowRasterBiasConstant,
                               punctualShadowRasterBiasSlope);
     }
 
@@ -189,7 +267,8 @@ void Shadows::recordPass(vk::CommandBuffer cmd, const std::vector<DrawCommand>& 
             pc.lightPosRange[3] = pointCasters[p].range;
             recordShadowIteration(pointShadowPass_.renderPass(),
                                   pointShadowPass_.framebuffer(6 * p + face),
-                                  pointShadowMapExtent, pc, punctualShadowRasterBiasConstant,
+                                  pointShadowMapExtent, pc, shadowDraws, shadowPipelineHandle_,
+                                  punctualShadowRasterBiasConstant,
                                   punctualShadowRasterBiasSlope);
         }
     }

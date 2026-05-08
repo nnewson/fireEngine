@@ -140,6 +140,8 @@ struct LightUBO
     // Spot-light view-projection matrices for shadow sampling. Indexed by
     // LightData::cone.z (shadow index). Identity when the slot is unused.
     alignas(16) Mat4 spotViewProj[MAX_SPOT_SHADOW_CASTERS]{};
+    // Per-skinned-object self-shadow matrices. Indexed by ForwardPushConstants::selfShadowSlot.
+    alignas(16) Mat4 selfShadowViewProj[MAX_SKINNED_SELF_SHADOW_CASTERS]{};
     // View-space far-plane distances for each cascade (x..w = cascades 0..3).
     alignas(16) float cascadeSplits[4]{};
     alignas(16) float iblParams[4]{};         // x = maxReflectionLod, y/z = IBL strengths
@@ -201,11 +203,27 @@ struct ShadowPushConstants
 {
     // Selects which lightViewProj[] matrix the vertex shader uses.
     alignas(4) int matrixIndex{0};
+    // Per-skinned-object self-shadow layer for the dual-depth self pass.
+    alignas(4) int selfShadowSlot{-1};
+    // Normalized-depth gap required before a fragment counts as the second
+    // surface behind the first light-facing surface.
+    float selfShadowDepthEpsilon{skinnedSelfShadowDepthEpsilon};
+    float _pad0{0.0f};
     // Point shadow (matrixIndex >= SHADOW_POINT_MATRIX_BASE): xyz = light
     // world position, w = effective range. shadow.frag writes linear distance
     // / range so the cube-array compare sampler agrees with the main shader.
     // Zero for cascade/spot shadow passes.
     alignas(16) float lightPosRange[4]{};
+    // Used when matrixIndex < 0 for tightly-fit per-object self-shadow passes.
+    alignas(16) Mat4 lightViewProj{Mat4::identity()};
+};
+
+struct ForwardPushConstants
+{
+    alignas(4) int selfShadowSlot{-1};
+    int _pad0{0};
+    int _pad1{0};
+    int _pad2{0};
 };
 
 struct BloomPushConstants

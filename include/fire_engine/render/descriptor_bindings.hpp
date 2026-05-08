@@ -39,6 +39,8 @@ enum class ForwardBinding : std::uint32_t
     PointShadowMap = 23,
     ShadowDebugSampler = 24,
     ShadowDebugImage = 25,
+    WorldShadowMap = 26,
+    SelfShadowMap = 27,
 };
 
 enum class ShadowBinding : std::uint32_t
@@ -47,6 +49,8 @@ enum class ShadowBinding : std::uint32_t
     Skin = 1,
     Morph = 2,
     MorphTargets = 3,
+    SelfShadowFirstMap = 4,
+    SelfShadowDepthSampler = 5,
 };
 
 enum class SkyboxBinding : std::uint32_t

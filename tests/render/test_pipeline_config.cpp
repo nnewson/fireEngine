@@ -9,12 +9,13 @@
 using fire_engine::bindingIndex;
 using fire_engine::ForwardBinding;
 using fire_engine::Pipeline;
+using fire_engine::ShadowBinding;
 
 TEST(PipelineConfig, ForwardConfigIncludesIblBindings)
 {
     auto config = Pipeline::forwardConfig({});
 
-    EXPECT_EQ(config.bindings.size(), 26u);
+    EXPECT_EQ(config.bindings.size(), 28u);
 
     auto hasBinding = [&](ForwardBinding binding)
     {
@@ -44,6 +45,21 @@ TEST(PipelineConfig, ForwardConfigIncludesIblBindings)
     EXPECT_TRUE(hasBinding(ForwardBinding::PointShadowMap));
     EXPECT_TRUE(hasBinding(ForwardBinding::ShadowDebugSampler));
     EXPECT_TRUE(hasBinding(ForwardBinding::ShadowDebugImage));
+    // Split directional shadow path: static world receivers sample a world-only
+    // map, skinned meshes combine that with a per-object self-shadow map.
+    EXPECT_TRUE(hasBinding(ForwardBinding::WorldShadowMap));
+    EXPECT_TRUE(hasBinding(ForwardBinding::SelfShadowMap));
+}
+
+TEST(PipelineConfig, ForwardConfigIncludesSelfShadowPushConstant)
+{
+    auto config = Pipeline::forwardConfig({});
+
+    ASSERT_EQ(config.pushConstantRanges.size(), 1u);
+    EXPECT_EQ(config.pushConstantRanges[0].stageFlags, vk::ShaderStageFlagBits::eFragment);
+    EXPECT_EQ(config.pushConstantRanges[0].offset, 0u);
+    EXPECT_EQ(config.pushConstantRanges[0].size,
+              static_cast<uint32_t>(sizeof(fire_engine::ForwardPushConstants)));
 }
 
 TEST(PipelineConfig, ShadowConfigCullsFrontFaces)
@@ -52,6 +68,26 @@ TEST(PipelineConfig, ShadowConfigCullsFrontFaces)
 
     EXPECT_EQ(config.cullMode, vk::CullModeFlagBits::eFront);
     EXPECT_TRUE(config.depthBiasEnable);
+
+    auto hasBinding = [&](ShadowBinding binding)
+    {
+        return std::any_of(config.bindings.begin(), config.bindings.end(), [&](const auto& entry)
+                           { return entry.binding == bindingIndex(binding); });
+    };
+
+    EXPECT_TRUE(hasBinding(ShadowBinding::SelfShadowFirstMap));
+    EXPECT_TRUE(hasBinding(ShadowBinding::SelfShadowDepthSampler));
+}
+
+TEST(PipelineConfig, SelfShadowConfigsDisableCulling)
+{
+    auto first = Pipeline::selfShadowFirstConfig({});
+    auto second = Pipeline::selfShadowSecondConfig({});
+
+    EXPECT_EQ(first.cullMode, vk::CullModeFlagBits::eNone);
+    EXPECT_EQ(first.fragShaderPath, "shadow.frag.spv");
+    EXPECT_EQ(second.cullMode, vk::CullModeFlagBits::eNone);
+    EXPECT_EQ(second.fragShaderPath, "self_shadow_second.frag.spv");
 }
 
 TEST(PipelineConfig, SkyboxConfigIncludesCubemapSamplerBinding)

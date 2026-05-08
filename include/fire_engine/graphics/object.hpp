@@ -31,6 +31,7 @@ public:
     Object& operator=(Object&&) noexcept = default;
 
     void addGeometry(const Geometry& geometry);
+    void shadowGeometry(std::size_t geometryIndex, const Geometry* geometry) noexcept;
     void addVariantMaterial(std::size_t geometryIndex, std::size_t variantIndex,
                             const Material* material);
     void load(Resources& resources);
@@ -61,6 +62,7 @@ private:
     struct GeometryBindings
     {
         const Geometry* geometry{nullptr};
+        const Geometry* shadowGeometry{nullptr};
         const Material* defaultMaterial{nullptr};
         const Material* activeMaterial{nullptr};
         std::vector<const Material*> variantMaterials;
@@ -78,10 +80,13 @@ private:
 
     static void applyMaterialTextures(GeometryDescriptorInfo& geoInfo, const Material& mat,
                                       Resources& resources);
+    [[nodiscard]] Bounds3 computeShadowBounds(const std::vector<Mat4>& jointMatrices,
+                                              bool hasSkin, const Mat4& world) const noexcept;
 
     Skin* skin_{nullptr};
     std::vector<float> morphWeights_;
     Resources* resources_{nullptr};
+    uint32_t objectId_{0};
 
     std::array<MappedMemory, MAX_FRAMES_IN_FLIGHT> uniformMapped_{};
 

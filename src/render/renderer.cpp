@@ -4,6 +4,7 @@
 #include <array>
 #include <cmath>
 #include <cstring>
+#include <unordered_map>
 #include <span>
 
 #include <fire_engine/graphics/image.hpp>
@@ -90,6 +91,25 @@ Vec3 pickLightUp(Vec3 dir) noexcept
     return worldUp;
 }
 
+[[nodiscard]]
+Mat4 fitSelfShadowMatrix(const Bounds3& bounds, Vec3 lightDir) noexcept
+{
+    if (!bounds.valid)
+    {
+        return Mat4::identity();
+    }
+
+    const Vec3 center = bounds.center();
+    const float halfDiagonal = bounds.extent().magnitude() * 0.5f;
+    const float padding = std::max(0.05f, halfDiagonal * 0.05f);
+    const float radius = std::max(halfDiagonal + padding, 0.1f);
+    const Vec3 up = pickLightUp(lightDir);
+    const Vec3 lightPos = center - lightDir * radius;
+    const Mat4 view = Mat4::lookAt(lightPos, center, up);
+    const Mat4 proj = Mat4::ortho(-radius, radius, -radius, radius, 0.0f, radius * 2.0f);
+    return proj * view;
+}
+
 } // namespace
 
 Renderer::Renderer(const Window& window, std::string environmentPath, bool debugNormals,
@@ -158,6 +178,7 @@ void Renderer::updateLightData(Vec3 cameraPosition, Vec3 cameraTarget, float asp
     const Vec3 lightDir = primaryDirectional != nullptr
                               ? Vec3::normalise(primaryDirectional->worldDirection)
                               : Vec3::normalise(Vec3{1.0f, -1.0f, 1.0f});
+    directionalLightDir_ = lightDir;
 
     // Camera basis + light basis (shared by every cascade fit).
     const float tanHalfFov = std::tan(cameraFovRadians * 0.5f);
@@ -257,6 +278,10 @@ void Renderer::updateLightData(Vec3 cameraPosition, Vec3 cameraTarget, float asp
         lightData.cascadeViewProj[i] = cascadeViewProj[i];
         lightData.cascadeSplits[i] = splits[i];
     }
+    for (Mat4& m : lightData.selfShadowViewProj)
+    {
+        m = Mat4::identity();
+    }
 
     // Pack lights into the UBO array. The primary directional (CSM source)
     // goes first so the shader can branch on i==0 for the shadow lookup.
@@ -350,7 +375,53 @@ void Renderer::updateLightData(Vec3 cameraPosition, Vec3 cameraTarget, float asp
                                      : (debugShadow_ ? 3.0f
                                                      : (debugShadowDepth_ ? 4.0f : 0.0f)));
     lightData.environmentParams[3] = noShadows_ ? 1.0f : 0.0f;
-    std::memcpy(lightUbo_.mapped[currentFrame_], &lightData, sizeof(lightData));
+    lightData_ = lightData;
+    std::memcpy(lightUbo_.mapped[currentFrame_], &lightData_, sizeof(lightData_));
+}
+
+void Renderer::assignSelfShadowSlots(std::vector<DrawCommand>& drawCommands)
+{
+    for (Mat4& m : lightData_.selfShadowViewProj)
+    {
+        m = Mat4::identity();
+    }
+
+    std::unordered_map<uint32_t, int> objectSlots;
+    int nextSlot = 0;
+    for (const auto& dc : drawCommands)
+    {
+        if (!dc.hasSkin || !dc.shadowBounds.valid || dc.objectId == 0)
+        {
+            continue;
+        }
+        if (objectSlots.contains(dc.objectId))
+        {
+            continue;
+        }
+        if (nextSlot >= MAX_SKINNED_SELF_SHADOW_CASTERS)
+        {
+            break;
+        }
+        objectSlots.emplace(dc.objectId, nextSlot);
+        lightData_.selfShadowViewProj[nextSlot] =
+            fitSelfShadowMatrix(dc.shadowBounds, directionalLightDir_);
+        ++nextSlot;
+    }
+
+    for (auto& dc : drawCommands)
+    {
+        auto it = objectSlots.find(dc.objectId);
+        if (it == objectSlots.end())
+        {
+            dc.selfShadowSlot = -1;
+            dc.selfShadowViewProj = Mat4::identity();
+            continue;
+        }
+        dc.selfShadowSlot = it->second;
+        dc.selfShadowViewProj = lightData_.selfShadowViewProj[it->second];
+    }
+
+    std::memcpy(lightUbo_.mapped[currentFrame_], &lightData_, sizeof(lightData_));
 }
 
 Renderer::DrawBuckets Renderer::buildDrawBuckets(const std::vector<DrawCommand>& drawCommands) const
@@ -362,6 +433,14 @@ Renderer::DrawBuckets Renderer::buildDrawBuckets(const std::vector<DrawCommand>&
         if (dc.pipeline == shadows_.pipelineHandle())
         {
             buckets.shadow.push_back(dc);
+            if (!dc.hasSkin)
+            {
+                buckets.worldShadow.push_back(dc);
+            }
+            else if (dc.selfShadowSlot >= 0)
+            {
+                buckets.selfShadow.push_back(dc);
+            }
         }
         else if (dc.pipeline == forwardBlendHandle_)
         {
@@ -409,6 +488,16 @@ void Renderer::recordDrawBucket(vk::CommandBuffer cmd, const std::vector<DrawCom
         vk::DescriptorSet ds = resources_.vulkanDescriptorSet(dc.descriptorSet);
         cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
                                resources_.vulkanPipelineLayout(dc.pipeline), 0, ds, {});
+        const bool usesForwardPushConstants = dc.pipeline == forwardOpaqueHandle_ ||
+                                              dc.pipeline == forwardOpaqueDoubleSidedHandle_ ||
+                                              dc.pipeline == forwardBlendHandle_;
+        if (usesForwardPushConstants)
+        {
+            ForwardPushConstants pc{};
+            pc.selfShadowSlot = dc.selfShadowSlot;
+            cmd.pushConstants<ForwardPushConstants>(resources_.vulkanPipelineLayout(dc.pipeline),
+                                                    vk::ShaderStageFlagBits::eFragment, 0, pc);
+        }
         cmd.drawIndexed(dc.indexCount, 1, 0, 0, 0);
     }
 }
@@ -459,10 +548,12 @@ void Renderer::drawFrame(Window& display, SceneGraph& scene, Vec3 cameraPosition
                       shadowViewProjs_};
     scene.render(ctx);
 
+    assignSelfShadowSlots(drawCommands);
     DrawBuckets buckets = buildDrawBuckets(drawCommands);
     std::span<const PointShadowCaster> pointCasterSpan{
         pointCasters_.data(), static_cast<std::size_t>(activePointCasters_)};
-    shadows_.recordPass(cmd, buckets.shadow, activeSpotCasters_, pointCasterSpan);
+    shadows_.recordPass(cmd, buckets.shadow, buckets.worldShadow, buckets.selfShadow,
+                        activeSpotCasters_, pointCasterSpan);
     recordForwardPass(cmd, buckets);
     if (!buckets.transmissive.empty())
     {

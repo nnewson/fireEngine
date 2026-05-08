@@ -85,6 +85,7 @@ public:
     [[nodiscard]] MappedBufferSet createMappedUniformBuffers(std::size_t size);
     [[nodiscard]] MappedBufferSet createMappedStorageBuffer(std::size_t size,
                                                             const void* initialData);
+    [[nodiscard]] uint32_t allocateObjectId() noexcept;
 
     // --- Shadow map + offscreen textures ---
 
@@ -114,8 +115,10 @@ public:
 
     // MoltenVK workaround: depth-only render passes fail to store on Metal
     // TBDR. Creates a B8G8R8A8 colour attachment so the shadow pass becomes a
-    // real (colour + depth) render pass. When sampled=true, the attachment is
-    // kept and exposed as a sampled texture for shadow-depth debugging.
+    // real (colour + depth) render pass. The shadow render pass transitions
+    // the colour attachment to ShaderReadOnly, so the image always carries
+    // Sampled usage. When sampled=true, a sampler is also created for
+    // shadow-depth debugging.
     [[nodiscard]] TextureHandle createShadowColourAttachment(uint32_t extent, uint32_t layerCount = 1,
                                                              bool sampled = false);
     [[nodiscard]] vk::ImageView vulkanShadowColourLayerView(TextureHandle handle,
@@ -183,6 +186,36 @@ public:
     [[nodiscard]] TextureHandle shadowMap() const noexcept
     {
         return shadowMap_;
+    }
+
+    void worldShadowMap(TextureHandle handle) noexcept
+    {
+        worldShadowMap_ = handle;
+    }
+
+    [[nodiscard]] TextureHandle worldShadowMap() const noexcept
+    {
+        return worldShadowMap_;
+    }
+
+    void selfShadowMap(TextureHandle handle) noexcept
+    {
+        selfShadowMap_ = handle;
+    }
+
+    [[nodiscard]] TextureHandle selfShadowMap() const noexcept
+    {
+        return selfShadowMap_;
+    }
+
+    void selfShadowFirstMap(TextureHandle handle) noexcept
+    {
+        selfShadowFirstMap_ = handle;
+    }
+
+    [[nodiscard]] TextureHandle selfShadowFirstMap() const noexcept
+    {
+        return selfShadowFirstMap_;
     }
 
     void spotShadowMap(TextureHandle handle) noexcept
@@ -320,6 +353,9 @@ private:
 
     std::array<BufferHandle, MAX_FRAMES_IN_FLIGHT> lightBuffers_{NullBuffer, NullBuffer};
     TextureHandle shadowMap_{NullTexture};
+    TextureHandle worldShadowMap_{NullTexture};
+    TextureHandle selfShadowMap_{NullTexture};
+    TextureHandle selfShadowFirstMap_{NullTexture};
     TextureHandle spotShadowMap_{NullTexture};
     TextureHandle pointShadowMap_{NullTexture};
     TextureHandle shadowDebugImage_{NullTexture};
@@ -328,6 +364,7 @@ private:
     TextureHandle prefilteredMap_{NullTexture};
     TextureHandle brdfLut_{NullTexture};
     vk::raii::Sampler shadowDebugSampler_{nullptr};
+    uint32_t nextObjectId_{1};
 };
 
 } // namespace fire_engine

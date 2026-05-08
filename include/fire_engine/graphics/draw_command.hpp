@@ -2,7 +2,9 @@
 
 #include <cstdint>
 
+#include <fire_engine/graphics/bounds.hpp>
 #include <fire_engine/graphics/gpu_handle.hpp>
+#include <fire_engine/math/mat4.hpp>
 
 namespace fire_engine
 {
@@ -41,6 +43,11 @@ struct DrawCommand
     // the scene-colour capture so its fragment shader can sample the
     // post-opaque HDR target via screen-space refraction.
     bool transmissive{false};
+    uint32_t objectId{0};
+    bool hasSkin{false};
+    int selfShadowSlot{-1};
+    Bounds3 shadowBounds{};
+    Mat4 selfShadowViewProj{Mat4::identity()};
 };
 
 } // namespace fire_engine

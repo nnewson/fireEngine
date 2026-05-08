@@ -24,6 +24,7 @@ inline constexpr int MAX_MORPH_TARGETS = 8;
 // the LightUBO array fits comfortably under any sane Vulkan UBO limit. Bump
 // when scenes routinely exceed this; or swap to an SSBO at that point.
 inline constexpr int MAX_LIGHTS = 8;
+inline constexpr int MAX_SKINNED_SELF_SHADOW_CASTERS = 4;
 
 // ---------------------------------------------------------------------------
 // Camera projection — shared between Object::render (perspective matrix)
@@ -77,6 +78,8 @@ inline constexpr int MAX_SPOT_SHADOW_CASTERS = 4;
 inline constexpr int MAX_POINT_SHADOW_CASTERS = 4;
 inline constexpr uint32_t spotShadowMapExtent = 1024;
 inline constexpr uint32_t pointShadowMapExtent = 512;
+inline constexpr uint32_t skinnedSelfShadowMapExtent = 1024;
+inline constexpr float skinnedSelfShadowDepthEpsilon = 0.0005f;
 inline constexpr float pointSpotShadowMinBias = 0.005f;
 inline constexpr float pointSpotShadowSlopeBias = 0.01f;
 inline constexpr float punctualShadowRasterBiasConstant = 1.25f;

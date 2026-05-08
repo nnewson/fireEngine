@@ -110,6 +110,16 @@ public:
     // MorphTargets SSBO, all vertex stage.
     [[nodiscard]] static PipelineConfig shadowConfig(vk::RenderPass renderPass);
 
+    // First pass for skinned self-shadow maps. Same shader/layout as the
+    // regular shadow path but no face culling so the first visible
+    // light-facing surface is captured for dual-depth rejection.
+    [[nodiscard]] static PipelineConfig selfShadowFirstConfig(vk::RenderPass renderPass);
+
+    // Second pass for skinned self-shadow maps. Uses the same vertex path and
+    // descriptor layout as shadowConfig, but the fragment shader samples the
+    // first-depth self map and discards same-surface fragments.
+    [[nodiscard]] static PipelineConfig selfShadowSecondConfig(vk::RenderPass renderPass);
+
     // Factory producing the PipelineConfig for the post-process pass.
     // Draws a fullscreen triangle via gl_VertexIndex sampling the offscreen
     // HDR forward target at binding 0, applying ACES tone mapping + gamma,

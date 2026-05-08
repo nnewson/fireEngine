@@ -41,6 +41,8 @@ struct ObjectDescriptorRequest
     std::array<BufferHandle, MAX_FRAMES_IN_FLIGHT> uniformBufs{NullBuffer, NullBuffer};
     std::array<BufferHandle, MAX_FRAMES_IN_FLIGHT> lightBufs{NullBuffer, NullBuffer};
     TextureHandle shadowMap{NullTexture};
+    TextureHandle worldShadowMap{NullTexture};
+    TextureHandle selfShadowMap{NullTexture};
     TextureHandle spotShadowMap{NullTexture};
     TextureHandle pointShadowMap{NullTexture};
     TextureHandle shadowDebugImage{NullTexture};

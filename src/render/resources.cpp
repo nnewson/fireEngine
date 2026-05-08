@@ -94,6 +94,11 @@ BufferHandle Resources::createIndexBuffer(std::span<const uint32_t> indices)
     return storeBuffer(std::move(buf), std::move(mem));
 }
 
+uint32_t Resources::allocateObjectId() noexcept
+{
+    return nextObjectId_++;
+}
+
 // --- Texture creation ---
 
 static vk::SamplerAddressMode toVkAddressMode(WrapMode mode)
@@ -1009,9 +1014,7 @@ TextureHandle Resources::createShadowColourAttachment(uint32_t extent, uint32_t 
     vk::ImageCreateInfo imgCi = makeImageCreateInfo(
         {}, vk::ImageType::e2D, entry.format,
         vk::Extent3D{.width = extent, .height = extent, .depth = 1}, 1, layerCount,
-        vk::ImageUsageFlagBits::eColorAttachment |
-            (sampled ? vk::ImageUsageFlagBits::eSampled
-                     : vk::ImageUsageFlagBits::eTransientAttachment));
+        vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled);
     entry.image = vk::raii::Image(device_->device(), imgCi);
 
     auto imgReq = entry.image.getMemoryRequirements();

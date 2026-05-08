@@ -6,9 +6,11 @@
 #include <fire_engine/render/ubo.hpp>
 
 using fire_engine::EnvironmentCaptureUBO;
+using fire_engine::ForwardPushConstants;
 using fire_engine::LightUBO;
 using fire_engine::MaterialUBO;
 using fire_engine::MorphUBO;
+using fire_engine::ShadowPushConstants;
 using fire_engine::ShadowUBO;
 using fire_engine::SkinUBO;
 using fire_engine::UniformBufferObject;
@@ -312,6 +314,10 @@ TEST(UBO, LightUBOFieldOrder)
 {
     static_assert(offsetof(LightUBO, cascadeViewProj) < offsetof(LightUBO, cascadeSplits),
                   "cascadeViewProj must precede cascadeSplits to match shader layout");
+    static_assert(offsetof(LightUBO, spotViewProj) < offsetof(LightUBO, selfShadowViewProj),
+                  "spotViewProj must precede selfShadowViewProj to match shader layout");
+    static_assert(offsetof(LightUBO, selfShadowViewProj) < offsetof(LightUBO, cascadeSplits),
+                  "selfShadowViewProj must precede cascadeSplits to match shader layout");
     static_assert(offsetof(LightUBO, cascadeSplits) < offsetof(LightUBO, iblParams),
                   "cascadeSplits must precede iblParams to match shader layout");
     static_assert(offsetof(LightUBO, iblParams) < offsetof(LightUBO, shadowParams),
@@ -329,6 +335,10 @@ TEST(UBO, LightUBOFieldsAligned16)
 {
     static_assert(offsetof(LightUBO, cascadeViewProj) % 16 == 0,
                   "cascadeViewProj must be 16-byte aligned for std140 mat4[]");
+    static_assert(offsetof(LightUBO, spotViewProj) % 16 == 0,
+                  "spotViewProj must be 16-byte aligned for std140 mat4[]");
+    static_assert(offsetof(LightUBO, selfShadowViewProj) % 16 == 0,
+                  "selfShadowViewProj must be 16-byte aligned for std140 mat4[]");
     static_assert(offsetof(LightUBO, cascadeSplits) % 16 == 0,
                   "cascadeSplits must be 16-byte aligned for std140 vec4");
     static_assert(offsetof(LightUBO, iblParams) % 16 == 0,
@@ -348,6 +358,23 @@ TEST(UBO, LightDataSizeAligned)
 {
     EXPECT_EQ(sizeof(fire_engine::LightData) % 16, 0u);
     EXPECT_EQ(sizeof(fire_engine::LightData), 64u);
+}
+
+TEST(UBO, ForwardPushConstantsDefaultsToNoSelfShadowSlot)
+{
+    ForwardPushConstants pc{};
+    EXPECT_EQ(pc.selfShadowSlot, -1);
+    EXPECT_EQ(sizeof(ForwardPushConstants), 16u);
+}
+
+TEST(UBO, ShadowPushConstantsCanCarryInlineLightMatrix)
+{
+    ShadowPushConstants pc{};
+    EXPECT_EQ(pc.matrixIndex, 0);
+    EXPECT_EQ(pc.selfShadowSlot, -1);
+    EXPECT_FLOAT_EQ(pc.selfShadowDepthEpsilon, fire_engine::skinnedSelfShadowDepthEpsilon);
+    EXPECT_EQ(sizeof(ShadowPushConstants) % 16, 0u);
+    EXPECT_EQ(pc.lightViewProj, fire_engine::Mat4::identity());
 }
 
 // ---------------------------------------------------------------------------

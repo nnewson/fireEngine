@@ -7,6 +7,7 @@
 #include <fire_engine/graphics/material_binding.hpp>
 #include <fire_engine/graphics/skin.hpp>
 #include <fire_engine/math/constants.hpp>
+#include <fire_engine/math/vec4.hpp>
 #include <fire_engine/render/constants.hpp>
 #include <fire_engine/render/resources.hpp>
 #include <fire_engine/render/ubo.hpp>
@@ -73,14 +74,54 @@ std::vector<float> packMorphTargetDeltas(const Geometry& geometry)
     return ssboData;
 }
 
+[[nodiscard]]
+Vec3 skinnedPosition(const Vertex& vertex, Vec3 position, const std::vector<Mat4>& joints) noexcept
+{
+    const Joints4 jointIds = vertex.joints();
+    const Vec4 weights = vertex.weights();
+
+    Vec3 result{};
+    float totalWeight = 0.0f;
+    auto addJoint = [&](uint32_t jointId, float weight)
+    {
+        if (weight <= 0.0f || jointId >= joints.size())
+        {
+            return;
+        }
+        result += static_cast<Vec3>(joints[jointId] * Vec4{position}) * weight;
+        totalWeight += weight;
+    };
+
+    addJoint(jointIds.j0(), weights.x());
+    addJoint(jointIds.j1(), weights.y());
+    addJoint(jointIds.j2(), weights.z());
+    addJoint(jointIds.j3(), weights.w());
+    if (totalWeight <= 0.0f)
+    {
+        return position;
+    }
+    return result;
+}
+
 } // namespace
 
 void Object::addGeometry(const Geometry& geometry)
 {
     auto& binding = bindings_.emplace_back();
     binding.geometry = &geometry;
+    binding.shadowGeometry = &geometry;
     binding.defaultMaterial = &geometry.material();
     binding.activeMaterial = &geometry.material();
+}
+
+void Object::shadowGeometry(std::size_t geometryIndex, const Geometry* geometry) noexcept
+{
+    if (geometryIndex >= bindings_.size())
+    {
+        return;
+    }
+    bindings_[geometryIndex].shadowGeometry =
+        geometry != nullptr ? geometry : bindings_[geometryIndex].geometry;
 }
 
 void Object::addVariantMaterial(std::size_t geometryIndex, std::size_t variantIndex,
@@ -102,6 +143,10 @@ void Object::addVariantMaterial(std::size_t geometryIndex, std::size_t variantIn
 void Object::load(Resources& resources)
 {
     resources_ = &resources;
+    if (objectId_ == 0)
+    {
+        objectId_ = resources.allocateObjectId();
+    }
     // Create shared uniform buffers (model/view/proj)
     auto uniformSet = resources.createMappedUniformBuffers(sizeof(UniformBufferObject));
     for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
@@ -112,6 +157,8 @@ void Object::load(Resources& resources)
     Resources::ObjectDescriptorRequest req;
     const auto& lightBufs = resources.lightBuffers();
     req.shadowMap = resources.shadowMap();
+    req.worldShadowMap = resources.worldShadowMap();
+    req.selfShadowMap = resources.selfShadowMap();
     req.spotShadowMap = resources.spotShadowMap();
     req.pointShadowMap = resources.pointShadowMap();
     req.shadowDebugImage = resources.shadowDebugImage();
@@ -310,6 +357,42 @@ void Object::updateSkin()
     }
 }
 
+Bounds3 Object::computeShadowBounds(const std::vector<Mat4>& jointMatrices, bool hasSkin,
+                                    const Mat4& world) const noexcept
+{
+    Bounds3 bounds;
+    for (const auto& binding : bindings_)
+    {
+        const Geometry* geometry =
+            binding.shadowGeometry != nullptr ? binding.shadowGeometry : binding.geometry;
+        if (geometry == nullptr)
+        {
+            continue;
+        }
+
+        const auto& vertices = geometry->vertices();
+        const auto& morphPositions = geometry->morphPositions();
+        for (std::size_t v = 0; v < vertices.size(); ++v)
+        {
+            Vec3 position = vertices[v].position();
+            for (std::size_t target = 0;
+                 target < morphPositions.size() && target < morphWeights_.size(); ++target)
+            {
+                if (v < morphPositions[target].size())
+                {
+                    position += morphPositions[target][v] * morphWeights_[target];
+                }
+            }
+
+            Vec3 worldPosition = hasSkin
+                                     ? skinnedPosition(vertices[v], position, jointMatrices)
+                                     : static_cast<Vec3>(world * Vec4{position});
+            bounds.expand(worldPosition);
+        }
+    }
+    return bounds;
+}
+
 std::vector<DrawCommand> Object::render(const FrameInfo& frame, const Mat4& world)
 {
     // Write shared UBO
@@ -326,14 +409,17 @@ std::vector<DrawCommand> Object::render(const FrameInfo& frame, const Mat4& worl
     ubo.hasSkin = (skin_ != nullptr && !skin_->empty()) ? 1 : 0;
     std::memcpy(uniformMapped_[frame.currentFrame], &ubo, sizeof(ubo));
 
+    std::vector<Mat4> emptyJointMatrices;
+    const std::vector<Mat4>* jointMatrices = &emptyJointMatrices;
+
     // Upload cached joint matrices if skinned
     if (ubo.hasSkin == 1)
     {
-        const auto& jointMatrices = skin_->cachedJointMatrices();
+        jointMatrices = &skin_->cachedJointMatrices();
         SkinUBO skinUbo{};
-        for (std::size_t j = 0; j < jointMatrices.size() && j < MAX_JOINTS; ++j)
+        for (std::size_t j = 0; j < jointMatrices->size() && j < MAX_JOINTS; ++j)
         {
-            skinUbo.joints[j] = jointMatrices[j];
+            skinUbo.joints[j] = (*jointMatrices)[j];
         }
         for (auto& binding : bindings_)
         {
@@ -394,6 +480,8 @@ std::vector<DrawCommand> Object::render(const FrameInfo& frame, const Mat4& worl
         std::memcpy(binding.shadowMapped[frame.currentFrame], &shadowData, sizeof(shadowData));
     }
 
+    const Bounds3 shadowBounds = computeShadowBounds(*jointMatrices, ubo.hasSkin == 1, world);
+
     // Build draw commands
     std::vector<DrawCommand> commands;
     commands.reserve(bindings_.size() * 2);
@@ -425,6 +513,9 @@ std::vector<DrawCommand> Object::render(const FrameInfo& frame, const Mat4& worl
         cmd.descriptorSet = binding.descSets[frame.currentFrame];
         cmd.pipeline = pipe;
         cmd.sortDepth = depth;
+        cmd.objectId = objectId_;
+        cmd.hasSkin = ubo.hasSkin == 1;
+        cmd.shadowBounds = shadowBounds;
         // KHR_materials_transmission F3: defer this draw to the second forward
         // sub-pass so its fragment shader can sample the post-opaque HDR
         // target via screen-space refraction.
@@ -435,6 +526,13 @@ std::vector<DrawCommand> Object::render(const FrameInfo& frame, const Mat4& worl
             binding.shadowDescSets[frame.currentFrame] != NullDescriptorSet)
         {
             DrawCommand shadowCmd = cmd;
+            const Geometry* shadowGeometry = binding.shadowGeometry != nullptr
+                                                 ? binding.shadowGeometry
+                                                 : binding.geometry;
+            shadowCmd.vertexBuffer = shadowGeometry->vertexBuffer();
+            shadowCmd.indexBuffer = shadowGeometry->indexBuffer();
+            shadowCmd.indexCount = shadowGeometry->indexCount();
+            shadowCmd.indexType = shadowGeometry->indexType();
             shadowCmd.pipeline = frame.shadowPipeline;
             shadowCmd.descriptorSet = binding.shadowDescSets[frame.currentFrame];
             shadowCmd.sortDepth = 0.0f;

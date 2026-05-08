@@ -4,7 +4,11 @@ const int SHADOW_POINT_MATRIX_BASE = 8;
 
 layout(push_constant) uniform ShadowPushConstants {
     int matrixIndex;
+    int selfShadowSlot;
+    float selfShadowDepthEpsilon;
+    float _pad0;
     vec4 lightPosRange;
+    mat4 lightViewProj;
 } pc;
 
 layout(location = 0) in vec3 worldPos;

@@ -42,6 +42,8 @@ public:
     }
 
     void recordPass(vk::CommandBuffer cmd, const std::vector<DrawCommand>& shadowDraws,
+                    const std::vector<DrawCommand>& worldOnlyShadowDraws,
+                    const std::vector<DrawCommand>& selfShadowDraws,
                     int activeSpotCasters,
                     std::span<const PointShadowCaster> pointCasters) const;
 
@@ -50,9 +52,19 @@ private:
     Resources* resources_{nullptr};
     RenderPass shadowPass_;
     Pipeline shadowPipeline_;
+    Pipeline selfShadowFirstPipeline_;
+    Pipeline selfShadowSecondPipeline_;
     PipelineHandle shadowPipelineHandle_{NullPipeline};
+    PipelineHandle selfShadowFirstPipelineHandle_{NullPipeline};
+    PipelineHandle selfShadowSecondPipelineHandle_{NullPipeline};
     TextureHandle shadowMapHandle_{NullTexture};
     TextureHandle shadowColourHandle_{NullTexture};
+    TextureHandle worldShadowMapHandle_{NullTexture};
+    TextureHandle worldShadowColourHandle_{NullTexture};
+    TextureHandle selfShadowFirstMapHandle_{NullTexture};
+    TextureHandle selfShadowFirstColourHandle_{NullTexture};
+    TextureHandle selfShadowMapHandle_{NullTexture};
+    TextureHandle selfShadowColourHandle_{NullTexture};
     TextureHandle spotShadowMapHandle_{NullTexture};
     TextureHandle spotShadowColourHandle_{NullTexture};
     TextureHandle pointShadowMapHandle_{NullTexture};
@@ -63,6 +75,9 @@ private:
     RenderPass spotShadowPass_;
     // Framebuffers for each (cube, face) of every point caster.
     RenderPass pointShadowPass_;
+    RenderPass worldShadowPass_;
+    RenderPass selfShadowFirstPass_;
+    RenderPass selfShadowSecondPass_;
 };
 
 } // namespace fire_engine

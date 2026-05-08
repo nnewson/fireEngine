@@ -65,6 +65,16 @@ TEST(DrawCommand, DefaultTransmissiveIsFalse)
     EXPECT_FALSE(cmd.transmissive);
 }
 
+TEST(DrawCommand, DefaultSelfShadowMetadataIsDisabled)
+{
+    DrawCommand cmd;
+    EXPECT_EQ(cmd.objectId, 0u);
+    EXPECT_FALSE(cmd.hasSkin);
+    EXPECT_EQ(cmd.selfShadowSlot, -1);
+    EXPECT_FALSE(cmd.shadowBounds.valid);
+    EXPECT_EQ(cmd.selfShadowViewProj, Mat4::identity());
+}
+
 TEST(DrawCommand, AssignTransmissive)
 {
     DrawCommand cmd;

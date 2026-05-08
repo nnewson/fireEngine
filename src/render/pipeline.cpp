@@ -73,7 +73,11 @@ PipelineConfig Pipeline::forwardConfig(vk::RenderPass renderPass)
         sampledImage(ForwardBinding::PointShadowMap),
         plainSampler(ForwardBinding::ShadowDebugSampler),
         sampledImage(ForwardBinding::ShadowDebugImage),
+        sampledImage(ForwardBinding::WorldShadowMap),
+        sampledImage(ForwardBinding::SelfShadowMap),
     };
+    config.pushConstantRanges.emplace_back(vk::ShaderStageFlagBits::eFragment, 0,
+                                           static_cast<uint32_t>(sizeof(ForwardPushConstants)));
     config.renderPass = renderPass;
     return config;
 }
@@ -112,6 +116,10 @@ PipelineConfig Pipeline::shadowConfig(vk::RenderPass renderPass)
          vk::ShaderStageFlagBits::eVertex},
         {bindingIndex(ShadowBinding::MorphTargets), vk::DescriptorType::eStorageBuffer, 1,
          vk::ShaderStageFlagBits::eVertex},
+        {bindingIndex(ShadowBinding::SelfShadowFirstMap), vk::DescriptorType::eSampledImage, 1,
+         vk::ShaderStageFlagBits::eFragment},
+        {bindingIndex(ShadowBinding::SelfShadowDepthSampler), vk::DescriptorType::eSampler, 1,
+         vk::ShaderStageFlagBits::eFragment},
     };
     // matrixIndex picks lightViewProj[] in the vertex stage. lightPosRange is
     // consumed by the fragment shader's point-shadow branch (linear distance
@@ -127,6 +135,21 @@ PipelineConfig Pipeline::shadowConfig(vk::RenderPass renderPass)
     config.depthBiasEnable = true;
     config.depthBiasConstant = 0.0f;
     config.depthBiasSlope = 0.0f;
+    return config;
+}
+
+PipelineConfig Pipeline::selfShadowSecondConfig(vk::RenderPass renderPass)
+{
+    PipelineConfig config = shadowConfig(renderPass);
+    config.fragShaderPath = "self_shadow_second.frag.spv";
+    config.cullMode = vk::CullModeFlagBits::eNone;
+    return config;
+}
+
+PipelineConfig Pipeline::selfShadowFirstConfig(vk::RenderPass renderPass)
+{
+    PipelineConfig config = shadowConfig(renderPass);
+    config.cullMode = vk::CullModeFlagBits::eNone;
     return config;
 }
 

@@ -10,7 +10,11 @@ layout(binding = 0) uniform ShadowUBO {
 
 layout(push_constant) uniform ShadowPushConstants {
     int matrixIndex;
+    int selfShadowSlot;
+    float selfShadowDepthEpsilon;
+    float _pad0;
     vec4 lightPosRange;
+    mat4 lightViewProj;
 } pc;
 
 layout(binding = 1) uniform SkinUBO {
@@ -66,5 +70,6 @@ void main() {
 
     vec4 wp = transform * vec4(pos, 1.0);
     worldPos = wp.xyz;
-    gl_Position = shadow.lightViewProj[pc.matrixIndex] * wp;
+    mat4 lightMatrix = pc.matrixIndex < 0 ? pc.lightViewProj : shadow.lightViewProj[pc.matrixIndex];
+    gl_Position = lightMatrix * wp;
 }

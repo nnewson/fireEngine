@@ -90,6 +90,8 @@ layout(binding = 23) uniform textureCubeArray pointShadowMapTex;
 layout(binding = 15) uniform sampler shadowCompareSampler;
 layout(binding = 24) uniform sampler shadowDebugSampler;
 layout(binding = 25) uniform texture2DArray shadowDebugImageTex;
+layout(binding = 26) uniform texture2DArray worldShadowMapTex;
+layout(binding = 27) uniform texture2DArray selfShadowMapTex;
 layout(binding = 12) uniform samplerCube irradianceMap;
 layout(binding = 13) uniform samplerCube prefilteredMap;
 layout(binding = 14) uniform sampler2D brdfLut;
@@ -112,6 +114,7 @@ const int MAX_SPOT_SHADOW_CASTERS = 4;
 layout(binding = 11) uniform LightUBO {
     mat4 cascadeViewProj[4];
     mat4 spotViewProj[MAX_SPOT_SHADOW_CASTERS];
+    mat4 selfShadowViewProj[4];
     vec4 cascadeSplits;
     vec4 iblParams;
     vec4 shadowParams;
@@ -123,6 +126,10 @@ layout(binding = 11) uniform LightUBO {
     int  _pad2;
     LightData lights[MAX_LIGHTS];
 } light;
+
+layout(push_constant) uniform ForwardPushConstants {
+    int selfShadowSlot;
+} pc;
 
 layout(location = 0) in vec3 fragColor;
 layout(location = 1) in vec3 fragNormal;
@@ -202,7 +209,8 @@ mat2 poissonRotation(vec3 worldPos)
     return mat2(c, -s, s, c);
 }
 
-float sampleDirectionalShadow(vec3 worldPos, vec3 normal, vec3 lightDir, int cascade)
+float sampleDirectionalShadowFrom(texture2DArray shadowTex, vec3 worldPos, vec3 normal,
+                                  vec3 lightDir, int cascade)
 {
     vec3 sampleWorldPos = worldPos + normal * light.shadowParams.w * exp2(float(cascade));
     vec4 lightSpace = light.cascadeViewProj[cascade] * vec4(sampleWorldPos, 1.0);
@@ -223,20 +231,43 @@ float sampleDirectionalShadow(vec3 worldPos, vec3 normal, vec3 lightDir, int cas
     float receiverDepth = proj.z - bias;
 
     mat2 rot = poissonRotation(worldPos);
-    float texelSize = 1.0 / float(textureSize(shadowMapTex, 0).x);
+    float texelSize = 1.0 / float(textureSize(shadowTex, 0).x);
     float filterRadius = max(light.shadowParams.z, 0.0) * texelSize;
 
-    float vis = texture(sampler2DArrayShadow(shadowMapTex, shadowCompareSampler),
+    float vis = texture(sampler2DArrayShadow(shadowTex, shadowCompareSampler),
                         vec4(proj.xy, float(cascade), receiverDepth));
     if (filterRadius <= 0.0) {
         return vis;
     }
     for (int i = 0; i < 16; ++i) {
         vec2 off = rot * poissonDisk[i] * filterRadius;
-        vis += texture(sampler2DArrayShadow(shadowMapTex, shadowCompareSampler),
+        vis += texture(sampler2DArrayShadow(shadowTex, shadowCompareSampler),
                        vec4(proj.xy + off, float(cascade), receiverDepth));
     }
     return vis / 17.0;
+}
+
+float sampleSelfShadow(vec3 worldPos, vec3 normal, vec3 lightDir, int slot)
+{
+    if (slot < 0 || slot >= 4) {
+        return 1.0;
+    }
+
+    vec3 sampleWorldPos = worldPos + normal * light.shadowParams.w;
+    vec4 lightSpace = light.selfShadowViewProj[slot] * vec4(sampleWorldPos, 1.0);
+    vec3 proj = lightSpace.xyz / lightSpace.w;
+    proj.xy = proj.xy * 0.5 + 0.5;
+    if (proj.z > 1.0 || proj.z < 0.0
+        || any(lessThan(proj.xy, vec2(0.0)))
+        || any(greaterThan(proj.xy, vec2(1.0)))) {
+        return 1.0;
+    }
+
+    float baseBias = max(light.shadowParams.x,
+                         light.shadowParams.y * (1.0 - max(dot(normal, lightDir), 0.0)));
+    float receiverDepth = proj.z - baseBias;
+    return texture(sampler2DArrayShadow(selfShadowMapTex, shadowCompareSampler),
+                   vec4(proj.xy, float(slot), receiverDepth));
 }
 
 int selectCascade(float viewDepth)
@@ -268,11 +299,23 @@ float cascadeBlendFactor(int cascade, float viewDepth)
 
 float computeShadow(vec3 worldPos, vec3 normal, vec3 lightDir, int cascade, float viewDepth)
 {
-    float current = sampleDirectionalShadow(worldPos, normal, lightDir, cascade);
+    float current = sampleDirectionalShadowFrom(shadowMapTex, worldPos, normal, lightDir, cascade);
     float t = cascadeBlendFactor(cascade, viewDepth);
     if (t <= 0.0)
         return current;
-    float next = sampleDirectionalShadow(worldPos, normal, lightDir, cascade + 1);
+    float next = sampleDirectionalShadowFrom(shadowMapTex, worldPos, normal, lightDir, cascade + 1);
+    return mix(current, next, t);
+}
+
+float computeWorldShadow(vec3 worldPos, vec3 normal, vec3 lightDir, int cascade, float viewDepth)
+{
+    float current =
+        sampleDirectionalShadowFrom(worldShadowMapTex, worldPos, normal, lightDir, cascade);
+    float t = cascadeBlendFactor(cascade, viewDepth);
+    if (t <= 0.0)
+        return current;
+    float next =
+        sampleDirectionalShadowFrom(worldShadowMapTex, worldPos, normal, lightDir, cascade + 1);
     return mix(current, next, t);
 }
 
@@ -504,12 +547,21 @@ void main() {
         if (i == 0 && type == 0) {
             primaryDirectionalNdotL = NdotL;
             int cascade = selectCascade(fragViewDepth);
-            // Skinned meshes still cast into the directional CSM, but skip
-            // receiving it until the skinned same-surface compare path is more
-            // robust. This preserves floor shadows without character acne.
-            float shadow = light.environmentParams.w > 0.5 || ubo.hasSkin == 1
-                ? 1.0
-                : computeShadow(fragWorldPos, shadowNormal, lightVec, cascade, fragViewDepth);
+            float shadow = 1.0;
+            if (light.environmentParams.w <= 0.5) {
+                if (ubo.hasSkin == 1) {
+                    float worldShadow =
+                        computeWorldShadow(fragWorldPos, shadowNormal, lightVec, cascade,
+                                           fragViewDepth);
+                    float selfShadow = sampleSelfShadow(fragWorldPos, shadowNormal, lightVec,
+                                                        pc.selfShadowSlot);
+                    shadow = min(worldShadow, selfShadow);
+                } else {
+                    shadow =
+                        computeShadow(fragWorldPos, shadowNormal, lightVec, cascade,
+                                      fragViewDepth);
+                }
+            }
             primaryDirectionalVisibility = shadow;
             diffuseContrib *= shadow;
             specularContrib *= shadow;

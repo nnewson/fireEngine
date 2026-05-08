@@ -5,6 +5,7 @@
 #include <limits>
 
 #include <fire_engine/render/device.hpp>
+#include <fire_engine/render/ubo.hpp>
 
 namespace fire_engine
 {
@@ -35,6 +36,10 @@ void recordTransmissionDrawBucket(vk::CommandBuffer cmd, std::span<const DrawCom
         vk::DescriptorSet descriptorSet = resources.vulkanDescriptorSet(dc.descriptorSet);
         cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
                                resources.vulkanPipelineLayout(dc.pipeline), 0, descriptorSet, {});
+        ForwardPushConstants pc{};
+        pc.selfShadowSlot = dc.selfShadowSlot;
+        cmd.pushConstants<ForwardPushConstants>(resources.vulkanPipelineLayout(dc.pipeline),
+                                                vk::ShaderStageFlagBits::eFragment, 0, pc);
         cmd.drawIndexed(dc.indexCount, 1, 0, 0, 0);
     }
 }
