@@ -200,7 +200,7 @@ public:
         Mat4 r;
         r.m_[0] = 2.0f / (right - left);
         r.m_[5] = -2.0f / (top - bottom); // Vulkan Y flipped
-        r.m_[10] = 1.0f / (far - near);   // Vulkan Z in [0,1]
+        r.m_[10] = -1.0f / (far - near);  // Vulkan Z in [0,1], view forward is -Z
         r.m_[12] = -(right + left) / (right - left);
         r.m_[13] = (top + bottom) / (top - bottom);
         r.m_[14] = -near / (far - near);

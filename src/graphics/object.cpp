@@ -114,6 +114,7 @@ void Object::load(Resources& resources)
     req.shadowMap = resources.shadowMap();
     req.spotShadowMap = resources.spotShadowMap();
     req.pointShadowMap = resources.pointShadowMap();
+    req.shadowDebugImage = resources.shadowDebugImage();
     req.irradianceMap = resources.irradianceMap();
     req.prefilteredMap = resources.prefilteredMap();
     req.brdfLut = resources.brdfLut();
@@ -430,7 +431,7 @@ std::vector<DrawCommand> Object::render(const FrameInfo& frame, const Mat4& worl
         cmd.transmissive = mat.transmissionFactor() > 0.0f || mat.hasTransmissionTexture();
         commands.push_back(cmd);
 
-        if (frame.shadowPipeline != NullPipeline &&
+        if (binding.geometry->castsShadow() && frame.shadowPipeline != NullPipeline &&
             binding.shadowDescSets[frame.currentFrame] != NullDescriptorSet)
         {
             DrawCommand shadowCmd = cmd;

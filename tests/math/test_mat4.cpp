@@ -555,6 +555,34 @@ TEST(Mat4Perspective, AllElementsFinite)
 }
 
 // ==========================================================================
+// Ortho
+// ==========================================================================
+
+TEST(Mat4Ortho, MapsForwardNegativeZIntoVulkanDepthRange)
+{
+    Mat4 o = Mat4::ortho(-1.0f, 1.0f, -1.0f, 1.0f, 0.0f, 10.0f);
+
+    Vec4 nearPoint = o * Vec4{0.0f, 0.0f, 0.0f, 1.0f};
+    Vec4 farPoint = o * Vec4{0.0f, 0.0f, -10.0f, 1.0f};
+    Vec4 midPoint = o * Vec4{0.0f, 0.0f, -5.0f, 1.0f};
+
+    EXPECT_NEAR(nearPoint.z(), 0.0f, kEps);
+    EXPECT_NEAR(farPoint.z(), 1.0f, kEps);
+    EXPECT_NEAR(midPoint.z(), 0.5f, kEps);
+}
+
+TEST(Mat4Ortho, FlipsYForVulkanClipSpace)
+{
+    Mat4 o = Mat4::ortho(-2.0f, 2.0f, -2.0f, 2.0f, 0.0f, 10.0f);
+
+    Vec4 top = o * Vec4{0.0f, 2.0f, 0.0f, 1.0f};
+    Vec4 bottom = o * Vec4{0.0f, -2.0f, 0.0f, 1.0f};
+
+    EXPECT_NEAR(top.y(), -1.0f, kEps);
+    EXPECT_NEAR(bottom.y(), 1.0f, kEps);
+}
+
+// ==========================================================================
 // Constexpr
 // ==========================================================================
 

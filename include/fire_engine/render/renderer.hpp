@@ -31,7 +31,10 @@ class SceneGraph;
 class Renderer
 {
 public:
-    explicit Renderer(const Window& window, std::string environmentPath = {});
+    explicit Renderer(const Window& window, std::string environmentPath = {},
+                      bool debugNormals = false, bool debugNdotL = false,
+                      bool debugShadow = false, bool debugShadowDepth = false,
+                      bool noShadows = false);
     ~Renderer() = default;
 
     Renderer(const Renderer&) = delete;
@@ -140,10 +143,12 @@ private:
     std::array<PointShadowCaster, MAX_POINT_SHADOW_CASTERS> pointCasters_{};
     std::vector<vk::Fence> imagesInFlight_{};
     uint32_t currentFrame_{0};
-    // Flip to true and rebuild to visualise cascade regions: red→green→blue→yellow
-    // for cascades 0..3, near to far. Surfaced via LightUBO.environmentParams.w.
-    bool cascadeDebugTint_{false};
     std::string environmentPath_;
+    bool debugNormals_{false};
+    bool debugNdotL_{false};
+    bool debugShadow_{false};
+    bool debugShadowDepth_{false};
+    bool noShadows_{false};
 };
 
 } // namespace fire_engine

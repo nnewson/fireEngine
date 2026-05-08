@@ -112,14 +112,14 @@ public:
     [[nodiscard]] vk::ImageView vulkanPointShadowFaceView(TextureHandle handle, uint32_t cubeIndex,
                                                           uint32_t face) const noexcept;
 
-    // Non-comparison sampler over the shadow image — used by PCSS to read raw
-    // depth values during the blocker search. Same image as vulkanSampler().
-    [[nodiscard]] vk::Sampler vulkanShadowSamplerLinear(TextureHandle handle) const noexcept;
-
     // MoltenVK workaround: depth-only render passes fail to store on Metal
-    // TBDR. Creates a throwaway B8G8R8A8 colour attachment so the shadow pass
-    // becomes a real (colour + depth) render pass. Contents are never read.
-    [[nodiscard]] TextureHandle createShadowColourAttachment(uint32_t extent);
+    // TBDR. Creates a B8G8R8A8 colour attachment so the shadow pass becomes a
+    // real (colour + depth) render pass. When sampled=true, the attachment is
+    // kept and exposed as a sampled texture for shadow-depth debugging.
+    [[nodiscard]] TextureHandle createShadowColourAttachment(uint32_t extent, uint32_t layerCount = 1,
+                                                             bool sampled = false);
+    [[nodiscard]] vk::ImageView vulkanShadowColourLayerView(TextureHandle handle,
+                                                            uint32_t layer) const noexcept;
 
     // Allocates an R16G16B16A16_SFLOAT colour image sized to the given extent,
     // usable as both a colour attachment (forward pass target) and a sampled
@@ -205,6 +205,16 @@ public:
         return pointShadowMap_;
     }
 
+    void shadowDebugImage(TextureHandle handle) noexcept
+    {
+        shadowDebugImage_ = handle;
+    }
+
+    [[nodiscard]] TextureHandle shadowDebugImage() const noexcept
+    {
+        return shadowDebugImage_;
+    }
+
     void irradianceMap(TextureHandle handle) noexcept
     {
         irradianceMap_ = handle;
@@ -262,6 +272,7 @@ public:
     [[nodiscard]] vk::ImageView vulkanCubemapFaceView(TextureHandle handle, uint32_t face,
                                                       uint32_t mipLevel = 0) const noexcept;
     [[nodiscard]] vk::Sampler vulkanSampler(TextureHandle handle) const noexcept;
+    [[nodiscard]] vk::Sampler vulkanShadowDebugSampler() const noexcept;
     [[nodiscard]] vk::Format textureFormat(TextureHandle handle) const noexcept;
     [[nodiscard]] uint32_t textureMipLevels(TextureHandle handle) const noexcept;
     [[nodiscard]] vk::DescriptorSet vulkanDescriptorSet(DescriptorSetHandle handle) const noexcept;
@@ -291,9 +302,6 @@ private:
         vk::raii::DeviceMemory memory{nullptr};
         vk::raii::ImageView view{nullptr};
         vk::raii::Sampler sampler{nullptr};
-        // Shadow-map only: a second sampler with compareEnable=false, used by
-        // the PCSS blocker search to read raw depth values from the same image.
-        vk::raii::Sampler samplerLinear{nullptr};
         vk::Format format{vk::Format::eUndefined};
         std::vector<vk::raii::ImageView> faceViews;
         uint32_t mipLevels{1};
@@ -314,10 +322,12 @@ private:
     TextureHandle shadowMap_{NullTexture};
     TextureHandle spotShadowMap_{NullTexture};
     TextureHandle pointShadowMap_{NullTexture};
+    TextureHandle shadowDebugImage_{NullTexture};
     TextureHandle sceneColor_{NullTexture};
     TextureHandle irradianceMap_{NullTexture};
     TextureHandle prefilteredMap_{NullTexture};
     TextureHandle brdfLut_{NullTexture};
+    vk::raii::Sampler shadowDebugSampler_{nullptr};
 };
 
 } // namespace fire_engine

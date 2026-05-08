@@ -143,11 +143,15 @@ struct LightUBO
     // View-space far-plane distances for each cascade (x..w = cascades 0..3).
     alignas(16) float cascadeSplits[4]{};
     alignas(16) float iblParams[4]{};         // x = maxReflectionLod, y/z = IBL strengths
-    // x = csm minBias, y = csm slopeBias, z = filterRadius, w = pcssLightSize.
+    // x = csm minBias, y = csm slopeBias, z = filterRadius, w = normalOffset.
     alignas(16) float shadowParams[4]{};
     // x = punctual minBias, y = punctual slopeBias.
     alignas(16) float pointSpotShadowParams[4]{};
-    alignas(16) float environmentParams[4]{}; // x = skyboxIntensity, w = CSM debug tint
+    // x = skyboxIntensity, y = environmentShadowStrength,
+    // z = debug view (0=off, 1=normals, 2=NdotL, 3=shadow visibility,
+    // 4=directional raw depth: red=receiver, green=stored, blue=cascade).
+    // w = disable all shadow-map visibility lookups when > 0.5.
+    alignas(16) float environmentParams[4]{};
     // Active light count and the packed light array. Convention: lights[0] is
     // the primary directional (CSM source) when one exists. The shader loops
     // 0..lightCount-1 and only applies CSM shadow at i==0 with type==0.
@@ -197,10 +201,10 @@ struct ShadowPushConstants
 {
     // Selects which lightViewProj[] matrix the vertex shader uses.
     alignas(4) int matrixIndex{0};
-    // Point shadow only (matrixIndex >= SHADOW_POINT_MATRIX_BASE): xyz = light
-    // world position, w = effective range. shadow.frag writes
-    // gl_FragDepth = length(worldPos - xyz)/w so the cube-array compare
-    // sampler can compare linear-distance ratios. Zero for cascade/spot.
+    // Point shadow (matrixIndex >= SHADOW_POINT_MATRIX_BASE): xyz = light
+    // world position, w = effective range. shadow.frag writes linear distance
+    // / range so the cube-array compare sampler agrees with the main shader.
+    // Zero for cascade/spot shadow passes.
     alignas(16) float lightPosRange[4]{};
 };
 

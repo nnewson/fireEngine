@@ -92,7 +92,8 @@ Vec3 pickLightUp(Vec3 dir) noexcept
 
 } // namespace
 
-Renderer::Renderer(const Window& window, std::string environmentPath)
+Renderer::Renderer(const Window& window, std::string environmentPath, bool debugNormals,
+                   bool debugNdotL, bool debugShadow, bool debugShadowDepth, bool noShadows)
     : device_(window),
       swapchain_(device_, window),
       forwardPass_(RenderPass::createForward(device_)),
@@ -106,7 +107,12 @@ Renderer::Renderer(const Window& window, std::string environmentPath)
       postProcessing_(device_, swapchain_, resources_),
       transmission_(device_, swapchain_, resources_, postProcessing_.offscreenColourTarget()),
       shadows_(device_, resources_),
-      environmentPath_(std::move(environmentPath))
+      environmentPath_(std::move(environmentPath)),
+      debugNormals_(debugNormals),
+      debugNdotL_(debugNdotL),
+      debugShadow_(debugShadow),
+      debugShadowDepth_(debugShadowDepth),
+      noShadows_(noShadows)
 {
     swapchain_.createDepthResources(device_);
     forwardPass_.createForwardFramebuffer(
@@ -145,15 +151,13 @@ void Renderer::updateLightData(Vec3 cameraPosition, Vec3 cameraTarget, float asp
                                std::span<const Lighting> lights)
 {
     // Pick a primary directional for CSM. First directional in the gather
-    // order wins. If no directional is in the scene, the cascade fit still
-    // runs against a sane default direction (light contributes nothing
-    // because lightCount == 0 unless there are non-directionals).
+    // order wins. Light::worldDirection is the light's forward ray direction
+    // (glTF/KHR convention), so the shadow camera must look down that vector.
+    // The forward shader negates it separately when it needs surface-to-light.
     const Lighting* primaryDirectional = primaryDirectionalLight(lights);
     const Vec3 lightDir = primaryDirectional != nullptr
-                              ? Vec3::normalise(Vec3{-primaryDirectional->worldDirection.x(),
-                                                     -primaryDirectional->worldDirection.y(),
-                                                     -primaryDirectional->worldDirection.z()})
-                              : Vec3::normalise(Vec3{-1.0f, 1.0f, -1.0f});
+                              ? Vec3::normalise(primaryDirectional->worldDirection)
+                              : Vec3::normalise(Vec3{1.0f, -1.0f, 1.0f});
 
     // Camera basis + light basis (shared by every cascade fit).
     const float tanHalfFov = std::tan(cameraFovRadians * 0.5f);
@@ -268,8 +272,8 @@ void Renderer::updateLightData(Vec3 cameraPosition, Vec3 cameraTarget, float asp
         if (L.type == 2 && activeSpotCasters < MAX_SPOT_SHADOW_CASTERS)
         {
             const int shadowIndex = activeSpotCasters++;
-            const float fov = std::max(2.0f * std::acos(std::clamp(L.outerConeCos, -1.0f, 1.0f)),
-                                       0.01f);
+            const float fov =
+                std::max(2.0f * std::acos(std::clamp(L.outerConeCos, -1.0f, 1.0f)), 0.01f);
             const float far = L.range > 0.0f ? L.range : pointShadowInfiniteRangeFallback;
             const Mat4 proj = Mat4::perspective(fov, 1.0f, pointShadowNearPlane, far);
             const Vec3 dir = Vec3::normalise(L.worldDirection);
@@ -284,25 +288,22 @@ void Renderer::updateLightData(Vec3 cameraPosition, Vec3 cameraTarget, float asp
         {
             const int shadowIndex = activePointCasters++;
             const float far = L.range > 0.0f ? L.range : pointShadowInfiniteRangeFallback;
-            const Mat4 proj =
-                Mat4::perspective(0.5f * pi, 1.0f, pointShadowNearPlane, far);
+            const Mat4 proj = Mat4::perspective(0.5f * pi, 1.0f, pointShadowNearPlane, far);
             // Vulkan cubemap face order: +X, -X, +Y, -Y, +Z, -Z. Up vectors
             // match the IBL prefilter convention used elsewhere in the engine
             // so cube sampling stays consistent across face boundaries.
             constexpr Vec3 faceForward[6] = {
-                Vec3{1.0f, 0.0f, 0.0f},  Vec3{-1.0f, 0.0f, 0.0f},
-                Vec3{0.0f, 1.0f, 0.0f},  Vec3{0.0f, -1.0f, 0.0f},
-                Vec3{0.0f, 0.0f, 1.0f},  Vec3{0.0f, 0.0f, -1.0f},
+                Vec3{1.0f, 0.0f, 0.0f},  Vec3{-1.0f, 0.0f, 0.0f}, Vec3{0.0f, 1.0f, 0.0f},
+                Vec3{0.0f, -1.0f, 0.0f}, Vec3{0.0f, 0.0f, 1.0f},  Vec3{0.0f, 0.0f, -1.0f},
             };
             constexpr Vec3 faceUp[6] = {
-                Vec3{0.0f, -1.0f, 0.0f}, Vec3{0.0f, -1.0f, 0.0f},
-                Vec3{0.0f, 0.0f, 1.0f},  Vec3{0.0f, 0.0f, -1.0f},
-                Vec3{0.0f, -1.0f, 0.0f}, Vec3{0.0f, -1.0f, 0.0f},
+                Vec3{0.0f, -1.0f, 0.0f}, Vec3{0.0f, -1.0f, 0.0f}, Vec3{0.0f, 0.0f, 1.0f},
+                Vec3{0.0f, 0.0f, -1.0f}, Vec3{0.0f, -1.0f, 0.0f}, Vec3{0.0f, -1.0f, 0.0f},
             };
             for (uint32_t face = 0; face < 6; ++face)
             {
-                const Mat4 view = Mat4::lookAt(L.worldPosition,
-                                               L.worldPosition + faceForward[face], faceUp[face]);
+                const Mat4 view = Mat4::lookAt(L.worldPosition, L.worldPosition + faceForward[face],
+                                               faceUp[face]);
                 shadowViewProjs_[SHADOW_POINT_MATRIX_BASE + 6 * shadowIndex + face] = proj * view;
             }
             lightData.lights[packedSlot].cone[2] = static_cast<float>(shadowIndex);
@@ -338,11 +339,17 @@ void Renderer::updateLightData(Vec3 cameraPosition, Vec3 cameraTarget, float asp
     lightData.shadowParams[0] = shadowMinBias;
     lightData.shadowParams[1] = shadowSlopeBias;
     lightData.shadowParams[2] = shadowFilterRadius;
-    lightData.shadowParams[3] = pcssLightSize;
+    lightData.shadowParams[3] = shadowNormalOffset;
     lightData.pointSpotShadowParams[0] = pointSpotShadowMinBias;
     lightData.pointSpotShadowParams[1] = pointSpotShadowSlopeBias;
     lightData.environmentParams[0] = skyboxIntensity;
-    lightData.environmentParams[3] = cascadeDebugTint_ ? 1.0f : 0.0f;
+    lightData.environmentParams[1] = environmentShadowStrength;
+    lightData.environmentParams[2] =
+        debugNormals_ ? 1.0f
+                      : (debugNdotL_ ? 2.0f
+                                     : (debugShadow_ ? 3.0f
+                                                     : (debugShadowDepth_ ? 4.0f : 0.0f)));
+    lightData.environmentParams[3] = noShadows_ ? 1.0f : 0.0f;
     std::memcpy(lightUbo_.mapped[currentFrame_], &lightData, sizeof(lightData));
 }
 
@@ -453,8 +460,8 @@ void Renderer::drawFrame(Window& display, SceneGraph& scene, Vec3 cameraPosition
     scene.render(ctx);
 
     DrawBuckets buckets = buildDrawBuckets(drawCommands);
-    std::span<const PointShadowCaster> pointCasterSpan{pointCasters_.data(),
-                                                       static_cast<std::size_t>(activePointCasters_)};
+    std::span<const PointShadowCaster> pointCasterSpan{
+        pointCasters_.data(), static_cast<std::size_t>(activePointCasters_)};
     shadows_.recordPass(cmd, buckets.shadow, activeSpotCasters_, pointCasterSpan);
     recordForwardPass(cmd, buckets);
     if (!buckets.transmissive.empty())

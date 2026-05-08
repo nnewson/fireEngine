@@ -25,6 +25,26 @@ Resources::Resources(const Device& device, const Pipeline& pipeline)
         .queueFamilyIndex = device.graphicsFamily(),
     };
     cmdPool_ = vk::raii::CommandPool(device.device(), poolCi);
+
+    shadowDebugSampler_ = vk::raii::Sampler(
+        device.device(),
+        vk::SamplerCreateInfo{
+            .magFilter = vk::Filter::eNearest,
+            .minFilter = vk::Filter::eNearest,
+            .mipmapMode = vk::SamplerMipmapMode::eNearest,
+            .addressModeU = vk::SamplerAddressMode::eClampToBorder,
+            .addressModeV = vk::SamplerAddressMode::eClampToBorder,
+            .addressModeW = vk::SamplerAddressMode::eClampToBorder,
+            .mipLodBias = 0.0f,
+            .anisotropyEnable = vk::False,
+            .maxAnisotropy = 1.0f,
+            .compareEnable = vk::False,
+            .compareOp = vk::CompareOp::eAlways,
+            .minLod = 0.0f,
+            .maxLod = 1.0f,
+            .borderColor = vk::BorderColor::eFloatOpaqueWhite,
+            .unnormalizedCoordinates = vk::False,
+        });
 }
 
 // --- Buffer helpers ---
@@ -903,20 +923,11 @@ TextureHandle Resources::createShadowMap(uint32_t extent, uint32_t layerCount)
     }
 
     vk::SamplerCreateInfo samplerCi = makeSamplerCreateInfo(
-        vk::Filter::eLinear, vk::Filter::eLinear, vk::SamplerMipmapMode::eNearest,
+        vk::Filter::eNearest, vk::Filter::eNearest, vk::SamplerMipmapMode::eNearest,
         vk::SamplerAddressMode::eClampToBorder, vk::SamplerAddressMode::eClampToBorder,
-        vk::SamplerAddressMode::eClampToBorder, vk::False, 1.0f, vk::True, vk::CompareOp::eLess,
-        0.0f, 1.0f, vk::BorderColor::eFloatOpaqueWhite);
+        vk::SamplerAddressMode::eClampToBorder, vk::False, 1.0f, vk::True,
+        vk::CompareOp::eLessOrEqual, 0.0f, 1.0f, vk::BorderColor::eFloatOpaqueWhite);
     entry.sampler = vk::raii::Sampler(device_->device(), samplerCi);
-
-    // PCSS blocker search reads raw depth values, not comparison results, so
-    // it needs a non-comparison sampler over the same image.
-    vk::SamplerCreateInfo linearSamplerCi = makeSamplerCreateInfo(
-        vk::Filter::eLinear, vk::Filter::eLinear, vk::SamplerMipmapMode::eNearest,
-        vk::SamplerAddressMode::eClampToBorder, vk::SamplerAddressMode::eClampToBorder,
-        vk::SamplerAddressMode::eClampToBorder, vk::False, 1.0f, vk::False, vk::CompareOp::eAlways,
-        0.0f, 1.0f, vk::BorderColor::eFloatOpaqueWhite);
-    entry.samplerLinear = vk::raii::Sampler(device_->device(), linearSamplerCi);
 
     transitionDepthImageToReadOnly(*device_, *cmdPool_, *entry.image, layerCount);
 
@@ -969,10 +980,10 @@ TextureHandle Resources::createPointShadowMap(uint32_t faceExtent, uint32_t cube
     }
 
     vk::SamplerCreateInfo samplerCi = makeSamplerCreateInfo(
-        vk::Filter::eLinear, vk::Filter::eLinear, vk::SamplerMipmapMode::eNearest,
+        vk::Filter::eNearest, vk::Filter::eNearest, vk::SamplerMipmapMode::eNearest,
         vk::SamplerAddressMode::eClampToEdge, vk::SamplerAddressMode::eClampToEdge,
-        vk::SamplerAddressMode::eClampToEdge, vk::False, 1.0f, vk::True, vk::CompareOp::eLess, 0.0f,
-        1.0f, vk::BorderColor::eFloatOpaqueWhite);
+        vk::SamplerAddressMode::eClampToEdge, vk::False, 1.0f, vk::True,
+        vk::CompareOp::eLessOrEqual, 0.0f, 1.0f, vk::BorderColor::eFloatOpaqueWhite);
     entry.sampler = vk::raii::Sampler(device_->device(), samplerCi);
 
     transitionDepthImageToReadOnly(*device_, *cmdPool_, *entry.image, totalLayers);
@@ -987,12 +998,8 @@ vk::ImageView Resources::vulkanPointShadowFaceView(TextureHandle handle, uint32_
     return *entry.faceViews[6u * cubeIndex + face];
 }
 
-vk::Sampler Resources::vulkanShadowSamplerLinear(TextureHandle handle) const noexcept
-{
-    return *textures_[static_cast<uint32_t>(handle)].samplerLinear;
-}
-
-TextureHandle Resources::createShadowColourAttachment(uint32_t extent)
+TextureHandle Resources::createShadowColourAttachment(uint32_t extent, uint32_t layerCount,
+                                                      bool sampled)
 {
     auto id = static_cast<uint32_t>(textures_.size());
     textures_.emplace_back();
@@ -1001,8 +1008,10 @@ TextureHandle Resources::createShadowColourAttachment(uint32_t extent)
 
     vk::ImageCreateInfo imgCi = makeImageCreateInfo(
         {}, vk::ImageType::e2D, entry.format,
-        vk::Extent3D{.width = extent, .height = extent, .depth = 1}, 1, 1,
-        vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eTransientAttachment);
+        vk::Extent3D{.width = extent, .height = extent, .depth = 1}, 1, layerCount,
+        vk::ImageUsageFlagBits::eColorAttachment |
+            (sampled ? vk::ImageUsageFlagBits::eSampled
+                     : vk::ImageUsageFlagBits::eTransientAttachment));
     entry.image = vk::raii::Image(device_->device(), imgCi);
 
     auto imgReq = entry.image.getMemoryRequirements();
@@ -1012,12 +1021,42 @@ TextureHandle Resources::createShadowColourAttachment(uint32_t extent)
     entry.memory = vk::raii::DeviceMemory(device_->device(), imgAi);
     entry.image.bindMemory(*entry.memory, 0);
 
+    vk::ImageViewType mainViewType =
+        layerCount > 1 ? vk::ImageViewType::e2DArray : vk::ImageViewType::e2D;
     vk::ImageViewCreateInfo viewCi = makeImageViewCreateInfo(
-        *entry.image, vk::ImageViewType::e2D, entry.format,
-        makeImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1));
+        *entry.image, mainViewType, entry.format,
+        makeImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, 1, 0, layerCount));
     entry.view = vk::raii::ImageView(device_->device(), viewCi);
 
+    if (layerCount > 1)
+    {
+        entry.faceViews.reserve(layerCount);
+        for (uint32_t layer = 0; layer < layerCount; ++layer)
+        {
+            vk::ImageViewCreateInfo layerCi = makeImageViewCreateInfo(
+                *entry.image, vk::ImageViewType::e2D, entry.format,
+                makeImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, 1, layer, 1));
+            entry.faceViews.emplace_back(device_->device(), layerCi);
+        }
+    }
+
+    if (sampled)
+    {
+        vk::SamplerCreateInfo samplerCi = makeSamplerCreateInfo(
+            vk::Filter::eNearest, vk::Filter::eNearest, vk::SamplerMipmapMode::eNearest,
+            vk::SamplerAddressMode::eClampToBorder, vk::SamplerAddressMode::eClampToBorder,
+            vk::SamplerAddressMode::eClampToBorder, vk::False, 1.0f, vk::False,
+            vk::CompareOp::eAlways, 0.0f, 1.0f, vk::BorderColor::eFloatOpaqueWhite);
+        entry.sampler = vk::raii::Sampler(device_->device(), samplerCi);
+    }
+
     return TextureHandle{id};
+}
+
+vk::ImageView Resources::vulkanShadowColourLayerView(TextureHandle handle, uint32_t layer) const noexcept
+{
+    const auto& entry = textures_[static_cast<uint32_t>(handle)];
+    return *entry.faceViews[layer];
 }
 
 TextureHandle Resources::createOffscreenColourTarget(vk::Extent2D extent)
@@ -1264,6 +1303,11 @@ vk::Image Resources::vulkanImage(TextureHandle handle) const noexcept
 vk::Sampler Resources::vulkanSampler(TextureHandle handle) const noexcept
 {
     return *textures_[static_cast<uint32_t>(handle)].sampler;
+}
+
+vk::Sampler Resources::vulkanShadowDebugSampler() const noexcept
+{
+    return *shadowDebugSampler_;
 }
 
 vk::Format Resources::textureFormat(TextureHandle handle) const noexcept

@@ -1,7 +1,7 @@
 #version 450
 // textureSize() and similar queries on plain texture* uniforms (no sampler
 // attached) need this — we use it for the shadow map array which is bound
-// as a sampledImage so the same image can pair with multiple samplers.
+// as a sampledImage so all shadow maps can share one comparison sampler.
 #extension GL_EXT_samplerless_texture_functions : require
 
 layout(binding = 0) uniform UBO {
@@ -9,6 +9,7 @@ layout(binding = 0) uniform UBO {
     mat4 view;
     mat4 proj;
     vec4 cameraPos;
+    int hasSkin;
 } ubo;
 
 layout(binding = 1) uniform MaterialUBO {
@@ -79,15 +80,16 @@ layout(binding = 20) uniform sampler2D sceneColorMap;
 // thicknessFactor). Drives both the refracted exit point and the Beer-Lambert
 // path length.
 layout(binding = 21) uniform sampler2D thicknessMap;
-// Shadow images bound as plain textures so a single comparison sampler and
-// a single linear sampler can be reused across all three (Apple's per-stage
-// sampler limit is 16). Combined samplers are constructed at use time via
-// the GLSL sampler*() constructors.
+// Shadow images bound as plain textures so one comparison sampler can be
+// reused across CSM, spot, and point maps (Apple's per-stage sampler limit is
+// 16). Combined samplers are constructed at use time via the GLSL sampler*()
+// constructors.
 layout(binding = 10) uniform texture2DArray shadowMapTex;
 layout(binding = 22) uniform texture2DArray spotShadowMapTex;
 layout(binding = 23) uniform textureCubeArray pointShadowMapTex;
 layout(binding = 15) uniform sampler shadowCompareSampler;
-layout(binding = 24) uniform sampler shadowLinearSampler;
+layout(binding = 24) uniform sampler shadowDebugSampler;
+layout(binding = 25) uniform texture2DArray shadowDebugImageTex;
 layout(binding = 12) uniform samplerCube irradianceMap;
 layout(binding = 13) uniform samplerCube prefilteredMap;
 layout(binding = 14) uniform sampler2D brdfLut;
@@ -178,7 +180,7 @@ vec3 fresnelSchlick(float cosTheta, vec3 F0)
     return F0 + (1.0 - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
 }
 
-// 16-tap Poisson disk for PCSS blocker search and variable-radius PCF.
+// 16-tap Poisson disk for directional CSM PCF.
 const vec2 poissonDisk[16] = vec2[16](
     vec2(-0.94201624, -0.39906216), vec2( 0.94558609, -0.76890725),
     vec2(-0.09418410, -0.92938870), vec2( 0.34495938,  0.29387760),
@@ -200,60 +202,41 @@ mat2 poissonRotation(vec3 worldPos)
     return mat2(c, -s, s, c);
 }
 
-float pcfSample(vec3 worldPos, vec3 normal, vec3 lightDir, int cascade)
+float sampleDirectionalShadow(vec3 worldPos, vec3 normal, vec3 lightDir, int cascade)
 {
-    vec4 lightSpace = light.cascadeViewProj[cascade] * vec4(worldPos, 1.0);
+    vec3 sampleWorldPos = worldPos + normal * light.shadowParams.w * exp2(float(cascade));
+    vec4 lightSpace = light.cascadeViewProj[cascade] * vec4(sampleWorldPos, 1.0);
     vec3 proj = lightSpace.xyz / lightSpace.w;
     proj.xy = proj.xy * 0.5 + 0.5;
-    if (proj.z > 1.0 || proj.z < 0.0)
+    if (proj.z > 1.0 || proj.z < 0.0
+        || any(lessThan(proj.xy, vec2(0.0)))
+        || any(greaterThan(proj.xy, vec2(1.0)))) {
         return 1.0;
+    }
 
     float minBias = light.shadowParams.x;
     float slopeBias = light.shadowParams.y;
-    float lightSize = light.shadowParams.w;
     float baseBias = max(minBias, slopeBias * (1.0 - max(dot(normal, lightDir), 0.0)));
-    // Far cascades cover proportionally more world per texel; bias must scale.
+    // Far cascades cover proportionally more world per texel; bias must scale
+    // with cascade size.
     float bias = baseBias * exp2(float(cascade));
     float receiverDepth = proj.z - bias;
 
     mat2 rot = poissonRotation(worldPos);
-
-    // 1. Blocker search — average depth of any occluders within search radius.
-    //    Reads raw depths via the non-comparison sampler at binding 15.
-    float searchRadius = lightSize;
-    float blockerSum = 0.0;
-    int blockerCount = 0;
-    for (int i = 0; i < 16; ++i) {
-        vec2 off = rot * poissonDisk[i] * searchRadius;
-        float d = texture(sampler2DArray(shadowMapTex, shadowLinearSampler),
-                          vec3(proj.xy + off, float(cascade))).r;
-        if (d < receiverDepth) {
-            blockerSum += d;
-            blockerCount++;
-        }
-    }
-    if (blockerCount == 0) {
-        // No occluders → fully lit, skip the PCF cost entirely.
-        return 1.0;
-    }
-    float avgBlocker = blockerSum / float(blockerCount);
-
-    // 2. Penumbra size from blocker / receiver depth ratio (PCSS classical).
-    //    Larger gap → softer shadow.
-    float penumbra = (receiverDepth - avgBlocker) / max(avgBlocker, 1e-4) * lightSize;
-    // Floor at one shadow texel — keeps the kernel from collapsing to a single
-    // sample at razor-thin contact, which would re-introduce aliasing.
     float texelSize = 1.0 / float(textureSize(shadowMapTex, 0).x);
-    float filterRadius = max(penumbra, texelSize);
+    float filterRadius = max(light.shadowParams.z, 0.0) * texelSize;
 
-    // 3. Variable-radius PCF — same Poisson kernel, hardware compare sampler.
-    float vis = 0.0;
+    float vis = texture(sampler2DArrayShadow(shadowMapTex, shadowCompareSampler),
+                        vec4(proj.xy, float(cascade), receiverDepth));
+    if (filterRadius <= 0.0) {
+        return vis;
+    }
     for (int i = 0; i < 16; ++i) {
         vec2 off = rot * poissonDisk[i] * filterRadius;
         vis += texture(sampler2DArrayShadow(shadowMapTex, shadowCompareSampler),
                        vec4(proj.xy + off, float(cascade), receiverDepth));
     }
-    return vis / 16.0;
+    return vis / 17.0;
 }
 
 int selectCascade(float viewDepth)
@@ -285,12 +268,34 @@ float cascadeBlendFactor(int cascade, float viewDepth)
 
 float computeShadow(vec3 worldPos, vec3 normal, vec3 lightDir, int cascade, float viewDepth)
 {
-    float current = pcfSample(worldPos, normal, lightDir, cascade);
+    float current = sampleDirectionalShadow(worldPos, normal, lightDir, cascade);
     float t = cascadeBlendFactor(cascade, viewDepth);
     if (t <= 0.0)
         return current;
-    float next = pcfSample(worldPos, normal, lightDir, cascade + 1);
+    float next = sampleDirectionalShadow(worldPos, normal, lightDir, cascade + 1);
     return mix(current, next, t);
+}
+
+vec2 directionalShadowDepths(vec3 worldPos, vec3 normal, vec3 lightDir, int cascade)
+{
+    vec3 sampleWorldPos = worldPos + normal * light.shadowParams.w * exp2(float(cascade));
+    vec4 lightSpace = light.cascadeViewProj[cascade] * vec4(sampleWorldPos, 1.0);
+    vec3 proj = lightSpace.xyz / lightSpace.w;
+    proj.xy = proj.xy * 0.5 + 0.5;
+    if (proj.z > 1.0 || proj.z < 0.0
+        || any(lessThan(proj.xy, vec2(0.0)))
+        || any(greaterThan(proj.xy, vec2(1.0)))) {
+        return vec2(0.0, 0.0);
+    }
+
+    float minBias = light.shadowParams.x;
+    float slopeBias = light.shadowParams.y;
+    float baseBias = max(minBias, slopeBias * (1.0 - max(dot(normal, lightDir), 0.0)));
+    float bias = baseBias * exp2(float(cascade));
+    float receiverDepth = proj.z - bias;
+    float storedDepth = texture(sampler2DArray(shadowDebugImageTex, shadowDebugSampler),
+                                vec3(proj.xy, float(cascade))).r;
+    return vec2(receiverDepth, storedDepth);
 }
 
 void main() {
@@ -304,6 +309,10 @@ void main() {
     } else {
         N = normalize(fragNormal);
     }
+
+    // Use the geometric mesh normal for shadow receiver bias; tangent-space
+    // normal maps affect BRDF shading, not geometric visibility.
+    vec3 shadowNormal = normalize(fragNormal);
 
     vec3 V = normalize(ubo.cameraPos.xyz - fragWorldPos);
     float NdotV = max(dot(N, V), 0.001);
@@ -328,6 +337,11 @@ void main() {
         alpha *= texColor.a;
     }
     if (alpha < material.materialParams.z) discard;
+
+    if (light.environmentParams.z > 0.5 && light.environmentParams.z < 1.5) {
+        outColor = vec4(N * 0.5 + 0.5, alpha);
+        return;
+    }
 
     // KHR_materials_unlit. Skip BRDF/IBL/shadow entirely; output the textured
     // base colour directly. Post-process tonemap still runs on the HDR target.
@@ -386,6 +400,8 @@ void main() {
     // shadow; everything else is unshadowed.
     vec3 directDiffuse = vec3(0.0);
     vec3 directSpecular = vec3(0.0);
+    float primaryDirectionalVisibility = 1.0;
+    float primaryDirectionalNdotL = 0.0;
     for (int i = 0; i < light.lightCount && i < MAX_LIGHTS; ++i) {
         LightData L = light.lights[i];
         int type = int(L.position.w);
@@ -424,7 +440,7 @@ void main() {
             }
 
             int shIdx = int(L.cone.z + 0.5);
-            if (shIdx >= 0 && attenuation > 0.0) {
+            if (shIdx >= 0 && attenuation > 0.0 && light.environmentParams.w <= 0.5) {
                 float bias = light.pointSpotShadowParams.x;
                 if (type == 2) {
                     vec4 sp = light.spotViewProj[shIdx] * vec4(fragWorldPos, 1.0);
@@ -486,8 +502,15 @@ void main() {
         }
 
         if (i == 0 && type == 0) {
+            primaryDirectionalNdotL = NdotL;
             int cascade = selectCascade(fragViewDepth);
-            float shadow = computeShadow(fragWorldPos, N, lightVec, cascade, fragViewDepth);
+            // Skinned meshes still cast into the directional CSM, but skip
+            // receiving it until the skinned same-surface compare path is more
+            // robust. This preserves floor shadows without character acne.
+            float shadow = light.environmentParams.w > 0.5 || ubo.hasSkin == 1
+                ? 1.0
+                : computeShadow(fragWorldPos, shadowNormal, lightVec, cascade, fragViewDepth);
+            primaryDirectionalVisibility = shadow;
             diffuseContrib *= shadow;
             specularContrib *= shadow;
             cc_contrib *= shadow;
@@ -496,6 +519,25 @@ void main() {
         directDiffuse += diffuseContrib;
         directSpecular += specularContrib;
         directSpecular += cc_contrib;
+    }
+
+    if (light.environmentParams.z > 1.5 && light.environmentParams.z < 2.5) {
+        outColor = vec4(vec3(primaryDirectionalNdotL), alpha);
+        return;
+    }
+
+    if (light.environmentParams.z > 2.5 && light.environmentParams.z < 3.5) {
+        outColor = vec4(vec3(primaryDirectionalVisibility), alpha);
+        return;
+    }
+
+    if (light.environmentParams.z > 3.5 && light.environmentParams.z < 4.5) {
+        int cascade = selectCascade(fragViewDepth);
+        vec3 lightVec = normalize(-light.lights[0].direction.xyz);
+        vec2 depths = directionalShadowDepths(fragWorldPos, shadowNormal, lightVec, cascade);
+        float cascadeDebug = float(cascade) / 3.0;
+        outColor = vec4(depths.x, depths.y, cascadeDebug, alpha);
+        return;
     }
 
     vec3 irradiance = texture(irradianceMap, N).rgb;
@@ -544,9 +586,13 @@ void main() {
         ao = mix(1.0, sampled, material.materialParams.w);
     }
 
-    vec3 diffuseAmbientTerm = diffuseIbl * ao;
+    float environmentShadow = mix(1.0, primaryDirectionalVisibility, light.environmentParams.y);
+    vec3 diffuseAmbientTerm = diffuseIbl * ao * environmentShadow;
     float specularAo = mix(1.0, ao, 0.25);
-    vec3 specularAmbientTerm = specularIbl * specularAo + clearcoatIbl * specularAo;
+    float specularEnvironmentShadow = mix(1.0, environmentShadow, 0.5);
+    vec3 specularAmbientTerm =
+        specularIbl * specularAo * specularEnvironmentShadow
+        + clearcoatIbl * specularAo * specularEnvironmentShadow;
     vec3 ambientTerm = diffuseAmbientTerm + specularAmbientTerm;
 
     // Emissive
@@ -628,20 +674,6 @@ void main() {
     vec3 color = diffuseAmbientTerm + specularAmbientTerm
                + directDiffuse + directSpecular
                + transmittedLight + emissiveTerm;
-
-    if (light.environmentParams.w > 0.5) {
-        int cascade = selectCascade(fragViewDepth);
-        vec3 cascadeTints[4] = vec3[4](
-            vec3(1.0, 0.4, 0.4),  // cascade 0 — red, closest
-            vec3(0.4, 1.0, 0.4),  // cascade 1 — green
-            vec3(0.4, 0.4, 1.0),  // cascade 2 — blue
-            vec3(1.0, 1.0, 0.4)   // cascade 3 — yellow, furthest
-        );
-        vec3 currentTint = cascadeTints[cascade];
-        float t = cascadeBlendFactor(cascade, fragViewDepth);
-        vec3 nextTint = cascadeTints[min(cascade + 1, 3)];
-        color *= mix(currentTint, nextTint, t);
-    }
 
     outColor = vec4(color, alpha);
 }

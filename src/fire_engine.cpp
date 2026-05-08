@@ -10,6 +10,12 @@
 
 #include <fire_engine/core/gltf_loader.hpp>
 #include <fire_engine/core/system.hpp>
+#include <fire_engine/graphics/geometry.hpp>
+#include <fire_engine/graphics/material.hpp>
+#include <fire_engine/graphics/object.hpp>
+#include <fire_engine/graphics/vertex.hpp>
+#include <fire_engine/scene/mesh.hpp>
+#include <fire_engine/scene/node.hpp>
 
 namespace fire_engine
 {
@@ -29,15 +35,63 @@ FireEngine::~FireEngine()
 }
 
 void FireEngine::run(size_t width, size_t height, std::string_view app_name,
-                     std::string_view scene_path, std::string_view skybox_path)
+                     std::string_view scene_path, std::string_view skybox_path, bool addFloor,
+                     bool debugNormals, bool debugNdotL, bool debugShadow,
+                     bool debugShadowDepth, bool noShadows)
 {
     window_ = std::make_unique<Window>(width, height, app_name);
     input_.enable(*window_);
 
-    renderer_ = std::make_unique<Renderer>(*window_, std::string(skybox_path));
+    renderer_ = std::make_unique<Renderer>(*window_, std::string(skybox_path), debugNormals,
+                                           debugNdotL, debugShadow, debugShadowDepth, noShadows);
 
     loadScene(scene_path);
+    if (addFloor)
+    {
+        addFloorPlane();
+    }
     mainLoop();
+}
+
+void FireEngine::addFloorPlane()
+{
+    constexpr float halfSize = 5.0f;
+    constexpr Colour3 white{1.0f, 1.0f, 1.0f};
+    constexpr Vec3 normal{0.0f, 1.0f, 0.0f};
+
+    // Material is fine to push into assets_ — backed by std::deque so existing
+    // pointers stay valid across the insert.
+    auto& mat = assets_.addMaterial(Material{});
+    mat.name("FloorWhite");
+    mat.diffuse(white);
+    mat.alpha(1.0f);
+    mat.roughness(1.0f);
+    mat.metallic(0.0f);
+
+    floorGeometry_ = std::make_unique<Geometry>();
+    std::vector<Vertex> verts{
+        Vertex{Vec3{-halfSize, 0.0f, -halfSize}, white, normal, Vec2{0.0f, 0.0f}},
+        Vertex{Vec3{halfSize, 0.0f, -halfSize}, white, normal, Vec2{1.0f, 0.0f}},
+        Vertex{Vec3{halfSize, 0.0f, halfSize}, white, normal, Vec2{1.0f, 1.0f}},
+        Vertex{Vec3{-halfSize, 0.0f, halfSize}, white, normal, Vec2{0.0f, 1.0f}},
+    };
+    // CCW from above (+y) so the front face survives the forward pass'
+    // back-face cull. The floor is a receiver-only debug plane; if it casts
+    // into the CSM it self-shadows and greys out the whole scene.
+    std::vector<uint32_t> indices{0, 2, 1, 0, 3, 2};
+    floorGeometry_->vertices(std::move(verts));
+    floorGeometry_->indices(std::move(indices));
+    floorGeometry_->material(&mat);
+    floorGeometry_->castsShadow(false);
+    floorGeometry_->load(renderer_->resources());
+
+    Object floorObject;
+    floorObject.addGeometry(*floorGeometry_);
+    floorObject.load(renderer_->resources());
+
+    auto floorNode = std::make_unique<Node>("Floor");
+    floorNode->component().emplace<Mesh>(std::move(floorObject));
+    scene_.addNode(std::move(floorNode));
 }
 
 void FireEngine::loadScene(std::string_view scene_path)

@@ -174,18 +174,19 @@ RenderPass RenderPass::createForwardTransmission(const Device& device)
 RenderPass RenderPass::createShadow(const Device& device)
 {
     // MoltenVK quirk: depth-only render passes don't commit storeOp on TBDR.
-    // Attach a throwaway B8G8R8A8 colour target so Metal treats this as a real
-    // render pass. loadOp=DontCare/storeOp=DontCare keeps it free.
+    // Attach a B8G8R8A8 colour target so Metal treats this as a real render
+    // pass. We keep/store it so debug builds can sample the light-space depth
+    // written into the colour attachment.
     std::array<vk::AttachmentDescription, 2> attachments = {
         vk::AttachmentDescription{
             .format = vk::Format::eB8G8R8A8Unorm,
             .samples = vk::SampleCountFlagBits::e1,
             .loadOp = vk::AttachmentLoadOp::eDontCare,
-            .storeOp = vk::AttachmentStoreOp::eDontCare,
+            .storeOp = vk::AttachmentStoreOp::eStore,
             .stencilLoadOp = vk::AttachmentLoadOp::eDontCare,
             .stencilStoreOp = vk::AttachmentStoreOp::eDontCare,
             .initialLayout = vk::ImageLayout::eUndefined,
-            .finalLayout = vk::ImageLayout::eColorAttachmentOptimal,
+            .finalLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
         },
         vk::AttachmentDescription{
             .format = vk::Format::eD32Sfloat,
@@ -247,14 +248,16 @@ RenderPass RenderPass::createShadow(const Device& device)
     return pass;
 }
 
-void RenderPass::createShadowFramebuffer(const Device& device, vk::ImageView colourView,
+void RenderPass::createShadowFramebuffer(const Device& device,
+                                         std::span<const vk::ImageView> colourViews,
                                          std::span<const vk::ImageView> depthViews, uint32_t extent)
 {
     framebuffers_.clear();
     framebuffers_.reserve(depthViews.size());
-    for (vk::ImageView depthView : depthViews)
+    for (std::size_t i = 0; i < depthViews.size(); ++i)
     {
-        std::array<vk::ImageView, 2> views = {colourView, depthView};
+        vk::ImageView colourView = colourViews.size() == 1 ? colourViews[0] : colourViews[i];
+        std::array<vk::ImageView, 2> views = {colourView, depthViews[i]};
         vk::FramebufferCreateInfo ci{
             .renderPass = *renderPass_,
             .attachmentCount = static_cast<uint32_t>(views.size()),

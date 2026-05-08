@@ -86,6 +86,21 @@ TEST(Geometry, SetAndGetUInt32Indices)
     EXPECT_EQ(geo.indexType(), DrawIndexType::UInt32);
 }
 
+TEST(Geometry, CastsShadowDefaultsToTrue)
+{
+    Geometry geo;
+    EXPECT_TRUE(geo.castsShadow());
+}
+
+TEST(Geometry, CastsShadowRoundTrip)
+{
+    Geometry geo;
+    geo.castsShadow(false);
+    EXPECT_FALSE(geo.castsShadow());
+    geo.castsShadow(true);
+    EXPECT_TRUE(geo.castsShadow());
+}
+
 // ---------------------------------------------------------------------------
 // Material pointer
 // ---------------------------------------------------------------------------

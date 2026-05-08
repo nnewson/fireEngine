@@ -82,6 +82,15 @@ public:
         return DrawIndexType::UInt32;
     }
 
+    [[nodiscard]] bool castsShadow() const noexcept
+    {
+        return castsShadow_;
+    }
+    void castsShadow(bool value) noexcept
+    {
+        castsShadow_ = value;
+    }
+
     [[nodiscard]] const std::vector<std::vector<Vec3>>& morphPositions() const noexcept
     {
         return morphPositions_;
@@ -127,6 +136,7 @@ private:
 
     BufferHandle vertexBuffer_{NullBuffer};
     BufferHandle indexBuffer_{NullBuffer};
+    bool castsShadow_{true};
 };
 
 } // namespace fire_engine

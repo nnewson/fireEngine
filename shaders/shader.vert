@@ -70,13 +70,19 @@ void main() {
     }
 
     mat4 transform;
+    mat3 normalTransform;
     if (ubo.hasSkin == 1) {
         transform = inWeights.x * skin.joints[inJoints.x]
                   + inWeights.y * skin.joints[inJoints.y]
                   + inWeights.z * skin.joints[inJoints.z]
                   + inWeights.w * skin.joints[inJoints.w];
+        // Skin matrices can contain armature conversion and blended joint
+        // scale/shear, so normals need the same inverse-transpose treatment as
+        // static meshes.
+        normalTransform = transpose(inverse(mat3(transform)));
     } else {
         transform = ubo.model;
+        normalTransform = transpose(inverse(mat3(transform)));
     }
 
     vec4 worldPos = transform * vec4(pos, 1.0);
@@ -85,15 +91,14 @@ void main() {
     fragViewDepth = -(ubo.view * worldPos).z;
     fragTexCoord1 = inTexCoord1;
 
-    mat3 normalMatrix = transpose(inverse(mat3(transform)));
-    fragNormal = normalMatrix * normal;
+    fragNormal = normalize(normalTransform * normal);
     fragWorldPos = worldPos.xyz;
     fragTexCoord = inTexCoord;
 
     // TBN matrix for normal mapping. Use the morph-blended tangent so facial
     // expression rigs get correct normal-mapped lighting per blend.
     vec3 N = normalize(fragNormal);
-    vec3 T = normalMatrix * tangent;
+    vec3 T = normalTransform * tangent;
     T = normalize(T - N * dot(N, T));
     vec3 B = normalize(cross(N, T)) * inTangent.w;
     fragTBN = mat3(T, B, N);

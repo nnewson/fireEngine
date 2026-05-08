@@ -43,6 +43,7 @@ struct ObjectDescriptorRequest
     TextureHandle shadowMap{NullTexture};
     TextureHandle spotShadowMap{NullTexture};
     TextureHandle pointShadowMap{NullTexture};
+    TextureHandle shadowDebugImage{NullTexture};
     TextureHandle irradianceMap{NullTexture};
     TextureHandle prefilteredMap{NullTexture};
     TextureHandle brdfLut{NullTexture};

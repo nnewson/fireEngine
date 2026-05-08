@@ -35,17 +35,20 @@ inline constexpr float cameraNearPlane = 0.1f;
 inline constexpr float cameraFarPlane = 1000.0f;
 
 // ---------------------------------------------------------------------------
-// Directional light + IBL strengths. Calibrated against the ACES post-process
-// so direct light stays crisp without washing out midtones.
+// Directional light + IBL strengths. Keep diffuse IBL below direct sun so
+// shadowed areas do not get filled back to near-white by bright environments.
 // ---------------------------------------------------------------------------
 
-inline constexpr float directionalLightIntensity = 0.95f;
-inline constexpr float diffuseIblStrength = 1.0f;
+inline constexpr float directionalLightIntensity = 1.35f;
+inline constexpr float diffuseIblStrength = 0.35f;
 inline constexpr float specularIblStrength = 0.7f;
 inline constexpr float skyboxIntensity = 1.0f;
+// Keep image-based lighting independent from CSM visibility by default. Direct
+// light carries the shadow contrast; ambient light stays stable across assets.
+inline constexpr float environmentShadowStrength = 0.0f;
 
 // ---------------------------------------------------------------------------
-// Shadow mapping — extent, cascading, bias, PCSS knobs.
+// Shadow mapping — extent, cascading, bias, and filter radius.
 // ---------------------------------------------------------------------------
 
 inline constexpr uint32_t shadowMapExtent = 2048;
@@ -60,10 +63,12 @@ inline constexpr float shadowFarPlane = 50.0f;
 inline constexpr float shadowDepthBackExtend = 20.0f;
 inline constexpr float shadowMinBias = 0.0008f;
 inline constexpr float shadowSlopeBias = 0.0035f;
-inline constexpr float shadowFilterRadius = 1.0f;
-// PCSS light angular size in light-space NDC units. Larger → softer shadows
-// further from contact points. ~0.005 is a soft sun; ~0.001 a sharp one.
-inline constexpr float pcssLightSize = 0.005f;
+inline constexpr float shadowFilterRadius = 0.0f;
+inline constexpr float shadowNormalOffset = 0.0f;
+// Keep directional caster bias conservative so contact shadows remain attached.
+// Punctual lights use their own bias constants below.
+inline constexpr float directionalShadowRasterBiasConstant = 0.0f;
+inline constexpr float directionalShadowRasterBiasSlope = 0.0f;
 
 // Shadow casters for punctual lights. Caps are independent of MAX_LIGHTS;
 // excess punctual lights remain unshadowed. First-N policy in gather order.
@@ -74,6 +79,8 @@ inline constexpr uint32_t spotShadowMapExtent = 1024;
 inline constexpr uint32_t pointShadowMapExtent = 512;
 inline constexpr float pointSpotShadowMinBias = 0.005f;
 inline constexpr float pointSpotShadowSlopeBias = 0.01f;
+inline constexpr float punctualShadowRasterBiasConstant = 1.25f;
+inline constexpr float punctualShadowRasterBiasSlope = 1.75f;
 inline constexpr float pointShadowNearPlane = 0.1f;
 // Substituted far plane for point lights with range==0 (glTF "infinite") so
 // the cube projection stays finite. Used only for shadow-map projection.

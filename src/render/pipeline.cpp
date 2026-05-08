@@ -71,7 +71,8 @@ PipelineConfig Pipeline::forwardConfig(vk::RenderPass renderPass)
         sampler(ForwardBinding::ThicknessTexture),
         sampledImage(ForwardBinding::SpotShadowMap),
         sampledImage(ForwardBinding::PointShadowMap),
-        plainSampler(ForwardBinding::ShadowLinearSampler),
+        plainSampler(ForwardBinding::ShadowDebugSampler),
+        sampledImage(ForwardBinding::ShadowDebugImage),
     };
     config.renderPass = renderPass;
     return config;
@@ -122,10 +123,10 @@ PipelineConfig Pipeline::shadowConfig(vk::RenderPass renderPass)
     config.depthWrite = true;
     config.depthCompare = vk::CompareOp::eLessOrEqual;
     config.cullMode = vk::CullModeFlagBits::eFront;
-    config.writeColour = false;
+    config.writeColour = true;
     config.depthBiasEnable = true;
-    config.depthBiasConstant = 1.25f;
-    config.depthBiasSlope = 1.75f;
+    config.depthBiasConstant = 0.0f;
+    config.depthBiasSlope = 0.0f;
     return config;
 }
 
@@ -363,7 +364,8 @@ void Pipeline::createGraphicsPipeline(const PipelineConfig& config)
         .scissorCount = 1,
     };
 
-    std::array dynamicStates = {vk::DynamicState::eViewport, vk::DynamicState::eScissor};
+    std::array dynamicStates = {vk::DynamicState::eViewport, vk::DynamicState::eScissor,
+                                vk::DynamicState::eDepthBias};
     vk::PipelineDynamicStateCreateInfo dynamicState{
         .dynamicStateCount = static_cast<uint32_t>(dynamicStates.size()),
         .pDynamicStates = dynamicStates.data(),
