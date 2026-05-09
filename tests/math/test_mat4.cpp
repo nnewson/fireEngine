@@ -1,4 +1,5 @@
 #include <fire_engine/math/mat4.hpp>
+#include <fire_engine/math/view_basis.hpp>
 
 #include <cmath>
 #include <limits>
@@ -9,6 +10,7 @@
 using fire_engine::Mat4;
 using fire_engine::Vec3;
 using fire_engine::Vec4;
+using fire_engine::ViewBasis;
 
 // ---- Helpers ----
 
@@ -487,6 +489,49 @@ TEST(Mat4LookAt, PreservesOrthonormality)
         dot01 += v[0, c] * v[1, c];
     }
     EXPECT_NEAR(dot01, 0.0f, kEps);
+}
+
+TEST(Mat4LookAt, SameEyeAndTargetProducesFiniteFallbackView)
+{
+    Mat4 v = Mat4::lookAt({1, 2, 3}, {1, 2, 3}, {0, 1, 0});
+
+    for (int col = 0; col < 4; ++col)
+    {
+        for (int row = 0; row < 4; ++row)
+        {
+            EXPECT_TRUE(std::isfinite(v[row, col])) << "row=" << row << " col=" << col;
+        }
+    }
+    EXPECT_NEAR((v[2, 3]), -3.0f, kEps);
+}
+
+TEST(Mat4LookAt, ForwardParallelToPreferredUpProducesFiniteOrthonormalView)
+{
+    Mat4 v = Mat4::lookAt({0, 0, 0}, {0, 1, 0}, {0, 1, 0});
+
+    for (int r = 0; r < 3; ++r)
+    {
+        float len2 = 0.0f;
+        for (int c = 0; c < 3; ++c)
+        {
+            EXPECT_TRUE(std::isfinite(v[r, c])) << "row=" << r << " col=" << c;
+            len2 += v[r, c] * v[r, c];
+        }
+        EXPECT_NEAR(len2, 1.0f, kEps);
+    }
+}
+
+TEST(ViewBasis, HandlesVerticalCameraTargets)
+{
+    const ViewBasis upBasis = fire_engine::makeViewBasis({0, 0, 0}, {0, 1, 0});
+    const ViewBasis downBasis = fire_engine::makeViewBasis({0, 0, 0}, {0, -1, 0});
+
+    EXPECT_GT(upBasis.right.magnitudeSquared(), 0.99f);
+    EXPECT_GT(upBasis.up.magnitudeSquared(), 0.99f);
+    EXPECT_GT(downBasis.right.magnitudeSquared(), 0.99f);
+    EXPECT_GT(downBasis.up.magnitudeSquared(), 0.99f);
+    EXPECT_NEAR(Vec3::dotProduct(upBasis.forward, upBasis.up), 0.0f, kEps);
+    EXPECT_NEAR(Vec3::dotProduct(downBasis.forward, downBasis.up), 0.0f, kEps);
 }
 
 // ==========================================================================

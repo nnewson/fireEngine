@@ -8,6 +8,7 @@
 #include <fire_engine/graphics/skin.hpp>
 #include <fire_engine/math/constants.hpp>
 #include <fire_engine/math/vec4.hpp>
+#include <fire_engine/math/view_basis.hpp>
 #include <fire_engine/render/constants.hpp>
 #include <fire_engine/render/resources.hpp>
 #include <fire_engine/render/ubo.hpp>
@@ -462,7 +463,7 @@ std::vector<DrawCommand> Object::render(const FrameInfo& frame, const Mat4& worl
     // blend draws. Each mesh instance is taken as its world-translation origin
     // — fine for the scenes the engine renders today (flat decals etc.); a
     // future AABB-based centroid would be the natural upgrade.
-    Vec3 forwardVec = Vec3::normalise(frame.cameraTarget - frame.cameraPosition);
+    const Vec3 forwardVec = makeViewBasis(frame.cameraPosition, frame.cameraTarget).forward;
 
     // Write shadow UBO (model + per-cascade lightViewProj[4] + hasSkin) and
     // emit a matching shadow DrawCommand alongside the forward command. The

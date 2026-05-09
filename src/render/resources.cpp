@@ -332,6 +332,30 @@ makeSamplerCreateInfo(vk::Filter magFilter, vk::Filter minFilter, vk::SamplerMip
     };
 }
 
+Resources::TextureEntry& Resources::appendTextureEntry(TextureHandle& handle, vk::Format format,
+                                                       uint32_t mipLevels)
+{
+    handle = TextureHandle{static_cast<uint32_t>(textures_.size())};
+    textures_.emplace_back();
+    TextureEntry& entry = textures_.back();
+    entry.format = format;
+    entry.mipLevels = mipLevels;
+    return entry;
+}
+
+void Resources::allocateImage(TextureEntry& entry, const vk::ImageCreateInfo& imageInfo)
+{
+    entry.image = vk::raii::Image(device_->device(), imageInfo);
+
+    auto imageRequirements = entry.image.getMemoryRequirements();
+    vk::MemoryAllocateInfo allocateInfo =
+        makeMemoryAllocateInfo(imageRequirements,
+                               device_->findMemoryType(imageRequirements.memoryTypeBits,
+                                                       vk::MemoryPropertyFlagBits::eDeviceLocal));
+    entry.memory = vk::raii::DeviceMemory(device_->device(), allocateInfo);
+    entry.image.bindMemory(*entry.memory, 0);
+}
+
 void Resources::createCubemapFaceViews(const Device& device, TextureEntry& entry)
 {
     entry.faceViews.clear();
@@ -368,7 +392,8 @@ TextureHandle Resources::createTexture(KtxImage image, const SamplerSettings& sa
         throw std::runtime_error("Cannot upload an empty KTX image");
     }
 
-    if (image.dimensions() != 2u || image.depth() != 1u || image.layers() != 1u || image.faces() != 1u)
+    if (image.dimensions() != 2u || image.depth() != 1u || image.layers() != 1u ||
+        image.faces() != 1u)
     {
         throw std::runtime_error("Only 2D single-layer KTX textures are currently supported");
     }
@@ -408,7 +433,8 @@ TextureHandle Resources::createTexture(KtxImage image, const SamplerSettings& sa
     vk::ImageCreateInfo imgCi = makeImageCreateInfo(
         {}, vk::ImageType::e2D, entry.format,
         vk::Extent3D{.width = image.width(), .height = image.height(), .depth = 1},
-        entry.mipLevels, 1, vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled);
+        entry.mipLevels, 1,
+        vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled);
     entry.image = vk::raii::Image(device_->device(), imgCi);
 
     auto imgReq = entry.image.getMemoryRequirements();
@@ -477,9 +503,10 @@ TextureHandle Resources::createTexture(KtxImage image, const SamplerSettings& sa
 
     auto props = device_->physicalDevice().getProperties();
     vk::SamplerCreateInfo samplerCi = makeSamplerCreateInfo(
-        toVkFilter(sampler.magFilter), toVkFilter(sampler.minFilter), vk::SamplerMipmapMode::eLinear,
-        toVkAddressMode(sampler.wrapS), toVkAddressMode(sampler.wrapT), toVkAddressMode(sampler.wrapS),
-        vk::True, props.limits.maxSamplerAnisotropy, vk::False, vk::CompareOp::eAlways, 0.0f,
+        toVkFilter(sampler.magFilter), toVkFilter(sampler.minFilter),
+        vk::SamplerMipmapMode::eLinear, toVkAddressMode(sampler.wrapS),
+        toVkAddressMode(sampler.wrapT), toVkAddressMode(sampler.wrapS), vk::True,
+        props.limits.maxSamplerAnisotropy, vk::False, vk::CompareOp::eAlways, 0.0f,
         static_cast<float>(entry.mipLevels - 1), vk::BorderColor::eIntOpaqueBlack);
     entry.sampler = vk::raii::Sampler(device_->device(), samplerCi);
 
@@ -885,24 +912,15 @@ static void transitionDepthImageToReadOnly(const Device& device, vk::CommandPool
 
 TextureHandle Resources::createShadowMap(uint32_t extent, uint32_t layerCount)
 {
-    auto id = static_cast<uint32_t>(textures_.size());
-    textures_.emplace_back();
-    auto& entry = textures_.back();
-    entry.format = vk::Format::eD32Sfloat;
+    TextureHandle handle;
+    TextureEntry& entry = appendTextureEntry(handle, vk::Format::eD32Sfloat);
 
     vk::ImageCreateInfo imgCi = makeImageCreateInfo(
         {}, vk::ImageType::e2D, entry.format,
         vk::Extent3D{.width = extent, .height = extent, .depth = 1}, 1, layerCount,
         vk::ImageUsageFlagBits::eDepthStencilAttachment | vk::ImageUsageFlagBits::eSampled |
             vk::ImageUsageFlagBits::eTransferDst);
-    entry.image = vk::raii::Image(device_->device(), imgCi);
-
-    auto imgReq = entry.image.getMemoryRequirements();
-    vk::MemoryAllocateInfo imgAi = makeMemoryAllocateInfo(
-        imgReq,
-        device_->findMemoryType(imgReq.memoryTypeBits, vk::MemoryPropertyFlagBits::eDeviceLocal));
-    entry.memory = vk::raii::DeviceMemory(device_->device(), imgAi);
-    entry.image.bindMemory(*entry.memory, 0);
+    allocateImage(entry, imgCi);
 
     // Main view: 2D for single-layer (sampler2DShadow), 2DArray for multi-layer
     // (sampler2DArrayShadow in the forward fragment shader).
@@ -936,7 +954,7 @@ TextureHandle Resources::createShadowMap(uint32_t extent, uint32_t layerCount)
 
     transitionDepthImageToReadOnly(*device_, *cmdPool_, *entry.image, layerCount);
 
-    return TextureHandle{id};
+    return handle;
 }
 
 vk::ImageView Resources::vulkanShadowMapLayerView(TextureHandle handle,
@@ -948,24 +966,15 @@ vk::ImageView Resources::vulkanShadowMapLayerView(TextureHandle handle,
 
 TextureHandle Resources::createPointShadowMap(uint32_t faceExtent, uint32_t cubeCount)
 {
-    auto id = static_cast<uint32_t>(textures_.size());
-    textures_.emplace_back();
-    auto& entry = textures_.back();
-    entry.format = vk::Format::eD32Sfloat;
+    TextureHandle handle;
+    TextureEntry& entry = appendTextureEntry(handle, vk::Format::eD32Sfloat);
 
     const uint32_t totalLayers = 6u * cubeCount;
     vk::ImageCreateInfo imgCi = makeImageCreateInfo(
         vk::ImageCreateFlagBits::eCubeCompatible, vk::ImageType::e2D, entry.format,
         vk::Extent3D{.width = faceExtent, .height = faceExtent, .depth = 1}, 1, totalLayers,
         vk::ImageUsageFlagBits::eDepthStencilAttachment | vk::ImageUsageFlagBits::eSampled);
-    entry.image = vk::raii::Image(device_->device(), imgCi);
-
-    auto imgReq = entry.image.getMemoryRequirements();
-    vk::MemoryAllocateInfo imgAi = makeMemoryAllocateInfo(
-        imgReq,
-        device_->findMemoryType(imgReq.memoryTypeBits, vk::MemoryPropertyFlagBits::eDeviceLocal));
-    entry.memory = vk::raii::DeviceMemory(device_->device(), imgAi);
-    entry.image.bindMemory(*entry.memory, 0);
+    allocateImage(entry, imgCi);
 
     // Main view: cube array (samplerCubeArrayShadow in the forward fragment).
     vk::ImageViewCreateInfo viewCi = makeImageViewCreateInfo(
@@ -993,7 +1002,7 @@ TextureHandle Resources::createPointShadowMap(uint32_t faceExtent, uint32_t cube
 
     transitionDepthImageToReadOnly(*device_, *cmdPool_, *entry.image, totalLayers);
 
-    return TextureHandle{id};
+    return handle;
 }
 
 vk::ImageView Resources::vulkanPointShadowFaceView(TextureHandle handle, uint32_t cubeIndex,
@@ -1006,23 +1015,14 @@ vk::ImageView Resources::vulkanPointShadowFaceView(TextureHandle handle, uint32_
 TextureHandle Resources::createShadowColourAttachment(uint32_t extent, uint32_t layerCount,
                                                       bool sampled)
 {
-    auto id = static_cast<uint32_t>(textures_.size());
-    textures_.emplace_back();
-    auto& entry = textures_.back();
-    entry.format = vk::Format::eB8G8R8A8Unorm;
+    TextureHandle handle;
+    TextureEntry& entry = appendTextureEntry(handle, vk::Format::eB8G8R8A8Unorm);
 
     vk::ImageCreateInfo imgCi = makeImageCreateInfo(
         {}, vk::ImageType::e2D, entry.format,
         vk::Extent3D{.width = extent, .height = extent, .depth = 1}, 1, layerCount,
         vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled);
-    entry.image = vk::raii::Image(device_->device(), imgCi);
-
-    auto imgReq = entry.image.getMemoryRequirements();
-    vk::MemoryAllocateInfo imgAi = makeMemoryAllocateInfo(
-        imgReq,
-        device_->findMemoryType(imgReq.memoryTypeBits, vk::MemoryPropertyFlagBits::eDeviceLocal));
-    entry.memory = vk::raii::DeviceMemory(device_->device(), imgAi);
-    entry.image.bindMemory(*entry.memory, 0);
+    allocateImage(entry, imgCi);
 
     vk::ImageViewType mainViewType =
         layerCount > 1 ? vk::ImageViewType::e2DArray : vk::ImageViewType::e2D;
@@ -1053,10 +1053,11 @@ TextureHandle Resources::createShadowColourAttachment(uint32_t extent, uint32_t 
         entry.sampler = vk::raii::Sampler(device_->device(), samplerCi);
     }
 
-    return TextureHandle{id};
+    return handle;
 }
 
-vk::ImageView Resources::vulkanShadowColourLayerView(TextureHandle handle, uint32_t layer) const noexcept
+vk::ImageView Resources::vulkanShadowColourLayerView(TextureHandle handle,
+                                                     uint32_t layer) const noexcept
 {
     const auto& entry = textures_[static_cast<uint32_t>(handle)];
     return *entry.faceViews[layer];
@@ -1064,10 +1065,8 @@ vk::ImageView Resources::vulkanShadowColourLayerView(TextureHandle handle, uint3
 
 TextureHandle Resources::createOffscreenColourTarget(vk::Extent2D extent)
 {
-    auto id = static_cast<uint32_t>(textures_.size());
-    textures_.emplace_back();
-    auto& entry = textures_.back();
-    entry.format = vk::Format::eR16G16B16A16Sfloat;
+    TextureHandle handle;
+    TextureEntry& entry = appendTextureEntry(handle, vk::Format::eR16G16B16A16Sfloat);
 
     // KHR_materials_transmission F3 also requires TransferSrc on the HDR
     // target so the sceneColor capture pass can blit from it.
@@ -1076,14 +1075,7 @@ TextureHandle Resources::createOffscreenColourTarget(vk::Extent2D extent)
         vk::Extent3D{.width = extent.width, .height = extent.height, .depth = 1}, 1, 1,
         vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled |
             vk::ImageUsageFlagBits::eTransferSrc);
-    entry.image = vk::raii::Image(device_->device(), imgCi);
-
-    auto imgReq = entry.image.getMemoryRequirements();
-    vk::MemoryAllocateInfo imgAi = makeMemoryAllocateInfo(
-        imgReq,
-        device_->findMemoryType(imgReq.memoryTypeBits, vk::MemoryPropertyFlagBits::eDeviceLocal));
-    entry.memory = vk::raii::DeviceMemory(device_->device(), imgAi);
-    entry.image.bindMemory(*entry.memory, 0);
+    allocateImage(entry, imgCi);
 
     vk::ImageViewCreateInfo viewCi = makeImageViewCreateInfo(
         *entry.image, vk::ImageViewType::e2D, entry.format,
@@ -1097,29 +1089,20 @@ TextureHandle Resources::createOffscreenColourTarget(vk::Extent2D extent)
         0.0f, 1.0f, vk::BorderColor::eFloatOpaqueBlack);
     entry.sampler = vk::raii::Sampler(device_->device(), samplerCi);
 
-    return TextureHandle{id};
+    return handle;
 }
 
 TextureHandle Resources::createBloomChain(uint32_t width, uint32_t height, uint32_t mipLevels)
 {
-    auto id = static_cast<uint32_t>(textures_.size());
-    textures_.emplace_back();
-    auto& entry = textures_.back();
-    entry.format = vk::Format::eR16G16B16A16Sfloat;
-    entry.mipLevels = mipLevels;
+    TextureHandle handle;
+    TextureEntry& entry =
+        appendTextureEntry(handle, vk::Format::eR16G16B16A16Sfloat, mipLevels);
 
     vk::ImageCreateInfo imgCi = makeImageCreateInfo(
         {}, vk::ImageType::e2D, entry.format,
         vk::Extent3D{.width = width, .height = height, .depth = 1}, mipLevels, 1,
         vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled);
-    entry.image = vk::raii::Image(device_->device(), imgCi);
-
-    auto imgReq = entry.image.getMemoryRequirements();
-    vk::MemoryAllocateInfo imgAi = makeMemoryAllocateInfo(
-        imgReq,
-        device_->findMemoryType(imgReq.memoryTypeBits, vk::MemoryPropertyFlagBits::eDeviceLocal));
-    entry.memory = vk::raii::DeviceMemory(device_->device(), imgAi);
-    entry.image.bindMemory(*entry.memory, 0);
+    allocateImage(entry, imgCi);
 
     // Main view spans all mips — used as the post-process bloom input via mip 0.
     vk::ImageViewCreateInfo viewCi = makeImageViewCreateInfo(
@@ -1145,7 +1128,7 @@ TextureHandle Resources::createBloomChain(uint32_t width, uint32_t height, uint3
         0.0f, 0.0f, vk::BorderColor::eFloatOpaqueBlack);
     entry.sampler = vk::raii::Sampler(device_->device(), samplerCi);
 
-    return TextureHandle{id};
+    return handle;
 }
 
 vk::ImageView Resources::vulkanBloomMipView(TextureHandle handle, uint32_t mipLevel) const noexcept
@@ -1155,11 +1138,9 @@ vk::ImageView Resources::vulkanBloomMipView(TextureHandle handle, uint32_t mipLe
 
 TextureHandle Resources::createSceneColorTarget(uint32_t width, uint32_t height, uint32_t mipLevels)
 {
-    auto id = static_cast<uint32_t>(textures_.size());
-    textures_.emplace_back();
-    auto& entry = textures_.back();
-    entry.format = vk::Format::eR16G16B16A16Sfloat;
-    entry.mipLevels = mipLevels;
+    TextureHandle handle;
+    TextureEntry& entry =
+        appendTextureEntry(handle, vk::Format::eR16G16B16A16Sfloat, mipLevels);
 
     // KHR_materials_transmission F3 — receives a blit copy from the post-opaque
     // HDR target and then a vkCmdBlitImage chain for the remaining mips.
@@ -1168,14 +1149,7 @@ TextureHandle Resources::createSceneColorTarget(uint32_t width, uint32_t height,
         vk::Extent3D{.width = width, .height = height, .depth = 1}, mipLevels, 1,
         vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eTransferSrc |
             vk::ImageUsageFlagBits::eSampled);
-    entry.image = vk::raii::Image(device_->device(), imgCi);
-
-    auto imgReq = entry.image.getMemoryRequirements();
-    vk::MemoryAllocateInfo imgAi = makeMemoryAllocateInfo(
-        imgReq,
-        device_->findMemoryType(imgReq.memoryTypeBits, vk::MemoryPropertyFlagBits::eDeviceLocal));
-    entry.memory = vk::raii::DeviceMemory(device_->device(), imgAi);
-    entry.image.bindMemory(*entry.memory, 0);
+    allocateImage(entry, imgCi);
 
     // Initial transition Undefined → ShaderReadOnlyOptimal for ALL mips. The
     // forward descriptor set binds sceneColor at binding 20 on every draw —
@@ -1214,7 +1188,7 @@ TextureHandle Resources::createSceneColorTarget(uint32_t width, uint32_t height,
         0.0f, static_cast<float>(mipLevels), vk::BorderColor::eFloatOpaqueBlack);
     entry.sampler = vk::raii::Sampler(device_->device(), samplerCi);
 
-    return TextureHandle{id};
+    return handle;
 }
 
 void Resources::releaseTexture(TextureHandle handle)

@@ -9,6 +9,7 @@
 
 #include <fire_engine/graphics/image.hpp>
 #include <fire_engine/math/constants.hpp>
+#include <fire_engine/math/view_basis.hpp>
 #include <fire_engine/render/environment_precompute.hpp>
 #include <fire_engine/render/render_context.hpp>
 #include <fire_engine/render/swapchain.hpp>
@@ -20,23 +21,6 @@ namespace fire_engine
 
 namespace
 {
-
-struct CameraBasis
-{
-    Vec3 forward;
-    Vec3 right;
-    Vec3 up;
-};
-
-[[nodiscard]]
-CameraBasis cameraBasis(Vec3 cameraPosition, Vec3 cameraTarget)
-{
-    const Vec3 forward = Vec3::normalise(cameraTarget - cameraPosition);
-    const Vec3 worldUp{0.0f, 1.0f, 0.0f};
-    const Vec3 right = Vec3::normalise(Vec3::crossProduct(forward, worldUp));
-    const Vec3 up = Vec3::crossProduct(right, forward);
-    return {forward, right, up};
-}
 
 [[nodiscard]]
 const Lighting* primaryDirectionalLight(std::span<const Lighting> lights) noexcept
@@ -83,12 +67,7 @@ int packLight(LightUBO& lightData, int& slot, const Lighting& light) noexcept
 [[nodiscard]]
 Vec3 pickLightUp(Vec3 dir) noexcept
 {
-    const Vec3 worldUp{0.0f, 1.0f, 0.0f};
-    if (std::abs(Vec3::dotProduct(dir, worldUp)) > 0.99f)
-    {
-        return Vec3{0.0f, 0.0f, 1.0f};
-    }
-    return worldUp;
+    return stableUpForForward(dir);
 }
 
 [[nodiscard]]
@@ -182,16 +161,11 @@ void Renderer::updateLightData(Vec3 cameraPosition, Vec3 cameraTarget, float asp
 
     // Camera basis + light basis (shared by every cascade fit).
     const float tanHalfFov = std::tan(cameraFovRadians * 0.5f);
-    const CameraBasis basis = cameraBasis(cameraPosition, cameraTarget);
-    const Vec3 worldUp{0.0f, 1.0f, 0.0f};
-
-    Vec3 lightUp = worldUp;
-    if (std::abs(Vec3::dotProduct(lightDir, lightUp)) > 0.99f)
-    {
-        lightUp = Vec3{0.0f, 0.0f, 1.0f};
-    }
-    const Vec3 lightRight = Vec3::normalise(Vec3::crossProduct(lightDir, lightUp));
-    const Vec3 lightUpOrtho = Vec3::crossProduct(lightRight, lightDir);
+    const ViewBasis basis = makeViewBasis(cameraPosition, cameraTarget);
+    const Vec3 lightUp = stableUpForForward(lightDir);
+    const Vec3 lightRight =
+        normaliseOr(Vec3::crossProduct(lightDir, lightUp), {1.0f, 0.0f, 0.0f});
+    const Vec3 lightUpOrtho = normaliseOr(Vec3::crossProduct(lightRight, lightDir), lightUp);
     const float shadowMapExtentF = static_cast<float>(shadowMapExtent);
 
     // Bounding-sphere fit for a single sub-frustum slice. Matches the Stage 1
@@ -674,7 +648,7 @@ void Renderer::submitAndPresent(Window& display, vk::CommandBuffer cmd, uint32_t
 void Renderer::recordSkybox(Vec3 cameraPosition, Vec3 cameraTarget,
                             std::vector<DrawCommand>& drawCommands)
 {
-    const CameraBasis basis = cameraBasis(cameraPosition, cameraTarget);
+    const ViewBasis basis = makeViewBasis(cameraPosition, cameraTarget);
 
     constexpr float skyboxFov = cameraFovRadians;
     auto extent = swapchain_.extent();

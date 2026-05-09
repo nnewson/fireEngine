@@ -4,6 +4,7 @@
 
 #include <fire_engine/math/vec3.hpp>
 #include <fire_engine/math/vec4.hpp>
+#include <fire_engine/math/view_basis.hpp>
 
 namespace fire_engine
 {
@@ -152,18 +153,16 @@ public:
     [[nodiscard]]
     static Mat4 lookAt(Vec3 eye, Vec3 center, Vec3 up) noexcept
     {
-        float fx = center.x() - eye.x(), fy = center.y() - eye.y(), fz = center.z() - eye.z();
-        float len = std::sqrt(fx * fx + fy * fy + fz * fz);
-        fx /= len;
-        fy /= len;
-        fz /= len;
-        float sx = fy * up.z() - fz * up.y(), sy = fz * up.x() - fx * up.z(),
-              sz = fx * up.y() - fy * up.x();
-        len = std::sqrt(sx * sx + sy * sy + sz * sz);
-        sx /= len;
-        sy /= len;
-        sz /= len;
-        float ux = sy * fz - sz * fy, uy = sz * fx - sx * fz, uz = sx * fy - sy * fx;
+        const ViewBasis basis = makeViewBasis(eye, center, up);
+        const float fx = basis.forward.x();
+        const float fy = basis.forward.y();
+        const float fz = basis.forward.z();
+        const float sx = basis.right.x();
+        const float sy = basis.right.y();
+        const float sz = basis.right.z();
+        const float ux = basis.up.x();
+        const float uy = basis.up.y();
+        const float uz = basis.up.z();
         Mat4 r = identity();
         r.m_[0] = sx;
         r.m_[4] = sy;

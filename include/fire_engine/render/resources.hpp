@@ -119,7 +119,8 @@ public:
     // the colour attachment to ShaderReadOnly, so the image always carries
     // Sampled usage. When sampled=true, a sampler is also created for
     // shadow-depth debugging.
-    [[nodiscard]] TextureHandle createShadowColourAttachment(uint32_t extent, uint32_t layerCount = 1,
+    [[nodiscard]] TextureHandle createShadowColourAttachment(uint32_t extent,
+                                                             uint32_t layerCount = 1,
                                                              bool sampled = false);
     [[nodiscard]] vk::ImageView vulkanShadowColourLayerView(TextureHandle handle,
                                                             uint32_t layer) const noexcept;
@@ -339,6 +340,9 @@ private:
         std::vector<vk::raii::ImageView> faceViews;
         uint32_t mipLevels{1};
     };
+    TextureEntry& appendTextureEntry(TextureHandle& handle, vk::Format format,
+                                     uint32_t mipLevels = 1);
+    void allocateImage(TextureEntry& entry, const vk::ImageCreateInfo& imageInfo);
     static void createCubemapFaceViews(const Device& device, TextureEntry& entry);
     std::vector<TextureEntry> textures_;
     std::array<TextureHandle, 5> fallbackTextures_{NullTexture, NullTexture, NullTexture,

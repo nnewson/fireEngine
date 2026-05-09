@@ -75,15 +75,6 @@ public:
     // the primitive with a warning rather than render garbage.
     [[nodiscard]] static bool isSupportedPrimitiveType(fastgltf::PrimitiveType type) noexcept;
 
-    struct TexturePaths
-    {
-        std::string baseColour;
-        std::string emissive;
-        std::string normal;
-        std::string metallicRoughness;
-        std::string occlusion;
-    };
-
     using NodeMap = std::unordered_map<std::size_t, Node*>;
     using MeshMap = std::unordered_map<std::size_t, Mesh*>;
 
@@ -173,63 +164,6 @@ private:
     static Object loadMesh(const fastgltf::Asset& asset, const fastgltf::Mesh& mesh,
                            const std::string& baseDir, Resources& resources, Assets& assets,
                            std::size_t meshIndex);
-
-    [[nodiscard]]
-    static const Texture*
-    resolveTexture(const fastgltf::Asset& asset, std::optional<std::size_t> materialIndex,
-                   const std::string& baseDir, Resources& resources, Assets& assets);
-
-    [[nodiscard]]
-    static const Texture*
-    resolveEmissiveTexture(const fastgltf::Asset& asset, std::optional<std::size_t> materialIndex,
-                           const std::string& baseDir, Resources& resources, Assets& assets);
-
-    [[nodiscard]]
-    static const Texture*
-    resolveNormalTexture(const fastgltf::Asset& asset, std::optional<std::size_t> materialIndex,
-                         const std::string& baseDir, Resources& resources, Assets& assets);
-
-    [[nodiscard]]
-    static const Texture* resolveMetallicRoughnessTexture(const fastgltf::Asset& asset,
-                                                          std::optional<std::size_t> materialIndex,
-                                                          const std::string& baseDir,
-                                                          Resources& resources, Assets& assets);
-
-    [[nodiscard]]
-    static const Texture*
-    resolveOcclusionTexture(const fastgltf::Asset& asset, std::optional<std::size_t> materialIndex,
-                            const std::string& baseDir, Resources& resources, Assets& assets);
-
-    [[nodiscard]]
-    static const Texture* resolveTransmissionTexture(const fastgltf::Asset& asset,
-                                                     std::optional<std::size_t> materialIndex,
-                                                     const std::string& baseDir,
-                                                     Resources& resources, Assets& assets);
-
-    [[nodiscard]]
-    static const Texture*
-    resolveClearcoatTexture(const fastgltf::Asset& asset, std::optional<std::size_t> materialIndex,
-                            const std::string& baseDir, Resources& resources, Assets& assets);
-
-    [[nodiscard]]
-    static const Texture* resolveClearcoatRoughnessTexture(const fastgltf::Asset& asset,
-                                                           std::optional<std::size_t> materialIndex,
-                                                           const std::string& baseDir,
-                                                           Resources& resources, Assets& assets);
-
-    [[nodiscard]]
-    static const Texture* resolveClearcoatNormalTexture(const fastgltf::Asset& asset,
-                                                        std::optional<std::size_t> materialIndex,
-                                                        const std::string& baseDir,
-                                                        Resources& resources, Assets& assets);
-
-    [[nodiscard]]
-    static const Texture*
-    resolveThicknessTexture(const fastgltf::Asset& asset, std::optional<std::size_t> materialIndex,
-                            const std::string& baseDir, Resources& resources, Assets& assets);
-
-    [[nodiscard]]
-    static Material* resolveMaterial(Material materialData, Assets& assets);
 
     [[nodiscard]]
     static TangentGenerationResult
