@@ -62,6 +62,11 @@ inline constexpr float shadowFarPlane = 50.0f;
 // Pulls the light-space near plane back along lightDir so casters behind the
 // fitted bounding sphere still write to the shadow map.
 inline constexpr float shadowDepthBackExtend = 20.0f;
+// Practical Split Scheme blend between linear and log-uniform cascade splits.
+// 0 = pure linear (cascades evenly spaced in view distance), 1 = pure log
+// (each cascade covers a constant ratio of the previous). 0.5 keeps close
+// cascades tight for near-camera detail while still covering shadowFarPlane.
+inline constexpr float shadowCascadeSplitLambda = 0.5f;
 inline constexpr float shadowMinBias = 0.0008f;
 inline constexpr float shadowSlopeBias = 0.0035f;
 inline constexpr float shadowFilterRadius = 0.0f;

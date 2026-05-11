@@ -65,12 +65,6 @@ int packLight(LightUBO& lightData, int& slot, const Lighting& light) noexcept
 }
 
 [[nodiscard]]
-Vec3 pickLightUp(Vec3 dir) noexcept
-{
-    return stableUpForForward(dir);
-}
-
-[[nodiscard]]
 Mat4 fitSelfShadowMatrix(const Bounds3& bounds, Vec3 lightDir) noexcept
 {
     if (!bounds.valid)
@@ -82,7 +76,7 @@ Mat4 fitSelfShadowMatrix(const Bounds3& bounds, Vec3 lightDir) noexcept
     const float halfDiagonal = bounds.extent().magnitude() * 0.5f;
     const float padding = std::max(0.05f, halfDiagonal * 0.05f);
     const float radius = std::max(halfDiagonal + padding, 0.1f);
-    const Vec3 up = pickLightUp(lightDir);
+    const Vec3 up = stableUpForForward(lightDir);
     const Vec3 lightPos = center - lightDir * radius;
     const Mat4 view = Mat4::lookAt(lightPos, center, up);
     const Mat4 proj = Mat4::ortho(-radius, radius, -radius, radius, 0.0f, radius * 2.0f);
@@ -227,7 +221,8 @@ void Renderer::updateLightData(Vec3 cameraPosition, Vec3 cameraTarget, float asp
         const float p = static_cast<float>(i + 1) / static_cast<float>(shadowCascadeCount);
         const float linear = cameraNearPlane + (shadowFarPlane - cameraNearPlane) * p;
         const float logSplit = cameraNearPlane * std::pow(shadowFarPlane / cameraNearPlane, p);
-        splits[i] = 0.5f * (linear + logSplit);
+        splits[i] = shadowCascadeSplitLambda * logSplit +
+                    (1.0f - shadowCascadeSplitLambda) * linear;
     }
 
     Mat4 cascadeViewProj[shadowCascadeCount];
@@ -276,7 +271,7 @@ void Renderer::updateLightData(Vec3 cameraPosition, Vec3 cameraTarget, float asp
             const float far = L.range > 0.0f ? L.range : pointShadowInfiniteRangeFallback;
             const Mat4 proj = Mat4::perspective(fov, 1.0f, pointShadowNearPlane, far);
             const Vec3 dir = Vec3::normalise(L.worldDirection);
-            const Vec3 up = pickLightUp(dir);
+            const Vec3 up = stableUpForForward(dir);
             const Mat4 view = Mat4::lookAt(L.worldPosition, L.worldPosition + dir, up);
             const Mat4 viewProj = proj * view;
             shadowViewProjs_[SHADOW_SPOT_MATRIX_BASE + shadowIndex] = viewProj;
@@ -355,11 +350,6 @@ void Renderer::updateLightData(Vec3 cameraPosition, Vec3 cameraTarget, float asp
 
 void Renderer::assignSelfShadowSlots(std::vector<DrawCommand>& drawCommands)
 {
-    for (Mat4& m : lightData_.selfShadowViewProj)
-    {
-        m = Mat4::identity();
-    }
-
     std::unordered_map<uint32_t, int> objectSlots;
     int nextSlot = 0;
     for (const auto& dc : drawCommands)
