@@ -385,9 +385,8 @@ Bounds3 Object::computeShadowBounds(const std::vector<Mat4>& jointMatrices, bool
                 }
             }
 
-            Vec3 worldPosition = hasSkin
-                                     ? skinnedPosition(vertices[v], position, jointMatrices)
-                                     : static_cast<Vec3>(world * Vec4{position});
+            Vec3 worldPosition = hasSkin ? skinnedPosition(vertices[v], position, jointMatrices)
+                                         : static_cast<Vec3>(world * Vec4{position});
             bounds.expand(worldPosition);
         }
     }
@@ -527,9 +526,8 @@ std::vector<DrawCommand> Object::render(const FrameInfo& frame, const Mat4& worl
             binding.shadowDescSets[frame.currentFrame] != NullDescriptorSet)
         {
             DrawCommand shadowCmd = cmd;
-            const Geometry* shadowGeometry = binding.shadowGeometry != nullptr
-                                                 ? binding.shadowGeometry
-                                                 : binding.geometry;
+            const Geometry* shadowGeometry =
+                binding.shadowGeometry != nullptr ? binding.shadowGeometry : binding.geometry;
             shadowCmd.vertexBuffer = shadowGeometry->vertexBuffer();
             shadowCmd.indexBuffer = shadowGeometry->indexBuffer();
             shadowCmd.indexCount = shadowGeometry->indexCount();

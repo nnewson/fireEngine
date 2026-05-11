@@ -1724,8 +1724,7 @@ void applyResolvedMaterialTextures(Material& material, const ResolvedMaterialTex
         }
         else
         {
-            warnSkippedTangentTexture(meshName, primIdx, variantIndex, "normal map",
-                                      tangentResult);
+            warnSkippedTangentTexture(meshName, primIdx, variantIndex, "normal map", tangentResult);
         }
     }
     if (textures.clearcoatNormal != nullptr)
@@ -1774,21 +1773,21 @@ Object GltfLoader::loadMesh(const fastgltf::Asset& asset, const fastgltf::Mesh& 
             const auto& gltfMat = asset.materials[materialIndex.value()];
             if (gltfMat.pbrData.baseColorTexture.has_value())
             {
-                result.baseColour = resolveTextureIndex(
-                    asset, gltfMat.pbrData.baseColorTexture->textureIndex, baseDir, resources,
-                    assets, TextureEncoding::Srgb);
+                result.baseColour =
+                    resolveTextureIndex(asset, gltfMat.pbrData.baseColorTexture->textureIndex,
+                                        baseDir, resources, assets, TextureEncoding::Srgb);
             }
             if (gltfMat.emissiveTexture.has_value())
             {
-                result.emissive = resolveTextureIndex(asset, gltfMat.emissiveTexture->textureIndex,
-                                                      baseDir, resources, assets,
-                                                      TextureEncoding::Srgb);
+                result.emissive =
+                    resolveTextureIndex(asset, gltfMat.emissiveTexture->textureIndex, baseDir,
+                                        resources, assets, TextureEncoding::Srgb);
             }
             if (gltfMat.normalTexture.has_value())
             {
-                result.normal = resolveTextureIndex(asset, gltfMat.normalTexture->textureIndex,
-                                                    baseDir, resources, assets,
-                                                    TextureEncoding::Linear);
+                result.normal =
+                    resolveTextureIndex(asset, gltfMat.normalTexture->textureIndex, baseDir,
+                                        resources, assets, TextureEncoding::Linear);
             }
             if (gltfMat.pbrData.metallicRoughnessTexture.has_value())
             {
@@ -1826,16 +1825,16 @@ Object GltfLoader::loadMesh(const fastgltf::Asset& asset, const fastgltf::Mesh& 
                 }
                 if (clearcoat.clearcoatNormalTexture.has_value())
                 {
-                    result.clearcoatNormal = resolveTextureIndex(
-                        asset, clearcoat.clearcoatNormalTexture->textureIndex, baseDir, resources,
-                        assets, TextureEncoding::Linear);
+                    result.clearcoatNormal =
+                        resolveTextureIndex(asset, clearcoat.clearcoatNormalTexture->textureIndex,
+                                            baseDir, resources, assets, TextureEncoding::Linear);
                 }
             }
             if (gltfMat.volume != nullptr && gltfMat.volume->thicknessTexture.has_value())
             {
-                result.thickness = resolveTextureIndex(
-                    asset, gltfMat.volume->thicknessTexture->textureIndex, baseDir, resources,
-                    assets, TextureEncoding::Linear);
+                result.thickness =
+                    resolveTextureIndex(asset, gltfMat.volume->thicknessTexture->textureIndex,
+                                        baseDir, resources, assets, TextureEncoding::Linear);
             }
             return result;
         };

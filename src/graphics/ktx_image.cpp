@@ -46,10 +46,9 @@ KtxImage KtxImage::load_from_memory(const uint8_t* data, std::size_t size_bytes,
                                     const std::string& label)
 {
     ktxTexture* texture = nullptr;
-    throwOnKtxError(
-        ktxTexture_CreateFromMemory(data, static_cast<ktx_size_t>(size_bytes), createFlags,
-                                    &texture),
-        "decode", label);
+    throwOnKtxError(ktxTexture_CreateFromMemory(data, static_cast<ktx_size_t>(size_bytes),
+                                                createFlags, &texture),
+                    "decode", label);
     return KtxImage(texture);
 }
 

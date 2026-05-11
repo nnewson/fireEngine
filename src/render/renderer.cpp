@@ -4,8 +4,8 @@
 #include <array>
 #include <cmath>
 #include <cstring>
-#include <unordered_map>
 #include <span>
+#include <unordered_map>
 
 #include <fire_engine/graphics/image.hpp>
 #include <fire_engine/math/constants.hpp>
@@ -157,8 +157,7 @@ void Renderer::updateLightData(Vec3 cameraPosition, Vec3 cameraTarget, float asp
     const float tanHalfFov = std::tan(cameraFovRadians * 0.5f);
     const ViewBasis basis = makeViewBasis(cameraPosition, cameraTarget);
     const Vec3 lightUp = stableUpForForward(lightDir);
-    const Vec3 lightRight =
-        normaliseOr(Vec3::crossProduct(lightDir, lightUp), {1.0f, 0.0f, 0.0f});
+    const Vec3 lightRight = normaliseOr(Vec3::crossProduct(lightDir, lightUp), {1.0f, 0.0f, 0.0f});
     const Vec3 lightUpOrtho = normaliseOr(Vec3::crossProduct(lightRight, lightDir), lightUp);
     const float shadowMapExtentF = static_cast<float>(shadowMapExtent);
 
@@ -221,8 +220,8 @@ void Renderer::updateLightData(Vec3 cameraPosition, Vec3 cameraTarget, float asp
         const float p = static_cast<float>(i + 1) / static_cast<float>(shadowCascadeCount);
         const float linear = cameraNearPlane + (shadowFarPlane - cameraNearPlane) * p;
         const float logSplit = cameraNearPlane * std::pow(shadowFarPlane / cameraNearPlane, p);
-        splits[i] = shadowCascadeSplitLambda * logSplit +
-                    (1.0f - shadowCascadeSplitLambda) * linear;
+        splits[i] =
+            shadowCascadeSplitLambda * logSplit + (1.0f - shadowCascadeSplitLambda) * linear;
     }
 
     Mat4 cascadeViewProj[shadowCascadeCount];
@@ -335,10 +334,9 @@ void Renderer::updateLightData(Vec3 cameraPosition, Vec3 cameraTarget, float asp
     lightData.environmentParams[0] = skyboxIntensity;
     lightData.environmentParams[1] = environmentShadowStrength;
     lightData.environmentParams[2] =
-        debugNormals_ ? 1.0f
-                      : (debugNdotL_ ? 2.0f
-                                     : (debugShadow_ ? 3.0f
-                                                     : (debugShadowDepth_ ? 4.0f : 0.0f)));
+        debugNormals_
+            ? 1.0f
+            : (debugNdotL_ ? 2.0f : (debugShadow_ ? 3.0f : (debugShadowDepth_ ? 4.0f : 0.0f)));
     lightData.environmentParams[3] = noShadows_ ? 1.0f : 0.0f;
     lightData_ = lightData;
     std::memcpy(lightUbo_.mapped[currentFrame_], &lightData_, sizeof(lightData_));

@@ -32,10 +32,7 @@ struct ApplicationArgs
 
     std::string extension(path.substr(dot));
     std::ranges::transform(extension, extension.begin(),
-                           [](unsigned char c)
-                           {
-                               return static_cast<char>(std::tolower(c));
-                           });
+                           [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
     return extension == ".hdr" || extension == ".exr";
 }
 

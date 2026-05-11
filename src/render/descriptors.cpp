@@ -185,12 +185,10 @@ ObjectDescriptorResult Descriptors::createObjectDescriptors(const ObjectDescript
             vk::DescriptorImageInfo pointShadowImageInfo =
                 makeDescriptorImageInfo({}, resources_->vulkanImageView(req.pointShadowMap),
                                         vk::ImageLayout::eDepthStencilReadOnlyOptimal);
-            vk::DescriptorImageInfo shadowCompareSamplerInfo =
-                makeDescriptorImageInfo(resources_->vulkanSampler(req.shadowMap), {},
-                                        vk::ImageLayout::eUndefined);
-            vk::DescriptorImageInfo shadowDebugSamplerInfo =
-                makeDescriptorImageInfo(resources_->vulkanShadowDebugSampler(), {},
-                                        vk::ImageLayout::eUndefined);
+            vk::DescriptorImageInfo shadowCompareSamplerInfo = makeDescriptorImageInfo(
+                resources_->vulkanSampler(req.shadowMap), {}, vk::ImageLayout::eUndefined);
+            vk::DescriptorImageInfo shadowDebugSamplerInfo = makeDescriptorImageInfo(
+                resources_->vulkanShadowDebugSampler(), {}, vk::ImageLayout::eUndefined);
             vk::DescriptorImageInfo shadowDebugImageInfo =
                 makeDescriptorImageInfo({}, resources_->vulkanImageView(req.shadowDebugImage),
                                         vk::ImageLayout::eShaderReadOnlyOptimal);
@@ -283,12 +281,12 @@ ObjectDescriptorResult Descriptors::createObjectDescriptors(const ObjectDescript
                                        .descriptorCount = 1,
                                        .descriptorType = vk::DescriptorType::eCombinedImageSampler,
                                        .pImageInfo = &brdfLutTexInfo},
-                vk::WriteDescriptorSet{
-                    .dstSet = *sets[i],
-                    .dstBinding = bindingIndex(ForwardBinding::ShadowCompareSampler),
-                    .descriptorCount = 1,
-                    .descriptorType = vk::DescriptorType::eSampler,
-                    .pImageInfo = &shadowCompareSamplerInfo},
+                vk::WriteDescriptorSet{.dstSet = *sets[i],
+                                       .dstBinding =
+                                           bindingIndex(ForwardBinding::ShadowCompareSampler),
+                                       .descriptorCount = 1,
+                                       .descriptorType = vk::DescriptorType::eSampler,
+                                       .pImageInfo = &shadowCompareSamplerInfo},
                 vk::WriteDescriptorSet{.dstSet = *sets[i],
                                        .dstBinding =
                                            bindingIndex(ForwardBinding::TransmissionTexture),
@@ -332,12 +330,12 @@ ObjectDescriptorResult Descriptors::createObjectDescriptors(const ObjectDescript
                                        .descriptorCount = 1,
                                        .descriptorType = vk::DescriptorType::eSampledImage,
                                        .pImageInfo = &pointShadowImageInfo},
-                vk::WriteDescriptorSet{
-                    .dstSet = *sets[i],
-                    .dstBinding = bindingIndex(ForwardBinding::ShadowDebugSampler),
-                    .descriptorCount = 1,
-                    .descriptorType = vk::DescriptorType::eSampler,
-                    .pImageInfo = &shadowDebugSamplerInfo},
+                vk::WriteDescriptorSet{.dstSet = *sets[i],
+                                       .dstBinding =
+                                           bindingIndex(ForwardBinding::ShadowDebugSampler),
+                                       .descriptorCount = 1,
+                                       .descriptorType = vk::DescriptorType::eSampler,
+                                       .pImageInfo = &shadowDebugSamplerInfo},
                 vk::WriteDescriptorSet{.dstSet = *sets[i],
                                        .dstBinding = bindingIndex(ForwardBinding::ShadowDebugImage),
                                        .descriptorCount = 1,
@@ -483,9 +481,8 @@ ShadowDescriptorResult Descriptors::createShadowDescriptors(const ShadowDescript
             vk::DescriptorImageInfo selfShadowFirstInfo = makeDescriptorImageInfo(
                 {}, resources_->vulkanImageView(resources_->selfShadowFirstMap()),
                 vk::ImageLayout::eDepthStencilReadOnlyOptimal);
-            vk::DescriptorImageInfo selfShadowSamplerInfo =
-                makeDescriptorImageInfo(resources_->vulkanShadowDebugSampler(), {},
-                                        vk::ImageLayout::eUndefined);
+            vk::DescriptorImageInfo selfShadowSamplerInfo = makeDescriptorImageInfo(
+                resources_->vulkanShadowDebugSampler(), {}, vk::ImageLayout::eUndefined);
 
             std::array<vk::WriteDescriptorSet, 6> writes = {{
                 vk::WriteDescriptorSet{.dstSet = *sets[i],

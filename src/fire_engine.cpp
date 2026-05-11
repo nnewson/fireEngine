@@ -1,5 +1,4 @@
 #include <algorithm>
-#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <memory>
@@ -36,8 +35,8 @@ FireEngine::~FireEngine()
 
 void FireEngine::run(size_t width, size_t height, std::string_view app_name,
                      std::string_view scene_path, std::string_view skybox_path, bool addFloor,
-                     bool debugNormals, bool debugNdotL, bool debugShadow,
-                     bool debugShadowDepth, bool noShadows)
+                     bool debugNormals, bool debugNdotL, bool debugShadow, bool debugShadowDepth,
+                     bool noShadows)
 {
     window_ = std::make_unique<Window>(width, height, app_name);
     input_.enable(*window_);
@@ -128,19 +127,8 @@ void FireEngine::loadScene(std::string_view scene_path)
         sun.type(Light::Type::Directional);
         sun.colour(Colour3{1.0f, 1.0f, 1.0f});
         sun.intensity(directionalLightIntensity);
-        Vec3 sunForward = Vec3::normalise(Vec3{1.0f, -1.0f, 1.0f});
-        Vec3 baseDir{0.0f, 0.0f, -1.0f};
-        Vec3 axis = Vec3::crossProduct(baseDir, sunForward);
-        float axisLen = axis.magnitude();
-        if (axisLen > float_epsilon)
-        {
-            axis = Vec3{axis.x() / axisLen, axis.y() / axisLen, axis.z() / axisLen};
-            float angle = std::acos(std::clamp(Vec3::dotProduct(baseDir, sunForward), -1.0f, 1.0f));
-            float h = angle * 0.5f;
-            float s = std::sin(h);
-            sunNode->transform().rotation(
-                Quaternion{axis.x() * s, axis.y() * s, axis.z() * s, std::cos(h)});
-        }
+        const Vec3 sunForward = Vec3::normalise(Vec3{1.0f, -1.0f, 1.0f});
+        sunNode->transform().rotation(Quaternion::fromVectors(Vec3{0.0f, 0.0f, -1.0f}, sunForward));
         scene_.addNode(std::move(sunNode));
     }
 

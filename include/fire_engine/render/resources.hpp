@@ -54,8 +54,7 @@ public:
     [[nodiscard]] TextureHandle createTexture(const Image& image,
                                               const SamplerSettings& sampler = {},
                                               TextureEncoding encoding = TextureEncoding::Srgb);
-    [[nodiscard]] TextureHandle createTexture(KtxImage image,
-                                              const SamplerSettings& sampler = {},
+    [[nodiscard]] TextureHandle createTexture(KtxImage image, const SamplerSettings& sampler = {},
                                               TextureEncoding encoding = TextureEncoding::Srgb);
     [[nodiscard]] TextureHandle createTexture(const uint8_t* pixels, int width, int height,
                                               const SamplerSettings& sampler = {},
@@ -119,9 +118,8 @@ public:
     // the colour attachment to ShaderReadOnly, so the image always carries
     // Sampled usage. When sampled=true, a sampler is also created for
     // shadow-depth debugging.
-    [[nodiscard]] TextureHandle createShadowColourAttachment(uint32_t extent,
-                                                             uint32_t layerCount = 1,
-                                                             bool sampled = false);
+    [[nodiscard]] TextureHandle
+    createShadowColourAttachment(uint32_t extent, uint32_t layerCount = 1, bool sampled = false);
     [[nodiscard]] vk::ImageView vulkanShadowColourLayerView(TextureHandle handle,
                                                             uint32_t layer) const noexcept;
 

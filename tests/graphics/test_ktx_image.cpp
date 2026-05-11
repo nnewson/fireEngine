@@ -75,9 +75,9 @@ void createTestKtx2File(const std::filesystem::path& path)
         255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255,
     };
 
-    ASSERT_EQ(ktxTexture_SetImageFromMemory(ktxTexture(texture), 0, 0, 0, pixels.data(),
-                                            pixels.size()),
-              KTX_SUCCESS);
+    ASSERT_EQ(
+        ktxTexture_SetImageFromMemory(ktxTexture(texture), 0, 0, 0, pixels.data(), pixels.size()),
+        KTX_SUCCESS);
     ASSERT_EQ(ktxTexture_WriteToNamedFile(ktxTexture(texture), path.string().c_str()), KTX_SUCCESS);
 }
 
@@ -194,7 +194,8 @@ TEST(KtxImageLoading, NonExistentFileThrows)
 TEST(KtxImageLoading, InvalidMemoryThrows)
 {
     const std::array<uint8_t, 4> bytes{0, 1, 2, 3};
-    EXPECT_THROW(KtxImage::load_from_memory(bytes.data(), bytes.size(), "invalid"), std::runtime_error);
+    EXPECT_THROW(KtxImage::load_from_memory(bytes.data(), bytes.size(), "invalid"),
+                 std::runtime_error);
 }
 
 TEST(KtxImageMove, MoveConstructionTransfersState)

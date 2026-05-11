@@ -80,8 +80,8 @@ private:
 
     static void applyMaterialTextures(GeometryDescriptorInfo& geoInfo, const Material& mat,
                                       Resources& resources);
-    [[nodiscard]] Bounds3 computeShadowBounds(const std::vector<Mat4>& jointMatrices,
-                                              bool hasSkin, const Mat4& world) const noexcept;
+    [[nodiscard]] Bounds3 computeShadowBounds(const std::vector<Mat4>& jointMatrices, bool hasSkin,
+                                              const Mat4& world) const noexcept;
 
     Skin* skin_{nullptr};
     std::vector<float> morphWeights_;

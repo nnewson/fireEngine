@@ -43,8 +43,7 @@ public:
 
     void recordPass(vk::CommandBuffer cmd, const std::vector<DrawCommand>& shadowDraws,
                     const std::vector<DrawCommand>& worldOnlyShadowDraws,
-                    const std::vector<DrawCommand>& selfShadowDraws,
-                    int activeSpotCasters,
+                    const std::vector<DrawCommand>& selfShadowDraws, int activeSpotCasters,
                     std::span<const PointShadowCaster> pointCasters) const;
 
 private:

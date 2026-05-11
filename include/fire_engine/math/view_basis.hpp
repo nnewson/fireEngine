@@ -49,8 +49,7 @@ inline Vec3 stableUpForForward(Vec3 forward, Vec3 preferredUp = {0.0f, 1.0f, 0.0
 }
 
 [[nodiscard]]
-inline ViewBasis makeViewBasis(Vec3 eye, Vec3 target,
-                               Vec3 preferredUp = {0.0f, 1.0f, 0.0f},
+inline ViewBasis makeViewBasis(Vec3 eye, Vec3 target, Vec3 preferredUp = {0.0f, 1.0f, 0.0f},
                                Vec3 fallbackForward = {0.0f, 0.0f, -1.0f}) noexcept
 {
     const Vec3 forward = normaliseOr(target - eye, fallbackForward);

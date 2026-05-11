@@ -32,9 +32,8 @@ class Renderer
 {
 public:
     explicit Renderer(const Window& window, std::string environmentPath = {},
-                      bool debugNormals = false, bool debugNdotL = false,
-                      bool debugShadow = false, bool debugShadowDepth = false,
-                      bool noShadows = false);
+                      bool debugNormals = false, bool debugNdotL = false, bool debugShadow = false,
+                      bool debugShadowDepth = false, bool noShadows = false);
     ~Renderer() = default;
 
     Renderer(const Renderer&) = delete;

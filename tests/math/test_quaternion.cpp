@@ -7,10 +7,12 @@
 #include <fire_engine/math/constants.hpp>
 #include <fire_engine/math/mat4.hpp>
 #include <fire_engine/math/vec3.hpp>
+#include <fire_engine/math/vec4.hpp>
 
 using fire_engine::Mat4;
 using fire_engine::Quaternion;
 using fire_engine::Vec3;
+using fire_engine::Vec4;
 
 // ---- Helpers ----
 
@@ -292,4 +294,63 @@ TEST(QuaternionToEulerXYZ, DecalBlendRotationExtractsXAxis)
     EXPECT_NEAR(e.x(), -0.98279f, 1e-4f);
     EXPECT_NEAR(e.y(), 0.0f, kEps);
     EXPECT_NEAR(e.z(), 0.0f, kEps);
+}
+
+// ==========================================================================
+// fromVectors
+// ==========================================================================
+
+namespace
+{
+// Rotate v by q via the rotation matrix derived from q (matches what
+// callers using the quaternion as a transform will see).
+Vec3 rotated(const Quaternion& q, Vec3 v)
+{
+    Vec4 r = q.toMat4() * Vec4{v};
+    return {r.x(), r.y(), r.z()};
+}
+} // namespace
+
+TEST(QuaternionFromVectors, ParallelInputsReturnIdentity)
+{
+    Vec3 v = Vec3::normalise(Vec3{0.3f, 0.7f, -0.2f});
+    Quaternion q = Quaternion::fromVectors(v, v);
+    expectNear(q, 0.0f, 0.0f, 0.0f, 1.0f);
+}
+
+TEST(QuaternionFromVectors, AntiparallelInputsRotate180)
+{
+    Vec3 from{0.0f, 0.0f, -1.0f};
+    Vec3 to{0.0f, 0.0f, 1.0f};
+    Quaternion q = Quaternion::fromVectors(from, to);
+
+    // 180° rotation about an axis orthogonal to `from`, so w == 0 and the
+    // axis lies in the X/Y plane.
+    EXPECT_NEAR(q.w(), 0.0f, kEps);
+    EXPECT_NEAR(q.z(), 0.0f, kEps);
+    // Rotating `from` should still land on `to`.
+    Vec3 rot = rotated(q, from);
+    EXPECT_NEAR(rot.x(), to.x(), kEps);
+    EXPECT_NEAR(rot.y(), to.y(), kEps);
+    EXPECT_NEAR(rot.z(), to.z(), kEps);
+}
+
+TEST(QuaternionFromVectors, ArbitraryPairRotatesFromOntoTo)
+{
+    Vec3 from = Vec3::normalise(Vec3{0.0f, 0.0f, -1.0f});
+    Vec3 to = Vec3::normalise(Vec3{1.0f, -1.0f, 1.0f});
+    Quaternion q = Quaternion::fromVectors(from, to);
+
+    Vec3 rot = rotated(q, from);
+    EXPECT_NEAR(rot.x(), to.x(), kEps);
+    EXPECT_NEAR(rot.y(), to.y(), kEps);
+    EXPECT_NEAR(rot.z(), to.z(), kEps);
+}
+
+TEST(QuaternionFromVectors, ResultIsUnitMagnitude)
+{
+    Vec3 from = Vec3::normalise(Vec3{0.0f, 0.0f, -1.0f});
+    Vec3 to = Vec3::normalise(Vec3{1.0f, -1.0f, 1.0f});
+    Quaternion q = Quaternion::fromVectors(from, to);
+    EXPECT_NEAR(q.magnitude(), 1.0f, kEps);
 }

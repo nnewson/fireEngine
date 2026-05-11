@@ -130,6 +130,37 @@ public:
         return *this;
     }
 
+    // Shortest-arc rotation that maps `from` onto `to`. Inputs are assumed
+    // to be unit-length; the formula degenerates if they are not. Handles
+    // the antiparallel case by rotating 180° about an axis orthogonal to
+    // `from`.
+    [[nodiscard]]
+    static Quaternion fromVectors(Vec3 from, Vec3 to) noexcept
+    {
+        // 1e-6 is the smallest threshold that still survives single-precision
+        // round-off near ±1: float_epsilon (1e-8) rounds back to 1.0f when
+        // subtracted from 1.0f, so it would let antiparallel inputs slip
+        // through to the general branch and produce a zero quaternion.
+        constexpr float kColinearTolerance = 1e-6f;
+        const float d = Vec3::dotProduct(from, to);
+        if (d > 1.0f - kColinearTolerance)
+        {
+            return Quaternion::identity();
+        }
+        if (d < -1.0f + kColinearTolerance)
+        {
+            Vec3 axis = Vec3::crossProduct(from, Vec3{1.0f, 0.0f, 0.0f});
+            if (axis.magnitudeSquared() < kColinearTolerance)
+            {
+                axis = Vec3::crossProduct(from, Vec3{0.0f, 1.0f, 0.0f});
+            }
+            axis.normalise();
+            return {axis.x(), axis.y(), axis.z(), 0.0f};
+        }
+        const Vec3 c = Vec3::crossProduct(from, to);
+        return Quaternion::normalise({c.x(), c.y(), c.z(), 1.0f + d});
+    }
+
     [[nodiscard]]
     static Quaternion slerp(const Quaternion& a, const Quaternion& b, float t) noexcept
     {

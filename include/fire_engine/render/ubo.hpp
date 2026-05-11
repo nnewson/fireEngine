@@ -144,7 +144,7 @@ struct LightUBO
     alignas(16) Mat4 selfShadowViewProj[MAX_SKINNED_SELF_SHADOW_CASTERS]{};
     // View-space far-plane distances for each cascade (x..w = cascades 0..3).
     alignas(16) float cascadeSplits[4]{};
-    alignas(16) float iblParams[4]{};         // x = maxReflectionLod, y/z = IBL strengths
+    alignas(16) float iblParams[4]{}; // x = maxReflectionLod, y/z = IBL strengths
     // x = csm minBias, y = csm slopeBias, z = filterRadius, w = normalOffset.
     alignas(16) float shadowParams[4]{};
     // x = punctual minBias, y = punctual slopeBias.

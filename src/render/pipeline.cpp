@@ -124,9 +124,9 @@ PipelineConfig Pipeline::shadowConfig(vk::RenderPass renderPass)
     // matrixIndex picks lightViewProj[] in the vertex stage. lightPosRange is
     // consumed by the fragment shader's point-shadow branch (linear distance
     // depth), so the push constant must be visible to both stages.
-    config.pushConstantRanges.emplace_back(
-        vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment, 0,
-        static_cast<uint32_t>(sizeof(ShadowPushConstants)));
+    config.pushConstantRanges.emplace_back(vk::ShaderStageFlagBits::eVertex |
+                                               vk::ShaderStageFlagBits::eFragment,
+                                           0, static_cast<uint32_t>(sizeof(ShadowPushConstants)));
     config.renderPass = renderPass;
     config.depthWrite = true;
     config.depthCompare = vk::CompareOp::eLessOrEqual;

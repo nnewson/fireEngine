@@ -21,7 +21,8 @@ void recordTransmissionDrawBucket(vk::CommandBuffer cmd, std::span<const DrawCom
     {
         if (dc.pipeline != lastBoundPipeline)
         {
-            cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, resources.vulkanPipeline(dc.pipeline));
+            cmd.bindPipeline(vk::PipelineBindPoint::eGraphics,
+                             resources.vulkanPipeline(dc.pipeline));
             lastBoundPipeline = dc.pipeline;
         }
         if (dc.vertexBuffer != NullBuffer)
@@ -195,19 +196,17 @@ void Transmission::recordSceneColorCapture(vk::CommandBuffer cmd) const
                                            .mipLevel = i - 1,
                                            .baseArrayLayer = 0,
                                            .layerCount = 1},
-            .srcOffsets = std::array<vk::Offset3D, 2>{vk::Offset3D{.x = 0, .y = 0, .z = 0},
-                                                      vk::Offset3D{.x = mipWidth,
-                                                                   .y = mipHeight,
-                                                                   .z = 1}},
+            .srcOffsets =
+                std::array<vk::Offset3D, 2>{vk::Offset3D{.x = 0, .y = 0, .z = 0},
+                                            vk::Offset3D{.x = mipWidth, .y = mipHeight, .z = 1}},
             .dstSubresource =
                 vk::ImageSubresourceLayers{.aspectMask = vk::ImageAspectFlagBits::eColor,
                                            .mipLevel = i,
                                            .baseArrayLayer = 0,
                                            .layerCount = 1},
-            .dstOffsets = std::array<vk::Offset3D, 2>{vk::Offset3D{.x = 0, .y = 0, .z = 0},
-                                                      vk::Offset3D{.x = nextWidth,
-                                                                   .y = nextHeight,
-                                                                   .z = 1}},
+            .dstOffsets =
+                std::array<vk::Offset3D, 2>{vk::Offset3D{.x = 0, .y = 0, .z = 0},
+                                            vk::Offset3D{.x = nextWidth, .y = nextHeight, .z = 1}},
         };
         cmd.blitImage(sceneImage, vk::ImageLayout::eTransferSrcOptimal, sceneImage,
                       vk::ImageLayout::eTransferDstOptimal, blit, vk::Filter::eLinear);

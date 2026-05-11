@@ -85,9 +85,8 @@ Shadows::Shadows(const Device& device, Resources& resources)
     worldShadowMapHandle_ = resources_->createShadowMap(shadowMapExtent, shadowCascadeCount);
     worldShadowColourHandle_ =
         resources_->createShadowColourAttachment(shadowMapExtent, shadowCascadeCount, false);
-    createLayeredShadowFramebuffer(*device_, *resources_, worldShadowPass_,
-                                   worldShadowMapHandle_, worldShadowColourHandle_,
-                                   shadowMapExtent, shadowCascadeCount);
+    createLayeredShadowFramebuffer(*device_, *resources_, worldShadowPass_, worldShadowMapHandle_,
+                                   worldShadowColourHandle_, shadowMapExtent, shadowCascadeCount);
 
     selfShadowFirstMapHandle_ =
         resources_->createShadowMap(skinnedSelfShadowMapExtent, MAX_SKINNED_SELF_SHADOW_CASTERS);
@@ -115,7 +114,8 @@ Shadows::Shadows(const Device& device, Resources& resources)
     {
         spotDepthViews.push_back(resources_->vulkanShadowMapLayerView(spotShadowMapHandle_, i));
     }
-    std::array<vk::ImageView, 1> spotColourViews = {resources_->vulkanImageView(spotShadowColourHandle_)};
+    std::array<vk::ImageView, 1> spotColourViews = {
+        resources_->vulkanImageView(spotShadowColourHandle_)};
     spotShadowPass_.createShadowFramebuffer(*device_, spotColourViews, spotDepthViews,
                                             spotShadowMapExtent);
 
@@ -135,7 +135,8 @@ Shadows::Shadows(const Device& device, Resources& resources)
                 resources_->vulkanPointShadowFaceView(pointShadowMapHandle_, cube, face));
         }
     }
-    std::array<vk::ImageView, 1> pointColourViews = {resources_->vulkanImageView(pointShadowColourHandle_)};
+    std::array<vk::ImageView, 1> pointColourViews = {
+        resources_->vulkanImageView(pointShadowColourHandle_)};
     pointShadowPass_.createShadowFramebuffer(*device_, pointColourViews, pointFaceViews,
                                              pointShadowMapExtent);
 
@@ -151,8 +152,7 @@ Shadows::Shadows(const Device& device, Resources& resources)
 
 void Shadows::recordPass(vk::CommandBuffer cmd, const std::vector<DrawCommand>& shadowDraws,
                          const std::vector<DrawCommand>& worldOnlyShadowDraws,
-                         const std::vector<DrawCommand>& selfShadowDraws,
-                         int activeSpotCasters,
+                         const std::vector<DrawCommand>& selfShadowDraws, int activeSpotCasters,
                          std::span<const PointShadowCaster> pointCasters) const
 {
     std::array<vk::ClearValue, 2> shadowClears = {
@@ -160,11 +160,10 @@ void Shadows::recordPass(vk::CommandBuffer cmd, const std::vector<DrawCommand>& 
         vk::ClearValue{.depthStencil = vk::ClearDepthStencilValue{.depth = 1.0f, .stencil = 0}},
     };
 
-    auto recordShadowIteration = [&](vk::RenderPass renderPass, vk::Framebuffer framebuffer,
-                                     uint32_t extent, const ShadowPushConstants& pc,
-                                     const std::vector<DrawCommand>& draws,
-                                     PipelineHandle pipelineHandle,
-                                     float depthBiasConstant, float depthBiasSlope)
+    auto recordShadowIteration =
+        [&](vk::RenderPass renderPass, vk::Framebuffer framebuffer, uint32_t extent,
+            const ShadowPushConstants& pc, const std::vector<DrawCommand>& draws,
+            PipelineHandle pipelineHandle, float depthBiasConstant, float depthBiasSlope)
     {
         vk::Viewport vp{
             .x = 0.0f,
@@ -249,8 +248,7 @@ void Shadows::recordPass(vk::CommandBuffer cmd, const std::vector<DrawCommand>& 
         recordShadowIteration(spotShadowPass_.renderPass(),
                               spotShadowPass_.framebuffer(static_cast<std::size_t>(s)),
                               spotShadowMapExtent, pc, shadowDraws, shadowPipelineHandle_,
-                              punctualShadowRasterBiasConstant,
-                              punctualShadowRasterBiasSlope);
+                              punctualShadowRasterBiasConstant, punctualShadowRasterBiasSlope);
     }
 
     for (std::size_t p = 0;
@@ -266,10 +264,9 @@ void Shadows::recordPass(vk::CommandBuffer cmd, const std::vector<DrawCommand>& 
             pc.lightPosRange[2] = pointCasters[p].worldPosition.z();
             pc.lightPosRange[3] = pointCasters[p].range;
             recordShadowIteration(pointShadowPass_.renderPass(),
-                                  pointShadowPass_.framebuffer(6 * p + face),
-                                  pointShadowMapExtent, pc, shadowDraws, shadowPipelineHandle_,
-                                  punctualShadowRasterBiasConstant,
-                                  punctualShadowRasterBiasSlope);
+                                  pointShadowPass_.framebuffer(6 * p + face), pointShadowMapExtent,
+                                  pc, shadowDraws, shadowPipelineHandle_,
+                                  punctualShadowRasterBiasConstant, punctualShadowRasterBiasSlope);
         }
     }
 }

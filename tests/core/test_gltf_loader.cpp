@@ -13,7 +13,6 @@
 #include <fastgltf/tools.hpp>
 #include <fastgltf/types.hpp>
 #include <simdjson.h>
-#include <simdjson.h>
 
 #include <fire_engine/core/gltf_loader.hpp>
 #include <fire_engine/graphics/material.hpp>
@@ -104,8 +103,7 @@ static fastgltf::Asset parseRealGltfAsset(const std::filesystem::path& gltfPath)
     constexpr fastgltf::Extensions enabledExtensions =
         fastgltf::Extensions::KHR_materials_emissive_strength |
         fastgltf::Extensions::KHR_texture_transform | fastgltf::Extensions::KHR_texture_basisu |
-        fastgltf::Extensions::KHR_materials_variants |
-        fastgltf::Extensions::KHR_materials_unlit |
+        fastgltf::Extensions::KHR_materials_variants | fastgltf::Extensions::KHR_materials_unlit |
         fastgltf::Extensions::KHR_lights_punctual |
         fastgltf::Extensions::KHR_materials_transmission | fastgltf::Extensions::KHR_materials_ior |
         fastgltf::Extensions::KHR_materials_clearcoat | fastgltf::Extensions::KHR_materials_volume;
@@ -118,10 +116,9 @@ static fastgltf::Asset parseRealGltfAsset(const std::filesystem::path& gltfPath)
         return fastgltf::Asset{};
     }
 
-    auto result =
-        parser.loadGltf(dataResult.get(), gltfPath.parent_path(),
-                        fastgltf::Options::LoadExternalBuffers |
-                            fastgltf::Options::LoadExternalImages);
+    auto result = parser.loadGltf(dataResult.get(), gltfPath.parent_path(),
+                                  fastgltf::Options::LoadExternalBuffers |
+                                      fastgltf::Options::LoadExternalImages);
     EXPECT_EQ(result.error(), fastgltf::Error::None);
     if (result.error() != fastgltf::Error::None)
     {
@@ -983,8 +980,8 @@ TEST(ParseAssetKtxBasisu, StainedGlassLampMaterialsReferenceBasisuTextures)
 
 TEST(ParseAssetImageSources, TextureSettingsTestUsesLegacyImageIndices)
 {
-    const auto asset =
-        parseRealGltfAsset(std::filesystem::path("TextureSettingsTest") / "TextureSettingsTest.gltf");
+    const auto asset = parseRealGltfAsset(std::filesystem::path("TextureSettingsTest") /
+                                          "TextureSettingsTest.gltf");
 
     ASSERT_FALSE(asset.textures.empty());
     for (const auto& texture : asset.textures)

@@ -27,24 +27,23 @@ Resources::Resources(const Device& device, const Pipeline& pipeline)
     cmdPool_ = vk::raii::CommandPool(device.device(), poolCi);
 
     shadowDebugSampler_ = vk::raii::Sampler(
-        device.device(),
-        vk::SamplerCreateInfo{
-            .magFilter = vk::Filter::eNearest,
-            .minFilter = vk::Filter::eNearest,
-            .mipmapMode = vk::SamplerMipmapMode::eNearest,
-            .addressModeU = vk::SamplerAddressMode::eClampToBorder,
-            .addressModeV = vk::SamplerAddressMode::eClampToBorder,
-            .addressModeW = vk::SamplerAddressMode::eClampToBorder,
-            .mipLodBias = 0.0f,
-            .anisotropyEnable = vk::False,
-            .maxAnisotropy = 1.0f,
-            .compareEnable = vk::False,
-            .compareOp = vk::CompareOp::eAlways,
-            .minLod = 0.0f,
-            .maxLod = 1.0f,
-            .borderColor = vk::BorderColor::eFloatOpaqueWhite,
-            .unnormalizedCoordinates = vk::False,
-        });
+        device.device(), vk::SamplerCreateInfo{
+                             .magFilter = vk::Filter::eNearest,
+                             .minFilter = vk::Filter::eNearest,
+                             .mipmapMode = vk::SamplerMipmapMode::eNearest,
+                             .addressModeU = vk::SamplerAddressMode::eClampToBorder,
+                             .addressModeV = vk::SamplerAddressMode::eClampToBorder,
+                             .addressModeW = vk::SamplerAddressMode::eClampToBorder,
+                             .mipLodBias = 0.0f,
+                             .anisotropyEnable = vk::False,
+                             .maxAnisotropy = 1.0f,
+                             .compareEnable = vk::False,
+                             .compareOp = vk::CompareOp::eAlways,
+                             .minLod = 0.0f,
+                             .maxLod = 1.0f,
+                             .borderColor = vk::BorderColor::eFloatOpaqueWhite,
+                             .unnormalizedCoordinates = vk::False,
+                         });
 }
 
 // --- Buffer helpers ---
@@ -155,9 +154,8 @@ static std::size_t fallbackTextureIndex(Resources::FallbackTextureKind kind)
         return KTX_TTF_ASTC_4x4_RGBA;
     }
 
-    const vk::Format bc7Format = encoding == TextureEncoding::Srgb
-                                     ? vk::Format::eBc7SrgbBlock
-                                     : vk::Format::eBc7UnormBlock;
+    const vk::Format bc7Format =
+        encoding == TextureEncoding::Srgb ? vk::Format::eBc7SrgbBlock : vk::Format::eBc7UnormBlock;
     if (supportsSampledTextureFormat(device, bc7Format))
     {
         return KTX_TTF_BC7_RGBA;
@@ -171,8 +169,8 @@ static std::size_t fallbackTextureIndex(Resources::FallbackTextureKind kind)
         return KTX_TTF_ETC2_RGBA;
     }
 
-    const vk::Format rgbaFormat = encoding == TextureEncoding::Srgb ? vk::Format::eR8G8B8A8Srgb
-                                                                    : vk::Format::eR8G8B8A8Unorm;
+    const vk::Format rgbaFormat =
+        encoding == TextureEncoding::Srgb ? vk::Format::eR8G8B8A8Srgb : vk::Format::eR8G8B8A8Unorm;
     if (supportsSampledTextureFormat(device, rgbaFormat))
     {
         return KTX_TTF_RGBA32;
@@ -348,10 +346,9 @@ void Resources::allocateImage(TextureEntry& entry, const vk::ImageCreateInfo& im
     entry.image = vk::raii::Image(device_->device(), imageInfo);
 
     auto imageRequirements = entry.image.getMemoryRequirements();
-    vk::MemoryAllocateInfo allocateInfo =
-        makeMemoryAllocateInfo(imageRequirements,
-                               device_->findMemoryType(imageRequirements.memoryTypeBits,
-                                                       vk::MemoryPropertyFlagBits::eDeviceLocal));
+    vk::MemoryAllocateInfo allocateInfo = makeMemoryAllocateInfo(
+        imageRequirements, device_->findMemoryType(imageRequirements.memoryTypeBits,
+                                                   vk::MemoryPropertyFlagBits::eDeviceLocal));
     entry.memory = vk::raii::DeviceMemory(device_->device(), allocateInfo);
     entry.image.bindMemory(*entry.memory, 0);
 }
@@ -432,9 +429,8 @@ TextureHandle Resources::createTexture(KtxImage image, const SamplerSettings& sa
 
     vk::ImageCreateInfo imgCi = makeImageCreateInfo(
         {}, vk::ImageType::e2D, entry.format,
-        vk::Extent3D{.width = image.width(), .height = image.height(), .depth = 1},
-        entry.mipLevels, 1,
-        vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled);
+        vk::Extent3D{.width = image.width(), .height = image.height(), .depth = 1}, entry.mipLevels,
+        1, vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled);
     entry.image = vk::raii::Image(device_->device(), imgCi);
 
     auto imgReq = entry.image.getMemoryRequirements();
@@ -1095,8 +1091,7 @@ TextureHandle Resources::createOffscreenColourTarget(vk::Extent2D extent)
 TextureHandle Resources::createBloomChain(uint32_t width, uint32_t height, uint32_t mipLevels)
 {
     TextureHandle handle;
-    TextureEntry& entry =
-        appendTextureEntry(handle, vk::Format::eR16G16B16A16Sfloat, mipLevels);
+    TextureEntry& entry = appendTextureEntry(handle, vk::Format::eR16G16B16A16Sfloat, mipLevels);
 
     vk::ImageCreateInfo imgCi = makeImageCreateInfo(
         {}, vk::ImageType::e2D, entry.format,
@@ -1139,8 +1134,7 @@ vk::ImageView Resources::vulkanBloomMipView(TextureHandle handle, uint32_t mipLe
 TextureHandle Resources::createSceneColorTarget(uint32_t width, uint32_t height, uint32_t mipLevels)
 {
     TextureHandle handle;
-    TextureEntry& entry =
-        appendTextureEntry(handle, vk::Format::eR16G16B16A16Sfloat, mipLevels);
+    TextureEntry& entry = appendTextureEntry(handle, vk::Format::eR16G16B16A16Sfloat, mipLevels);
 
     // KHR_materials_transmission F3 — receives a blit copy from the post-opaque
     // HDR target and then a vkCmdBlitImage chain for the remaining mips.

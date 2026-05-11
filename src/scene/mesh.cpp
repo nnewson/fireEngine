@@ -83,7 +83,8 @@ void Mesh::cycleVariant(int delta) noexcept
     }
 
     const int stateCount = static_cast<int>(variantNames_.size()) + 1;
-    int currentState = activeVariant_.has_value() ? static_cast<int>(activeVariant_.value()) + 1 : 0;
+    int currentState =
+        activeVariant_.has_value() ? static_cast<int>(activeVariant_.value()) + 1 : 0;
     const int direction = delta > 0 ? 1 : -1;
 
     for (int step = 0; step < stateCount; ++step)
@@ -110,7 +111,8 @@ void Mesh::cycleVariant(int delta) noexcept
 bool Mesh::isSelectableVariantState(int state) const noexcept
 {
     const std::optional<std::size_t> candidate =
-        (state == 0) ? std::nullopt : std::optional<std::size_t>{static_cast<std::size_t>(state - 1)};
+        (state == 0) ? std::nullopt
+                     : std::optional<std::size_t>{static_cast<std::size_t>(state - 1)};
 
     return object_.wouldChangeVariant(candidate);
 }
