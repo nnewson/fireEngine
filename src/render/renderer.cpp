@@ -236,14 +236,10 @@ void Renderer::updateLightData(Vec3 cameraPosition, Vec3 cameraTarget, float asp
     // Reset the shadow matrix array each frame, then write cascades, spots,
     // and point faces in their fixed slots.
     shadowViewProjs_.fill(Mat4::identity());
-    for (uint32_t i = 0; i < shadowCascadeCount; ++i)
-    {
-        shadowViewProjs_[SHADOW_CASCADE_MATRIX_BASE + i] = cascadeViewProj[i];
-    }
-
     LightUBO lightData{};
     for (uint32_t i = 0; i < shadowCascadeCount; ++i)
     {
+        shadowViewProjs_[SHADOW_CASCADE_MATRIX_BASE + i] = cascadeViewProj[i];
         lightData.cascadeViewProj[i] = cascadeViewProj[i];
         lightData.cascadeSplits[i] = splits[i];
     }
