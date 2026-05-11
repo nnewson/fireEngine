@@ -381,7 +381,7 @@ TextureHandle Resources::createTexture(const Image& image, const SamplerSettings
     return createTexture(image.data(), image.width(), image.height(), sampler, encoding);
 }
 
-TextureHandle Resources::createTexture(KtxImage image, const SamplerSettings& sampler,
+TextureHandle Resources::createTexture(KtxImage&& image, const SamplerSettings& sampler,
                                        TextureEncoding encoding)
 {
     if (image.empty())
