@@ -341,6 +341,13 @@ private:
     TextureEntry& appendTextureEntry(TextureHandle& handle, vk::Format format,
                                      uint32_t mipLevels = 1);
     void allocateImage(TextureEntry& entry, const vk::ImageCreateInfo& imageInfo);
+    // Stages `bytes` host bytes into a new device-local image described by
+    // `imageInfo`, copies them via `regions`, and transitions the full
+    // subresource range to ShaderReadOnlyOptimal. Populates entry.image and
+    // entry.memory; the caller still owns view/sampler creation.
+    void uploadImageFromHost(TextureEntry& entry, const void* pixels, vk::DeviceSize bytes,
+                             const vk::ImageCreateInfo& imageInfo,
+                             std::span<const vk::BufferImageCopy> regions);
     static void createCubemapFaceViews(const Device& device, TextureEntry& entry);
     std::vector<TextureEntry> textures_;
     std::array<TextureHandle, 5> fallbackTextures_{NullTexture, NullTexture, NullTexture,

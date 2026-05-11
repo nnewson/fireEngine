@@ -100,7 +100,10 @@ uint32_t Resources::allocateObjectId() noexcept
 
 // --- Texture creation ---
 
-static vk::SamplerAddressMode toVkAddressMode(WrapMode mode)
+namespace
+{
+
+vk::SamplerAddressMode toVkAddressMode(WrapMode mode)
 {
     switch (mode)
     {
@@ -113,7 +116,7 @@ static vk::SamplerAddressMode toVkAddressMode(WrapMode mode)
     }
 }
 
-static vk::Filter toVkFilter(FilterMode mode)
+vk::Filter toVkFilter(FilterMode mode)
 {
     switch (mode)
     {
@@ -124,18 +127,18 @@ static vk::Filter toVkFilter(FilterMode mode)
     }
 }
 
-static vk::Format toVkTextureFormat(TextureEncoding encoding)
+vk::Format toVkTextureFormat(TextureEncoding encoding)
 {
     return encoding == TextureEncoding::Srgb ? vk::Format::eR8G8B8A8Srgb
                                              : vk::Format::eR8G8B8A8Unorm;
 }
 
-static std::size_t fallbackTextureIndex(Resources::FallbackTextureKind kind)
+std::size_t fallbackTextureIndex(Resources::FallbackTextureKind kind)
 {
     return static_cast<std::size_t>(kind);
 }
 
-[[nodiscard]] static bool supportsSampledTextureFormat(const Device& device, vk::Format format)
+[[nodiscard]] bool supportsSampledTextureFormat(const Device& device, vk::Format format)
 {
     vk::FormatProperties properties = device.physicalDevice().getFormatProperties(format);
     constexpr vk::FormatFeatureFlags required =
@@ -143,8 +146,8 @@ static std::size_t fallbackTextureIndex(Resources::FallbackTextureKind kind)
     return (properties.optimalTilingFeatures & required) == required;
 }
 
-[[nodiscard]] static ktx_transcode_fmt_e chooseBasisTranscodeFormat(const Device& device,
-                                                                    TextureEncoding encoding)
+[[nodiscard]] ktx_transcode_fmt_e chooseBasisTranscodeFormat(const Device& device,
+                                                             TextureEncoding encoding)
 {
     const vk::Format astcFormat = encoding == TextureEncoding::Srgb
                                       ? vk::Format::eAstc4x4SrgbBlock
@@ -179,7 +182,7 @@ static std::size_t fallbackTextureIndex(Resources::FallbackTextureKind kind)
     throw std::runtime_error("No supported Vulkan transcode target for Basis-compressed KTX image");
 }
 
-[[nodiscard]] static std::string ktxFailureDetail(KTX_error_code error)
+[[nodiscard]] std::string ktxFailureDetail(KTX_error_code error)
 {
     const char* reason = ktxErrorString(error);
     if (reason == nullptr || reason[0] == '\0')
@@ -190,7 +193,7 @@ static std::size_t fallbackTextureIndex(Resources::FallbackTextureKind kind)
     return reason;
 }
 
-[[nodiscard]] static vk::ImageSubresourceRange
+[[nodiscard]] vk::ImageSubresourceRange
 makeImageSubresourceRange(vk::ImageAspectFlags aspectMask, uint32_t baseMipLevel,
                           uint32_t levelCount, uint32_t baseArrayLayer, uint32_t layerCount)
 {
@@ -203,7 +206,7 @@ makeImageSubresourceRange(vk::ImageAspectFlags aspectMask, uint32_t baseMipLevel
     };
 }
 
-[[nodiscard]] static vk::ImageSubresourceLayers
+[[nodiscard]] vk::ImageSubresourceLayers
 makeImageSubresourceLayers(vk::ImageAspectFlags aspectMask, uint32_t mipLevel,
                            uint32_t baseArrayLayer, uint32_t layerCount)
 {
@@ -215,7 +218,7 @@ makeImageSubresourceLayers(vk::ImageAspectFlags aspectMask, uint32_t mipLevel,
     };
 }
 
-[[nodiscard]] static vk::ImageCreateInfo
+[[nodiscard]] vk::ImageCreateInfo
 makeImageCreateInfo(vk::ImageCreateFlags flags, vk::ImageType imageType, vk::Format format,
                     vk::Extent3D extent, uint32_t mipLevels, uint32_t arrayLayers,
                     vk::ImageUsageFlags usage)
@@ -235,7 +238,7 @@ makeImageCreateInfo(vk::ImageCreateFlags flags, vk::ImageType imageType, vk::For
     };
 }
 
-[[nodiscard]] static vk::MemoryAllocateInfo
+[[nodiscard]] vk::MemoryAllocateInfo
 makeMemoryAllocateInfo(vk::MemoryRequirements requirements, uint32_t memoryTypeIndex)
 {
     return vk::MemoryAllocateInfo{
@@ -244,7 +247,7 @@ makeMemoryAllocateInfo(vk::MemoryRequirements requirements, uint32_t memoryTypeI
     };
 }
 
-[[nodiscard]] static vk::CommandBufferAllocateInfo
+[[nodiscard]] vk::CommandBufferAllocateInfo
 makeCommandBufferAllocateInfo(vk::CommandPool commandPool, uint32_t commandBufferCount)
 {
     return vk::CommandBufferAllocateInfo{
@@ -254,14 +257,14 @@ makeCommandBufferAllocateInfo(vk::CommandPool commandPool, uint32_t commandBuffe
     };
 }
 
-[[nodiscard]] static vk::CommandBufferBeginInfo makeOneTimeSubmitBeginInfo()
+[[nodiscard]] vk::CommandBufferBeginInfo makeOneTimeSubmitBeginInfo()
 {
     return vk::CommandBufferBeginInfo{
         .flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit,
     };
 }
 
-[[nodiscard]] static vk::ImageMemoryBarrier
+[[nodiscard]] vk::ImageMemoryBarrier
 makeImageMemoryBarrier(vk::AccessFlags srcAccessMask, vk::AccessFlags dstAccessMask,
                        vk::ImageLayout oldLayout, vk::ImageLayout newLayout, vk::Image image,
                        vk::ImageSubresourceRange subresourceRange)
@@ -278,7 +281,7 @@ makeImageMemoryBarrier(vk::AccessFlags srcAccessMask, vk::AccessFlags dstAccessM
     };
 }
 
-[[nodiscard]] static vk::BufferImageCopy
+[[nodiscard]] vk::BufferImageCopy
 makeBufferImageCopy(vk::DeviceSize bufferOffset, vk::ImageSubresourceLayers imageSubresource,
                     vk::Extent3D imageExtent)
 {
@@ -292,7 +295,7 @@ makeBufferImageCopy(vk::DeviceSize bufferOffset, vk::ImageSubresourceLayers imag
     };
 }
 
-[[nodiscard]] static vk::ImageViewCreateInfo
+[[nodiscard]] vk::ImageViewCreateInfo
 makeImageViewCreateInfo(vk::Image image, vk::ImageViewType viewType, vk::Format format,
                         vk::ImageSubresourceRange subresourceRange)
 {
@@ -304,7 +307,7 @@ makeImageViewCreateInfo(vk::Image image, vk::ImageViewType viewType, vk::Format 
     };
 }
 
-[[nodiscard]] static vk::SamplerCreateInfo
+[[nodiscard]] vk::SamplerCreateInfo
 makeSamplerCreateInfo(vk::Filter magFilter, vk::Filter minFilter, vk::SamplerMipmapMode mipmapMode,
                       vk::SamplerAddressMode addressModeU, vk::SamplerAddressMode addressModeV,
                       vk::SamplerAddressMode addressModeW, vk::Bool32 anisotropyEnable,
@@ -330,6 +333,47 @@ makeSamplerCreateInfo(vk::Filter magFilter, vk::Filter minFilter, vk::SamplerMip
     };
 }
 
+// Allocates a single primary command buffer from `pool`, runs `record(cmd)`
+// inside a one-time-submit begin/end pair, submits the buffer on the graphics
+// queue, and waits for the queue to idle before returning. Used for all the
+// blocking, setup-time GPU work the renderer issues outside the main frame
+// loop (texture uploads, layout transitions, etc).
+template <typename F>
+void withOneTimeSubmit(const Device& device, vk::CommandPool pool, F&& record)
+{
+    vk::CommandBufferAllocateInfo cmdAi = makeCommandBufferAllocateInfo(pool, 1);
+    auto cmds = device.device().allocateCommandBuffers(cmdAi);
+    auto& cmd = cmds[0];
+    cmd.begin(makeOneTimeSubmitBeginInfo());
+    record(*cmd);
+    cmd.end();
+    vk::CommandBuffer rawCmd = *cmd;
+    vk::SubmitInfo submitInfo{.commandBufferCount = 1, .pCommandBuffers = &rawCmd};
+    device.graphicsQueue().submit(submitInfo);
+    device.graphicsQueue().waitIdle();
+}
+
+// One-time transition Undefined → DepthStencilReadOnlyOptimal for every
+// subresource of a depth image. Punctual-light shadow maps need this because
+// only the layers/faces of *active* casters are touched by the shadow render
+// pass each frame; unused layers would otherwise remain in UNDEFINED, but the
+// forward shader's array sampler accesses the entire image.
+void transitionDepthImageToReadOnly(const Device& device, vk::CommandPool pool, vk::Image image,
+                                    uint32_t layerCount)
+{
+    withOneTimeSubmit(device, pool, [&](vk::CommandBuffer cmd)
+    {
+        vk::ImageMemoryBarrier toReadOnly = makeImageMemoryBarrier(
+            {}, vk::AccessFlagBits::eShaderRead, vk::ImageLayout::eUndefined,
+            vk::ImageLayout::eDepthStencilReadOnlyOptimal, image,
+            makeImageSubresourceRange(vk::ImageAspectFlagBits::eDepth, 0, 1, 0, layerCount));
+        cmd.pipelineBarrier(vk::PipelineStageFlagBits::eTopOfPipe,
+                            vk::PipelineStageFlagBits::eFragmentShader, {}, {}, {}, toReadOnly);
+    });
+}
+
+} // namespace
+
 Resources::TextureEntry& Resources::appendTextureEntry(TextureHandle& handle, vk::Format format,
                                                        uint32_t mipLevels)
 {
@@ -351,6 +395,46 @@ void Resources::allocateImage(TextureEntry& entry, const vk::ImageCreateInfo& im
                                                    vk::MemoryPropertyFlagBits::eDeviceLocal));
     entry.memory = vk::raii::DeviceMemory(device_->device(), allocateInfo);
     entry.image.bindMemory(*entry.memory, 0);
+}
+
+void Resources::uploadImageFromHost(TextureEntry& entry, const void* pixels, vk::DeviceSize bytes,
+                                    const vk::ImageCreateInfo& imageInfo,
+                                    std::span<const vk::BufferImageCopy> regions)
+{
+    auto [stagingBuf, stagingMem] = device_->createBuffer(
+        bytes, vk::BufferUsageFlagBits::eTransferSrc,
+        vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
+    void* mapped = stagingMem.mapMemory(0, bytes);
+    std::memcpy(mapped, pixels, static_cast<std::size_t>(bytes));
+    stagingMem.unmapMemory();
+
+    allocateImage(entry, imageInfo);
+
+    const uint32_t mipLevels = imageInfo.mipLevels;
+    const uint32_t arrayLayers = imageInfo.arrayLayers;
+
+    withOneTimeSubmit(*device_, *cmdPool_, [&](vk::CommandBuffer cmd)
+    {
+        vk::ImageMemoryBarrier toTransfer = makeImageMemoryBarrier(
+            {}, vk::AccessFlagBits::eTransferWrite, vk::ImageLayout::eUndefined,
+            vk::ImageLayout::eTransferDstOptimal, *entry.image,
+            makeImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, mipLevels, 0,
+                                      arrayLayers));
+        cmd.pipelineBarrier(vk::PipelineStageFlagBits::eTopOfPipe,
+                            vk::PipelineStageFlagBits::eTransfer, {}, {}, {}, toTransfer);
+
+        cmd.copyBufferToImage(*stagingBuf, *entry.image, vk::ImageLayout::eTransferDstOptimal,
+                              regions);
+
+        vk::ImageMemoryBarrier toShader = makeImageMemoryBarrier(
+            vk::AccessFlagBits::eTransferWrite, vk::AccessFlagBits::eShaderRead,
+            vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal,
+            *entry.image,
+            makeImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, mipLevels, 0,
+                                      arrayLayers));
+        cmd.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,
+                            vk::PipelineStageFlagBits::eFragmentShader, {}, {}, {}, toShader);
+    });
 }
 
 void Resources::createCubemapFaceViews(const Device& device, TextureEntry& entry)
@@ -413,45 +497,8 @@ TextureHandle Resources::createTexture(KtxImage&& image, const SamplerSettings& 
         throw std::runtime_error("KTX image does not expose a Vulkan format");
     }
 
-    auto id = static_cast<uint32_t>(textures_.size());
-    textures_.emplace_back();
-    auto& entry = textures_.back();
-    entry.format = format;
-    entry.mipLevels = image.levels();
-
-    const vk::DeviceSize imageSize = static_cast<vk::DeviceSize>(image.size_bytes());
-    auto [stagingBuf, stagingMem] = device_->createBuffer(
-        imageSize, vk::BufferUsageFlagBits::eTransferSrc,
-        vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
-    void* data = stagingMem.mapMemory(0, imageSize);
-    std::memcpy(data, image.data(), static_cast<std::size_t>(imageSize));
-    stagingMem.unmapMemory();
-
-    vk::ImageCreateInfo imgCi = makeImageCreateInfo(
-        {}, vk::ImageType::e2D, entry.format,
-        vk::Extent3D{.width = image.width(), .height = image.height(), .depth = 1}, entry.mipLevels,
-        1, vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled);
-    entry.image = vk::raii::Image(device_->device(), imgCi);
-
-    auto imgReq = entry.image.getMemoryRequirements();
-    vk::MemoryAllocateInfo imgAi = makeMemoryAllocateInfo(
-        imgReq,
-        device_->findMemoryType(imgReq.memoryTypeBits, vk::MemoryPropertyFlagBits::eDeviceLocal));
-    entry.memory = vk::raii::DeviceMemory(device_->device(), imgAi);
-    entry.image.bindMemory(*entry.memory, 0);
-
-    vk::CommandBufferAllocateInfo cmdAi = makeCommandBufferAllocateInfo(*cmdPool_, 1);
-    auto cmds = device_->device().allocateCommandBuffers(cmdAi);
-    auto& cmd = cmds[0];
-
-    cmd.begin(makeOneTimeSubmitBeginInfo());
-
-    vk::ImageMemoryBarrier toTransfer = makeImageMemoryBarrier(
-        {}, vk::AccessFlagBits::eTransferWrite, vk::ImageLayout::eUndefined,
-        vk::ImageLayout::eTransferDstOptimal, *entry.image,
-        makeImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, entry.mipLevels, 0, 1));
-    cmd.pipelineBarrier(vk::PipelineStageFlagBits::eTopOfPipe, vk::PipelineStageFlagBits::eTransfer,
-                        {}, {}, {}, toTransfer);
+    TextureHandle handle;
+    TextureEntry& entry = appendTextureEntry(handle, format, image.levels());
 
     std::vector<vk::BufferImageCopy> regions;
     regions.reserve(entry.mipLevels);
@@ -473,24 +520,13 @@ TextureHandle Resources::createTexture(KtxImage&& image, const SamplerSettings& 
                          .height = std::max(1u, image.height() >> level),
                          .depth = 1}));
     }
-    cmd.copyBufferToImage(*stagingBuf, *entry.image, vk::ImageLayout::eTransferDstOptimal, regions);
 
-    vk::ImageMemoryBarrier toShader = makeImageMemoryBarrier(
-        vk::AccessFlagBits::eTransferWrite, vk::AccessFlagBits::eShaderRead,
-        vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal, *entry.image,
-        makeImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, entry.mipLevels, 0, 1));
-    cmd.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,
-                        vk::PipelineStageFlagBits::eFragmentShader, {}, {}, {}, toShader);
-
-    cmd.end();
-
-    vk::CommandBuffer rawCmd = *cmd;
-    vk::SubmitInfo submitInfo{
-        .commandBufferCount = 1,
-        .pCommandBuffers = &rawCmd,
-    };
-    device_->graphicsQueue().submit(submitInfo);
-    device_->graphicsQueue().waitIdle();
+    vk::ImageCreateInfo imgCi = makeImageCreateInfo(
+        {}, vk::ImageType::e2D, entry.format,
+        vk::Extent3D{.width = image.width(), .height = image.height(), .depth = 1}, entry.mipLevels,
+        1, vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled);
+    uploadImageFromHost(entry, image.data(), static_cast<vk::DeviceSize>(image.size_bytes()), imgCi,
+                        regions);
 
     vk::ImageViewCreateInfo viewCi = makeImageViewCreateInfo(
         *entry.image, vk::ImageViewType::e2D, entry.format,
@@ -506,78 +542,26 @@ TextureHandle Resources::createTexture(KtxImage&& image, const SamplerSettings& 
         static_cast<float>(entry.mipLevels - 1), vk::BorderColor::eIntOpaqueBlack);
     entry.sampler = vk::raii::Sampler(device_->device(), samplerCi);
 
-    return TextureHandle{id};
+    return handle;
 }
 
 TextureHandle Resources::createTexture(const uint8_t* pixels, int width, int height,
                                        const SamplerSettings& sampler, TextureEncoding encoding)
 {
-    auto id = static_cast<uint32_t>(textures_.size());
-    textures_.emplace_back();
-    auto& entry = textures_.back();
-    entry.format = toVkTextureFormat(encoding);
+    TextureHandle handle;
+    TextureEntry& entry = appendTextureEntry(handle, toVkTextureFormat(encoding));
 
-    vk::DeviceSize imageSize =
-        static_cast<vk::DeviceSize>(width) * static_cast<vk::DeviceSize>(height) * 4;
-
-    auto [stagingBuf, stagingMem] = device_->createBuffer(
-        imageSize, vk::BufferUsageFlagBits::eTransferSrc,
-        vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
-    void* data = stagingMem.mapMemory(0, imageSize);
-    std::memcpy(data, pixels, static_cast<std::size_t>(imageSize));
-    stagingMem.unmapMemory();
-
+    const vk::Extent3D extent{.width = static_cast<uint32_t>(width),
+                              .height = static_cast<uint32_t>(height),
+                              .depth = 1};
+    vk::BufferImageCopy region = makeBufferImageCopy(
+        0, makeImageSubresourceLayers(vk::ImageAspectFlagBits::eColor, 0, 0, 1), extent);
     vk::ImageCreateInfo imgCi = makeImageCreateInfo(
-        {}, vk::ImageType::e2D, entry.format,
-        vk::Extent3D{.width = static_cast<uint32_t>(width),
-                     .height = static_cast<uint32_t>(height),
-                     .depth = 1},
-        1, 1, vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled);
-    entry.image = vk::raii::Image(device_->device(), imgCi);
-
-    auto imgReq = entry.image.getMemoryRequirements();
-    vk::MemoryAllocateInfo imgAi = makeMemoryAllocateInfo(
-        imgReq,
-        device_->findMemoryType(imgReq.memoryTypeBits, vk::MemoryPropertyFlagBits::eDeviceLocal));
-    entry.memory = vk::raii::DeviceMemory(device_->device(), imgAi);
-    entry.image.bindMemory(*entry.memory, 0);
-
-    vk::CommandBufferAllocateInfo cmdAi = makeCommandBufferAllocateInfo(*cmdPool_, 1);
-    auto cmds = device_->device().allocateCommandBuffers(cmdAi);
-    auto& cmd = cmds[0];
-
-    cmd.begin(makeOneTimeSubmitBeginInfo());
-
-    vk::ImageMemoryBarrier toTransfer = makeImageMemoryBarrier(
-        {}, vk::AccessFlagBits::eTransferWrite, vk::ImageLayout::eUndefined,
-        vk::ImageLayout::eTransferDstOptimal, *entry.image,
-        makeImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1));
-    cmd.pipelineBarrier(vk::PipelineStageFlagBits::eTopOfPipe, vk::PipelineStageFlagBits::eTransfer,
-                        {}, {}, {}, toTransfer);
-
-    vk::BufferImageCopy region =
-        makeBufferImageCopy(0, makeImageSubresourceLayers(vk::ImageAspectFlagBits::eColor, 0, 0, 1),
-                            vk::Extent3D{.width = static_cast<uint32_t>(width),
-                                         .height = static_cast<uint32_t>(height),
-                                         .depth = 1});
-    cmd.copyBufferToImage(*stagingBuf, *entry.image, vk::ImageLayout::eTransferDstOptimal, region);
-
-    vk::ImageMemoryBarrier toShader = makeImageMemoryBarrier(
-        vk::AccessFlagBits::eTransferWrite, vk::AccessFlagBits::eShaderRead,
-        vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal, *entry.image,
-        makeImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1));
-    cmd.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,
-                        vk::PipelineStageFlagBits::eFragmentShader, {}, {}, {}, toShader);
-
-    cmd.end();
-
-    vk::CommandBuffer rawCmd = *cmd;
-    vk::SubmitInfo submitInfo{
-        .commandBufferCount = 1,
-        .pCommandBuffers = &rawCmd,
-    };
-    device_->graphicsQueue().submit(submitInfo);
-    device_->graphicsQueue().waitIdle();
+        {}, vk::ImageType::e2D, entry.format, extent, 1, 1,
+        vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled);
+    vk::DeviceSize bytes =
+        static_cast<vk::DeviceSize>(width) * static_cast<vk::DeviceSize>(height) * 4;
+    uploadImageFromHost(entry, pixels, bytes, imgCi, std::span<const vk::BufferImageCopy>{&region, 1});
 
     vk::ImageViewCreateInfo viewCi = makeImageViewCreateInfo(
         *entry.image, vk::ImageViewType::e2D, entry.format,
@@ -593,79 +577,26 @@ TextureHandle Resources::createTexture(const uint8_t* pixels, int width, int hei
                               vk::CompareOp::eAlways, 0.0f, 0.0f, vk::BorderColor::eIntOpaqueBlack);
     entry.sampler = vk::raii::Sampler(device_->device(), samplerCi);
 
-    return TextureHandle{id};
+    return handle;
 }
 
 TextureHandle Resources::createTexture(const float* pixels, int width, int height,
                                        const SamplerSettings& sampler)
 {
-    auto id = static_cast<uint32_t>(textures_.size());
-    textures_.emplace_back();
-    auto& entry = textures_.back();
-    entry.format = vk::Format::eR32G32B32A32Sfloat;
-    entry.mipLevels = 1;
+    TextureHandle handle;
+    TextureEntry& entry = appendTextureEntry(handle, vk::Format::eR32G32B32A32Sfloat);
 
-    vk::DeviceSize imageSize = static_cast<vk::DeviceSize>(width) *
-                               static_cast<vk::DeviceSize>(height) * 4 * sizeof(float);
-
-    auto [stagingBuf, stagingMem] = device_->createBuffer(
-        imageSize, vk::BufferUsageFlagBits::eTransferSrc,
-        vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
-    void* data = stagingMem.mapMemory(0, imageSize);
-    std::memcpy(data, pixels, static_cast<std::size_t>(imageSize));
-    stagingMem.unmapMemory();
-
+    const vk::Extent3D extent{.width = static_cast<uint32_t>(width),
+                              .height = static_cast<uint32_t>(height),
+                              .depth = 1};
+    vk::BufferImageCopy region = makeBufferImageCopy(
+        0, makeImageSubresourceLayers(vk::ImageAspectFlagBits::eColor, 0, 0, 1), extent);
     vk::ImageCreateInfo imgCi = makeImageCreateInfo(
-        {}, vk::ImageType::e2D, entry.format,
-        vk::Extent3D{.width = static_cast<uint32_t>(width),
-                     .height = static_cast<uint32_t>(height),
-                     .depth = 1},
-        1, 1, vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled);
-    entry.image = vk::raii::Image(device_->device(), imgCi);
-
-    auto imgReq = entry.image.getMemoryRequirements();
-    vk::MemoryAllocateInfo imgAi = makeMemoryAllocateInfo(
-        imgReq,
-        device_->findMemoryType(imgReq.memoryTypeBits, vk::MemoryPropertyFlagBits::eDeviceLocal));
-    entry.memory = vk::raii::DeviceMemory(device_->device(), imgAi);
-    entry.image.bindMemory(*entry.memory, 0);
-
-    vk::CommandBufferAllocateInfo cmdAi = makeCommandBufferAllocateInfo(*cmdPool_, 1);
-    auto cmds = device_->device().allocateCommandBuffers(cmdAi);
-    auto& cmd = cmds[0];
-
-    cmd.begin(makeOneTimeSubmitBeginInfo());
-
-    vk::ImageMemoryBarrier toTransfer = makeImageMemoryBarrier(
-        {}, vk::AccessFlagBits::eTransferWrite, vk::ImageLayout::eUndefined,
-        vk::ImageLayout::eTransferDstOptimal, *entry.image,
-        makeImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1));
-    cmd.pipelineBarrier(vk::PipelineStageFlagBits::eTopOfPipe, vk::PipelineStageFlagBits::eTransfer,
-                        {}, {}, {}, toTransfer);
-
-    vk::BufferImageCopy region =
-        makeBufferImageCopy(0, makeImageSubresourceLayers(vk::ImageAspectFlagBits::eColor, 0, 0, 1),
-                            vk::Extent3D{.width = static_cast<uint32_t>(width),
-                                         .height = static_cast<uint32_t>(height),
-                                         .depth = 1});
-    cmd.copyBufferToImage(*stagingBuf, *entry.image, vk::ImageLayout::eTransferDstOptimal, region);
-
-    vk::ImageMemoryBarrier toShader = makeImageMemoryBarrier(
-        vk::AccessFlagBits::eTransferWrite, vk::AccessFlagBits::eShaderRead,
-        vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal, *entry.image,
-        makeImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1));
-    cmd.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,
-                        vk::PipelineStageFlagBits::eFragmentShader, {}, {}, {}, toShader);
-
-    cmd.end();
-
-    vk::CommandBuffer rawCmd = *cmd;
-    vk::SubmitInfo submitInfo{
-        .commandBufferCount = 1,
-        .pCommandBuffers = &rawCmd,
-    };
-    device_->graphicsQueue().submit(submitInfo);
-    device_->graphicsQueue().waitIdle();
+        {}, vk::ImageType::e2D, entry.format, extent, 1, 1,
+        vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled);
+    vk::DeviceSize bytes = static_cast<vk::DeviceSize>(width) *
+                           static_cast<vk::DeviceSize>(height) * 4 * sizeof(float);
+    uploadImageFromHost(entry, pixels, bytes, imgCi, std::span<const vk::BufferImageCopy>{&region, 1});
 
     vk::ImageViewCreateInfo viewCi = makeImageViewCreateInfo(
         *entry.image, vk::ImageViewType::e2D, entry.format,
@@ -681,7 +612,7 @@ TextureHandle Resources::createTexture(const float* pixels, int width, int heigh
         vk::BorderColor::eFloatOpaqueBlack);
     entry.sampler = vk::raii::Sampler(device_->device(), samplerCi);
 
-    return TextureHandle{id};
+    return handle;
 }
 
 TextureHandle Resources::createCubemapTexture(const float* pixels, uint32_t faceExtent,
@@ -693,88 +624,37 @@ TextureHandle Resources::createCubemapTexture(const float* pixels, uint32_t face
 TextureHandle Resources::createCubemapTexture(const float* pixels, uint32_t faceExtent,
                                               uint32_t mipLevels, const SamplerSettings& sampler)
 {
-    auto id = static_cast<uint32_t>(textures_.size());
-    textures_.emplace_back();
-    auto& entry = textures_.back();
-    entry.format = vk::Format::eR32G32B32A32Sfloat;
-    entry.mipLevels = mipLevels;
+    TextureHandle handle;
+    TextureEntry& entry = appendTextureEntry(handle, vk::Format::eR32G32B32A32Sfloat, mipLevels);
 
     vk::DeviceSize imageSize = 0;
-    uint32_t levelExtent = faceExtent;
-    for (uint32_t level = 0; level < mipLevels; ++level)
+    std::vector<vk::BufferImageCopy> regions;
+    regions.reserve(static_cast<std::size_t>(mipLevels) * 6);
     {
-        vk::DeviceSize faceSize =
-            static_cast<vk::DeviceSize>(levelExtent) * levelExtent * 4 * sizeof(float);
-        imageSize += faceSize * 6;
-        levelExtent = std::max(1u, levelExtent / 2);
+        uint32_t levelExtent = faceExtent;
+        vk::DeviceSize offset = 0;
+        for (uint32_t level = 0; level < mipLevels; ++level)
+        {
+            vk::DeviceSize faceSize =
+                static_cast<vk::DeviceSize>(levelExtent) * levelExtent * 4 * sizeof(float);
+            for (uint32_t face = 0; face < 6; ++face)
+            {
+                regions.push_back(makeBufferImageCopy(
+                    offset,
+                    makeImageSubresourceLayers(vk::ImageAspectFlagBits::eColor, level, face, 1),
+                    vk::Extent3D{.width = levelExtent, .height = levelExtent, .depth = 1}));
+                offset += faceSize;
+            }
+            imageSize += faceSize * 6;
+            levelExtent = std::max(1u, levelExtent / 2);
+        }
     }
-
-    auto [stagingBuf, stagingMem] = device_->createBuffer(
-        imageSize, vk::BufferUsageFlagBits::eTransferSrc,
-        vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
-    void* data = stagingMem.mapMemory(0, imageSize);
-    std::memcpy(data, pixels, static_cast<std::size_t>(imageSize));
-    stagingMem.unmapMemory();
 
     vk::ImageCreateInfo imgCi = makeImageCreateInfo(
         vk::ImageCreateFlagBits::eCubeCompatible, vk::ImageType::e2D, entry.format,
         vk::Extent3D{.width = faceExtent, .height = faceExtent, .depth = 1}, mipLevels, 6,
         vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled);
-    entry.image = vk::raii::Image(device_->device(), imgCi);
-
-    auto imgReq = entry.image.getMemoryRequirements();
-    vk::MemoryAllocateInfo imgAi = makeMemoryAllocateInfo(
-        imgReq,
-        device_->findMemoryType(imgReq.memoryTypeBits, vk::MemoryPropertyFlagBits::eDeviceLocal));
-    entry.memory = vk::raii::DeviceMemory(device_->device(), imgAi);
-    entry.image.bindMemory(*entry.memory, 0);
-
-    vk::CommandBufferAllocateInfo cmdAi = makeCommandBufferAllocateInfo(*cmdPool_, 1);
-    auto cmds = device_->device().allocateCommandBuffers(cmdAi);
-    auto& cmd = cmds[0];
-    cmd.begin(makeOneTimeSubmitBeginInfo());
-
-    vk::ImageMemoryBarrier toTransfer = makeImageMemoryBarrier(
-        {}, vk::AccessFlagBits::eTransferWrite, vk::ImageLayout::eUndefined,
-        vk::ImageLayout::eTransferDstOptimal, *entry.image,
-        makeImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, mipLevels, 0, 6));
-    cmd.pipelineBarrier(vk::PipelineStageFlagBits::eTopOfPipe, vk::PipelineStageFlagBits::eTransfer,
-                        {}, {}, {}, toTransfer);
-
-    std::vector<vk::BufferImageCopy> regions;
-    regions.reserve(static_cast<std::size_t>(mipLevels) * 6);
-    vk::DeviceSize offset = 0;
-    levelExtent = faceExtent;
-    for (uint32_t level = 0; level < mipLevels; ++level)
-    {
-        vk::DeviceSize faceSize =
-            static_cast<vk::DeviceSize>(levelExtent) * levelExtent * 4 * sizeof(float);
-        for (uint32_t face = 0; face < 6; ++face)
-        {
-            regions.push_back(makeBufferImageCopy(
-                offset, makeImageSubresourceLayers(vk::ImageAspectFlagBits::eColor, level, face, 1),
-                vk::Extent3D{.width = levelExtent, .height = levelExtent, .depth = 1}));
-            offset += faceSize;
-        }
-        levelExtent = std::max(1u, levelExtent / 2);
-    }
-    cmd.copyBufferToImage(*stagingBuf, *entry.image, vk::ImageLayout::eTransferDstOptimal, regions);
-
-    vk::ImageMemoryBarrier toShader = makeImageMemoryBarrier(
-        vk::AccessFlagBits::eTransferWrite, vk::AccessFlagBits::eShaderRead,
-        vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal, *entry.image,
-        makeImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, mipLevels, 0, 6));
-    cmd.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,
-                        vk::PipelineStageFlagBits::eFragmentShader, {}, {}, {}, toShader);
-    cmd.end();
-
-    vk::CommandBuffer rawCmd = *cmd;
-    vk::SubmitInfo submitInfo{
-        .commandBufferCount = 1,
-        .pCommandBuffers = &rawCmd,
-    };
-    device_->graphicsQueue().submit(submitInfo);
-    device_->graphicsQueue().waitIdle();
+    uploadImageFromHost(entry, pixels, imageSize, imgCi, regions);
 
     vk::ImageViewCreateInfo viewCi = makeImageViewCreateInfo(
         *entry.image, vk::ImageViewType::eCube, entry.format,
@@ -791,7 +671,7 @@ TextureHandle Resources::createCubemapTexture(const float* pixels, uint32_t face
         static_cast<float>(mipLevels - 1), vk::BorderColor::eFloatOpaqueBlack);
     entry.sampler = vk::raii::Sampler(device_->device(), samplerCi);
 
-    return TextureHandle{id};
+    return handle;
 }
 
 TextureHandle Resources::createRenderTargetCubemap(uint32_t faceExtent, uint32_t mipLevels,
@@ -880,31 +760,6 @@ TextureHandle Resources::createFallbackTexture(FallbackTextureKind kind)
 }
 
 // --- Shadow map ---
-
-// One-time transition Undefined → DepthStencilReadOnlyOptimal for every
-// subresource of a depth image. Punctual-light shadow maps need this because
-// only the layers/faces of *active* casters are touched by the shadow render
-// pass each frame; unused layers would otherwise remain in UNDEFINED, but the
-// forward shader's array sampler accesses the entire image.
-static void transitionDepthImageToReadOnly(const Device& device, vk::CommandPool pool,
-                                           vk::Image image, uint32_t layerCount)
-{
-    vk::CommandBufferAllocateInfo cmdAi = makeCommandBufferAllocateInfo(pool, 1);
-    auto cmds = device.device().allocateCommandBuffers(cmdAi);
-    auto& cmd = cmds[0];
-    cmd.begin(makeOneTimeSubmitBeginInfo());
-    vk::ImageMemoryBarrier toReadOnly = makeImageMemoryBarrier(
-        {}, vk::AccessFlagBits::eShaderRead, vk::ImageLayout::eUndefined,
-        vk::ImageLayout::eDepthStencilReadOnlyOptimal, image,
-        makeImageSubresourceRange(vk::ImageAspectFlagBits::eDepth, 0, 1, 0, layerCount));
-    cmd.pipelineBarrier(vk::PipelineStageFlagBits::eTopOfPipe,
-                        vk::PipelineStageFlagBits::eFragmentShader, {}, {}, {}, toReadOnly);
-    cmd.end();
-    vk::CommandBuffer rawCmd = *cmd;
-    vk::SubmitInfo submitInfo{.commandBufferCount = 1, .pCommandBuffers = &rawCmd};
-    device.graphicsQueue().submit(submitInfo);
-    device.graphicsQueue().waitIdle();
-}
 
 TextureHandle Resources::createShadowMap(uint32_t extent, uint32_t layerCount)
 {
@@ -1150,21 +1005,15 @@ TextureHandle Resources::createSceneColorTarget(uint32_t width, uint32_t height,
     // including the non-transmissive ones in pass 1 — so the layout must
     // match what the descriptor was written with even before any capture
     // pass writes meaningful contents.
-    vk::CommandBufferAllocateInfo cmdAi = makeCommandBufferAllocateInfo(*cmdPool_, 1);
-    auto cmds = device_->device().allocateCommandBuffers(cmdAi);
-    auto& cmd = cmds[0];
-    cmd.begin(makeOneTimeSubmitBeginInfo());
-    vk::ImageMemoryBarrier toShader = makeImageMemoryBarrier(
-        {}, vk::AccessFlagBits::eShaderRead, vk::ImageLayout::eUndefined,
-        vk::ImageLayout::eShaderReadOnlyOptimal, *entry.image,
-        makeImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, mipLevels, 0, 1));
-    cmd.pipelineBarrier(vk::PipelineStageFlagBits::eTopOfPipe,
-                        vk::PipelineStageFlagBits::eFragmentShader, {}, {}, {}, toShader);
-    cmd.end();
-    vk::CommandBuffer rawCmd = *cmd;
-    vk::SubmitInfo submitInfo{.commandBufferCount = 1, .pCommandBuffers = &rawCmd};
-    device_->graphicsQueue().submit(submitInfo);
-    device_->graphicsQueue().waitIdle();
+    withOneTimeSubmit(*device_, *cmdPool_, [&](vk::CommandBuffer cmd)
+    {
+        vk::ImageMemoryBarrier toShader = makeImageMemoryBarrier(
+            {}, vk::AccessFlagBits::eShaderRead, vk::ImageLayout::eUndefined,
+            vk::ImageLayout::eShaderReadOnlyOptimal, *entry.image,
+            makeImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, mipLevels, 0, 1));
+        cmd.pipelineBarrier(vk::PipelineStageFlagBits::eTopOfPipe,
+                            vk::PipelineStageFlagBits::eFragmentShader, {}, {}, {}, toShader);
+    });
 
     // Main view spans all mips so the shader's textureLod sample picks a mip
     // from a roughness-driven LOD.
