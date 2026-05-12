@@ -5,6 +5,7 @@
 
 #include <fire_engine/graphics/material.hpp>
 #include <fire_engine/graphics/texture.hpp>
+#include <fire_engine/render/descriptor_bindings.hpp>
 #include <fire_engine/render/ubo.hpp>
 
 namespace fire_engine
@@ -29,12 +30,13 @@ bool sameTextureSlot(bool hasA, bool hasB, const Texture& texA, const Texture& t
     return texA.handle() == texB.handle();
 }
 
-void packUv(float* dst, const UvTransform& transform) noexcept
+void writeUv(UvXform& dst, const UvTransform& transform) noexcept
 {
-    dst[0] = transform.offsetX;
-    dst[1] = transform.offsetY;
-    dst[2] = transform.scaleX;
-    dst[3] = transform.scaleY;
+    dst.offsetScale[0] = transform.offsetX;
+    dst.offsetScale[1] = transform.offsetY;
+    dst.offsetScale[2] = transform.scaleX;
+    dst.offsetScale[3] = transform.scaleY;
+    dst.rotation = transform.rotation;
 }
 
 } // namespace
@@ -66,18 +68,19 @@ MaterialUBO toMaterialUBO(const Material& mat)
     ubo.texCoordIndices[2] = mat.normalTexCoord();
     ubo.texCoordIndices[3] = mat.metallicRoughnessTexCoord();
 
-    packUv(ubo.uvBaseColor, mat.baseColorUvTransform());
-    packUv(ubo.uvEmissive, mat.emissiveUvTransform());
-    packUv(ubo.uvNormal, mat.normalUvTransform());
-    packUv(ubo.uvMetallicRoughness, mat.metallicRoughnessUvTransform());
-    packUv(ubo.uvOcclusion, mat.occlusionUvTransform());
-    packUv(ubo.uvTransmission, mat.transmissionUvTransform());
-    ubo.uvRotations[0] = mat.baseColorUvTransform().rotation;
-    ubo.uvRotations[1] = mat.emissiveUvTransform().rotation;
-    ubo.uvRotations[2] = mat.normalUvTransform().rotation;
-    ubo.uvRotations[3] = mat.metallicRoughnessUvTransform().rotation;
-    ubo.uvRotationsExtra[0] = mat.occlusionUvTransform().rotation;
-    ubo.uvRotationsExtra[1] = mat.transmissionUvTransform().rotation;
+    writeUv(ubo.uv[slotIndex(MaterialTextureSlot::BaseColour)], mat.baseColorUvTransform());
+    writeUv(ubo.uv[slotIndex(MaterialTextureSlot::Emissive)], mat.emissiveUvTransform());
+    writeUv(ubo.uv[slotIndex(MaterialTextureSlot::Normal)], mat.normalUvTransform());
+    writeUv(ubo.uv[slotIndex(MaterialTextureSlot::MetallicRoughness)],
+            mat.metallicRoughnessUvTransform());
+    writeUv(ubo.uv[slotIndex(MaterialTextureSlot::Occlusion)], mat.occlusionUvTransform());
+    writeUv(ubo.uv[slotIndex(MaterialTextureSlot::Transmission)], mat.transmissionUvTransform());
+    writeUv(ubo.uv[slotIndex(MaterialTextureSlot::Clearcoat)], mat.clearcoatUvTransform());
+    writeUv(ubo.uv[slotIndex(MaterialTextureSlot::ClearcoatRoughness)],
+            mat.clearcoatRoughnessUvTransform());
+    writeUv(ubo.uv[slotIndex(MaterialTextureSlot::ClearcoatNormal)],
+            mat.clearcoatNormalUvTransform());
+    writeUv(ubo.uv[slotIndex(MaterialTextureSlot::Thickness)], mat.thicknessUvTransform());
 
     ubo.transmissionParams[0] = mat.transmissionFactor();
     ubo.transmissionParams[1] = mat.hasTransmissionTexture() ? 1.0f : 0.0f;
@@ -93,17 +96,12 @@ MaterialUBO toMaterialUBO(const Material& mat)
     ubo.clearcoatTexCoords[0] = static_cast<float>(mat.clearcoatTexCoord());
     ubo.clearcoatTexCoords[1] = static_cast<float>(mat.clearcoatRoughnessTexCoord());
     ubo.clearcoatTexCoords[2] = static_cast<float>(mat.clearcoatNormalTexCoord());
-    packUv(ubo.uvClearcoat, mat.clearcoatUvTransform());
-    packUv(ubo.uvClearcoatRoughness, mat.clearcoatRoughnessUvTransform());
-    packUv(ubo.uvClearcoatNormal, mat.clearcoatNormalUvTransform());
-    ubo.clearcoatRotations[0] = mat.clearcoatUvTransform().rotation;
-    ubo.clearcoatRotations[1] = mat.clearcoatRoughnessUvTransform().rotation;
-    ubo.clearcoatRotations[2] = mat.clearcoatNormalUvTransform().rotation;
 
     ubo.volumeParams[0] = mat.thicknessFactor();
     ubo.volumeParams[1] = mat.hasThicknessTexture() ? 1.0f : 0.0f;
     ubo.volumeParams[2] = static_cast<float>(mat.thicknessTexCoord());
-    ubo.volumeParams[3] = mat.thicknessUvTransform().rotation;
+    // volumeParams[3] reserved — thickness rotation now lives in
+    // uv[Thickness].rotation, written by writeUv above.
     ubo.attenuation[0] = mat.attenuationColor().r();
     ubo.attenuation[1] = mat.attenuationColor().g();
     ubo.attenuation[2] = mat.attenuationColor().b();
@@ -112,7 +110,6 @@ MaterialUBO toMaterialUBO(const Material& mat)
     ubo.attenuation[3] = attenuationDistance <= 0.0f || !std::isfinite(attenuationDistance)
                              ? 1.0e6f
                              : attenuationDistance;
-    packUv(ubo.uvThickness, mat.thicknessUvTransform());
     return ubo;
 }
 

@@ -12,6 +12,28 @@ layout(binding = 0) uniform UBO {
     int hasSkin;
 } ubo;
 
+// KHR_texture_transform packed per material texture slot. `offsetScale.xy` is
+// the UV offset; `offsetScale.zw` is the UV scale (identity = 0,0,1,1).
+// `rotation` is radians CCW. Matches std140 stride of the matching C++ struct
+// in render/ubo.hpp (16-byte vec4 + float, padded to 32 bytes).
+struct UvXform {
+    vec4 offsetScale;
+    float rotation;
+};
+
+// Material texture slots, ordered to match MaterialTextureSlot in
+// render/descriptor_bindings.hpp. uv[SLOT_*] indexes the UV-xform array.
+const int SLOT_BASE_COLOUR = 0;
+const int SLOT_EMISSIVE = 1;
+const int SLOT_NORMAL = 2;
+const int SLOT_METALLIC_ROUGHNESS = 3;
+const int SLOT_OCCLUSION = 4;
+const int SLOT_TRANSMISSION = 5;
+const int SLOT_CLEARCOAT = 6;
+const int SLOT_CLEARCOAT_ROUGHNESS = 7;
+const int SLOT_CLEARCOAT_NORMAL = 8;
+const int SLOT_THICKNESS = 9;
+
 layout(binding = 1) uniform MaterialUBO {
     vec4 diffuseAlpha;
     vec4 emissiveRoughness;
@@ -21,17 +43,6 @@ layout(binding = 1) uniform MaterialUBO {
     ivec4 extraFlags;
     // x=baseColor, y=emissive, z=normal, w=metallicRoughness UV-set index.
     ivec4 texCoordIndices;
-    // KHR_texture_transform per-slot offset.xy + scale.xy. Identity by default.
-    vec4 uvBaseColor;
-    vec4 uvEmissive;
-    vec4 uvNormal;
-    vec4 uvMetallicRoughness;
-    vec4 uvOcclusion;
-    vec4 uvTransmission;
-    // Rotations (radians, CCW) packed: x=base, y=emissive, z=normal, w=mr.
-    vec4 uvRotations;
-    // .x = occlusion rotation, .y = transmission rotation; rest reserved.
-    vec4 uvRotationsExtra;
     // KHR_materials_transmission + KHR_materials_ior. .x = transmissionFactor,
     // .y = texture-present flag, .z = transmission texCoord index, .w = ior.
     vec4 transmissionParams;
@@ -43,23 +54,16 @@ layout(binding = 1) uniform MaterialUBO {
     // .x = factor texCoord, .y = roughness texCoord, .z = normal texCoord
     // (encoded as floats).
     vec4 clearcoatTexCoords;
-    // KHR_texture_transform per clearcoat slot (offset.xy + scale.xy).
-    vec4 uvClearcoat;
-    vec4 uvClearcoatRoughness;
-    vec4 uvClearcoatNormal;
-    // Rotations (radians, CCW): .x = factor, .y = roughness, .z = normal.
-    vec4 clearcoatRotations;
     // KHR_materials_volume.
     //   .x = thicknessFactor (world units, scaled by node max scale)
     //   .y = thickness texture present (0 / 1)
     //   .z = thickness texCoord index (0 / 1)
-    //   .w = thickness rotation (radians, CCW)
+    //   .w = reserved (thickness rotation lives in uv[SLOT_THICKNESS].rotation).
     vec4 volumeParams;
     // .rgb = attenuationColor, .a = attenuationDistance (huge finite when
     // the spec says +infinity — see Object::toMaterialUBO).
     vec4 attenuation;
-    // KHR_texture_transform offset.xy + scale.xy for thickness slot.
-    vec4 uvThickness;
+    UvXform uv[10];
 } material;
 
 layout(binding = 2) uniform sampler2D texSampler;
@@ -345,7 +349,8 @@ void main() {
     vec3 N;
     if (material.textureFlags.z == 1) {
         vec2 uvNormal = applyUvTransform(pickUv(material.texCoordIndices.z),
-                                         material.uvNormal, material.uvRotations.z);
+                                         material.uv[SLOT_NORMAL].offsetScale,
+                                         material.uv[SLOT_NORMAL].rotation);
         vec3 mapNormal = texture(normalMap, uvNormal).rgb * 2.0 - 1.0;
         mapNormal.xy *= material.materialParams.y;
         N = normalize(fragTBN * mapNormal);
@@ -369,7 +374,8 @@ void main() {
     vec4 texColor = vec4(1.0);
     if (material.textureFlags.x == 1) {
         vec2 uvBase = applyUvTransform(pickUv(material.texCoordIndices.x),
-                                       material.uvBaseColor, material.uvRotations.x);
+                                       material.uv[SLOT_BASE_COLOUR].offsetScale,
+                                       material.uv[SLOT_BASE_COLOUR].rotation);
         texColor = texture(texSampler, uvBase);
     }
     vec3 baseColor = material.diffuseAlpha.rgb * fragColor * texColor.rgb;
@@ -398,7 +404,8 @@ void main() {
     float metallic = material.materialParams.x;
     if (material.textureFlags.w == 1) {
         vec2 uvMr = applyUvTransform(pickUv(material.texCoordIndices.w),
-                                     material.uvMetallicRoughness, material.uvRotations.w);
+                                     material.uv[SLOT_METALLIC_ROUGHNESS].offsetScale,
+                                     material.uv[SLOT_METALLIC_ROUGHNESS].rotation);
         vec4 mrSample = texture(metallicRoughnessMap, uvMr);
         roughness *= mrSample.g;
         metallic *= mrSample.b;
@@ -417,13 +424,14 @@ void main() {
     float ccNormalScale = material.clearcoatParams.z;
     if (material.clearcoatFlags.x > 0.5) {
         vec2 ccUv = applyUvTransform(pickUv(int(material.clearcoatTexCoords.x)),
-                                     material.uvClearcoat, material.clearcoatRotations.x);
+                                     material.uv[SLOT_CLEARCOAT].offsetScale,
+                                     material.uv[SLOT_CLEARCOAT].rotation);
         clearcoat *= texture(clearcoatMap, ccUv).r;
     }
     if (material.clearcoatFlags.y > 0.5) {
         vec2 ccRuv = applyUvTransform(pickUv(int(material.clearcoatTexCoords.y)),
-                                      material.uvClearcoatRoughness,
-                                      material.clearcoatRotations.y);
+                                      material.uv[SLOT_CLEARCOAT_ROUGHNESS].offsetScale,
+                                      material.uv[SLOT_CLEARCOAT_ROUGHNESS].rotation);
         ccRough *= texture(clearcoatRoughnessMap, ccRuv).g;
     }
     ccRough = clamp(ccRough, 0.04, 1.0);
@@ -432,8 +440,8 @@ void main() {
     vec3 N_cc = N;
     if (material.clearcoatFlags.z > 0.5) {
         vec2 ccNuv = applyUvTransform(pickUv(int(material.clearcoatTexCoords.z)),
-                                      material.uvClearcoatNormal,
-                                      material.clearcoatRotations.z);
+                                      material.uv[SLOT_CLEARCOAT_NORMAL].offsetScale,
+                                      material.uv[SLOT_CLEARCOAT_NORMAL].rotation);
         vec3 cnSamp = texture(clearcoatNormalMap, ccNuv).rgb * 2.0 - 1.0;
         cnSamp.xy *= ccNormalScale;
         N_cc = normalize(fragTBN * cnSamp);
@@ -633,7 +641,8 @@ void main() {
         // Equivalent to ao = mix(1.0, sampled, strength) when applied as a
         // multiplier downstream.
         vec2 uvOcc = applyUvTransform(pickUv(material.extraFlags.y),
-                                      material.uvOcclusion, material.uvRotationsExtra.x);
+                                      material.uv[SLOT_OCCLUSION].offsetScale,
+                                      material.uv[SLOT_OCCLUSION].rotation);
         float sampled = texture(occlusionMap, uvOcc).r;
         ao = mix(1.0, sampled, material.materialParams.w);
     }
@@ -651,7 +660,8 @@ void main() {
     vec3 emissiveTerm = material.emissiveRoughness.rgb;
     if (material.textureFlags.y == 1) {
         vec2 uvEm = applyUvTransform(pickUv(material.texCoordIndices.y),
-                                     material.uvEmissive, material.uvRotations.y);
+                                     material.uv[SLOT_EMISSIVE].offsetScale,
+                                     material.uv[SLOT_EMISSIVE].rotation);
         emissiveTerm *= texture(emissiveMap, uvEm).rgb;
     }
 
@@ -663,7 +673,8 @@ void main() {
     float transmission = material.transmissionParams.x;
     if (material.transmissionParams.y > 0.5) {
         vec2 uvTrans = applyUvTransform(pickUv(int(material.transmissionParams.z)),
-                                        material.uvTransmission, material.uvRotationsExtra.y);
+                                        material.uv[SLOT_TRANSMISSION].offsetScale,
+                                        material.uv[SLOT_TRANSMISSION].rotation);
         transmission *= texture(transmissionMap, uvTrans).r;
     }
 
@@ -679,7 +690,8 @@ void main() {
         float thickness = material.volumeParams.x;
         if (material.volumeParams.y > 0.5) {
             vec2 uvThick = applyUvTransform(pickUv(int(material.volumeParams.z)),
-                                            material.uvThickness, material.volumeParams.w);
+                                            material.uv[SLOT_THICKNESS].offsetScale,
+                                            material.uv[SLOT_THICKNESS].rotation);
             thickness *= texture(thicknessMap, uvThick).g;
         }
         vec3 modelScale = vec3(length(ubo.model[0].xyz),

@@ -18,6 +18,17 @@ struct UniformBufferObject
     int _pad3{0};
 };
 
+// KHR_texture_transform packed per material texture slot. `offsetScale.xy` is
+// the UV offset; `offsetScale.zw` is the UV scale (identity = 0,0,1,1).
+// `rotation` is radians CCW. Layout matches the std140 stride (16-byte vec4
+// + float, padded to 32 bytes) of the matching GLSL struct in shader.frag.
+struct UvXform
+{
+    alignas(16) float offsetScale[4]{0.0f, 0.0f, 1.0f, 1.0f};
+    float rotation{0.0f};
+    float _pad[3]{};
+};
+
 struct MaterialUBO
 {
     alignas(16) float diffuseAlpha[4]{};
@@ -32,18 +43,6 @@ struct MaterialUBO
     // override read TEXCOORD_0 as before. Layout: x=baseColor, y=emissive,
     // z=normal, w=metallicRoughness. Occlusion lives in extraFlags.y.
     alignas(16) int texCoordIndices[4]{};
-    // KHR_texture_transform per-slot (offset.xy + scale.xy). Defaults to
-    // identity (offset 0, scale 1). Rotations live in uvRotations[*] below.
-    alignas(16) float uvBaseColor[4]{0.0f, 0.0f, 1.0f, 1.0f};
-    alignas(16) float uvEmissive[4]{0.0f, 0.0f, 1.0f, 1.0f};
-    alignas(16) float uvNormal[4]{0.0f, 0.0f, 1.0f, 1.0f};
-    alignas(16) float uvMetallicRoughness[4]{0.0f, 0.0f, 1.0f, 1.0f};
-    alignas(16) float uvOcclusion[4]{0.0f, 0.0f, 1.0f, 1.0f};
-    alignas(16) float uvTransmission[4]{0.0f, 0.0f, 1.0f, 1.0f};
-    // x=base, y=emissive, z=normal, w=metallicRoughness rotation (radians,
-    // CCW). Occlusion's rotation in uvRotationsExtra.x; transmission's in .y.
-    alignas(16) float uvRotations[4]{};
-    alignas(16) float uvRotationsExtra[4]{};
     // KHR_materials_transmission + KHR_materials_ior. .x = transmissionFactor;
     // .y = transmission texture present (0 / 1); .z = transmission texCoord
     // index (0 / 1); .w = ior (KHR_materials_ior; default 1.5 per spec).
@@ -57,17 +56,11 @@ struct MaterialUBO
     // .x = factor texCoord, .y = roughness texCoord, .z = normal texCoord,
     // .w reserved (as floats — saves an alignas slot vs int4).
     alignas(16) float clearcoatTexCoords[4]{};
-    // KHR_texture_transform per clearcoat slot. offset.xy + scale.xy each.
-    alignas(16) float uvClearcoat[4]{0.0f, 0.0f, 1.0f, 1.0f};
-    alignas(16) float uvClearcoatRoughness[4]{0.0f, 0.0f, 1.0f, 1.0f};
-    alignas(16) float uvClearcoatNormal[4]{0.0f, 0.0f, 1.0f, 1.0f};
-    // Rotations (radians, CCW): .x = factor, .y = roughness, .z = normal.
-    alignas(16) float clearcoatRotations[4]{};
     // KHR_materials_volume.
     //   .x = thicknessFactor (world units, scaled in shader by node max scale)
     //   .y = thickness texture present (0/1)
     //   .z = thickness texCoord index (0/1)
-    //   .w = thickness rotation (radians, CCW)
+    //   .w reserved (thickness rotation lives in uv[Thickness].rotation).
     alignas(16) float volumeParams[4]{};
     // .rgb = attenuationColor (default 1,1,1 — no absorption).
     // .a   = attenuationDistance in world units. Default packs the spec's
@@ -75,8 +68,9 @@ struct MaterialUBO
     //        exp(-coeff * d) collapses to 1 for thick surfaces without
     //        propagating inf through GLSL.
     alignas(16) float attenuation[4]{1.0f, 1.0f, 1.0f, 1.0e6f};
-    // KHR_texture_transform offset.xy + scale.xy for thickness slot.
-    alignas(16) float uvThickness[4]{0.0f, 0.0f, 1.0f, 1.0f};
+    // KHR_texture_transform per material texture slot. Indexed by
+    // MaterialTextureSlot enum order (BaseColour..Thickness, 0..9).
+    alignas(16) UvXform uv[10]{};
 };
 
 struct SkinUBO
