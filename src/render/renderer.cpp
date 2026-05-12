@@ -134,9 +134,10 @@ Renderer::Renderer(const Window& window, std::string environmentPath, bool debug
     prefilteredCubemapHandle_ = environmentPrecompute.prefilteredCubemap();
     brdfLutHandle_ = environmentPrecompute.brdfLut();
     skyboxDescSets_ = environmentPrecompute.skyboxDescriptorSets();
-    resources_.irradianceMap(irradianceCubemapHandle_);
-    resources_.prefilteredMap(prefilteredCubemapHandle_);
-    resources_.brdfLut(brdfLutHandle_);
+    auto& shared = resources_.sharedTextures();
+    shared.irradianceMap = irradianceCubemapHandle_;
+    shared.prefilteredMap = prefilteredCubemapHandle_;
+    shared.brdfLut = brdfLutHandle_;
     imagesInFlight_.assign(swapchain_.images().size(), vk::Fence{});
 }
 
@@ -148,12 +149,62 @@ void Renderer::updateLightData(Vec3 cameraPosition, Vec3 cameraTarget, float asp
     // (glTF/KHR convention), so the shadow camera must look down that vector.
     // The forward shader negates it separately when it needs surface-to-light.
     const Lighting* primaryDirectional = primaryDirectionalLight(lights);
-    const Vec3 lightDir = primaryDirectional != nullptr
-                              ? Vec3::normalise(primaryDirectional->worldDirection)
-                              : Vec3::normalise(Vec3{1.0f, -1.0f, 1.0f});
-    directionalLightDir_ = lightDir;
+    directionalLightDir_ = primaryDirectional != nullptr
+                               ? Vec3::normalise(primaryDirectional->worldDirection)
+                               : Vec3::normalise(Vec3{1.0f, -1.0f, 1.0f});
 
+    LightUBO lightData{};
+    computeShadowCascades(lightData, cameraPosition, cameraTarget, aspect);
+    for (Mat4& m : lightData.selfShadowViewProj)
+    {
+        m = Mat4::identity();
+    }
+
+    // Pack lights into the UBO array. The primary directional (CSM source)
+    // goes first so the shader can branch on i==0 for the shadow lookup.
+    int slot = 0;
+    activeSpotCasters_ = 0;
+    activePointCasters_ = 0;
+    auto packAndAssign = [&](const Lighting& L)
+    {
+        const int packed = packLight(lightData, slot, L);
+        if (packed < 0)
+        {
+            return;
+        }
+        if (L.type == 2)
+        {
+            assignSpotShadow(lightData, packed, L);
+        }
+        else if (L.type == 1)
+        {
+            assignPointShadow(lightData, packed, L);
+        }
+    };
+    if (primaryDirectional != nullptr)
+    {
+        packAndAssign(*primaryDirectional);
+    }
+    for (const auto& L : lights)
+    {
+        if (&L == primaryDirectional)
+        {
+            continue;
+        }
+        packAndAssign(L);
+    }
+    lightData.lightCount = slot;
+
+    writeIblAndDebugParams(lightData);
+    lightData_ = lightData;
+    std::memcpy(lightUbo_.mapped[currentFrame_], &lightData_, sizeof(lightData_));
+}
+
+void Renderer::computeShadowCascades(LightUBO& out, Vec3 cameraPosition, Vec3 cameraTarget,
+                                     float aspect)
+{
     // Camera basis + light basis (shared by every cascade fit).
+    const Vec3 lightDir = directionalLightDir_;
     const float tanHalfFov = std::tan(cameraFovRadians * 0.5f);
     const ViewBasis basis = makeViewBasis(cameraPosition, cameraTarget);
     const Vec3 lightUp = stableUpForForward(lightDir);
@@ -161,8 +212,8 @@ void Renderer::updateLightData(Vec3 cameraPosition, Vec3 cameraTarget, float asp
     const Vec3 lightUpOrtho = normaliseOr(Vec3::crossProduct(lightRight, lightDir), lightUp);
     const float shadowMapExtentF = static_cast<float>(shadowMapExtent);
 
-    // Bounding-sphere fit for a single sub-frustum slice. Matches the Stage 1
-    // fit — extracted so CSM can reuse it per cascade.
+    // Bounding-sphere fit for a single sub-frustum slice. Captures the light
+    // basis above, called once per cascade.
     auto fitCascade = [&](float sliceNear, float sliceFar) -> Mat4
     {
         const float nearH = tanHalfFov * sliceNear;
@@ -212,8 +263,8 @@ void Renderer::updateLightData(Vec3 cameraPosition, Vec3 cameraTarget, float asp
         return lightProj * lightView;
     };
 
-    // Log-uniform cascade splits (λ=0.5) — Practical Split Scheme. Keeps close
-    // cascades small for near-camera detail while still covering shadowFarPlane.
+    // Log-uniform cascade splits — Practical Split Scheme. Keeps close cascades
+    // small for near-camera detail while still covering shadowFarPlane.
     float splits[shadowCascadeCount];
     for (uint32_t i = 0; i < shadowCascadeCount; ++i)
     {
@@ -232,114 +283,90 @@ void Renderer::updateLightData(Vec3 cameraPosition, Vec3 cameraTarget, float asp
         sliceNear = splits[i];
     }
 
-    // Reset the shadow matrix array each frame, then write cascades, spots,
-    // and point faces in their fixed slots.
+    // Reset the shadow matrix array each frame, then write cascade slots.
     shadowViewProjs_.fill(Mat4::identity());
-    LightUBO lightData{};
     for (uint32_t i = 0; i < shadowCascadeCount; ++i)
     {
         shadowViewProjs_[SHADOW_CASCADE_MATRIX_BASE + i] = cascadeViewProj[i];
-        lightData.cascadeViewProj[i] = cascadeViewProj[i];
-        lightData.cascadeSplits[i] = splits[i];
+        out.cascadeViewProj[i] = cascadeViewProj[i];
+        out.cascadeSplits[i] = splits[i];
     }
-    for (Mat4& m : lightData.selfShadowViewProj)
-    {
-        m = Mat4::identity();
-    }
+}
 
-    // Pack lights into the UBO array. The primary directional (CSM source)
-    // goes first so the shader can branch on i==0 for the shadow lookup.
-    int slot = 0;
-    int activeSpotCasters = 0;
-    int activePointCasters = 0;
-    auto assignShadow = [&](int packedSlot, const Lighting& L)
+void Renderer::assignSpotShadow(LightUBO& out, int packedSlot, const Lighting& light)
+{
+    if (activeSpotCasters_ >= MAX_SPOT_SHADOW_CASTERS)
     {
-        if (packedSlot < 0)
-        {
-            return;
-        }
-        if (L.type == 2 && activeSpotCasters < MAX_SPOT_SHADOW_CASTERS)
-        {
-            const int shadowIndex = activeSpotCasters++;
-            const float fov =
-                std::max(2.0f * std::acos(std::clamp(L.outerConeCos, -1.0f, 1.0f)), 0.01f);
-            const float far = L.range > 0.0f ? L.range : pointShadowInfiniteRangeFallback;
-            const Mat4 proj = Mat4::perspective(fov, 1.0f, pointShadowNearPlane, far);
-            const Vec3 dir = Vec3::normalise(L.worldDirection);
-            const Vec3 up = stableUpForForward(dir);
-            const Mat4 view = Mat4::lookAt(L.worldPosition, L.worldPosition + dir, up);
-            const Mat4 viewProj = proj * view;
-            shadowViewProjs_[SHADOW_SPOT_MATRIX_BASE + shadowIndex] = viewProj;
-            lightData.spotViewProj[shadowIndex] = viewProj;
-            lightData.lights[packedSlot].cone[2] = static_cast<float>(shadowIndex);
-        }
-        else if (L.type == 1 && activePointCasters < MAX_POINT_SHADOW_CASTERS)
-        {
-            const int shadowIndex = activePointCasters++;
-            const float far = L.range > 0.0f ? L.range : pointShadowInfiniteRangeFallback;
-            const Mat4 proj = Mat4::perspective(0.5f * pi, 1.0f, pointShadowNearPlane, far);
-            // Vulkan cubemap face order: +X, -X, +Y, -Y, +Z, -Z. Up vectors
-            // match the IBL prefilter convention used elsewhere in the engine
-            // so cube sampling stays consistent across face boundaries.
-            constexpr Vec3 faceForward[6] = {
-                Vec3{1.0f, 0.0f, 0.0f},  Vec3{-1.0f, 0.0f, 0.0f}, Vec3{0.0f, 1.0f, 0.0f},
-                Vec3{0.0f, -1.0f, 0.0f}, Vec3{0.0f, 0.0f, 1.0f},  Vec3{0.0f, 0.0f, -1.0f},
-            };
-            constexpr Vec3 faceUp[6] = {
-                Vec3{0.0f, -1.0f, 0.0f}, Vec3{0.0f, -1.0f, 0.0f}, Vec3{0.0f, 0.0f, 1.0f},
-                Vec3{0.0f, 0.0f, -1.0f}, Vec3{0.0f, -1.0f, 0.0f}, Vec3{0.0f, -1.0f, 0.0f},
-            };
-            for (uint32_t face = 0; face < 6; ++face)
-            {
-                const Mat4 view = Mat4::lookAt(L.worldPosition, L.worldPosition + faceForward[face],
-                                               faceUp[face]);
-                shadowViewProjs_[SHADOW_POINT_MATRIX_BASE + 6 * shadowIndex + face] = proj * view;
-            }
-            lightData.lights[packedSlot].cone[2] = static_cast<float>(shadowIndex);
-            // Stash the effective range used for shadow projection so the
-            // shadow pass push-constant + main-shader compare value agree.
-            lightData.lights[packedSlot].direction[3] = far;
-            pointCasters_[shadowIndex] = PointShadowCaster{L.worldPosition, far};
-        }
+        return;
+    }
+    const int shadowIndex = activeSpotCasters_++;
+    const float fov =
+        std::max(2.0f * std::acos(std::clamp(light.outerConeCos, -1.0f, 1.0f)), 0.01f);
+    const float far = light.range > 0.0f ? light.range : pointShadowInfiniteRangeFallback;
+    const Mat4 proj = Mat4::perspective(fov, 1.0f, pointShadowNearPlane, far);
+    const Vec3 dir = Vec3::normalise(light.worldDirection);
+    const Vec3 up = stableUpForForward(dir);
+    const Mat4 view = Mat4::lookAt(light.worldPosition, light.worldPosition + dir, up);
+    const Mat4 viewProj = proj * view;
+    shadowViewProjs_[SHADOW_SPOT_MATRIX_BASE + shadowIndex] = viewProj;
+    out.spotViewProj[shadowIndex] = viewProj;
+    out.lights[packedSlot].cone[2] = static_cast<float>(shadowIndex);
+}
+
+void Renderer::assignPointShadow(LightUBO& out, int packedSlot, const Lighting& light)
+{
+    if (activePointCasters_ >= MAX_POINT_SHADOW_CASTERS)
+    {
+        return;
+    }
+    const int shadowIndex = activePointCasters_++;
+    const float far = light.range > 0.0f ? light.range : pointShadowInfiniteRangeFallback;
+    const Mat4 proj = Mat4::perspective(0.5f * pi, 1.0f, pointShadowNearPlane, far);
+    // Vulkan cubemap face order: +X, -X, +Y, -Y, +Z, -Z. Up vectors match the
+    // IBL prefilter convention used elsewhere in the engine so cube sampling
+    // stays consistent across face boundaries.
+    constexpr Vec3 faceForward[6] = {
+        Vec3{1.0f, 0.0f, 0.0f},  Vec3{-1.0f, 0.0f, 0.0f}, Vec3{0.0f, 1.0f, 0.0f},
+        Vec3{0.0f, -1.0f, 0.0f}, Vec3{0.0f, 0.0f, 1.0f},  Vec3{0.0f, 0.0f, -1.0f},
     };
-    if (primaryDirectional != nullptr)
+    constexpr Vec3 faceUp[6] = {
+        Vec3{0.0f, -1.0f, 0.0f}, Vec3{0.0f, -1.0f, 0.0f}, Vec3{0.0f, 0.0f, 1.0f},
+        Vec3{0.0f, 0.0f, -1.0f}, Vec3{0.0f, -1.0f, 0.0f}, Vec3{0.0f, -1.0f, 0.0f},
+    };
+    for (uint32_t face = 0; face < 6; ++face)
     {
-        const int packed = packLight(lightData, slot, *primaryDirectional);
-        assignShadow(packed, *primaryDirectional);
+        const Mat4 view =
+            Mat4::lookAt(light.worldPosition, light.worldPosition + faceForward[face], faceUp[face]);
+        shadowViewProjs_[SHADOW_POINT_MATRIX_BASE + 6 * shadowIndex + face] = proj * view;
     }
-    for (const auto& L : lights)
-    {
-        if (&L == primaryDirectional)
-        {
-            continue;
-        }
-        const int packed = packLight(lightData, slot, L);
-        assignShadow(packed, L);
-    }
-    lightData.lightCount = slot;
-    activeSpotCasters_ = activeSpotCasters;
-    activePointCasters_ = activePointCasters;
-    uint32_t mipLevels = prefilteredCubemapHandle_ != NullTexture
-                             ? resources_.textureMipLevels(prefilteredCubemapHandle_)
-                             : 1u;
-    lightData.iblParams[0] = static_cast<float>(mipLevels > 0 ? mipLevels - 1 : 0);
-    lightData.iblParams[1] = diffuseIblStrength;
-    lightData.iblParams[2] = specularIblStrength;
-    lightData.shadowParams[0] = shadowMinBias;
-    lightData.shadowParams[1] = shadowSlopeBias;
-    lightData.shadowParams[2] = shadowFilterRadius;
-    lightData.shadowParams[3] = shadowNormalOffset;
-    lightData.pointSpotShadowParams[0] = pointSpotShadowMinBias;
-    lightData.pointSpotShadowParams[1] = pointSpotShadowSlopeBias;
-    lightData.environmentParams[0] = skyboxIntensity;
-    lightData.environmentParams[1] = environmentShadowStrength;
-    lightData.environmentParams[2] =
+    out.lights[packedSlot].cone[2] = static_cast<float>(shadowIndex);
+    // Stash the effective range used for shadow projection so the shadow-pass
+    // push-constant and the main-shader compare value agree.
+    out.lights[packedSlot].direction[3] = far;
+    pointCasters_[shadowIndex] = PointShadowCaster{light.worldPosition, far};
+}
+
+void Renderer::writeIblAndDebugParams(LightUBO& out) const
+{
+    const uint32_t mipLevels = prefilteredCubemapHandle_ != NullTexture
+                                   ? resources_.textureMipLevels(prefilteredCubemapHandle_)
+                                   : 1u;
+    out.iblParams[0] = static_cast<float>(mipLevels > 0 ? mipLevels - 1 : 0);
+    out.iblParams[1] = diffuseIblStrength;
+    out.iblParams[2] = specularIblStrength;
+    out.shadowParams[0] = shadowMinBias;
+    out.shadowParams[1] = shadowSlopeBias;
+    out.shadowParams[2] = shadowFilterRadius;
+    out.shadowParams[3] = shadowNormalOffset;
+    out.pointSpotShadowParams[0] = pointSpotShadowMinBias;
+    out.pointSpotShadowParams[1] = pointSpotShadowSlopeBias;
+    out.environmentParams[0] = skyboxIntensity;
+    out.environmentParams[1] = environmentShadowStrength;
+    out.environmentParams[2] =
         debugNormals_
             ? 1.0f
             : (debugNdotL_ ? 2.0f : (debugShadow_ ? 3.0f : (debugShadowDepth_ ? 4.0f : 0.0f)));
-    lightData.environmentParams[3] = noShadows_ ? 1.0f : 0.0f;
-    lightData_ = lightData;
-    std::memcpy(lightUbo_.mapped[currentFrame_], &lightData_, sizeof(lightData_));
+    out.environmentParams[3] = noShadows_ ? 1.0f : 0.0f;
 }
 
 void Renderer::assignSelfShadowSlots(std::vector<DrawCommand>& drawCommands)

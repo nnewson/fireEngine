@@ -141,13 +141,14 @@ Shadows::Shadows(const Device& device, Resources& resources)
                                              pointShadowMapExtent);
 
     resources_->descriptors().shadowDescriptorSetLayout(shadowPipeline_.descriptorSetLayout());
-    resources_->shadowMap(shadowMapHandle_);
-    resources_->worldShadowMap(worldShadowMapHandle_);
-    resources_->selfShadowFirstMap(selfShadowFirstMapHandle_);
-    resources_->selfShadowMap(selfShadowMapHandle_);
-    resources_->spotShadowMap(spotShadowMapHandle_);
-    resources_->pointShadowMap(pointShadowMapHandle_);
-    resources_->shadowDebugImage(shadowColourHandle_);
+    auto& shared = resources_->sharedTextures();
+    shared.shadowMap = shadowMapHandle_;
+    shared.worldShadowMap = worldShadowMapHandle_;
+    shared.selfShadowFirstMap = selfShadowFirstMapHandle_;
+    shared.selfShadowMap = selfShadowMapHandle_;
+    shared.spotShadowMap = spotShadowMapHandle_;
+    shared.pointShadowMap = pointShadowMapHandle_;
+    shared.shadowDebugImage = shadowColourHandle_;
 }
 
 void Shadows::recordPass(vk::CommandBuffer cmd, const std::vector<DrawCommand>& shadowDraws,

@@ -102,7 +102,7 @@ void Transmission::rebuildSceneColorChain()
 
     sceneColorHandle_ =
         resources_->createSceneColorTarget(extent.width, extent.height, sceneColorMipLevels_);
-    resources_->sceneColor(sceneColorHandle_);
+    resources_->sharedTextures().sceneColor = sceneColorHandle_;
 }
 
 void Transmission::recordSceneColorCapture(vk::CommandBuffer cmd) const

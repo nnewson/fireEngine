@@ -103,6 +103,21 @@ private:
 
     void updateLightData(Vec3 cameraPosition, Vec3 cameraTarget, float aspect,
                          std::span<const Lighting> lights);
+    // Resets shadowViewProjs_ and writes the per-cascade matrix slots. Fills
+    // out.cascadeViewProj / out.cascadeSplits. Reads directionalLightDir_ for
+    // the light basis, so the caller must set it before calling.
+    void computeShadowCascades(LightUBO& out, Vec3 cameraPosition, Vec3 cameraTarget, float aspect);
+    // Registers the packed light as a spot caster if there is room (advancing
+    // activeSpotCasters_) and writes the matching matrices into out and
+    // shadowViewProjs_. No-op if the spot caster cap is hit.
+    void assignSpotShadow(LightUBO& out, int packedSlot, const Lighting& light);
+    // Registers the packed light as a point caster if there is room (advancing
+    // activePointCasters_ and pointCasters_) and writes its six cube-face
+    // matrices into shadowViewProjs_. No-op if the point caster cap is hit.
+    void assignPointShadow(LightUBO& out, int packedSlot, const Lighting& light);
+    // Fills out.iblParams / out.shadowParams / out.environmentParams from the
+    // engine-wide constants plus the debug-flag members.
+    void writeIblAndDebugParams(LightUBO& out) const;
     void assignSelfShadowSlots(std::vector<DrawCommand>& drawCommands);
     [[nodiscard]] DrawBuckets buildDrawBuckets(const std::vector<DrawCommand>& drawCommands) const;
     void recordDrawBucket(vk::CommandBuffer cmd, const std::vector<DrawCommand>& bucket,

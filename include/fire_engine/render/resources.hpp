@@ -175,118 +175,39 @@ public:
         return lightBuffers_;
     }
 
-    // --- Shared shadow map (bound to every forward descriptor set) ---
-
-    void shadowMap(TextureHandle handle) noexcept
+    // --- Shared textures bound to every forward / shadow descriptor set ---
+    //
+    // Each entry is populated once during renderer setup (Renderer for IBL,
+    // Shadows for the shadow-pass attachments, Transmission for sceneColor)
+    // and then read by descriptor-set writers and per-draw resolves. The
+    // handles live together so callers can pass a single struct reference
+    // through to descriptor-build helpers instead of threading eleven
+    // arguments.
+    struct SharedTextures
     {
-        shadowMap_ = handle;
+        TextureHandle shadowMap{NullTexture};
+        TextureHandle worldShadowMap{NullTexture};
+        TextureHandle selfShadowMap{NullTexture};
+        TextureHandle selfShadowFirstMap{NullTexture};
+        TextureHandle spotShadowMap{NullTexture};
+        TextureHandle pointShadowMap{NullTexture};
+        TextureHandle shadowDebugImage{NullTexture};
+        TextureHandle irradianceMap{NullTexture};
+        TextureHandle prefilteredMap{NullTexture};
+        TextureHandle brdfLut{NullTexture};
+        // KHR_materials_transmission F3 — captured post-opaque scene-colour
+        // mip chain. Bound at forward descriptor binding 20.
+        TextureHandle sceneColor{NullTexture};
+    };
+
+    [[nodiscard]] SharedTextures& sharedTextures() noexcept
+    {
+        return shared_;
     }
 
-    [[nodiscard]] TextureHandle shadowMap() const noexcept
+    [[nodiscard]] const SharedTextures& sharedTextures() const noexcept
     {
-        return shadowMap_;
-    }
-
-    void worldShadowMap(TextureHandle handle) noexcept
-    {
-        worldShadowMap_ = handle;
-    }
-
-    [[nodiscard]] TextureHandle worldShadowMap() const noexcept
-    {
-        return worldShadowMap_;
-    }
-
-    void selfShadowMap(TextureHandle handle) noexcept
-    {
-        selfShadowMap_ = handle;
-    }
-
-    [[nodiscard]] TextureHandle selfShadowMap() const noexcept
-    {
-        return selfShadowMap_;
-    }
-
-    void selfShadowFirstMap(TextureHandle handle) noexcept
-    {
-        selfShadowFirstMap_ = handle;
-    }
-
-    [[nodiscard]] TextureHandle selfShadowFirstMap() const noexcept
-    {
-        return selfShadowFirstMap_;
-    }
-
-    void spotShadowMap(TextureHandle handle) noexcept
-    {
-        spotShadowMap_ = handle;
-    }
-
-    [[nodiscard]] TextureHandle spotShadowMap() const noexcept
-    {
-        return spotShadowMap_;
-    }
-
-    void pointShadowMap(TextureHandle handle) noexcept
-    {
-        pointShadowMap_ = handle;
-    }
-
-    [[nodiscard]] TextureHandle pointShadowMap() const noexcept
-    {
-        return pointShadowMap_;
-    }
-
-    void shadowDebugImage(TextureHandle handle) noexcept
-    {
-        shadowDebugImage_ = handle;
-    }
-
-    [[nodiscard]] TextureHandle shadowDebugImage() const noexcept
-    {
-        return shadowDebugImage_;
-    }
-
-    void irradianceMap(TextureHandle handle) noexcept
-    {
-        irradianceMap_ = handle;
-    }
-
-    [[nodiscard]] TextureHandle irradianceMap() const noexcept
-    {
-        return irradianceMap_;
-    }
-
-    void prefilteredMap(TextureHandle handle) noexcept
-    {
-        prefilteredMap_ = handle;
-    }
-
-    [[nodiscard]] TextureHandle prefilteredMap() const noexcept
-    {
-        return prefilteredMap_;
-    }
-
-    void brdfLut(TextureHandle handle) noexcept
-    {
-        brdfLut_ = handle;
-    }
-
-    [[nodiscard]] TextureHandle brdfLut() const noexcept
-    {
-        return brdfLut_;
-    }
-
-    // KHR_materials_transmission F3 — captured post-opaque scene-colour
-    // mip chain. Bound at forward descriptor binding 20.
-    void sceneColor(TextureHandle handle) noexcept
-    {
-        sceneColor_ = handle;
-    }
-
-    [[nodiscard]] TextureHandle sceneColor() const noexcept
-    {
-        return sceneColor_;
+        return shared_;
     }
 
     // --- Pipeline registry ---
@@ -361,17 +282,7 @@ private:
     std::vector<PipelineEntry> pipelines_;
 
     std::array<BufferHandle, MAX_FRAMES_IN_FLIGHT> lightBuffers_{NullBuffer, NullBuffer};
-    TextureHandle shadowMap_{NullTexture};
-    TextureHandle worldShadowMap_{NullTexture};
-    TextureHandle selfShadowMap_{NullTexture};
-    TextureHandle selfShadowFirstMap_{NullTexture};
-    TextureHandle spotShadowMap_{NullTexture};
-    TextureHandle pointShadowMap_{NullTexture};
-    TextureHandle shadowDebugImage_{NullTexture};
-    TextureHandle sceneColor_{NullTexture};
-    TextureHandle irradianceMap_{NullTexture};
-    TextureHandle prefilteredMap_{NullTexture};
-    TextureHandle brdfLut_{NullTexture};
+    SharedTextures shared_;
     vk::raii::Sampler shadowDebugSampler_{nullptr};
     uint32_t nextObjectId_{1};
 };

@@ -157,16 +157,17 @@ void Object::load(Resources& resources)
 
     Resources::ObjectDescriptorRequest req;
     const auto& lightBufs = resources.lightBuffers();
-    req.shadowMap = resources.shadowMap();
-    req.worldShadowMap = resources.worldShadowMap();
-    req.selfShadowMap = resources.selfShadowMap();
-    req.spotShadowMap = resources.spotShadowMap();
-    req.pointShadowMap = resources.pointShadowMap();
-    req.shadowDebugImage = resources.shadowDebugImage();
-    req.irradianceMap = resources.irradianceMap();
-    req.prefilteredMap = resources.prefilteredMap();
-    req.brdfLut = resources.brdfLut();
-    req.sceneColor = resources.sceneColor();
+    const auto& shared = resources.sharedTextures();
+    req.shadowMap = shared.shadowMap;
+    req.worldShadowMap = shared.worldShadowMap;
+    req.selfShadowMap = shared.selfShadowMap;
+    req.spotShadowMap = shared.spotShadowMap;
+    req.pointShadowMap = shared.pointShadowMap;
+    req.shadowDebugImage = shared.shadowDebugImage;
+    req.irradianceMap = shared.irradianceMap;
+    req.prefilteredMap = shared.prefilteredMap;
+    req.brdfLut = shared.brdfLut;
+    req.sceneColor = shared.sceneColor;
     for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
     {
         req.uniformBufs[i] = uniformSet.buffers[i];
