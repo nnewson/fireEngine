@@ -142,7 +142,12 @@ PipelineConfig Pipeline::selfShadowSecondConfig(vk::RenderPass renderPass)
 {
     PipelineConfig config = shadowConfig(renderPass);
     config.fragShaderPath = "self_shadow_second.frag.spv";
-    config.cullMode = vk::CullModeFlagBits::eNone;
+    // Cull front faces so only back faces rasterise. Back faces are always
+    // behind the first-pass front-face depth by definition, so the per-fragment
+    // `currentDepth <= firstDepth + ε` discard inside the shader stops being a
+    // coin-flip on marginal fragments. The discard test remains as a safety
+    // net but should never fire on properly-oriented back faces.
+    config.cullMode = vk::CullModeFlagBits::eFront;
     return config;
 }
 

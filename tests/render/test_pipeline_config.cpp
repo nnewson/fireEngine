@@ -79,14 +79,18 @@ TEST(PipelineConfig, ShadowConfigCullsFrontFaces)
     EXPECT_TRUE(hasBinding(ShadowBinding::SelfShadowDepthSampler));
 }
 
-TEST(PipelineConfig, SelfShadowConfigsDisableCulling)
+TEST(PipelineConfig, SelfShadowConfigsCulling)
 {
+    // First pass rasterises both faces so it captures the light-facing depth.
+    // Second pass culls front faces so only back-facing fragments survive,
+    // which keeps the in-shader discard threshold from flipping on marginal
+    // fragments and producing per-pixel flicker.
     auto first = Pipeline::selfShadowFirstConfig({});
     auto second = Pipeline::selfShadowSecondConfig({});
 
     EXPECT_EQ(first.cullMode, vk::CullModeFlagBits::eNone);
     EXPECT_EQ(first.fragShaderPath, "shadow.frag.spv");
-    EXPECT_EQ(second.cullMode, vk::CullModeFlagBits::eNone);
+    EXPECT_EQ(second.cullMode, vk::CullModeFlagBits::eFront);
     EXPECT_EQ(second.fragShaderPath, "self_shadow_second.frag.spv");
 }
 
