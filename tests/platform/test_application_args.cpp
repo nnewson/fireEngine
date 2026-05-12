@@ -2,6 +2,7 @@
 
 #include <gtest/gtest.h>
 
+using fire_engine::DebugView;
 using fire_engine::parseApplicationArgs;
 
 TEST(ApplicationArgs, EmptyArgsUseDefaults)
@@ -13,11 +14,8 @@ TEST(ApplicationArgs, EmptyArgsUseDefaults)
 
     EXPECT_TRUE(args.scenePath.empty());
     EXPECT_TRUE(args.skyboxPath.empty());
-    EXPECT_FALSE(args.debugNormals);
-    EXPECT_FALSE(args.debugNdotL);
-    EXPECT_FALSE(args.debugShadow);
-    EXPECT_FALSE(args.debugShadowDepth);
-    EXPECT_FALSE(args.noShadows);
+    EXPECT_EQ(args.debug.view, DebugView::None);
+    EXPECT_FALSE(args.debug.noShadows);
 }
 
 TEST(ApplicationArgs, SingleSceneArgumentSetsScenePath)
@@ -30,11 +28,8 @@ TEST(ApplicationArgs, SingleSceneArgumentSetsScenePath)
 
     EXPECT_EQ(args.scenePath, "Fox/Fox.gltf");
     EXPECT_TRUE(args.skyboxPath.empty());
-    EXPECT_FALSE(args.debugNormals);
-    EXPECT_FALSE(args.debugNdotL);
-    EXPECT_FALSE(args.debugShadow);
-    EXPECT_FALSE(args.debugShadowDepth);
-    EXPECT_FALSE(args.noShadows);
+    EXPECT_EQ(args.debug.view, DebugView::None);
+    EXPECT_FALSE(args.debug.noShadows);
 }
 
 TEST(ApplicationArgs, SingleHdrArgumentSetsSkyboxPath)
@@ -47,11 +42,8 @@ TEST(ApplicationArgs, SingleHdrArgumentSetsSkyboxPath)
 
     EXPECT_TRUE(args.scenePath.empty());
     EXPECT_EQ(args.skyboxPath, "nightbox.hdr");
-    EXPECT_FALSE(args.debugNormals);
-    EXPECT_FALSE(args.debugNdotL);
-    EXPECT_FALSE(args.debugShadow);
-    EXPECT_FALSE(args.debugShadowDepth);
-    EXPECT_FALSE(args.noShadows);
+    EXPECT_EQ(args.debug.view, DebugView::None);
+    EXPECT_FALSE(args.debug.noShadows);
 }
 
 TEST(ApplicationArgs, SingleExrArgumentSetsSkyboxPath)
@@ -64,11 +56,8 @@ TEST(ApplicationArgs, SingleExrArgumentSetsSkyboxPath)
 
     EXPECT_TRUE(args.scenePath.empty());
     EXPECT_EQ(args.skyboxPath, "studio.EXR");
-    EXPECT_FALSE(args.debugNormals);
-    EXPECT_FALSE(args.debugNdotL);
-    EXPECT_FALSE(args.debugShadow);
-    EXPECT_FALSE(args.debugShadowDepth);
-    EXPECT_FALSE(args.noShadows);
+    EXPECT_EQ(args.debug.view, DebugView::None);
+    EXPECT_FALSE(args.debug.noShadows);
 }
 
 TEST(ApplicationArgs, TwoArgumentsKeepSceneThenSkyboxOrder)
@@ -82,11 +71,8 @@ TEST(ApplicationArgs, TwoArgumentsKeepSceneThenSkyboxOrder)
 
     EXPECT_EQ(args.scenePath, "Fox/Fox.gltf");
     EXPECT_EQ(args.skyboxPath, "nightbox.hdr");
-    EXPECT_FALSE(args.debugNormals);
-    EXPECT_FALSE(args.debugNdotL);
-    EXPECT_FALSE(args.debugShadow);
-    EXPECT_FALSE(args.debugShadowDepth);
-    EXPECT_FALSE(args.noShadows);
+    EXPECT_EQ(args.debug.view, DebugView::None);
+    EXPECT_FALSE(args.debug.noShadows);
 }
 
 TEST(ApplicationArgs, DebugNormalsFlagSetsToggle)
@@ -97,10 +83,7 @@ TEST(ApplicationArgs, DebugNormalsFlagSetsToggle)
 
     const auto args = parseApplicationArgs(2, argv);
 
-    EXPECT_TRUE(args.debugNormals);
-    EXPECT_FALSE(args.debugNdotL);
-    EXPECT_FALSE(args.debugShadow);
-    EXPECT_FALSE(args.debugShadowDepth);
+    EXPECT_EQ(args.debug.view, DebugView::Normals);
     EXPECT_TRUE(args.scenePath.empty());
     EXPECT_TRUE(args.skyboxPath.empty());
 }
@@ -115,7 +98,7 @@ TEST(ApplicationArgs, DebugNormalsFlagCoexistsWithSceneAndFloor)
 
     const auto args = parseApplicationArgs(4, argv);
 
-    EXPECT_TRUE(args.debugNormals);
+    EXPECT_EQ(args.debug.view, DebugView::Normals);
     EXPECT_TRUE(args.addFloor);
     EXPECT_EQ(args.scenePath, "RiggedSimple/RiggedSimple.gltf");
 }
@@ -128,10 +111,7 @@ TEST(ApplicationArgs, DebugNdotLFlagSetsToggle)
 
     const auto args = parseApplicationArgs(2, argv);
 
-    EXPECT_TRUE(args.debugNdotL);
-    EXPECT_FALSE(args.debugNormals);
-    EXPECT_FALSE(args.debugShadow);
-    EXPECT_FALSE(args.debugShadowDepth);
+    EXPECT_EQ(args.debug.view, DebugView::NdotL);
 }
 
 TEST(ApplicationArgs, DebugShadowFlagSetsToggle)
@@ -142,10 +122,7 @@ TEST(ApplicationArgs, DebugShadowFlagSetsToggle)
 
     const auto args = parseApplicationArgs(2, argv);
 
-    EXPECT_TRUE(args.debugShadow);
-    EXPECT_FALSE(args.debugNormals);
-    EXPECT_FALSE(args.debugNdotL);
-    EXPECT_FALSE(args.debugShadowDepth);
+    EXPECT_EQ(args.debug.view, DebugView::Shadow);
 }
 
 TEST(ApplicationArgs, DebugShadowDepthFlagSetsToggle)
@@ -156,10 +133,7 @@ TEST(ApplicationArgs, DebugShadowDepthFlagSetsToggle)
 
     const auto args = parseApplicationArgs(2, argv);
 
-    EXPECT_TRUE(args.debugShadowDepth);
-    EXPECT_FALSE(args.debugNormals);
-    EXPECT_FALSE(args.debugNdotL);
-    EXPECT_FALSE(args.debugShadow);
+    EXPECT_EQ(args.debug.view, DebugView::ShadowDepth);
 }
 
 TEST(ApplicationArgs, NoShadowsFlagSetsToggle)
@@ -170,9 +144,6 @@ TEST(ApplicationArgs, NoShadowsFlagSetsToggle)
 
     const auto args = parseApplicationArgs(2, argv);
 
-    EXPECT_TRUE(args.noShadows);
-    EXPECT_FALSE(args.debugNormals);
-    EXPECT_FALSE(args.debugNdotL);
-    EXPECT_FALSE(args.debugShadow);
-    EXPECT_FALSE(args.debugShadowDepth);
+    EXPECT_TRUE(args.debug.noShadows);
+    EXPECT_EQ(args.debug.view, DebugView::None);
 }

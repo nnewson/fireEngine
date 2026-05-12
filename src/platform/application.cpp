@@ -17,8 +17,7 @@ int main(int argc, char* argv[])
     {
         FireEngine app;
         app.run(800, 600, "FireEngine Demo", args.scenePath, args.skyboxPath, args.addFloor,
-                args.debugNormals, args.debugNdotL, args.debugShadow, args.debugShadowDepth,
-                args.noShadows);
+                args.debug);
     }
     catch (const std::exception& e)
     {

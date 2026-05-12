@@ -85,8 +85,7 @@ Mat4 fitSelfShadowMatrix(const Bounds3& bounds, Vec3 lightDir) noexcept
 
 } // namespace
 
-Renderer::Renderer(const Window& window, std::string environmentPath, bool debugNormals,
-                   bool debugNdotL, bool debugShadow, bool debugShadowDepth, bool noShadows)
+Renderer::Renderer(const Window& window, std::string environmentPath, RendererDebug debug)
     : device_(window),
       swapchain_(device_, window),
       forwardPass_(RenderPass::createForward(device_)),
@@ -101,11 +100,7 @@ Renderer::Renderer(const Window& window, std::string environmentPath, bool debug
       transmission_(device_, swapchain_, resources_, postProcessing_.offscreenColourTarget()),
       shadows_(device_, resources_),
       environmentPath_(std::move(environmentPath)),
-      debugNormals_(debugNormals),
-      debugNdotL_(debugNdotL),
-      debugShadow_(debugShadow),
-      debugShadowDepth_(debugShadowDepth),
-      noShadows_(noShadows)
+      debug_(debug)
 {
     swapchain_.createDepthResources(device_);
     forwardPass_.createForwardFramebuffer(
@@ -362,11 +357,8 @@ void Renderer::writeIblAndDebugParams(LightUBO& out) const
     out.pointSpotShadowParams[1] = pointSpotShadowSlopeBias;
     out.environmentParams[0] = skyboxIntensity;
     out.environmentParams[1] = environmentShadowStrength;
-    out.environmentParams[2] =
-        debugNormals_
-            ? 1.0f
-            : (debugNdotL_ ? 2.0f : (debugShadow_ ? 3.0f : (debugShadowDepth_ ? 4.0f : 0.0f)));
-    out.environmentParams[3] = noShadows_ ? 1.0f : 0.0f;
+    out.environmentParams[2] = static_cast<float>(debug_.view);
+    out.environmentParams[3] = debug_.noShadows ? 1.0f : 0.0f;
 }
 
 void Renderer::assignSelfShadowSlots(std::vector<DrawCommand>& drawCommands)

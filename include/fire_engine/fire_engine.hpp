@@ -26,8 +26,7 @@ public:
 
     void run(size_t width, size_t height, std::string_view app_name,
              std::string_view scene_path = "", std::string_view skybox_path = "",
-             bool addFloor = false, bool debugNormals = false, bool debugNdotL = false,
-             bool debugShadow = false, bool debugShadowDepth = false, bool noShadows = false);
+             bool addFloor = false, RendererDebug debug = {});
 
 private:
     std::unique_ptr<Window> window_;

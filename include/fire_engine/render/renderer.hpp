@@ -28,12 +28,31 @@ namespace fire_engine
 
 class SceneGraph;
 
+// Selects which debug-view branch the forward fragment shader runs. Mapped
+// 1:1 to LightUBO::environmentParams[2] (0..4) — keep the enum and shader
+// constants in lockstep.
+enum class DebugView : int
+{
+    None = 0,
+    Normals = 1,
+    NdotL = 2,
+    Shadow = 3,
+    ShadowDepth = 4,
+};
+
+struct RendererDebug
+{
+    DebugView view{DebugView::None};
+    // Disables every shadow-map visibility lookup (cascade, spot, point) in
+    // the forward shader. Surfaces look fully lit by direct lighting.
+    bool noShadows{false};
+};
+
 class Renderer
 {
 public:
     explicit Renderer(const Window& window, std::string environmentPath = {},
-                      bool debugNormals = false, bool debugNdotL = false, bool debugShadow = false,
-                      bool debugShadowDepth = false, bool noShadows = false);
+                      RendererDebug debug = {});
     ~Renderer() = default;
 
     Renderer(const Renderer&) = delete;
@@ -163,11 +182,7 @@ private:
     std::vector<vk::Fence> imagesInFlight_{};
     uint32_t currentFrame_{0};
     std::string environmentPath_;
-    bool debugNormals_{false};
-    bool debugNdotL_{false};
-    bool debugShadow_{false};
-    bool debugShadowDepth_{false};
-    bool noShadows_{false};
+    RendererDebug debug_{};
 };
 
 } // namespace fire_engine

@@ -5,6 +5,8 @@
 #include <string>
 #include <string_view>
 
+#include <fire_engine/render/renderer.hpp>
+
 namespace fire_engine
 {
 
@@ -15,11 +17,10 @@ struct ApplicationArgs
     // -f flag: drop a 100×100 white plane at y=0 into the loaded scene so
     // shadow casters from punctual lights have something to occlude.
     bool addFloor{false};
-    bool debugNormals{false};
-    bool debugNdotL{false};
-    bool debugShadow{false};
-    bool debugShadowDepth{false};
-    bool noShadows{false};
+    // Forwarded straight to the Renderer. Multiple --debug-* flags collapse to
+    // the last one parsed (single debug view at a time); --no-shadows is
+    // independent and combines with any view.
+    RendererDebug debug{};
 };
 
 [[nodiscard]] inline bool isEnvironmentPath(std::string_view path)
@@ -53,27 +54,27 @@ struct ApplicationArgs
         }
         if (arg == "--debug-normals")
         {
-            args.debugNormals = true;
+            args.debug.view = DebugView::Normals;
             continue;
         }
         if (arg == "--debug-ndotl")
         {
-            args.debugNdotL = true;
+            args.debug.view = DebugView::NdotL;
             continue;
         }
         if (arg == "--debug-shadow")
         {
-            args.debugShadow = true;
+            args.debug.view = DebugView::Shadow;
             continue;
         }
         if (arg == "--debug-shadow-depth")
         {
-            args.debugShadowDepth = true;
+            args.debug.view = DebugView::ShadowDepth;
             continue;
         }
         if (arg == "--no-shadows")
         {
-            args.noShadows = true;
+            args.debug.noShadows = true;
             continue;
         }
         if (positionalCount < 2)
