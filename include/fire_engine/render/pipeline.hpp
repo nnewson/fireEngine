@@ -15,7 +15,14 @@ struct PipelineConfig
 {
     std::string vertShaderPath;
     std::string fragShaderPath;
+    // Set 0 — per-object / per-material bindings, allocated once per object
+    // and rewritten only when materials change.
     std::vector<vk::DescriptorSetLayoutBinding> bindings;
+    // Set 1 — forward-pipeline globals (light UBO, shadow maps, IBL, scene
+    // colour). Allocated once per frame, bound once per forward pass. Empty
+    // for pipelines that don't need a second descriptor set (skybox,
+    // post-process, shadow, environment precompute).
+    std::vector<vk::DescriptorSetLayoutBinding> globalBindings;
     std::vector<vk::PushConstantRange> pushConstantRanges;
     vk::RenderPass renderPass{};
     bool useVertexInput{true};
@@ -48,6 +55,16 @@ public:
     [[nodiscard]] vk::DescriptorSetLayout descriptorSetLayout() const noexcept
     {
         return *descSetLayout_;
+    }
+    // Set 1 layout (forward globals). nullptr when the pipeline declared no
+    // globalBindings in its PipelineConfig.
+    [[nodiscard]] vk::DescriptorSetLayout globalDescriptorSetLayout() const noexcept
+    {
+        return *globalDescSetLayout_;
+    }
+    [[nodiscard]] bool hasGlobalDescriptorSetLayout() const noexcept
+    {
+        return static_cast<bool>(*globalDescSetLayout_);
     }
     [[nodiscard]] vk::PipelineLayout pipelineLayout() const noexcept
     {
@@ -148,6 +165,7 @@ private:
 
     const vk::raii::Device* device_{nullptr};
     vk::raii::DescriptorSetLayout descSetLayout_{nullptr};
+    vk::raii::DescriptorSetLayout globalDescSetLayout_{nullptr};
     vk::raii::PipelineLayout pipelineLayout_{nullptr};
     vk::raii::Pipeline pipeline_{nullptr};
 };

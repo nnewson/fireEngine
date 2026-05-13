@@ -14,7 +14,7 @@ namespace
 {
 
 void recordTransmissionDrawBucket(vk::CommandBuffer cmd, std::span<const DrawCommand> drawCommands,
-                                  const Resources& resources)
+                                  const Resources& resources, vk::DescriptorSet globalSet)
 {
     auto lastBoundPipeline = PipelineHandle{std::numeric_limits<uint32_t>::max()};
     for (const auto& dc : drawCommands)
@@ -23,6 +23,11 @@ void recordTransmissionDrawBucket(vk::CommandBuffer cmd, std::span<const DrawCom
         {
             cmd.bindPipeline(vk::PipelineBindPoint::eGraphics,
                              resources.vulkanPipeline(dc.pipeline));
+            // Transmission draws use forward pipelines; bind set 1 (globals)
+            // whenever the pipeline changes so it survives any prior pipeline
+            // switch that might have used a set-1-incompatible layout.
+            cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
+                                   resources.vulkanPipelineLayout(dc.pipeline), 1, globalSet, {});
             lastBoundPipeline = dc.pipeline;
         }
         if (dc.vertexBuffer != NullBuffer)
@@ -59,7 +64,8 @@ Transmission::Transmission(const Device& device, const Swapchain& swapchain, Res
 }
 
 void Transmission::recordPass(vk::CommandBuffer cmd,
-                              std::span<const DrawCommand> transmissiveDraws) const
+                              std::span<const DrawCommand> transmissiveDraws,
+                              vk::DescriptorSet globalSet) const
 {
     if (transmissiveDraws.empty())
     {
@@ -67,7 +73,7 @@ void Transmission::recordPass(vk::CommandBuffer cmd,
     }
 
     recordSceneColorCapture(cmd);
-    recordForwardTransmissionPass(cmd, transmissiveDraws);
+    recordForwardTransmissionPass(cmd, transmissiveDraws, globalSet);
 }
 
 void Transmission::recreate(TextureHandle offscreenColourHandle)
@@ -257,7 +263,8 @@ void Transmission::recordSceneColorCapture(vk::CommandBuffer cmd) const
 }
 
 void Transmission::recordForwardTransmissionPass(
-    vk::CommandBuffer cmd, std::span<const DrawCommand> transmissiveDraws) const
+    vk::CommandBuffer cmd, std::span<const DrawCommand> transmissiveDraws,
+    vk::DescriptorSet globalSet) const
 {
     auto extent = swapchain_->extent();
     vk::Rect2D renderArea{
@@ -277,7 +284,7 @@ void Transmission::recordForwardTransmissionPass(
                                     .minDepth = 0.0f,
                                     .maxDepth = 1.0f});
     cmd.setScissor(0, renderArea);
-    recordTransmissionDrawBucket(cmd, transmissiveDraws, *resources_);
+    recordTransmissionDrawBucket(cmd, transmissiveDraws, *resources_, globalSet);
     cmd.endRenderPass();
 }
 

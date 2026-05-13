@@ -25,7 +25,8 @@ public:
     Transmission(Transmission&&) noexcept = default;
     Transmission& operator=(Transmission&&) noexcept = default;
 
-    void recordPass(vk::CommandBuffer cmd, std::span<const DrawCommand> transmissiveDraws) const;
+    void recordPass(vk::CommandBuffer cmd, std::span<const DrawCommand> transmissiveDraws,
+                    vk::DescriptorSet globalSet) const;
     void recreate(TextureHandle offscreenColourHandle);
 
 private:
@@ -33,7 +34,8 @@ private:
     void rebuildSceneColorChain();
     void recordSceneColorCapture(vk::CommandBuffer cmd) const;
     void recordForwardTransmissionPass(vk::CommandBuffer cmd,
-                                       std::span<const DrawCommand> transmissiveDraws) const;
+                                       std::span<const DrawCommand> transmissiveDraws,
+                                       vk::DescriptorSet globalSet) const;
 
     const Device* device_{nullptr};
     const Swapchain* swapchain_{nullptr};

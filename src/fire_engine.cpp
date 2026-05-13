@@ -116,8 +116,9 @@ void FireEngine::loadScene(std::string_view scene_path)
     }
 
     // Seed default directional only when the asset didn't author its own
-    // (KHR_lights_punctual). Aim local -Z along (1, -1, 1).normalise() so
-    // the surface-to-light vector matches the previously-hardcoded sun.
+    // (KHR_lights_punctual). Aim local -Z along normalise(1, -1, 1) so the
+    // sun appears above + behind the camera's typical starting orientation
+    // and casts visible shadows on most loaded scenes.
     if (!scene_.hasDirectionalLight())
     {
         auto sunNode = std::make_unique<Node>("Sun");

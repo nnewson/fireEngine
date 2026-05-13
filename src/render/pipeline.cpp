@@ -13,6 +13,14 @@ Pipeline::Pipeline(const Device& device, const PipelineConfig& config)
     : device_(&device.device())
 {
     createDescriptorSetLayout(config.bindings);
+    if (!config.globalBindings.empty())
+    {
+        vk::DescriptorSetLayoutCreateInfo ci{
+            .bindingCount = static_cast<uint32_t>(config.globalBindings.size()),
+            .pBindings = config.globalBindings.data(),
+        };
+        globalDescSetLayout_ = vk::raii::DescriptorSetLayout(*device_, ci);
+    }
     createGraphicsPipeline(config);
 }
 
@@ -29,13 +37,19 @@ PipelineConfig Pipeline::forwardConfig(vk::RenderPass renderPass)
                                               vk::DescriptorType::eCombinedImageSampler, 1,
                                               vk::ShaderStageFlagBits::eFragment};
     };
-    auto sampledImage = [](ForwardBinding binding)
+    auto globalSampler = [](ForwardGlobalBinding binding)
+    {
+        return vk::DescriptorSetLayoutBinding{bindingIndex(binding),
+                                              vk::DescriptorType::eCombinedImageSampler, 1,
+                                              vk::ShaderStageFlagBits::eFragment};
+    };
+    auto globalSampledImage = [](ForwardGlobalBinding binding)
     {
         return vk::DescriptorSetLayoutBinding{bindingIndex(binding),
                                               vk::DescriptorType::eSampledImage, 1,
                                               vk::ShaderStageFlagBits::eFragment};
     };
-    auto plainSampler = [](ForwardBinding binding)
+    auto globalPlainSampler = [](ForwardGlobalBinding binding)
     {
         return vk::DescriptorSetLayoutBinding{bindingIndex(binding), vk::DescriptorType::eSampler,
                                               1, vk::ShaderStageFlagBits::eFragment};
@@ -44,6 +58,8 @@ PipelineConfig Pipeline::forwardConfig(vk::RenderPass renderPass)
     PipelineConfig config;
     config.vertShaderPath = "shader.vert.spv";
     config.fragShaderPath = "shader.frag.spv";
+    // Set 0 — per-object / per-material. Shared globals (light, shadow maps,
+    // IBL, sceneColor) live on set 1 below.
     config.bindings = {
         uniform(ForwardBinding::Frame,
                 vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment),
@@ -57,24 +73,31 @@ PipelineConfig Pipeline::forwardConfig(vk::RenderPass renderPass)
         sampler(ForwardBinding::NormalTexture),
         sampler(ForwardBinding::MetallicRoughnessTexture),
         sampler(ForwardBinding::OcclusionTexture),
-        sampledImage(ForwardBinding::ShadowMap),
-        uniform(ForwardBinding::Light, vk::ShaderStageFlagBits::eFragment),
-        sampler(ForwardBinding::IrradianceMap),
-        sampler(ForwardBinding::PrefilteredMap),
-        sampler(ForwardBinding::BrdfLut),
-        plainSampler(ForwardBinding::ShadowCompareSampler),
         sampler(ForwardBinding::TransmissionTexture),
         sampler(ForwardBinding::ClearcoatTexture),
         sampler(ForwardBinding::ClearcoatRoughnessTexture),
         sampler(ForwardBinding::ClearcoatNormalTexture),
-        sampler(ForwardBinding::SceneColour),
         sampler(ForwardBinding::ThicknessTexture),
-        sampledImage(ForwardBinding::SpotShadowMap),
-        sampledImage(ForwardBinding::PointShadowMap),
-        plainSampler(ForwardBinding::ShadowDebugSampler),
-        sampledImage(ForwardBinding::ShadowDebugImage),
-        sampledImage(ForwardBinding::WorldShadowMap),
-        sampledImage(ForwardBinding::SelfShadowMap),
+    };
+    // Set 1 — forward globals. Bound once per frame in Renderer; survives
+    // pipeline transitions within the forward bucket. See ForwardGlobalBinding
+    // enum for the canonical numbering.
+    config.globalBindings = {
+        vk::DescriptorSetLayoutBinding{bindingIndex(ForwardGlobalBinding::Light),
+                                       vk::DescriptorType::eUniformBuffer, 1,
+                                       vk::ShaderStageFlagBits::eFragment},
+        globalSampledImage(ForwardGlobalBinding::ShadowMap),
+        globalSampledImage(ForwardGlobalBinding::WorldShadowMap),
+        globalSampledImage(ForwardGlobalBinding::SelfShadowMap),
+        globalSampledImage(ForwardGlobalBinding::SpotShadowMap),
+        globalSampledImage(ForwardGlobalBinding::PointShadowMap),
+        globalSampledImage(ForwardGlobalBinding::ShadowDebugImage),
+        globalPlainSampler(ForwardGlobalBinding::ShadowCompareSampler),
+        globalPlainSampler(ForwardGlobalBinding::ShadowDebugSampler),
+        globalSampler(ForwardGlobalBinding::IrradianceMap),
+        globalSampler(ForwardGlobalBinding::PrefilteredMap),
+        globalSampler(ForwardGlobalBinding::BrdfLut),
+        globalSampler(ForwardGlobalBinding::SceneColour),
     };
     config.pushConstantRanges.emplace_back(vk::ShaderStageFlagBits::eFragment, 0,
                                            static_cast<uint32_t>(sizeof(ForwardPushConstants)));
@@ -499,9 +522,16 @@ Pipeline::createShaderStages(const PipelineConfig& config, vk::raii::ShaderModul
 
 void Pipeline::createPipelineLayout(const PipelineConfig& config)
 {
+    // setLayouts[0] = per-object set 0, always present. setLayouts[1] = forward
+    // globals set 1, only when the config declared globalBindings (forward
+    // pipelines opt in; skybox / post-process / shadow / IBL precompute don't).
+    const bool hasGlobal = static_cast<bool>(*globalDescSetLayout_);
+    std::array<vk::DescriptorSetLayout, 2> setLayouts{*descSetLayout_,
+                                                      hasGlobal ? *globalDescSetLayout_
+                                                                : vk::DescriptorSetLayout{}};
     vk::PipelineLayoutCreateInfo plci{
-        .setLayoutCount = 1,
-        .pSetLayouts = &*descSetLayout_,
+        .setLayoutCount = hasGlobal ? 2u : 1u,
+        .pSetLayouts = setLayouts.data(),
         .pushConstantRangeCount = static_cast<uint32_t>(config.pushConstantRanges.size()),
         .pPushConstantRanges = config.pushConstantRanges.data(),
     };

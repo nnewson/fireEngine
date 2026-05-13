@@ -79,7 +79,7 @@ layout(binding = 19) uniform sampler2D clearcoatNormalMap;
 // KHR_materials_transmission F3 — captured post-opaque scene colour with mip
 // chain. Transmissive draws sample this at a screen-space UV displaced by
 // the refracted ray; roughness drives the mip level for frosted-glass blur.
-layout(binding = 20) uniform sampler2D sceneColorMap;
+layout(set = 1, binding = 12) uniform sampler2D sceneColorMap;
 // KHR_materials_volume — thickness texture (G channel multiplies the volume
 // thicknessFactor). Drives both the refracted exit point and the Beer-Lambert
 // path length.
@@ -88,17 +88,17 @@ layout(binding = 21) uniform sampler2D thicknessMap;
 // reused across CSM, spot, and point maps (Apple's per-stage sampler limit is
 // 16). Combined samplers are constructed at use time via the GLSL sampler*()
 // constructors.
-layout(binding = 10) uniform texture2DArray shadowMapTex;
-layout(binding = 22) uniform texture2DArray spotShadowMapTex;
-layout(binding = 23) uniform textureCubeArray pointShadowMapTex;
-layout(binding = 15) uniform sampler shadowCompareSampler;
-layout(binding = 24) uniform sampler shadowDebugSampler;
-layout(binding = 25) uniform texture2DArray shadowDebugImageTex;
-layout(binding = 26) uniform texture2DArray worldShadowMapTex;
-layout(binding = 27) uniform texture2DArray selfShadowMapTex;
-layout(binding = 12) uniform samplerCube irradianceMap;
-layout(binding = 13) uniform samplerCube prefilteredMap;
-layout(binding = 14) uniform sampler2D brdfLut;
+layout(set = 1, binding = 1) uniform texture2DArray shadowMapTex;
+layout(set = 1, binding = 4) uniform texture2DArray spotShadowMapTex;
+layout(set = 1, binding = 5) uniform textureCubeArray pointShadowMapTex;
+layout(set = 1, binding = 7) uniform sampler shadowCompareSampler;
+layout(set = 1, binding = 8) uniform sampler shadowDebugSampler;
+layout(set = 1, binding = 6) uniform texture2DArray shadowDebugImageTex;
+layout(set = 1, binding = 2) uniform texture2DArray worldShadowMapTex;
+layout(set = 1, binding = 3) uniform texture2DArray selfShadowMapTex;
+layout(set = 1, binding = 9) uniform samplerCube irradianceMap;
+layout(set = 1, binding = 10) uniform samplerCube prefilteredMap;
+layout(set = 1, binding = 11) uniform sampler2D brdfLut;
 
 struct LightData {
     // .xyz = world position (point/spot), .w = type (0=dir, 1=point, 2=spot)
@@ -115,7 +115,10 @@ struct LightData {
 const int MAX_LIGHTS = 8;
 const int MAX_SPOT_SHADOW_CASTERS = 4;
 
-layout(binding = 11) uniform LightUBO {
+// Forward globals — descriptor set 1 holds bindings shared by every draw
+// (light UBO, shadow maps, IBL textures, sceneColor). Bound once per frame
+// in Renderer; reused across all forward pipelines.
+layout(set = 1, binding = 0) uniform LightUBO {
     mat4 cascadeViewProj[4];
     mat4 spotViewProj[MAX_SPOT_SHADOW_CASTERS];
     mat4 selfShadowViewProj[4];

@@ -434,7 +434,7 @@ static void applyLight(const fastgltf::Asset& asset, const fastgltf::Node& gltfN
 }
 
 // ---------------------------------------------------------------------------
-// Node helpers (formerly anonymous namespace)
+// Node helpers
 // ---------------------------------------------------------------------------
 
 void GltfLoader::applyTRS(const fastgltf::Node& gltfNode, Node& node)

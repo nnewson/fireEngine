@@ -100,8 +100,8 @@ MaterialUBO toMaterialUBO(const Material& mat)
     ubo.volumeParams[0] = mat.thicknessFactor();
     ubo.volumeParams[1] = mat.hasThicknessTexture() ? 1.0f : 0.0f;
     ubo.volumeParams[2] = static_cast<float>(mat.thicknessTexCoord());
-    // volumeParams[3] reserved — thickness rotation now lives in
-    // uv[Thickness].rotation, written by writeUv above.
+    // volumeParams[3] is reserved; the thickness UV rotation is part of the
+    // unified uv[Thickness] slot written by writeUv above.
     ubo.attenuation[0] = mat.attenuationColor().r();
     ubo.attenuation[1] = mat.attenuationColor().g();
     ubo.attenuation[2] = mat.attenuationColor().b();

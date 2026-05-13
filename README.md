@@ -9,10 +9,10 @@ I've no doubt these are all solved problems nowadays with the Unreal engine et a
 
 ## Features
 
-- **glTF 2.0 model loading** via [fastgltf](https://github.com/spnda/fastgltf) — geometry, full PBR material set (base-colour, metallic-roughness, normal, occlusion + `occlusionStrength`, emissive, **transmission**), per-texture sampler settings, **per-slot UV-set selection (TEXCOORD_0 / TEXCOORD_1)**, skeletal skins, morph targets (POSITION + NORMAL + TANGENT deltas), keyframe animations, and alpha-mode state (OPAQUE / MASK / BLEND, `alphaCutoff`, `doubleSided`). Supported extensions: `KHR_materials_emissive_strength`, `KHR_texture_transform`, `KHR_materials_unlit`, **`KHR_lights_punctual`**, **`KHR_materials_transmission`**. Authored cameras are adopted as the engine's runtime view; authored lights drive the scene. Unsupported `extensionsRequired` rejected with a clear error; non-Triangles primitives skipped with a warning
+- **glTF 2.0 model loading** via [fastgltf](https://github.com/spnda/fastgltf) — geometry, full PBR material set (base-colour, metallic-roughness, normal, occlusion + `occlusionStrength`, emissive, **transmission**, **clearcoat**, **thickness**), per-texture sampler settings, **per-slot UV-set selection (TEXCOORD_0 / TEXCOORD_1)**, skeletal skins, morph targets (POSITION + NORMAL + TANGENT deltas), keyframe animations, and alpha-mode state (OPAQUE / MASK / BLEND, `alphaCutoff`, `doubleSided`). Supported extensions: `KHR_materials_emissive_strength`, `KHR_texture_transform`, **`KHR_texture_basisu`** (Basis Universal / KTX2 textures), **`KHR_materials_variants`**, `KHR_materials_unlit`, **`KHR_lights_punctual`**, **`KHR_materials_transmission`**, **`KHR_materials_ior`**, **`KHR_materials_clearcoat`**, **`KHR_materials_volume`**. Authored cameras are adopted as the engine's runtime view; authored lights drive the scene. Unsupported `extensionsRequired` rejected with a clear error; non-Triangles primitives skipped with a warning
 - **Tangent-space normal mapping** — tangents generated on load when a material uses a base normal or clearcoat normal texture (per-triangle UV derivatives, Gram-Schmidt orthogonalisation, handedness preserved in `tangent.w`). **Smooth-normal fallback** synthesises per-vertex normals when the source mesh omits NORMAL (e.g. Fox.gltf)
 - **Physically based shading with split-sum IBL + multi-scatter compensation** — equirectangular HDR skybox is converted to an environment cubemap (1024², 11 mip levels), a diffuse irradiance cubemap (32²), a GGX prefiltered specular cubemap (128², 8 mips, importance-sampled with 256 Hammersley samples and Filament-style mip-LOD weighting against the source cubemap's mip chain), and a BRDF integration LUT (256²) at startup. Forward fragment shader uses Fdez-Aguera multi-scatter compensation so rough conductors stay energy-conserving across the roughness range
-- **Cascaded directional shadows with skinned self-shadowing** — 4 cascades, 2048×2048 per cascade in a 2D-array depth image, log-uniform splits over 0.1m–50m. Directional shadows use shared comparison sampling with per-cascade bias scaling and 10% blend bands at cascade boundaries; the shader still has a rotated Poisson PCF path, currently configured with zero filter radius for crisp contact. Skinned meshes avoid same-map self-shadow acne by receiving world shadows from a world-only directional map plus a tightly-fit dual-depth per-object self-shadow map
+- **Cascaded directional shadows with skinned self-shadowing** — 4 cascades, 2048×2048 per cascade in a 2D-array depth image, Practical-Split-Scheme cascade boundaries (λ = 0.5 blend of linear and log-uniform splits) over 0.1m–50m. Directional shadows use shared comparison sampling with per-cascade bias scaling and 10% blend bands at cascade boundaries; the shader still has a rotated Poisson PCF path, currently configured with zero filter radius for crisp contact. Skinned meshes avoid same-map self-shadow acne by receiving world shadows from a world-only directional map plus a tightly-fit dual-depth per-object self-shadow map. The self-shadow second pass culls front faces (`vk::CullModeFlagBits::eFront`) so only back-facing geometry rasterises, eliminating per-fragment discard coin-flips on marginal surfaces that previously produced random per-pixel flicker
 - **KHR_materials_unlit** — flagged materials skip BRDF/IBL/shadow entirely and output the textured base colour directly. Used for skybox cards, foliage, decals, UI quads
 - **KHR_texture_transform** — per-slot UV offset/scale/rotation from the extension is applied to each texture sample. Identity by default
 - **Multi-light scenegraph** — `Light` is a first-class component variant alongside Camera / Mesh / Animator / Empty. Type enum is **Directional / Point / Spot**, with colour, intensity, range, and inner/outer cone angles per spec. Each frame the scenegraph walks all lights into a packed `Lighting` array (cap `MAX_LIGHTS = 8`), the renderer picks the first directional as the CSM source, and the forward shader runs a per-fragment loop over the array. Point/spot use the KHR_lights_punctual attenuation (`windowing² / d²` with `windowing = clamp(1 − (d / range)⁴, 0, 1)`); spot adds a smooth cone factor on top
@@ -27,8 +27,8 @@ I've no doubt these are all solved problems nowadays with the Unreal engine et a
 - **Scenegraph architecture** — tree of Nodes with Component variants (Camera, Animator, Mesh, Empty, **Light**) that propagate transforms, an `InputState` bundle, and draw commands. Node transforms store rotation as a quaternion so orientations from glTF round-trip exactly
 - **Custom collision and physics path** — glTF `extras.Physics` can create `Static`, `Kinematic`, and `Dynamic` bodies with layer/mask filtering, authored AABB/box/sphere/capsule proxy shapes, linear velocity, mass, restitution, friction, and gravity scale. `PhysicsWorld` owns body/collider state, `SweepAndPruneBroadPhase` gathers AABB candidate pairs, `NarrowPhase` performs swept-AABB time-of-impact tests, and `SceneGraph::submitPhysics` / `SceneGraph::applyPhysics` bridge scene-authored and physics-authored transforms each frame
 - **Backend-decoupled graphics layer** — graphics classes use opaque handles (`BufferHandle`, `TextureHandle`, `DescriptorSetHandle`, `PipelineHandle`) and emit `DrawCommand` structs with no Vulkan dependencies. IBL cubemaps, BRDF LUT, shadow map, bloom chain are all owned by the render layer and referenced through the same handle types
-- **Vulkan rendering** via vulkan.hpp C++ bindings with a 28-binding forward descriptor set, plus separate descriptor layouts for skybox, shadow, post-process, and bloom passes
-- **Single source of truth for tunables** — every rendering knob (light intensity, IBL strengths, shadow biases, bloom strength, cascade count, IBL extents, camera FOV) lives in `include/fire_engine/render/constants.hpp`
+- **Vulkan rendering** via vulkan.hpp C++ bindings with a **frequency-split forward descriptor layout**: set 0 holds 15 per-object/per-material bindings (frame UBO, material UBO + ten material textures, skin/morph buffers), set 1 holds 13 globals shared by every draw (light UBO, five shadow maps, debug image, compare/debug samplers, three IBL textures, sceneColor). Set 0 is allocated per object × frame; set 1 once per frame and bound at the start of each forward pass. Separate descriptor layouts exist for skybox, shadow, post-process, and bloom passes
+- **Single source of truth for tunables** — every rendering knob (light intensity, IBL strengths, shadow biases, cascade split λ, bloom strength, cascade count, IBL extents, camera FOV) lives in `include/fire_engine/render/constants.hpp`
 - **Texture mapping** via [stb_image](https://github.com/nothings/stb), including HDR equirectangular loading for the skybox; uploaded to GPU through staging buffers
 - **First-person camera** with keyboard (WASD + E/F for vertical) and mouse controls
 - **GLSL shaders** compiled to SPIR-V at build time via `glslc`
@@ -131,9 +131,10 @@ The transient pipelines are destroyed once the bake completes; only the resultin
 
 ### Rendering Pipeline
 
-- Forward descriptor set with **28 bindings**:
-  - 0 model/view/projection + camera position UBO
-  - 1 Material UBO — `diffuseAlpha`, `emissiveRoughness`, `materialParams` (metallic, normalScale, alphaCutoff, occlusionStrength), `textureFlags` (base/emissive/normal/MR present), `extraFlags` (occlusion present, occlusion's UV-set, **unlit flag**), `texCoordIndices` (per-slot UV-set), `uvBaseColor / uvEmissive / uvNormal / uvMetallicRoughness / uvOcclusion / uvTransmission` (KHR_texture_transform offset+scale per slot), `uvRotations` + `uvRotationsExtra` (per-slot rotations, occlusion in `.x`, transmission in `.y`), `transmissionParams` (factor, texture-present flag, texCoord index)
+- Forward descriptor layout is split by update frequency into **set 0 (per-object, 15 bindings)** and **set 1 (forward globals, 13 bindings)**. Set 0 is rewritten only when materials change; set 1 is bound once per frame and survives pipeline transitions inside the forward bucket.
+- **Set 0 — per-object / per-material**:
+  - 0 frame UBO (model / view / projection + camera position)
+  - 1 Material UBO — `diffuseAlpha`, `emissiveRoughness`, `materialParams` (metallic, normalScale, alphaCutoff, occlusionStrength), `textureFlags` (base/emissive/normal/MR present), `extraFlags` (occlusion present, occlusion's UV-set, **unlit flag**), `texCoordIndices` (per-slot UV-set for base/emissive/normal/MR), `transmissionParams`, `clearcoatParams` + `clearcoatFlags` + `clearcoatTexCoords`, `volumeParams`, `attenuation`, and a `UvXform uv[10]` array (`offsetScale.xy` = UV offset, `offsetScale.zw` = UV scale, `rotation` = radians) indexed by `MaterialTextureSlot` (BaseColour, Emissive, Normal, MetallicRoughness, Occlusion, Transmission, Clearcoat, ClearcoatRoughness, ClearcoatNormal, Thickness)
   - 2 base-colour sampler
   - 3 skin UBO (joint matrices, `mat4[64]`)
   - 4 morph UBO (metadata + weights)
@@ -142,24 +143,27 @@ The transient pipelines are destroyed once the bake completes; only the resultin
   - 7 normal sampler
   - 8 metallic-roughness sampler
   - 9 occlusion sampler
-  - 10 cascaded shadow map sampled image (`texture2DArray`, 4 layers)
-  - 11 Light UBO — `cascadeViewProj[4]`, `cascadeSplits`, IBL params, shadow bias/filter params, environment params, `lightCount`, and `LightData lights[MAX_LIGHTS]` (per-light position/direction/colour/cone in std140-aligned `vec4`s)
-  - 12 irradiance cubemap
-  - 13 prefiltered environment cubemap
-  - 14 BRDF integration LUT (2D)
-  - 15 shared shadow comparison sampler used with CSM, spot, and point sampled-image bindings
   - **16 transmission sampler (KHR_materials_transmission)**
   - **17 clearcoat factor sampler (KHR_materials_clearcoat)**
   - **18 clearcoat roughness sampler (KHR_materials_clearcoat)**
   - **19 clearcoat normal sampler (KHR_materials_clearcoat)**
-  - **20 captured scene-colour mip chain for screen-space transmission/refraction**
   - **21 thickness sampler (KHR_materials_volume)**
-  - 22 spot shadow sampled image (`texture2DArray`)
-  - 23 point shadow sampled image (`textureCubeArray`)
-  - 24 shadow-depth debug sampler
-  - 25 shadow-depth debug image (`texture2DArray`)
-  - 26 world-only directional shadow map sampled image (`texture2DArray`, excludes skinned casters)
-  - 27 skinned second-depth self-shadow map sampled image (`texture2DArray`, up to 4 per-object layers)
+- **Set 1 — forward globals** (renumbered locally within the set):
+  - 0 Light UBO — `cascadeViewProj[4]`, `cascadeSplits`, IBL params, shadow bias/filter params, environment params, `lightCount`, and `LightData lights[MAX_LIGHTS]` (per-light position/direction/colour/cone in std140-aligned `vec4`s)
+  - 1 cascaded shadow map sampled image (`texture2DArray`, 4 layers)
+  - 2 world-only directional shadow map sampled image (`texture2DArray`, excludes skinned casters)
+  - 3 skinned second-depth self-shadow map sampled image (`texture2DArray`, up to 4 per-object layers)
+  - 4 spot shadow sampled image (`texture2DArray`)
+  - 5 point shadow sampled image (`textureCubeArray`)
+  - 6 shadow-depth debug image (`texture2DArray`)
+  - 7 shared shadow comparison sampler used with CSM, spot, and point sampled-image bindings
+  - 8 shadow-depth debug sampler
+  - 9 irradiance cubemap
+  - 10 prefiltered environment cubemap
+  - 11 BRDF integration LUT (2D)
+  - **12 captured scene-colour mip chain for screen-space transmission/refraction**
+
+  On swapchain resize, only the `MAX_FRAMES_IN_FLIGHT` set-1 descriptors need rewriting (sceneColor, post-process targets, and any future recreated globals) via `Descriptors::updateGlobalDescriptors`; per-object set-0 descriptors are untouched.
 - Separate descriptor layouts for the skybox (SkyboxUBO + samplerCube + LightUBO), shadow (ShadowUBO with `lightViewProj[]` + SkinUBO + MorphUBO + MorphTargets SSBO + first self-shadow depth/sampler, plus `ShadowPushConstants` on the vertex/fragment stages), post-process (HDR sampler at 0 + bloom mip 0 sampler at 1, plus `PostProcessPushConstants { float bloomStrength }`), and bloom-down / bloom-up (single input mip sampler + `BloomPushConstants` on the fragment stage)
 - Three forward pipeline variants share the shader + binding layout but differ in cull mode, blend, and depth-write state:
   - **opaque** (cull back, no blend, depth write) — OPAQUE and MASK materials with `doubleSided=false`
@@ -203,7 +207,7 @@ Build:
 cmake --build build
 ```
 
-Run the tests (973 tests):
+Run the tests (980 tests):
 
 ```bash
 ./build/test_fire_engine

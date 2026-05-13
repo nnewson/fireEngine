@@ -5,10 +5,10 @@
 
 #include <fire_engine/math/constants.hpp>
 
-// Single source of truth for engine-wide rendering tunables. Values that
-// previously lived in renderer.cpp's anon namespace, were inlined inside
-// updateLightData / Object::render, or sat in the EnvironmentConfig struct
-// have all been pulled here so a tweak only needs to touch one file.
+// Single source of truth for engine-wide rendering tunables. Every value that
+// might want to be tweaked (light intensity, shadow biases, cascade split λ,
+// bloom strength, IBL extents, camera FOV, etc.) lives here so a one-knob
+// adjustment never has to chase usages across the codebase.
 
 namespace fire_engine
 {

@@ -429,10 +429,9 @@ public:
     }
 
     // KHR_materials_ior — index of refraction. Default 1.5 matches the glTF
-    // spec and the previously hardcoded shader constant; water 1.33,
-    // plastic 1.46, sapphire 1.77, diamond 2.42, etc. Only consulted by the
-    // transmission lobe in the fragment shader, so non-transmissive materials
-    // are unaffected by this value.
+    // spec for common dielectrics; water 1.33, plastic 1.46, sapphire 1.77,
+    // diamond 2.42, etc. Only consulted by the transmission lobe in the
+    // fragment shader, so non-transmissive materials are unaffected.
     [[nodiscard]] float ior() const noexcept
     {
         return ior_;

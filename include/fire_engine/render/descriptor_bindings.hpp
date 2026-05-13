@@ -43,6 +43,32 @@ enum class ForwardBinding : std::uint32_t
     SelfShadowMap = 27,
 };
 
+// Forward-pipeline globals live on descriptor set 1 — bound once per frame,
+// reused by every object. Migrating them off the per-object set 0 keeps
+// per-object descriptor allocation small and means swapchain-resize-driven
+// texture recreations only need to rewrite MAX_FRAMES_IN_FLIGHT sets, not
+// N×frames sets.
+//
+// Order is grouped: light → cascade/world/self/spot/point shadows → debug
+// image → standalone samplers → IBL textures → sceneColor. Keep the GLSL
+// `layout(set = 1, binding = N)` declarations in shader.frag in lockstep.
+enum class ForwardGlobalBinding : std::uint32_t
+{
+    Light = 0,
+    ShadowMap = 1,
+    WorldShadowMap = 2,
+    SelfShadowMap = 3,
+    SpotShadowMap = 4,
+    PointShadowMap = 5,
+    ShadowDebugImage = 6,
+    ShadowCompareSampler = 7,
+    ShadowDebugSampler = 8,
+    IrradianceMap = 9,
+    PrefilteredMap = 10,
+    BrdfLut = 11,
+    SceneColour = 12,
+};
+
 enum class ShadowBinding : std::uint32_t
 {
     Shadow = 0,
@@ -110,6 +136,12 @@ constexpr std::size_t slotIndex(MaterialTextureSlot slot) noexcept
 
 [[nodiscard]]
 constexpr std::uint32_t bindingIndex(ForwardBinding binding) noexcept
+{
+    return static_cast<std::uint32_t>(binding);
+}
+
+[[nodiscard]]
+constexpr std::uint32_t bindingIndex(ForwardGlobalBinding binding) noexcept
 {
     return static_cast<std::uint32_t>(binding);
 }

@@ -124,16 +124,12 @@ ObjectDescriptorResult Descriptors::createObjectDescriptors(const ObjectDescript
     auto numGeometries = static_cast<uint32_t>(req.geometries.size());
     uint32_t totalSets = numGeometries * MAX_FRAMES_IN_FLIGHT;
 
-    std::array<vk::DescriptorPoolSize, 5> poolSizes = {{
-        {vk::DescriptorType::eUniformBuffer, totalSets * 5},
-        // 14 combined samplers per set: baseColor, emissive, normal, mr,
-        // occlusion, irradiance, prefiltered, brdfLut, transmission,
-        // clearcoat, clearcoatRoughness, clearcoatNormal, sceneColor, thickness.
-        {vk::DescriptorType::eCombinedImageSampler, totalSets * 14},
-        // 6 sampled images per set: csm, world csm, self shadow, spot, point, debug colour.
-        {vk::DescriptorType::eSampledImage, totalSets * 6},
-        // 2 standalone samplers per set: compare sampler + non-compare debug sampler.
-        {vk::DescriptorType::eSampler, totalSets * 2},
+    std::array<vk::DescriptorPoolSize, 3> poolSizes = {{
+        // 4 uniform buffers per set: frame UBO, material UBO, skin UBO, morph UBO.
+        {vk::DescriptorType::eUniformBuffer, totalSets * 4},
+        // 10 combined samplers per set: baseColor, emissive, normal, mr,
+        // occlusion, transmission, clearcoat ×3, thickness.
+        {vk::DescriptorType::eCombinedImageSampler, totalSets * 10},
         {vk::DescriptorType::eStorageBuffer, totalSets},
     }};
     auto& poolEntry = createDescriptorPool(poolSizes, totalSets);
@@ -186,57 +182,13 @@ ObjectDescriptorResult Descriptors::createObjectDescriptors(const ObjectDescript
                 materialImageInfo(MaterialTextureSlot::ClearcoatRoughness);
             vk::DescriptorImageInfo ccNormalTexInfo =
                 materialImageInfo(MaterialTextureSlot::ClearcoatNormal);
-            vk::DescriptorImageInfo sceneColorInfo =
-                makeDescriptorImageInfo(resources_->vulkanSampler(req.sceneColor),
-                                        resources_->vulkanImageView(req.sceneColor),
-                                        vk::ImageLayout::eShaderReadOnlyOptimal);
             vk::DescriptorImageInfo thicknessTexInfo =
                 materialImageInfo(MaterialTextureSlot::Thickness);
-            vk::DescriptorBufferInfo lightBufInfo = makeDescriptorBufferInfo(
-                resources_->vulkanBuffer(req.lightBufs[i]), sizeof(LightUBO));
-            // Shadow images use plain sampledImage descriptors; the comparison
-            // sampler is shared across CSM/spot/point via its own descriptor
-            // binding (Apple's per-stage sampler limit is 16).
-            vk::DescriptorImageInfo shadowTexInfo =
-                makeDescriptorImageInfo({}, resources_->vulkanImageView(req.shadowMap),
-                                        vk::ImageLayout::eDepthStencilReadOnlyOptimal);
-            vk::DescriptorImageInfo worldShadowTexInfo =
-                makeDescriptorImageInfo({}, resources_->vulkanImageView(req.worldShadowMap),
-                                        vk::ImageLayout::eDepthStencilReadOnlyOptimal);
-            vk::DescriptorImageInfo selfShadowTexInfo =
-                makeDescriptorImageInfo({}, resources_->vulkanImageView(req.selfShadowMap),
-                                        vk::ImageLayout::eDepthStencilReadOnlyOptimal);
-            vk::DescriptorImageInfo spotShadowImageInfo =
-                makeDescriptorImageInfo({}, resources_->vulkanImageView(req.spotShadowMap),
-                                        vk::ImageLayout::eDepthStencilReadOnlyOptimal);
-            vk::DescriptorImageInfo pointShadowImageInfo =
-                makeDescriptorImageInfo({}, resources_->vulkanImageView(req.pointShadowMap),
-                                        vk::ImageLayout::eDepthStencilReadOnlyOptimal);
-            vk::DescriptorImageInfo shadowCompareSamplerInfo = makeDescriptorImageInfo(
-                resources_->vulkanSampler(req.shadowMap), {}, vk::ImageLayout::eUndefined);
-            vk::DescriptorImageInfo shadowDebugSamplerInfo = makeDescriptorImageInfo(
-                resources_->vulkanShadowDebugSampler(), {}, vk::ImageLayout::eUndefined);
-            vk::DescriptorImageInfo shadowDebugImageInfo =
-                makeDescriptorImageInfo({}, resources_->vulkanImageView(req.shadowDebugImage),
-                                        vk::ImageLayout::eShaderReadOnlyOptimal);
-            vk::DescriptorImageInfo irradianceTexInfo =
-                makeDescriptorImageInfo(resources_->vulkanSampler(req.irradianceMap),
-                                        resources_->vulkanImageView(req.irradianceMap),
-                                        vk::ImageLayout::eShaderReadOnlyOptimal);
-            vk::DescriptorImageInfo prefilteredTexInfo =
-                makeDescriptorImageInfo(resources_->vulkanSampler(req.prefilteredMap),
-                                        resources_->vulkanImageView(req.prefilteredMap),
-                                        vk::ImageLayout::eShaderReadOnlyOptimal);
-            vk::DescriptorImageInfo brdfLutTexInfo = makeDescriptorImageInfo(
-                resources_->vulkanSampler(req.brdfLut), resources_->vulkanImageView(req.brdfLut),
-                vk::ImageLayout::eShaderReadOnlyOptimal);
             const vk::DescriptorSet set = *sets[i];
             constexpr auto kUbo = vk::DescriptorType::eUniformBuffer;
             constexpr auto kSsbo = vk::DescriptorType::eStorageBuffer;
             constexpr auto kCis = vk::DescriptorType::eCombinedImageSampler;
-            constexpr auto kSi = vk::DescriptorType::eSampledImage;
-            constexpr auto kSamp = vk::DescriptorType::eSampler;
-            std::array<vk::WriteDescriptorSet, 28> writes = {{
+            std::array<vk::WriteDescriptorSet, 15> writes = {{
                 writeBuffer(set, bindingIndex(ForwardBinding::Frame), kUbo, uboBufInfo),
                 writeBuffer(set, bindingIndex(ForwardBinding::Material), kUbo, matBufInfo),
                 writeImage(set, bindingIndex(ForwardBinding::BaseColourTexture), kCis, texInfo),
@@ -250,15 +202,6 @@ ObjectDescriptorResult Descriptors::createObjectDescriptors(const ObjectDescript
                 writeImage(set, bindingIndex(ForwardBinding::MetallicRoughnessTexture), kCis,
                            mrTexInfo),
                 writeImage(set, bindingIndex(ForwardBinding::OcclusionTexture), kCis, occTexInfo),
-                writeImage(set, bindingIndex(ForwardBinding::ShadowMap), kSi, shadowTexInfo),
-                writeBuffer(set, bindingIndex(ForwardBinding::Light), kUbo, lightBufInfo),
-                writeImage(set, bindingIndex(ForwardBinding::IrradianceMap), kCis,
-                           irradianceTexInfo),
-                writeImage(set, bindingIndex(ForwardBinding::PrefilteredMap), kCis,
-                           prefilteredTexInfo),
-                writeImage(set, bindingIndex(ForwardBinding::BrdfLut), kCis, brdfLutTexInfo),
-                writeImage(set, bindingIndex(ForwardBinding::ShadowCompareSampler), kSamp,
-                           shadowCompareSamplerInfo),
                 writeImage(set, bindingIndex(ForwardBinding::TransmissionTexture), kCis,
                            transTexInfo),
                 writeImage(set, bindingIndex(ForwardBinding::ClearcoatTexture), kCis, ccTexInfo),
@@ -266,21 +209,8 @@ ObjectDescriptorResult Descriptors::createObjectDescriptors(const ObjectDescript
                            ccRoughTexInfo),
                 writeImage(set, bindingIndex(ForwardBinding::ClearcoatNormalTexture), kCis,
                            ccNormalTexInfo),
-                writeImage(set, bindingIndex(ForwardBinding::SceneColour), kCis, sceneColorInfo),
                 writeImage(set, bindingIndex(ForwardBinding::ThicknessTexture), kCis,
                            thicknessTexInfo),
-                writeImage(set, bindingIndex(ForwardBinding::SpotShadowMap), kSi,
-                           spotShadowImageInfo),
-                writeImage(set, bindingIndex(ForwardBinding::PointShadowMap), kSi,
-                           pointShadowImageInfo),
-                writeImage(set, bindingIndex(ForwardBinding::ShadowDebugSampler), kSamp,
-                           shadowDebugSamplerInfo),
-                writeImage(set, bindingIndex(ForwardBinding::ShadowDebugImage), kSi,
-                           shadowDebugImageInfo),
-                writeImage(set, bindingIndex(ForwardBinding::WorldShadowMap), kSi,
-                           worldShadowTexInfo),
-                writeImage(set, bindingIndex(ForwardBinding::SelfShadowMap), kSi,
-                           selfShadowTexInfo),
             }};
             device_->device().updateDescriptorSets(writes, {});
 
@@ -291,6 +221,109 @@ ObjectDescriptorResult Descriptors::createObjectDescriptors(const ObjectDescript
     }
 
     return result;
+}
+
+void Descriptors::writeGlobalBindings(vk::DescriptorSet set, const GlobalDescriptorRequest& req,
+                                      int frame) const
+{
+    const vk::DescriptorBufferInfo lightBufInfo =
+        makeDescriptorBufferInfo(resources_->vulkanBuffer(req.lightBufs[frame]), sizeof(LightUBO));
+
+    auto sampledImage = [this](TextureHandle handle)
+    {
+        return makeDescriptorImageInfo({}, resources_->vulkanImageView(handle),
+                                       vk::ImageLayout::eDepthStencilReadOnlyOptimal);
+    };
+    auto sampledColourImage = [this](TextureHandle handle)
+    {
+        return makeDescriptorImageInfo({}, resources_->vulkanImageView(handle),
+                                       vk::ImageLayout::eShaderReadOnlyOptimal);
+    };
+    auto combinedSampler = [this](TextureHandle handle)
+    {
+        return makeDescriptorImageInfo(resources_->vulkanSampler(handle),
+                                       resources_->vulkanImageView(handle),
+                                       vk::ImageLayout::eShaderReadOnlyOptimal);
+    };
+    auto plainSampler = [](vk::Sampler s)
+    { return makeDescriptorImageInfo(s, {}, vk::ImageLayout::eUndefined); };
+
+    const vk::DescriptorImageInfo shadowMapInfo = sampledImage(req.shadowMap);
+    const vk::DescriptorImageInfo worldShadowMapInfo = sampledImage(req.worldShadowMap);
+    const vk::DescriptorImageInfo selfShadowMapInfo = sampledImage(req.selfShadowMap);
+    const vk::DescriptorImageInfo spotShadowMapInfo = sampledImage(req.spotShadowMap);
+    const vk::DescriptorImageInfo pointShadowMapInfo = sampledImage(req.pointShadowMap);
+    const vk::DescriptorImageInfo shadowDebugImageInfo = sampledColourImage(req.shadowDebugImage);
+    const vk::DescriptorImageInfo shadowCompareSamplerInfo =
+        plainSampler(resources_->vulkanSampler(req.shadowMap));
+    const vk::DescriptorImageInfo shadowDebugSamplerInfo =
+        plainSampler(resources_->vulkanShadowDebugSampler());
+    const vk::DescriptorImageInfo irradianceInfo = combinedSampler(req.irradianceMap);
+    const vk::DescriptorImageInfo prefilteredInfo = combinedSampler(req.prefilteredMap);
+    const vk::DescriptorImageInfo brdfLutInfo = combinedSampler(req.brdfLut);
+    const vk::DescriptorImageInfo sceneColorInfo = combinedSampler(req.sceneColor);
+
+    constexpr auto kUbo = vk::DescriptorType::eUniformBuffer;
+    constexpr auto kCis = vk::DescriptorType::eCombinedImageSampler;
+    constexpr auto kSi = vk::DescriptorType::eSampledImage;
+    constexpr auto kSamp = vk::DescriptorType::eSampler;
+    std::array<vk::WriteDescriptorSet, 13> writes = {{
+        writeBuffer(set, bindingIndex(ForwardGlobalBinding::Light), kUbo, lightBufInfo),
+        writeImage(set, bindingIndex(ForwardGlobalBinding::ShadowMap), kSi, shadowMapInfo),
+        writeImage(set, bindingIndex(ForwardGlobalBinding::WorldShadowMap), kSi,
+                   worldShadowMapInfo),
+        writeImage(set, bindingIndex(ForwardGlobalBinding::SelfShadowMap), kSi, selfShadowMapInfo),
+        writeImage(set, bindingIndex(ForwardGlobalBinding::SpotShadowMap), kSi, spotShadowMapInfo),
+        writeImage(set, bindingIndex(ForwardGlobalBinding::PointShadowMap), kSi,
+                   pointShadowMapInfo),
+        writeImage(set, bindingIndex(ForwardGlobalBinding::ShadowDebugImage), kSi,
+                   shadowDebugImageInfo),
+        writeImage(set, bindingIndex(ForwardGlobalBinding::ShadowCompareSampler), kSamp,
+                   shadowCompareSamplerInfo),
+        writeImage(set, bindingIndex(ForwardGlobalBinding::ShadowDebugSampler), kSamp,
+                   shadowDebugSamplerInfo),
+        writeImage(set, bindingIndex(ForwardGlobalBinding::IrradianceMap), kCis, irradianceInfo),
+        writeImage(set, bindingIndex(ForwardGlobalBinding::PrefilteredMap), kCis, prefilteredInfo),
+        writeImage(set, bindingIndex(ForwardGlobalBinding::BrdfLut), kCis, brdfLutInfo),
+        writeImage(set, bindingIndex(ForwardGlobalBinding::SceneColour), kCis, sceneColorInfo),
+    }};
+    device_->device().updateDescriptorSets(writes, {});
+}
+
+std::array<DescriptorSetHandle, MAX_FRAMES_IN_FLIGHT>
+Descriptors::createGlobalDescriptors(const GlobalDescriptorRequest& req)
+{
+    // One global set per frame-in-flight. Pool sizes are exact per the
+    // ForwardGlobalBinding enum: 1 UBO + 4 CIS (IBL ×3 + sceneColor) + 6 SI
+    // (shadow maps ×5 + debug colour) + 2 plain samplers (compare + debug).
+    std::array<vk::DescriptorPoolSize, 4> poolSizes = {{
+        {vk::DescriptorType::eUniformBuffer, MAX_FRAMES_IN_FLIGHT},
+        {vk::DescriptorType::eCombinedImageSampler, MAX_FRAMES_IN_FLIGHT * 4},
+        {vk::DescriptorType::eSampledImage, MAX_FRAMES_IN_FLIGHT * 6},
+        {vk::DescriptorType::eSampler, MAX_FRAMES_IN_FLIGHT * 2},
+    }};
+    auto& poolEntry = createDescriptorPool(poolSizes, MAX_FRAMES_IN_FLIGHT);
+    auto sets = allocateDescriptorSets(*poolEntry.pool, pipeline_->globalDescriptorSetLayout(),
+                                       MAX_FRAMES_IN_FLIGHT);
+
+    std::array<DescriptorSetHandle, MAX_FRAMES_IN_FLIGHT> result;
+    for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
+    {
+        writeGlobalBindings(*sets[i], req, i);
+        result[i] = registerDescriptorSet(*sets[i]);
+    }
+    retainDescriptorSets(poolEntry, sets);
+    return result;
+}
+
+void Descriptors::updateGlobalDescriptors(
+    const std::array<DescriptorSetHandle, MAX_FRAMES_IN_FLIGHT>& sets,
+    const GlobalDescriptorRequest& req)
+{
+    for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
+    {
+        writeGlobalBindings(vulkanDescriptorSet(sets[i]), req, i);
+    }
 }
 
 void Descriptors::updateObjectGeometryTextures(DescriptorSetHandle set,

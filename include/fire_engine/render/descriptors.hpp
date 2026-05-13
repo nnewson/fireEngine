@@ -39,6 +39,22 @@ struct GeometryDescriptorInfo
 struct ObjectDescriptorRequest
 {
     std::array<BufferHandle, MAX_FRAMES_IN_FLIGHT> uniformBufs{NullBuffer, NullBuffer};
+    // Shadow maps, IBL textures, light UBO, and sceneColor live on the
+    // forward globals descriptor (set 1) — see GlobalDescriptorRequest above.
+    std::vector<GeometryDescriptorInfo> geometries;
+};
+
+struct ObjectDescriptorResult
+{
+    std::vector<std::array<DescriptorSetHandle, MAX_FRAMES_IN_FLIGHT>> descSets;
+};
+
+// Per-frame globals for the forward pipeline's set 1 — bound once at the
+// start of each forward pass, reused by every draw. Lifetime = renderer
+// lifetime; rewritten on swapchain resize when sceneColor / shadow maps get
+// recreated.
+struct GlobalDescriptorRequest
+{
     std::array<BufferHandle, MAX_FRAMES_IN_FLIGHT> lightBufs{NullBuffer, NullBuffer};
     TextureHandle shadowMap{NullTexture};
     TextureHandle worldShadowMap{NullTexture};
@@ -49,15 +65,7 @@ struct ObjectDescriptorRequest
     TextureHandle irradianceMap{NullTexture};
     TextureHandle prefilteredMap{NullTexture};
     TextureHandle brdfLut{NullTexture};
-    // KHR_materials_transmission F3 — captured post-opaque HDR scene colour
-    // mip chain. Bound at forward descriptor binding 20.
     TextureHandle sceneColor{NullTexture};
-    std::vector<GeometryDescriptorInfo> geometries;
-};
-
-struct ObjectDescriptorResult
-{
-    std::vector<std::array<DescriptorSetHandle, MAX_FRAMES_IN_FLIGHT>> descSets;
 };
 
 struct ShadowGeometryDescriptorInfo
@@ -96,6 +104,21 @@ public:
                                       const GeometryDescriptorInfo& geometry);
     [[nodiscard]] ShadowDescriptorResult
     createShadowDescriptors(const ShadowDescriptorRequest& req);
+
+    // Allocates MAX_FRAMES_IN_FLIGHT descriptor sets for the forward
+    // pipeline's set 1 layout and writes every global binding (light UBO,
+    // shadow maps, IBL, sceneColor).
+    [[nodiscard]] std::array<DescriptorSetHandle, MAX_FRAMES_IN_FLIGHT>
+    createGlobalDescriptors(const GlobalDescriptorRequest& req);
+
+    // Rewrites every binding on the supplied global descriptor sets to point
+    // at the textures/buffers in `req`. Called on swapchain resize after
+    // Transmission::recreate (and any future shadow-map recreations) so the
+    // existing sets stop dangling against destroyed samplers/views. Pool /
+    // set allocation is untouched.
+    void
+    updateGlobalDescriptors(const std::array<DescriptorSetHandle, MAX_FRAMES_IN_FLIGHT>& sets,
+                            const GlobalDescriptorRequest& req);
 
     void shadowDescriptorSetLayout(vk::DescriptorSetLayout layout) noexcept
     {
@@ -152,6 +175,12 @@ private:
     [[nodiscard]] static vk::DescriptorImageInfo
     makeDescriptorImageInfo(vk::Sampler sampler, vk::ImageView imageView,
                             vk::ImageLayout imageLayout);
+    // Submits the 13-write update for one frame's global descriptor set.
+    // Shared by createGlobalDescriptors (initial) and updateGlobalDescriptors
+    // (swapchain resize) so the binding order stays in lockstep with
+    // ForwardGlobalBinding in a single place.
+    void writeGlobalBindings(vk::DescriptorSet set, const GlobalDescriptorRequest& req,
+                             int frame) const;
 
     DescriptorPoolEntry& createDescriptorPool(std::span<const vk::DescriptorPoolSize> poolSizes,
                                               uint32_t maxSets);

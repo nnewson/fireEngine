@@ -11,44 +11,51 @@ using fire_engine::ForwardBinding;
 using fire_engine::Pipeline;
 using fire_engine::ShadowBinding;
 
-TEST(PipelineConfig, ForwardConfigIncludesIblBindings)
+TEST(PipelineConfig, ForwardConfigBindingsSplitBetweenSets)
 {
+    using fire_engine::ForwardGlobalBinding;
     auto config = Pipeline::forwardConfig({});
 
-    EXPECT_EQ(config.bindings.size(), 28u);
+    // Set 0 — per-object / per-material bindings: frame, material, skin,
+    // morph UBO + SSBO, base + 9 material textures (10 total).
+    EXPECT_EQ(config.bindings.size(), 15u);
+    // Set 1 — forward globals: light UBO + 5 shadow maps + debug image + 2
+    // standalone samplers + 3 IBL textures + sceneColor.
+    EXPECT_EQ(config.globalBindings.size(), 13u);
 
-    auto hasBinding = [&](ForwardBinding binding)
+    auto hasObjectBinding = [&](ForwardBinding binding)
     {
         return std::any_of(config.bindings.begin(), config.bindings.end(), [&](const auto& entry)
                            { return entry.binding == bindingIndex(binding); });
     };
+    auto hasGlobalBinding = [&](ForwardGlobalBinding binding)
+    {
+        return std::any_of(config.globalBindings.begin(), config.globalBindings.end(),
+                           [&](const auto& entry)
+                           { return entry.binding == bindingIndex(binding); });
+    };
 
-    EXPECT_TRUE(hasBinding(ForwardBinding::IrradianceMap));
-    EXPECT_TRUE(hasBinding(ForwardBinding::PrefilteredMap));
-    EXPECT_TRUE(hasBinding(ForwardBinding::BrdfLut));
-    // Shared comparison sampler — used with the SampledImage shadow bindings
-    // (10/22/23) via GLSL sampler*() constructors. Apple caps per-stage
-    // samplers at 16.
-    EXPECT_TRUE(hasBinding(ForwardBinding::ShadowCompareSampler));
-    // KHR_materials_transmission texture.
-    EXPECT_TRUE(hasBinding(ForwardBinding::TransmissionTexture));
-    // KHR_materials_clearcoat: factor (R), roughness (G), normal (RGB).
-    EXPECT_TRUE(hasBinding(ForwardBinding::ClearcoatTexture));
-    EXPECT_TRUE(hasBinding(ForwardBinding::ClearcoatRoughnessTexture));
-    EXPECT_TRUE(hasBinding(ForwardBinding::ClearcoatNormalTexture));
-    // KHR_materials_transmission F3 — sceneColor mip chain.
-    EXPECT_TRUE(hasBinding(ForwardBinding::SceneColour));
-    // KHR_materials_volume — thickness texture (G channel).
-    EXPECT_TRUE(hasBinding(ForwardBinding::ThicknessTexture));
-    // Punctual light shadows: spot 2D-array + point cubemap-array depth maps.
-    EXPECT_TRUE(hasBinding(ForwardBinding::SpotShadowMap));
-    EXPECT_TRUE(hasBinding(ForwardBinding::PointShadowMap));
-    EXPECT_TRUE(hasBinding(ForwardBinding::ShadowDebugSampler));
-    EXPECT_TRUE(hasBinding(ForwardBinding::ShadowDebugImage));
-    // Split directional shadow path: static world receivers sample a world-only
-    // map, skinned meshes combine that with a per-object self-shadow map.
-    EXPECT_TRUE(hasBinding(ForwardBinding::WorldShadowMap));
-    EXPECT_TRUE(hasBinding(ForwardBinding::SelfShadowMap));
+    // Per-object set 0 bindings.
+    EXPECT_TRUE(hasObjectBinding(ForwardBinding::TransmissionTexture));
+    EXPECT_TRUE(hasObjectBinding(ForwardBinding::ClearcoatTexture));
+    EXPECT_TRUE(hasObjectBinding(ForwardBinding::ClearcoatRoughnessTexture));
+    EXPECT_TRUE(hasObjectBinding(ForwardBinding::ClearcoatNormalTexture));
+    EXPECT_TRUE(hasObjectBinding(ForwardBinding::ThicknessTexture));
+
+    // Forward globals set 1 bindings.
+    EXPECT_TRUE(hasGlobalBinding(ForwardGlobalBinding::Light));
+    EXPECT_TRUE(hasGlobalBinding(ForwardGlobalBinding::IrradianceMap));
+    EXPECT_TRUE(hasGlobalBinding(ForwardGlobalBinding::PrefilteredMap));
+    EXPECT_TRUE(hasGlobalBinding(ForwardGlobalBinding::BrdfLut));
+    EXPECT_TRUE(hasGlobalBinding(ForwardGlobalBinding::ShadowCompareSampler));
+    EXPECT_TRUE(hasGlobalBinding(ForwardGlobalBinding::SceneColour));
+    EXPECT_TRUE(hasGlobalBinding(ForwardGlobalBinding::SpotShadowMap));
+    EXPECT_TRUE(hasGlobalBinding(ForwardGlobalBinding::PointShadowMap));
+    EXPECT_TRUE(hasGlobalBinding(ForwardGlobalBinding::ShadowDebugSampler));
+    EXPECT_TRUE(hasGlobalBinding(ForwardGlobalBinding::ShadowDebugImage));
+    EXPECT_TRUE(hasGlobalBinding(ForwardGlobalBinding::WorldShadowMap));
+    EXPECT_TRUE(hasGlobalBinding(ForwardGlobalBinding::SelfShadowMap));
+    EXPECT_TRUE(hasGlobalBinding(ForwardGlobalBinding::ShadowMap));
 }
 
 TEST(PipelineConfig, ForwardConfigIncludesSelfShadowPushConstant)

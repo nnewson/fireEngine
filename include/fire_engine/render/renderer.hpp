@@ -143,6 +143,11 @@ private:
                           PipelineHandle& lastBoundPipeline) const;
     void recordForwardPass(vk::CommandBuffer cmd, const DrawBuckets& buckets);
     void recreateSwapchain(const Window& display);
+    // Snapshots the current state of sharedTextures + lightUbo_ buffers into a
+    // GlobalDescriptorRequest. Used at ctor time to populate the set 1
+    // descriptors and on swapchain resize to rebind them after any
+    // releaseTexture/createTexture cycle has invalidated the old samplers.
+    [[nodiscard]] GlobalDescriptorRequest buildGlobalDescriptorRequest() const;
     [[nodiscard]] std::optional<uint32_t> acquireNextImage(Window& display);
     void beginRenderPass(vk::CommandBuffer cmd);
     void submitAndPresent(Window& display, vk::CommandBuffer cmd, uint32_t imageIndex);
@@ -173,6 +178,9 @@ private:
     std::array<DescriptorSetHandle, MAX_FRAMES_IN_FLIGHT> skyboxDescSets_{};
     BufferHandle skyboxIndexBuffer_{NullBuffer};
     Resources::MappedBufferSet lightUbo_;
+    // Forward pipeline globals (descriptor set 1) — one set per frame-in-flight,
+    // bound once at the start of every forward pass.
+    std::array<DescriptorSetHandle, MAX_FRAMES_IN_FLIGHT> globalDescSets_{};
     std::array<Mat4, SHADOW_TOTAL_MATRIX_COUNT> shadowViewProjs_{};
     LightUBO lightData_{};
     Vec3 directionalLightDir_{1.0f, -1.0f, 1.0f};

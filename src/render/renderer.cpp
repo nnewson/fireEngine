@@ -133,7 +133,32 @@ Renderer::Renderer(const Window& window, std::string environmentPath, RendererDe
     shared.irradianceMap = irradianceCubemapHandle_;
     shared.prefilteredMap = prefilteredCubemapHandle_;
     shared.brdfLut = brdfLutHandle_;
+
+    // All shared texture handles are populated by this point: shadow maps by
+    // the Shadows constructor, sceneColor by transmission_.recreate above,
+    // IBL textures by the just-completed environment precompute.
+    globalDescSets_ =
+        resources_.descriptors().createGlobalDescriptors(buildGlobalDescriptorRequest());
+
     imagesInFlight_.assign(swapchain_.images().size(), vk::Fence{});
+}
+
+GlobalDescriptorRequest Renderer::buildGlobalDescriptorRequest() const
+{
+    const auto& shared = resources_.sharedTextures();
+    return GlobalDescriptorRequest{
+        .lightBufs = lightUbo_.buffers,
+        .shadowMap = shared.shadowMap,
+        .worldShadowMap = shared.worldShadowMap,
+        .selfShadowMap = shared.selfShadowMap,
+        .spotShadowMap = shared.spotShadowMap,
+        .pointShadowMap = shared.pointShadowMap,
+        .shadowDebugImage = shared.shadowDebugImage,
+        .irradianceMap = shared.irradianceMap,
+        .prefilteredMap = shared.prefilteredMap,
+        .brdfLut = shared.brdfLut,
+        .sceneColor = shared.sceneColor,
+    };
 }
 
 void Renderer::updateLightData(Vec3 cameraPosition, Vec3 cameraTarget, float aspect,
@@ -447,10 +472,28 @@ void Renderer::recordDrawBucket(vk::CommandBuffer cmd, const std::vector<DrawCom
 {
     for (const auto& dc : bucket)
     {
+        const bool isForwardPipeline = dc.pipeline == forwardOpaqueHandle_ ||
+                                       dc.pipeline == forwardOpaqueDoubleSidedHandle_ ||
+                                       dc.pipeline == forwardBlendHandle_;
         if (dc.pipeline != lastBoundPipeline)
         {
             cmd.bindPipeline(vk::PipelineBindPoint::eGraphics,
                              resources_.vulkanPipeline(dc.pipeline));
+            // Set 1 (forward globals) is bound whenever a forward pipeline
+            // becomes active. Binding it through a forward layout is required
+            // because the skybox pipeline (no globalBindings) shares this
+            // bucket and its layout is set-1-incompatible — binding the
+            // skybox pipeline disturbs set 1 per Vulkan layout-compatibility
+            // rules, so we re-bind on every transition back to a forward
+            // pipeline.
+            if (isForwardPipeline)
+            {
+                vk::DescriptorSet globalSet =
+                    resources_.vulkanDescriptorSet(globalDescSets_[currentFrame_]);
+                cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
+                                       resources_.vulkanPipelineLayout(dc.pipeline), 1, globalSet,
+                                       {});
+            }
             lastBoundPipeline = dc.pipeline;
         }
         if (dc.vertexBuffer != NullBuffer)
@@ -465,10 +508,7 @@ void Renderer::recordDrawBucket(vk::CommandBuffer cmd, const std::vector<DrawCom
         vk::DescriptorSet ds = resources_.vulkanDescriptorSet(dc.descriptorSet);
         cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
                                resources_.vulkanPipelineLayout(dc.pipeline), 0, ds, {});
-        const bool usesForwardPushConstants = dc.pipeline == forwardOpaqueHandle_ ||
-                                              dc.pipeline == forwardOpaqueDoubleSidedHandle_ ||
-                                              dc.pipeline == forwardBlendHandle_;
-        if (usesForwardPushConstants)
+        if (isForwardPipeline)
         {
             ForwardPushConstants pc{};
             pc.selfShadowSlot = dc.selfShadowSlot;
@@ -534,7 +574,8 @@ void Renderer::drawFrame(Window& display, SceneGraph& scene, Vec3 cameraPosition
     recordForwardPass(cmd, buckets);
     if (!buckets.transmissive.empty())
     {
-        transmission_.recordPass(cmd, buckets.transmissive);
+        transmission_.recordPass(cmd, buckets.transmissive,
+                                 resources_.vulkanDescriptorSet(globalDescSets_[currentFrame_]));
     }
     postProcessing_.transitionOffscreenForSampling(cmd);
     postProcessing_.recordBloomPasses(cmd);
@@ -700,6 +741,11 @@ void Renderer::recreateSwapchain(const Window& display)
         device_, resources_.vulkanImageView(postProcessing_.offscreenColourTarget()),
         swapchain_.depthView(), swapchain_.extent());
     transmission_.recreate(postProcessing_.offscreenColourTarget());
+    // Rewrite the forward-globals (set 1) descriptors so they reference the
+    // sampler/view from the freshly recreated sceneColor target (and any
+    // other recreated shared texture) instead of the destroyed ones.
+    resources_.descriptors().updateGlobalDescriptors(globalDescSets_,
+                                                     buildGlobalDescriptorRequest());
     frame_.createRenderFinishedSemaphores(swapchain_.images().size());
     imagesInFlight_.assign(swapchain_.images().size(), vk::Fence{});
 }
