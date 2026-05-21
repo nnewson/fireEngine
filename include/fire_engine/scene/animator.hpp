@@ -36,6 +36,9 @@ public:
     Mat4 render(const RenderContext& ctx, const Mat4& world);
 
     [[nodiscard]]
+    Mat4 render(const Mat4& world) const noexcept;
+
+    [[nodiscard]]
     Mat4 modelMatrix() const noexcept
     {
         return modelMatrix_;

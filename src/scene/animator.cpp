@@ -59,6 +59,11 @@ void Animator::update(const InputState& input_state, const Transform& /*transfor
 
 Mat4 Animator::render(const RenderContext& /*ctx*/, const Mat4& world)
 {
+    return render(world);
+}
+
+Mat4 Animator::render(const Mat4& world) const noexcept
+{
     return world * modelMatrix_;
 }
 

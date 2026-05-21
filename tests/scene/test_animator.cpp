@@ -36,10 +36,8 @@ TEST(Animator, UpdateWithNoAnimationsProducesIdentity)
     state.time(1.0);
     a.update(state, transform);
 
-    int dummy = 0;
-    auto& ctx = reinterpret_cast<fire_engine::RenderContext&>(dummy);
     Mat4 world = Mat4::identity();
-    Mat4 result = a.render(ctx, world);
+    Mat4 result = a.render(world);
 
     for (int r = 0; r < 4; ++r)
     {
@@ -61,10 +59,8 @@ TEST(Animator, UpdateWithNoKeyframesProducesIdentity)
     state.time(1.0);
     a.update(state, transform);
 
-    int dummy = 0;
-    auto& ctx = reinterpret_cast<fire_engine::RenderContext&>(dummy);
     Mat4 world = Mat4::identity();
-    Mat4 result = a.render(ctx, world);
+    Mat4 result = a.render(world);
 
     for (int r = 0; r < 4; ++r)
     {
@@ -100,9 +96,7 @@ TEST(Animator, UpdateSamplesAnimationAtElapsedTime)
     state.time(11.0);
     a.update(state, transform);
 
-    int dummy = 0;
-    auto& ctx = reinterpret_cast<fire_engine::RenderContext&>(dummy);
-    Mat4 result = a.render(ctx, Mat4::identity());
+    Mat4 result = a.render(Mat4::identity());
 
     float cos45 = std::cos(static_cast<float>(M_PI) / 4.0f);
     float sin45 = std::sin(static_cast<float>(M_PI) / 4.0f);
@@ -130,8 +124,7 @@ TEST(Animator, RenderAppliesWorldMatrix)
     world[2, 2] = 2.0f;
     world[3, 3] = 1.0f;
 
-    fire_engine::RenderContext* ctx = nullptr;
-    Mat4 result = a.render(*ctx, world);
+    Mat4 result = a.render(world);
 
     // With identity animation, result should equal world
     EXPECT_NEAR((result[0, 0]), 2.0f, 1e-5f);
@@ -221,9 +214,7 @@ TEST(Animator, SwitchingAnimationResetsTimer)
     state.time(200.5);
     a.update(state, transform);
 
-    int dummy = 0;
-    auto& ctx = reinterpret_cast<fire_engine::RenderContext&>(dummy);
-    Mat4 result = a.render(ctx, Mat4::identity());
+    Mat4 result = a.render(Mat4::identity());
 
     // At t=0.5 into anim2, Y translation should be ~10.0
     EXPECT_NEAR((result[1, 3]), 10.0f, 1e-4f);
@@ -271,9 +262,7 @@ TEST(Animator, InputStateSwitchesAnimation)
     noSwitch.time(1.5);
     a.update(noSwitch, transform);
 
-    int dummy = 0;
-    auto& ctx = reinterpret_cast<fire_engine::RenderContext&>(dummy);
-    Mat4 result = a.render(ctx, Mat4::identity());
+    Mat4 result = a.render(Mat4::identity());
 
     // At t=0.5 into anim2, Y translation should be ~10.0
     EXPECT_NEAR((result[1, 3]), 10.0f, 1e-4f);
@@ -352,9 +341,7 @@ TEST(Animator, InputStateNoSelectionContinuesPlayback)
     state.time(11.0);
     a.update(state, transform);
 
-    int dummy = 0;
-    auto& ctx = reinterpret_cast<fire_engine::RenderContext&>(dummy);
-    Mat4 result = a.render(ctx, Mat4::identity());
+    Mat4 result = a.render(Mat4::identity());
 
     // At t=1.0, X translation should be ~10.0
     EXPECT_NEAR((result[0, 3]), 10.0f, 1e-4f);
@@ -363,7 +350,7 @@ TEST(Animator, InputStateNoSelectionContinuesPlayback)
     InputState state2;
     state2.time(11.5);
     a.update(state2, transform);
-    result = a.render(ctx, Mat4::identity());
+    result = a.render(Mat4::identity());
 
     // At t=1.5, X translation should be ~15.0
     EXPECT_NEAR((result[0, 3]), 15.0f, 1e-4f);
@@ -393,9 +380,7 @@ TEST(Animator, InputStateSameIndexDoesNotResetTimer)
     state.animationState().activeAnimation(0);
     a.update(state, transform);
 
-    int dummy = 0;
-    auto& ctx = reinterpret_cast<fire_engine::RenderContext&>(dummy);
-    Mat4 result = a.render(ctx, Mat4::identity());
+    Mat4 result = a.render(Mat4::identity());
 
     // At t=1.5 elapsed, X translation should be ~15.0 (not reset to 0)
     EXPECT_NEAR((result[0, 3]), 15.0f, 1e-4f);

@@ -45,21 +45,44 @@ namespace fire_engine
 
 namespace
 {
-// Mirrors the fastgltf::Extensions mask passed to the parser in parseAsset.
-// Add a string here when enabling a new extension on the parser; the two must
-// stay in lockstep or the loader silently accepts data it can't actually use.
-constexpr std::array<std::string_view, 10> kSupportedExtensions = {
-    std::string_view{"KHR_materials_emissive_strength"},
-    std::string_view{"KHR_texture_transform"},
-    std::string_view{"KHR_texture_basisu"},
-    std::string_view{"KHR_materials_variants"},
-    std::string_view{"KHR_materials_unlit"},
-    std::string_view{"KHR_lights_punctual"},
-    std::string_view{"KHR_materials_transmission"},
-    std::string_view{"KHR_materials_ior"},
-    std::string_view{"KHR_materials_clearcoat"},
-    std::string_view{"KHR_materials_volume"},
+struct SupportedExtension
+{
+    std::string_view name;
+    fastgltf::Extensions flag;
 };
+
+constexpr std::array<SupportedExtension, 10> kSupportedExtensions = {
+    SupportedExtension{std::string_view{"KHR_materials_emissive_strength"},
+                       fastgltf::Extensions::KHR_materials_emissive_strength},
+    SupportedExtension{std::string_view{"KHR_texture_transform"},
+                       fastgltf::Extensions::KHR_texture_transform},
+    SupportedExtension{std::string_view{"KHR_texture_basisu"},
+                       fastgltf::Extensions::KHR_texture_basisu},
+    SupportedExtension{std::string_view{"KHR_materials_variants"},
+                       fastgltf::Extensions::KHR_materials_variants},
+    SupportedExtension{std::string_view{"KHR_materials_unlit"},
+                       fastgltf::Extensions::KHR_materials_unlit},
+    SupportedExtension{std::string_view{"KHR_lights_punctual"},
+                       fastgltf::Extensions::KHR_lights_punctual},
+    SupportedExtension{std::string_view{"KHR_materials_transmission"},
+                       fastgltf::Extensions::KHR_materials_transmission},
+    SupportedExtension{std::string_view{"KHR_materials_ior"},
+                       fastgltf::Extensions::KHR_materials_ior},
+    SupportedExtension{std::string_view{"KHR_materials_clearcoat"},
+                       fastgltf::Extensions::KHR_materials_clearcoat},
+    SupportedExtension{std::string_view{"KHR_materials_volume"},
+                       fastgltf::Extensions::KHR_materials_volume},
+};
+
+constexpr fastgltf::Extensions supportedExtensionMask() noexcept
+{
+    fastgltf::Extensions mask = fastgltf::Extensions::None;
+    for (const auto& extension : kSupportedExtensions)
+    {
+        mask |= extension.flag;
+    }
+    return mask;
+}
 
 struct ExtrasParseState
 {
@@ -106,7 +129,7 @@ void GltfLoader::ensureSupportedExtensions(std::span<const std::string_view> req
         bool found = false;
         for (const auto& supported : kSupportedExtensions)
         {
-            if (ext == supported)
+            if (ext == supported.name)
             {
                 found = true;
                 break;
@@ -560,41 +583,21 @@ Node& GltfLoader::attachCamera(Node& node, Node*& activeCamera)
 // Asset parsing and setup
 // ---------------------------------------------------------------------------
 
-bool GltfLoader::nodeExtrasControllable(simdjson::dom::object* extras) noexcept
+namespace
 {
-    if (extras == nullptr)
-    {
-        return false;
-    }
 
-    auto controllable = extras->at_key("Controllable");
-    bool enabled = false;
-    return controllable.get(enabled) == simdjson::SUCCESS && enabled;
-}
-
-std::optional<GltfLoader::PhysicsConfig>
-GltfLoader::nodeExtrasPhysics(simdjson::dom::object* extras)
+class PhysicsExtrasReader
 {
-    if (extras == nullptr)
+public:
+    explicit PhysicsExtrasReader(simdjson::dom::object& object) noexcept
+        : object_{object}
     {
-        return std::nullopt;
     }
 
-    simdjson::dom::object physicsObject;
-    auto physicsElement = extras->at_key("Physics");
-    if (physicsElement.error() == simdjson::NO_SUCH_FIELD)
+    [[nodiscard]] float readFloat(std::string_view key, float fallback,
+                                  std::string_view label) const
     {
-        return std::nullopt;
-    }
-    if (physicsElement.get_object().get(physicsObject) != simdjson::SUCCESS)
-    {
-        throw std::runtime_error("glTF Physics extras must be an object");
-    }
-
-    auto readFloat = [&physicsObject](std::string_view key, float fallback,
-                                      std::string_view label) -> float
-    {
-        auto element = physicsObject.at_key(key);
+        auto element = object_.at_key(key);
         if (element.error() == simdjson::NO_SUCH_FIELD)
         {
             return fallback;
@@ -606,12 +609,12 @@ GltfLoader::nodeExtrasPhysics(simdjson::dom::object* extras)
             throw std::runtime_error("glTF Physics " + std::string(label) + " must be a number");
         }
         return static_cast<float>(value);
-    };
+    }
 
-    auto readUint = [&physicsObject](std::string_view key, std::uint32_t fallback,
-                                     std::string_view label) -> std::uint32_t
+    [[nodiscard]] std::uint32_t readUint(std::string_view key, std::uint32_t fallback,
+                                         std::string_view label) const
     {
-        auto element = physicsObject.at_key(key);
+        auto element = object_.at_key(key);
         if (element.error() == simdjson::NO_SUCH_FIELD)
         {
             return fallback;
@@ -625,12 +628,11 @@ GltfLoader::nodeExtrasPhysics(simdjson::dom::object* extras)
                                      " must be an unsigned 32-bit integer");
         }
         return static_cast<std::uint32_t>(value);
-    };
+    }
 
-    auto readVec3 = [&physicsObject](std::string_view key, Vec3 fallback,
-                                     std::string_view label) -> Vec3
+    [[nodiscard]] Vec3 readVec3(std::string_view key, Vec3 fallback, std::string_view label) const
     {
-        auto element = physicsObject.at_key(key);
+        auto element = object_.at_key(key);
         if (element.error() == simdjson::NO_SUCH_FIELD)
         {
             return fallback;
@@ -670,8 +672,46 @@ GltfLoader::nodeExtrasPhysics(simdjson::dom::object* extras)
         }
 
         return {values[0], values[1], values[2]};
-    };
+    }
 
+private:
+    simdjson::dom::object& object_;
+};
+
+} // namespace
+
+bool GltfLoader::nodeExtrasControllable(simdjson::dom::object* extras) noexcept
+{
+    if (extras == nullptr)
+    {
+        return false;
+    }
+
+    auto controllable = extras->at_key("Controllable");
+    bool enabled = false;
+    return controllable.get(enabled) == simdjson::SUCCESS && enabled;
+}
+
+std::optional<GltfLoader::PhysicsConfig>
+GltfLoader::nodeExtrasPhysics(simdjson::dom::object* extras)
+{
+    if (extras == nullptr)
+    {
+        return std::nullopt;
+    }
+
+    simdjson::dom::object physicsObject;
+    auto physicsElement = extras->at_key("Physics");
+    if (physicsElement.error() == simdjson::NO_SUCH_FIELD)
+    {
+        return std::nullopt;
+    }
+    if (physicsElement.get_object().get(physicsObject) != simdjson::SUCCESS)
+    {
+        throw std::runtime_error("glTF Physics extras must be an object");
+    }
+
+    const PhysicsExtrasReader reader{physicsObject};
     PhysicsConfig config;
     auto bodyTypeElement = physicsObject.at_key("BodyType");
     if (bodyTypeElement.error() != simdjson::NO_SUCH_FIELD)
@@ -700,13 +740,13 @@ GltfLoader::nodeExtrasPhysics(simdjson::dom::object* extras)
         }
     }
 
-    config.layer = readUint("Layer", config.layer, "Layer");
-    config.mask = readUint("Mask", config.mask, "Mask");
-    config.velocity = readVec3("Velocity", config.velocity, "Velocity");
-    config.mass = readFloat("Mass", config.mass, "Mass");
-    config.restitution = readFloat("Restitution", config.restitution, "Restitution");
-    config.friction = readFloat("Friction", config.friction, "Friction");
-    config.gravityScale = readFloat("GravityScale", config.gravityScale, "GravityScale");
+    config.layer = reader.readUint("Layer", config.layer, "Layer");
+    config.mask = reader.readUint("Mask", config.mask, "Mask");
+    config.velocity = reader.readVec3("Velocity", config.velocity, "Velocity");
+    config.mass = reader.readFloat("Mass", config.mass, "Mass");
+    config.restitution = reader.readFloat("Restitution", config.restitution, "Restitution");
+    config.friction = reader.readFloat("Friction", config.friction, "Friction");
+    config.gravityScale = reader.readFloat("GravityScale", config.gravityScale, "GravityScale");
 
     auto shapeElement = physicsObject.at_key("Shape");
     if (shapeElement.error() != simdjson::NO_SUCH_FIELD)
@@ -717,20 +757,20 @@ GltfLoader::nodeExtrasPhysics(simdjson::dom::object* extras)
             throw std::runtime_error("glTF Physics Shape must be a string");
         }
 
-        const Vec3 center = readVec3("Center", {}, "Center");
+        const Vec3 center = reader.readVec3("Center", {}, "Center");
         if (shape == "Box")
         {
             config.shape =
-                BoxShape{readVec3("HalfExtents", {0.5f, 0.5f, 0.5f}, "HalfExtents"), center};
+                BoxShape{reader.readVec3("HalfExtents", {0.5f, 0.5f, 0.5f}, "HalfExtents"), center};
         }
         else if (shape == "Sphere")
         {
-            config.shape = SphereShape{readFloat("Radius", 0.5f, "Radius"), center};
+            config.shape = SphereShape{reader.readFloat("Radius", 0.5f, "Radius"), center};
         }
         else if (shape == "Capsule")
         {
-            config.shape = CapsuleShape{readFloat("Radius", 0.5f, "Radius"),
-                                        readFloat("HalfHeight", 0.5f, "HalfHeight"), center};
+            config.shape = CapsuleShape{reader.readFloat("Radius", 0.5f, "Radius"),
+                                        reader.readFloat("HalfHeight", 0.5f, "HalfHeight"), center};
         }
         else
         {
@@ -748,14 +788,7 @@ GltfLoader::parseAsset(const std::filesystem::path& gltfPath,
 {
     // fastgltf only parses extension data when the extension is enabled here.
     // Without the opt-in, extension fields silently stay at their defaults.
-    constexpr fastgltf::Extensions enabledExtensions =
-        fastgltf::Extensions::KHR_materials_emissive_strength |
-        fastgltf::Extensions::KHR_texture_transform | fastgltf::Extensions::KHR_texture_basisu |
-        fastgltf::Extensions::KHR_materials_variants | fastgltf::Extensions::KHR_materials_unlit |
-        fastgltf::Extensions::KHR_lights_punctual |
-        fastgltf::Extensions::KHR_materials_transmission | fastgltf::Extensions::KHR_materials_ior |
-        fastgltf::Extensions::KHR_materials_clearcoat | fastgltf::Extensions::KHR_materials_volume;
-    fastgltf::Parser parser(enabledExtensions);
+    fastgltf::Parser parser(supportedExtensionMask());
     ExtrasParseState extrasState{controllableNodeIndices, physicsNodeConfigs};
     if (controllableNodeIndices != nullptr || physicsNodeConfigs != nullptr)
     {

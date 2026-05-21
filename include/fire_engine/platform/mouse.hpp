@@ -1,12 +1,11 @@
 #pragma once
 
-#define GLFW_INCLUDE_VULKAN
-#include <GLFW/glfw3.h>
-
-#include <fire_engine/platform/window.hpp>
+struct GLFWwindow;
 
 namespace fire_engine
 {
+
+class Window;
 
 class Mouse
 {
@@ -19,33 +18,9 @@ public:
     Mouse(Mouse&&) noexcept = default;
     Mouse& operator=(Mouse&&) noexcept = default;
 
-    void poll(const Window& window)
-    {
-        GLFWwindow* w = window.getWindow();
-        double currentX, currentY;
-        glfwGetCursorPos(w, &currentX, &currentY);
+    void poll(const Window& window);
 
-        if (firstMouse_)
-        {
-            lastX_ = currentX;
-            lastY_ = currentY;
-            firstMouse_ = false;
-        }
-
-        deltaX_ = currentX - lastX_;
-        deltaY_ = currentY - lastY_;
-
-        lastX_ = currentX;
-        lastY_ = currentY;
-
-        leftButton_ = glfwGetMouseButton(w, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
-        rightButton_ = glfwGetMouseButton(w, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
-    }
-
-    void registerScrollCallback(const Window& window)
-    {
-        glfwSetScrollCallback(window.getWindow(), scrollCallback);
-    }
+    void registerScrollCallback(const Window& window);
 
     [[nodiscard]] double consumeScrollDelta() noexcept
     {
@@ -80,10 +55,7 @@ public:
     }
 
 private:
-    static void scrollCallback(GLFWwindow* /*window*/, double /*xoffset*/, double yoffset)
-    {
-        scrollAccumulator_ += yoffset;
-    }
+    static void scrollCallback(GLFWwindow* window, double xoffset, double yoffset);
 
     static inline double scrollAccumulator_{0.0};
 

@@ -206,9 +206,10 @@ makeImageSubresourceRange(vk::ImageAspectFlags aspectMask, uint32_t baseMipLevel
     };
 }
 
-[[nodiscard]] vk::ImageSubresourceLayers
-makeImageSubresourceLayers(vk::ImageAspectFlags aspectMask, uint32_t mipLevel,
-                           uint32_t baseArrayLayer, uint32_t layerCount)
+[[nodiscard]] vk::ImageSubresourceLayers makeImageSubresourceLayers(vk::ImageAspectFlags aspectMask,
+                                                                    uint32_t mipLevel,
+                                                                    uint32_t baseArrayLayer,
+                                                                    uint32_t layerCount)
 {
     return vk::ImageSubresourceLayers{
         .aspectMask = aspectMask,
@@ -218,10 +219,11 @@ makeImageSubresourceLayers(vk::ImageAspectFlags aspectMask, uint32_t mipLevel,
     };
 }
 
-[[nodiscard]] vk::ImageCreateInfo
-makeImageCreateInfo(vk::ImageCreateFlags flags, vk::ImageType imageType, vk::Format format,
-                    vk::Extent3D extent, uint32_t mipLevels, uint32_t arrayLayers,
-                    vk::ImageUsageFlags usage)
+[[nodiscard]] vk::ImageCreateInfo makeImageCreateInfo(vk::ImageCreateFlags flags,
+                                                      vk::ImageType imageType, vk::Format format,
+                                                      vk::Extent3D extent, uint32_t mipLevels,
+                                                      uint32_t arrayLayers,
+                                                      vk::ImageUsageFlags usage)
 {
     return vk::ImageCreateInfo{
         .flags = flags,
@@ -238,8 +240,8 @@ makeImageCreateInfo(vk::ImageCreateFlags flags, vk::ImageType imageType, vk::For
     };
 }
 
-[[nodiscard]] vk::MemoryAllocateInfo
-makeMemoryAllocateInfo(vk::MemoryRequirements requirements, uint32_t memoryTypeIndex)
+[[nodiscard]] vk::MemoryAllocateInfo makeMemoryAllocateInfo(vk::MemoryRequirements requirements,
+                                                            uint32_t memoryTypeIndex)
 {
     return vk::MemoryAllocateInfo{
         .allocationSize = requirements.size,
@@ -281,9 +283,9 @@ makeImageMemoryBarrier(vk::AccessFlags srcAccessMask, vk::AccessFlags dstAccessM
     };
 }
 
-[[nodiscard]] vk::BufferImageCopy
-makeBufferImageCopy(vk::DeviceSize bufferOffset, vk::ImageSubresourceLayers imageSubresource,
-                    vk::Extent3D imageExtent)
+[[nodiscard]] vk::BufferImageCopy makeBufferImageCopy(vk::DeviceSize bufferOffset,
+                                                      vk::ImageSubresourceLayers imageSubresource,
+                                                      vk::Extent3D imageExtent)
 {
     return vk::BufferImageCopy{
         .bufferOffset = bufferOffset,
@@ -361,15 +363,17 @@ void withOneTimeSubmit(const Device& device, vk::CommandPool pool, F&& record)
 void transitionDepthImageToReadOnly(const Device& device, vk::CommandPool pool, vk::Image image,
                                     uint32_t layerCount)
 {
-    withOneTimeSubmit(device, pool, [&](vk::CommandBuffer cmd)
-    {
-        vk::ImageMemoryBarrier toReadOnly = makeImageMemoryBarrier(
-            {}, vk::AccessFlagBits::eShaderRead, vk::ImageLayout::eUndefined,
-            vk::ImageLayout::eDepthStencilReadOnlyOptimal, image,
-            makeImageSubresourceRange(vk::ImageAspectFlagBits::eDepth, 0, 1, 0, layerCount));
-        cmd.pipelineBarrier(vk::PipelineStageFlagBits::eTopOfPipe,
-                            vk::PipelineStageFlagBits::eFragmentShader, {}, {}, {}, toReadOnly);
-    });
+    withOneTimeSubmit(
+        device, pool,
+        [&](vk::CommandBuffer cmd)
+        {
+            vk::ImageMemoryBarrier toReadOnly = makeImageMemoryBarrier(
+                {}, vk::AccessFlagBits::eShaderRead, vk::ImageLayout::eUndefined,
+                vk::ImageLayout::eDepthStencilReadOnlyOptimal, image,
+                makeImageSubresourceRange(vk::ImageAspectFlagBits::eDepth, 0, 1, 0, layerCount));
+            cmd.pipelineBarrier(vk::PipelineStageFlagBits::eTopOfPipe,
+                                vk::PipelineStageFlagBits::eFragmentShader, {}, {}, {}, toReadOnly);
+        });
 }
 
 } // namespace
@@ -397,6 +401,35 @@ void Resources::allocateImage(TextureEntry& entry, const vk::ImageCreateInfo& im
     entry.image.bindMemory(*entry.memory, 0);
 }
 
+void Resources::createImageView(TextureEntry& entry, vk::ImageViewType viewType,
+                                vk::ImageAspectFlags aspectMask, uint32_t baseMipLevel,
+                                uint32_t levelCount, uint32_t baseArrayLayer, uint32_t layerCount)
+{
+    vk::ImageViewCreateInfo viewCi =
+        makeImageViewCreateInfo(*entry.image, viewType, entry.format,
+                                makeImageSubresourceRange(aspectMask, baseMipLevel, levelCount,
+                                                          baseArrayLayer, layerCount));
+    entry.view = vk::raii::ImageView(device_->device(), viewCi);
+}
+
+void Resources::createSampler(TextureEntry& entry, const vk::SamplerCreateInfo& samplerInfo)
+{
+    entry.sampler = vk::raii::Sampler(device_->device(), samplerInfo);
+}
+
+void Resources::createSampledTextureSampler(TextureEntry& entry, const SamplerSettings& sampler,
+                                            uint32_t mipLevels, vk::BorderColor borderColor)
+{
+    auto props = device_->physicalDevice().getProperties();
+    vk::SamplerCreateInfo samplerCi = makeSamplerCreateInfo(
+        toVkFilter(sampler.magFilter), toVkFilter(sampler.minFilter),
+        vk::SamplerMipmapMode::eLinear, toVkAddressMode(sampler.wrapS),
+        toVkAddressMode(sampler.wrapT), toVkAddressMode(sampler.wrapS), vk::True,
+        props.limits.maxSamplerAnisotropy, vk::False, vk::CompareOp::eAlways, 0.0f,
+        static_cast<float>(mipLevels - 1), borderColor);
+    createSampler(entry, samplerCi);
+}
+
 void Resources::uploadImageFromHost(TextureEntry& entry, const void* pixels, vk::DeviceSize bytes,
                                     const vk::ImageCreateInfo& imageInfo,
                                     std::span<const vk::BufferImageCopy> regions)
@@ -413,28 +446,56 @@ void Resources::uploadImageFromHost(TextureEntry& entry, const void* pixels, vk:
     const uint32_t mipLevels = imageInfo.mipLevels;
     const uint32_t arrayLayers = imageInfo.arrayLayers;
 
-    withOneTimeSubmit(*device_, *cmdPool_, [&](vk::CommandBuffer cmd)
-    {
-        vk::ImageMemoryBarrier toTransfer = makeImageMemoryBarrier(
-            {}, vk::AccessFlagBits::eTransferWrite, vk::ImageLayout::eUndefined,
-            vk::ImageLayout::eTransferDstOptimal, *entry.image,
-            makeImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, mipLevels, 0,
-                                      arrayLayers));
-        cmd.pipelineBarrier(vk::PipelineStageFlagBits::eTopOfPipe,
-                            vk::PipelineStageFlagBits::eTransfer, {}, {}, {}, toTransfer);
+    withOneTimeSubmit(
+        *device_, *cmdPool_,
+        [&](vk::CommandBuffer cmd)
+        {
+            vk::ImageMemoryBarrier toTransfer = makeImageMemoryBarrier(
+                {}, vk::AccessFlagBits::eTransferWrite, vk::ImageLayout::eUndefined,
+                vk::ImageLayout::eTransferDstOptimal, *entry.image,
+                makeImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, mipLevels, 0,
+                                          arrayLayers));
+            cmd.pipelineBarrier(vk::PipelineStageFlagBits::eTopOfPipe,
+                                vk::PipelineStageFlagBits::eTransfer, {}, {}, {}, toTransfer);
 
-        cmd.copyBufferToImage(*stagingBuf, *entry.image, vk::ImageLayout::eTransferDstOptimal,
-                              regions);
+            cmd.copyBufferToImage(*stagingBuf, *entry.image, vk::ImageLayout::eTransferDstOptimal,
+                                  regions);
 
-        vk::ImageMemoryBarrier toShader = makeImageMemoryBarrier(
-            vk::AccessFlagBits::eTransferWrite, vk::AccessFlagBits::eShaderRead,
-            vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal,
-            *entry.image,
-            makeImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, mipLevels, 0,
-                                      arrayLayers));
-        cmd.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,
-                            vk::PipelineStageFlagBits::eFragmentShader, {}, {}, {}, toShader);
-    });
+            vk::ImageMemoryBarrier toShader = makeImageMemoryBarrier(
+                vk::AccessFlagBits::eTransferWrite, vk::AccessFlagBits::eShaderRead,
+                vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal,
+                *entry.image,
+                makeImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, mipLevels, 0,
+                                          arrayLayers));
+            cmd.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,
+                                vk::PipelineStageFlagBits::eFragmentShader, {}, {}, {}, toShader);
+        });
+}
+
+TextureHandle Resources::createUploaded2DTexture(const void* pixels, int width, int height,
+                                                 vk::Format format, vk::DeviceSize bytesPerPixel,
+                                                 const SamplerSettings& sampler,
+                                                 vk::BorderColor borderColor)
+{
+    TextureHandle handle;
+    TextureEntry& entry = appendTextureEntry(handle, format);
+
+    const vk::Extent3D extent{
+        .width = static_cast<uint32_t>(width), .height = static_cast<uint32_t>(height), .depth = 1};
+    vk::BufferImageCopy region = makeBufferImageCopy(
+        0, makeImageSubresourceLayers(vk::ImageAspectFlagBits::eColor, 0, 0, 1), extent);
+    vk::ImageCreateInfo imgCi = makeImageCreateInfo(
+        {}, vk::ImageType::e2D, entry.format, extent, 1, 1,
+        vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled);
+    vk::DeviceSize bytes =
+        static_cast<vk::DeviceSize>(width) * static_cast<vk::DeviceSize>(height) * bytesPerPixel;
+    uploadImageFromHost(entry, pixels, bytes, imgCi,
+                        std::span<const vk::BufferImageCopy>{&region, 1});
+
+    createImageView(entry, vk::ImageViewType::e2D, vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1);
+    createSampledTextureSampler(entry, sampler, 1, borderColor);
+
+    return handle;
 }
 
 void Resources::createCubemapFaceViews(const Device& device, TextureEntry& entry)
@@ -528,19 +589,9 @@ TextureHandle Resources::createTexture(KtxImage&& image, const SamplerSettings& 
     uploadImageFromHost(entry, image.data(), static_cast<vk::DeviceSize>(image.size_bytes()), imgCi,
                         regions);
 
-    vk::ImageViewCreateInfo viewCi = makeImageViewCreateInfo(
-        *entry.image, vk::ImageViewType::e2D, entry.format,
-        makeImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, entry.mipLevels, 0, 1));
-    entry.view = vk::raii::ImageView(device_->device(), viewCi);
-
-    auto props = device_->physicalDevice().getProperties();
-    vk::SamplerCreateInfo samplerCi = makeSamplerCreateInfo(
-        toVkFilter(sampler.magFilter), toVkFilter(sampler.minFilter),
-        vk::SamplerMipmapMode::eLinear, toVkAddressMode(sampler.wrapS),
-        toVkAddressMode(sampler.wrapT), toVkAddressMode(sampler.wrapS), vk::True,
-        props.limits.maxSamplerAnisotropy, vk::False, vk::CompareOp::eAlways, 0.0f,
-        static_cast<float>(entry.mipLevels - 1), vk::BorderColor::eIntOpaqueBlack);
-    entry.sampler = vk::raii::Sampler(device_->device(), samplerCi);
+    createImageView(entry, vk::ImageViewType::e2D, vk::ImageAspectFlagBits::eColor, 0,
+                    entry.mipLevels, 0, 1);
+    createSampledTextureSampler(entry, sampler, entry.mipLevels, vk::BorderColor::eIntOpaqueBlack);
 
     return handle;
 }
@@ -548,71 +599,15 @@ TextureHandle Resources::createTexture(KtxImage&& image, const SamplerSettings& 
 TextureHandle Resources::createTexture(const uint8_t* pixels, int width, int height,
                                        const SamplerSettings& sampler, TextureEncoding encoding)
 {
-    TextureHandle handle;
-    TextureEntry& entry = appendTextureEntry(handle, toVkTextureFormat(encoding));
-
-    const vk::Extent3D extent{.width = static_cast<uint32_t>(width),
-                              .height = static_cast<uint32_t>(height),
-                              .depth = 1};
-    vk::BufferImageCopy region = makeBufferImageCopy(
-        0, makeImageSubresourceLayers(vk::ImageAspectFlagBits::eColor, 0, 0, 1), extent);
-    vk::ImageCreateInfo imgCi = makeImageCreateInfo(
-        {}, vk::ImageType::e2D, entry.format, extent, 1, 1,
-        vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled);
-    vk::DeviceSize bytes =
-        static_cast<vk::DeviceSize>(width) * static_cast<vk::DeviceSize>(height) * 4;
-    uploadImageFromHost(entry, pixels, bytes, imgCi, std::span<const vk::BufferImageCopy>{&region, 1});
-
-    vk::ImageViewCreateInfo viewCi = makeImageViewCreateInfo(
-        *entry.image, vk::ImageViewType::e2D, entry.format,
-        makeImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1));
-    entry.view = vk::raii::ImageView(device_->device(), viewCi);
-
-    auto props = device_->physicalDevice().getProperties();
-    vk::SamplerCreateInfo samplerCi =
-        makeSamplerCreateInfo(toVkFilter(sampler.magFilter), toVkFilter(sampler.minFilter),
-                              vk::SamplerMipmapMode::eLinear, toVkAddressMode(sampler.wrapS),
-                              toVkAddressMode(sampler.wrapT), toVkAddressMode(sampler.wrapS),
-                              vk::True, props.limits.maxSamplerAnisotropy, vk::False,
-                              vk::CompareOp::eAlways, 0.0f, 0.0f, vk::BorderColor::eIntOpaqueBlack);
-    entry.sampler = vk::raii::Sampler(device_->device(), samplerCi);
-
-    return handle;
+    return createUploaded2DTexture(pixels, width, height, toVkTextureFormat(encoding), 4, sampler,
+                                   vk::BorderColor::eIntOpaqueBlack);
 }
 
 TextureHandle Resources::createTexture(const float* pixels, int width, int height,
                                        const SamplerSettings& sampler)
 {
-    TextureHandle handle;
-    TextureEntry& entry = appendTextureEntry(handle, vk::Format::eR32G32B32A32Sfloat);
-
-    const vk::Extent3D extent{.width = static_cast<uint32_t>(width),
-                              .height = static_cast<uint32_t>(height),
-                              .depth = 1};
-    vk::BufferImageCopy region = makeBufferImageCopy(
-        0, makeImageSubresourceLayers(vk::ImageAspectFlagBits::eColor, 0, 0, 1), extent);
-    vk::ImageCreateInfo imgCi = makeImageCreateInfo(
-        {}, vk::ImageType::e2D, entry.format, extent, 1, 1,
-        vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled);
-    vk::DeviceSize bytes = static_cast<vk::DeviceSize>(width) *
-                           static_cast<vk::DeviceSize>(height) * 4 * sizeof(float);
-    uploadImageFromHost(entry, pixels, bytes, imgCi, std::span<const vk::BufferImageCopy>{&region, 1});
-
-    vk::ImageViewCreateInfo viewCi = makeImageViewCreateInfo(
-        *entry.image, vk::ImageViewType::e2D, entry.format,
-        makeImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1));
-    entry.view = vk::raii::ImageView(device_->device(), viewCi);
-
-    auto props = device_->physicalDevice().getProperties();
-    vk::SamplerCreateInfo samplerCi = makeSamplerCreateInfo(
-        toVkFilter(sampler.magFilter), toVkFilter(sampler.minFilter),
-        vk::SamplerMipmapMode::eLinear, toVkAddressMode(sampler.wrapS),
-        toVkAddressMode(sampler.wrapT), toVkAddressMode(sampler.wrapS), vk::True,
-        props.limits.maxSamplerAnisotropy, vk::False, vk::CompareOp::eAlways, 0.0f, 0.0f,
-        vk::BorderColor::eFloatOpaqueBlack);
-    entry.sampler = vk::raii::Sampler(device_->device(), samplerCi);
-
-    return handle;
+    return createUploaded2DTexture(pixels, width, height, vk::Format::eR32G32B32A32Sfloat,
+                                   4 * sizeof(float), sampler, vk::BorderColor::eFloatOpaqueBlack);
 }
 
 TextureHandle Resources::createCubemapTexture(const float* pixels, uint32_t faceExtent,
@@ -656,20 +651,11 @@ TextureHandle Resources::createCubemapTexture(const float* pixels, uint32_t face
         vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled);
     uploadImageFromHost(entry, pixels, imageSize, imgCi, regions);
 
-    vk::ImageViewCreateInfo viewCi = makeImageViewCreateInfo(
-        *entry.image, vk::ImageViewType::eCube, entry.format,
-        makeImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, mipLevels, 0, 6));
-    entry.view = vk::raii::ImageView(device_->device(), viewCi);
+    createImageView(entry, vk::ImageViewType::eCube, vk::ImageAspectFlagBits::eColor, 0, mipLevels,
+                    0, 6);
     createCubemapFaceViews(*device_, entry);
 
-    auto props = device_->physicalDevice().getProperties();
-    vk::SamplerCreateInfo samplerCi = makeSamplerCreateInfo(
-        toVkFilter(sampler.magFilter), toVkFilter(sampler.minFilter),
-        vk::SamplerMipmapMode::eLinear, toVkAddressMode(sampler.wrapS),
-        toVkAddressMode(sampler.wrapT), toVkAddressMode(sampler.wrapS), vk::True,
-        props.limits.maxSamplerAnisotropy, vk::False, vk::CompareOp::eAlways, 0.0f,
-        static_cast<float>(mipLevels - 1), vk::BorderColor::eFloatOpaqueBlack);
-    entry.sampler = vk::raii::Sampler(device_->device(), samplerCi);
+    createSampledTextureSampler(entry, sampler, mipLevels, vk::BorderColor::eFloatOpaqueBlack);
 
     return handle;
 }
@@ -678,11 +664,8 @@ TextureHandle Resources::createRenderTargetCubemap(uint32_t faceExtent, uint32_t
                                                    vk::Format format,
                                                    const SamplerSettings& sampler)
 {
-    auto id = static_cast<uint32_t>(textures_.size());
-    textures_.emplace_back();
-    auto& entry = textures_.back();
-    entry.format = format;
-    entry.mipLevels = mipLevels;
+    TextureHandle handle;
+    TextureEntry& entry = appendTextureEntry(handle, format, mipLevels);
 
     // Transfer src/dst enable vkCmdBlitImage-based mip generation (used for
     // the skybox cubemap so the prefilter pass can do importance-sampled
@@ -692,31 +675,15 @@ TextureHandle Resources::createRenderTargetCubemap(uint32_t faceExtent, uint32_t
         vk::Extent3D{.width = faceExtent, .height = faceExtent, .depth = 1}, mipLevels, 6,
         vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled |
             vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst);
-    entry.image = vk::raii::Image(device_->device(), imgCi);
+    allocateImage(entry, imgCi);
 
-    auto imgReq = entry.image.getMemoryRequirements();
-    vk::MemoryAllocateInfo imgAi = makeMemoryAllocateInfo(
-        imgReq,
-        device_->findMemoryType(imgReq.memoryTypeBits, vk::MemoryPropertyFlagBits::eDeviceLocal));
-    entry.memory = vk::raii::DeviceMemory(device_->device(), imgAi);
-    entry.image.bindMemory(*entry.memory, 0);
-
-    vk::ImageViewCreateInfo viewCi = makeImageViewCreateInfo(
-        *entry.image, vk::ImageViewType::eCube, entry.format,
-        makeImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, mipLevels, 0, 6));
-    entry.view = vk::raii::ImageView(device_->device(), viewCi);
+    createImageView(entry, vk::ImageViewType::eCube, vk::ImageAspectFlagBits::eColor, 0, mipLevels,
+                    0, 6);
     createCubemapFaceViews(*device_, entry);
 
-    auto props = device_->physicalDevice().getProperties();
-    vk::SamplerCreateInfo samplerCi = makeSamplerCreateInfo(
-        toVkFilter(sampler.magFilter), toVkFilter(sampler.minFilter),
-        vk::SamplerMipmapMode::eLinear, toVkAddressMode(sampler.wrapS),
-        toVkAddressMode(sampler.wrapT), toVkAddressMode(sampler.wrapS), vk::True,
-        props.limits.maxSamplerAnisotropy, vk::False, vk::CompareOp::eAlways, 0.0f,
-        static_cast<float>(mipLevels - 1), vk::BorderColor::eFloatOpaqueBlack);
-    entry.sampler = vk::raii::Sampler(device_->device(), samplerCi);
+    createSampledTextureSampler(entry, sampler, mipLevels, vk::BorderColor::eFloatOpaqueBlack);
 
-    return TextureHandle{id};
+    return handle;
 }
 
 TextureHandle Resources::fallbackTexture(FallbackTextureKind kind)
@@ -1005,15 +972,17 @@ TextureHandle Resources::createSceneColorTarget(uint32_t width, uint32_t height,
     // including the non-transmissive ones in pass 1 — so the layout must
     // match what the descriptor was written with even before any capture
     // pass writes meaningful contents.
-    withOneTimeSubmit(*device_, *cmdPool_, [&](vk::CommandBuffer cmd)
-    {
-        vk::ImageMemoryBarrier toShader = makeImageMemoryBarrier(
-            {}, vk::AccessFlagBits::eShaderRead, vk::ImageLayout::eUndefined,
-            vk::ImageLayout::eShaderReadOnlyOptimal, *entry.image,
-            makeImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, mipLevels, 0, 1));
-        cmd.pipelineBarrier(vk::PipelineStageFlagBits::eTopOfPipe,
-                            vk::PipelineStageFlagBits::eFragmentShader, {}, {}, {}, toShader);
-    });
+    withOneTimeSubmit(
+        *device_, *cmdPool_,
+        [&](vk::CommandBuffer cmd)
+        {
+            vk::ImageMemoryBarrier toShader = makeImageMemoryBarrier(
+                {}, vk::AccessFlagBits::eShaderRead, vk::ImageLayout::eUndefined,
+                vk::ImageLayout::eShaderReadOnlyOptimal, *entry.image,
+                makeImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, mipLevels, 0, 1));
+            cmd.pipelineBarrier(vk::PipelineStageFlagBits::eTopOfPipe,
+                                vk::PipelineStageFlagBits::eFragmentShader, {}, {}, {}, toShader);
+        });
 
     // Main view spans all mips so the shader's textureLod sample picks a mip
     // from a roughness-driven LOD.

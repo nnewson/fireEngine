@@ -262,6 +262,17 @@ private:
     TextureEntry& appendTextureEntry(TextureHandle& handle, vk::Format format,
                                      uint32_t mipLevels = 1);
     void allocateImage(TextureEntry& entry, const vk::ImageCreateInfo& imageInfo);
+    void createImageView(TextureEntry& entry, vk::ImageViewType viewType,
+                         vk::ImageAspectFlags aspectMask, uint32_t baseMipLevel,
+                         uint32_t levelCount, uint32_t baseArrayLayer, uint32_t layerCount);
+    void createSampler(TextureEntry& entry, const vk::SamplerCreateInfo& samplerInfo);
+    void createSampledTextureSampler(TextureEntry& entry, const SamplerSettings& sampler,
+                                     uint32_t mipLevels, vk::BorderColor borderColor);
+    [[nodiscard]] TextureHandle createUploaded2DTexture(const void* pixels, int width, int height,
+                                                        vk::Format format,
+                                                        vk::DeviceSize bytesPerPixel,
+                                                        const SamplerSettings& sampler,
+                                                        vk::BorderColor borderColor);
     // Stages `bytes` host bytes into a new device-local image described by
     // `imageInfo`, copies them via `regions`, and transitions the full
     // subresource range to ShaderReadOnlyOptimal. Populates entry.image and
