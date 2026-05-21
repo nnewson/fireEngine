@@ -35,6 +35,8 @@ add_library(fireengine SHARED
     src/graphics/skin.cpp
     src/graphics/texture.cpp
     src/input/input.cpp
+    src/platform/keyboard.cpp
+    src/platform/mouse.cpp
     src/platform/window.cpp
     src/physics/physics_body.cpp
     src/physics/physics_world.cpp
