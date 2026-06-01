@@ -19,7 +19,7 @@ vk::raii::CommandPool Frame::createCommandPool(const Device& device)
         .flags = vk::CommandPoolCreateFlagBits::eResetCommandBuffer,
         .queueFamilyIndex = device.graphicsFamily(),
     };
-    return vk::raii::CommandPool(*device_, ci);
+    return vk::raii::CommandPool(device.device(), ci);
 }
 
 void Frame::createCommandBuffers()

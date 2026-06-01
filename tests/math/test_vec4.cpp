@@ -1,8 +1,6 @@
 #include <fire_engine/math/vec4.hpp>
 
 #include <cmath>
-#include <limits>
-#include <sstream>
 
 #include <gtest/gtest.h>
 
@@ -343,26 +341,6 @@ TEST(Vec4Normalise, NegativeComponents)
     Vec4 v{-1.0f, -2.0f, -3.0f, -4.0f};
     Vec4 n = Vec4::normalise(v);
     EXPECT_NEAR(n.magnitude(), 1.0f, kEps);
-}
-
-// ==========================================================================
-// Stream Extraction
-// ==========================================================================
-
-TEST(Vec4Stream, ExtractsValues)
-{
-    std::istringstream ss("1.5 2.5 3.5 4.5");
-    Vec4 v{};
-    ss >> v;
-    expectNear(v, 1.5f, 2.5f, 3.5f, 4.5f);
-}
-
-TEST(Vec4Stream, NegativeValues)
-{
-    std::istringstream ss("-1 -2 -3 -4");
-    Vec4 v{};
-    ss >> v;
-    expectNear(v, -1.0f, -2.0f, -3.0f, -4.0f);
 }
 
 // ==========================================================================

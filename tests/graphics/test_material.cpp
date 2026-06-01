@@ -14,15 +14,15 @@ TEST(Material, DefaultConstructionUsesPbrDefaults)
     Material mat;
 
     EXPECT_TRUE(mat.name().empty());
-    EXPECT_FALSE(mat.hasTexture());
+    EXPECT_FALSE(mat.hasBaseColorTexture());
     EXPECT_FALSE(mat.hasEmissiveTexture());
     EXPECT_FALSE(mat.hasNormalTexture());
     EXPECT_FALSE(mat.hasMetallicRoughnessTexture());
     EXPECT_FALSE(mat.hasOcclusionTexture());
 
-    EXPECT_FLOAT_EQ(mat.diffuse().r(), 0.0f);
-    EXPECT_FLOAT_EQ(mat.diffuse().g(), 0.0f);
-    EXPECT_FLOAT_EQ(mat.diffuse().b(), 0.0f);
+    EXPECT_FLOAT_EQ(mat.baseColor().r(), 0.0f);
+    EXPECT_FLOAT_EQ(mat.baseColor().g(), 0.0f);
+    EXPECT_FLOAT_EQ(mat.baseColor().b(), 0.0f);
     EXPECT_FLOAT_EQ(mat.emissive().r(), 0.0f);
     EXPECT_FLOAT_EQ(mat.roughness(), 0.0f);
     EXPECT_FLOAT_EQ(mat.metallic(), 0.0f);
@@ -38,7 +38,7 @@ TEST(Material, SetAndGetCorePbrFields)
     Material mat;
 
     mat.name("helmet");
-    mat.diffuse({0.8f, 0.6f, 0.4f});
+    mat.baseColor({0.8f, 0.6f, 0.4f});
     mat.emissive({0.1f, 0.2f, 0.3f});
     mat.roughness(0.75f);
     mat.metallic(0.5f);
@@ -49,9 +49,9 @@ TEST(Material, SetAndGetCorePbrFields)
     mat.doubleSided(true);
 
     EXPECT_EQ(mat.name(), "helmet");
-    EXPECT_FLOAT_EQ(mat.diffuse().r(), 0.8f);
-    EXPECT_FLOAT_EQ(mat.diffuse().g(), 0.6f);
-    EXPECT_FLOAT_EQ(mat.diffuse().b(), 0.4f);
+    EXPECT_FLOAT_EQ(mat.baseColor().r(), 0.8f);
+    EXPECT_FLOAT_EQ(mat.baseColor().g(), 0.6f);
+    EXPECT_FLOAT_EQ(mat.baseColor().b(), 0.4f);
     EXPECT_FLOAT_EQ(mat.emissive().r(), 0.1f);
     EXPECT_FLOAT_EQ(mat.emissive().g(), 0.2f);
     EXPECT_FLOAT_EQ(mat.emissive().b(), 0.3f);
@@ -74,14 +74,14 @@ TEST(Material, TexturePointersRoundTrip)
     Texture occlusion;
     Texture transmission;
 
-    mat.texture(&base);
+    mat.baseColorTexture(&base);
     mat.emissiveTexture(&emissive);
     mat.normalTexture(&normal);
     mat.metallicRoughnessTexture(&mr);
     mat.occlusionTexture(&occlusion);
     mat.transmissionTexture(&transmission);
 
-    EXPECT_TRUE(mat.hasTexture());
+    EXPECT_TRUE(mat.hasBaseColorTexture());
     EXPECT_TRUE(mat.hasEmissiveTexture());
     EXPECT_TRUE(mat.hasNormalTexture());
     EXPECT_TRUE(mat.hasMetallicRoughnessTexture());
@@ -92,7 +92,7 @@ TEST(Material, TexturePointersRoundTrip)
 TEST(MaterialBinding, ToMaterialUboPacksCoreFields)
 {
     Material mat;
-    mat.diffuse({0.8f, 0.6f, 0.4f});
+    mat.baseColor({0.8f, 0.6f, 0.4f});
     mat.emissive({0.1f, 0.2f, 0.3f});
     mat.roughness(0.75f);
     mat.metallic(0.5f);
@@ -154,7 +154,7 @@ TEST(Material, MoveConstructionPreservesCoreFields)
 {
     Material original;
     original.name("moved");
-    original.diffuse({0.2f, 0.4f, 0.6f});
+    original.baseColor({0.2f, 0.4f, 0.6f});
     original.emissive({0.7f, 0.1f, 0.0f});
     original.roughness(0.8f);
     original.metallic(0.9f);
@@ -164,7 +164,7 @@ TEST(Material, MoveConstructionPreservesCoreFields)
     Material moved(std::move(original));
 
     EXPECT_EQ(moved.name(), "moved");
-    EXPECT_FLOAT_EQ(moved.diffuse().r(), 0.2f);
+    EXPECT_FLOAT_EQ(moved.baseColor().r(), 0.2f);
     EXPECT_FLOAT_EQ(moved.emissive().r(), 0.7f);
     EXPECT_FLOAT_EQ(moved.roughness(), 0.8f);
     EXPECT_FLOAT_EQ(moved.metallic(), 0.9f);

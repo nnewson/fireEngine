@@ -53,10 +53,10 @@ private:
     void createSwapchain(const Device& device, const Window& window);
     void createImageViews();
 
-    [[nodiscard]] vk::SurfaceFormatKHR chooseSwapFormat(const Device& device);
-    [[nodiscard]] vk::PresentModeKHR chooseSwapPresentMode(const Device& device);
-    [[nodiscard]] vk::Extent2D chooseSwapExtent(const Window& window,
-                                                const vk::SurfaceCapabilitiesKHR& caps);
+    [[nodiscard]] static vk::SurfaceFormatKHR chooseSwapFormat(const Device& device);
+    [[nodiscard]] static vk::PresentModeKHR chooseSwapPresentMode(const Device& device);
+    [[nodiscard]] static vk::Extent2D chooseSwapExtent(const Window& window,
+                                                       const vk::SurfaceCapabilitiesKHR& caps);
     [[nodiscard]] vk::raii::ImageView createImageView(vk::Image img, vk::Format fmt,
                                                       vk::ImageAspectFlags aspect);
 

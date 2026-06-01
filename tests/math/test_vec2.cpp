@@ -1,8 +1,6 @@
 #include <fire_engine/math/vec2.hpp>
 
 #include <cmath>
-#include <limits>
-#include <sstream>
 
 #include <gtest/gtest.h>
 
@@ -332,26 +330,6 @@ TEST(Vec2Normalise, NegativeComponents)
     Vec2 v{-3.0f, -4.0f};
     Vec2 n = Vec2::normalise(v);
     EXPECT_NEAR(n.magnitude(), 1.0f, kEps);
-}
-
-// ==========================================================================
-// Stream Extraction
-// ==========================================================================
-
-TEST(Vec2Stream, ExtractsValues)
-{
-    std::istringstream ss("1.5 2.5");
-    Vec2 v{};
-    ss >> v;
-    expectNear(v, 1.5f, 2.5f);
-}
-
-TEST(Vec2Stream, NegativeValues)
-{
-    std::istringstream ss("-1 -2");
-    Vec2 v{};
-    ss >> v;
-    expectNear(v, -1.0f, -2.0f);
 }
 
 // ==========================================================================

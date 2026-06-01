@@ -1,3 +1,4 @@
+#include <array>
 #include <iostream>
 #include <set>
 #include <stdexcept>
@@ -14,8 +15,8 @@ constexpr bool enableValidation = false;
 constexpr bool enableValidation = true;
 #endif
 
-static const std::vector<const char*> validationLayers = {"VK_LAYER_KHRONOS_validation"};
-static const std::vector<const char*> deviceExtensions = {
+constexpr std::array validationLayers{"VK_LAYER_KHRONOS_validation"};
+constexpr std::array deviceExtensions{
     VK_KHR_SWAPCHAIN_EXTENSION_NAME,
     "VK_KHR_portability_subset", // required on macOS/MoltenVK
 };
@@ -42,18 +43,16 @@ void Device::createInstance()
     exts.push_back(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
     exts.push_back(VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME);
 
-    std::vector<const char*> layers;
     if (enableValidation)
     {
-        layers = validationLayers;
         printValidationInfo();
     }
 
     vk::InstanceCreateInfo ci{
         .flags = vk::InstanceCreateFlagBits::eEnumeratePortabilityKHR,
         .pApplicationInfo = &appInfo,
-        .enabledLayerCount = static_cast<uint32_t>(layers.size()),
-        .ppEnabledLayerNames = layers.data(),
+        .enabledLayerCount = enableValidation ? static_cast<uint32_t>(validationLayers.size()) : 0u,
+        .ppEnabledLayerNames = enableValidation ? validationLayers.data() : nullptr,
         .enabledExtensionCount = static_cast<uint32_t>(exts.size()),
         .ppEnabledExtensionNames = exts.data(),
     };

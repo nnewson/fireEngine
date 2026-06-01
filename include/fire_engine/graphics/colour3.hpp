@@ -1,7 +1,5 @@
 #pragma once
 
-#include <istream>
-
 namespace fire_engine
 {
 
@@ -59,12 +57,6 @@ public:
     constexpr bool operator==(const Colour3& other) const noexcept
     {
         return r_ == other.r_ && g_ == other.g_ && b_ == other.b_;
-    }
-
-    // Friend declaration
-    friend std::istream& operator>>(std::istream& is, Colour3& c)
-    {
-        return is >> c.r_ >> c.g_ >> c.b_;
     }
 
 private:

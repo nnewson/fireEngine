@@ -41,17 +41,17 @@ public:
     Material(Material&&) noexcept = default;
     Material& operator=(Material&&) noexcept = default;
 
-    [[nodiscard]] const Texture& texture() const noexcept
+    [[nodiscard]] const Texture& baseColorTexture() const noexcept
     {
-        return *texture_;
+        return *baseColorTexture_;
     }
-    void texture(const Texture* t) noexcept
+    void baseColorTexture(const Texture* t) noexcept
     {
-        texture_ = t;
+        baseColorTexture_ = t;
     }
-    [[nodiscard]] bool hasTexture() const noexcept
+    [[nodiscard]] bool hasBaseColorTexture() const noexcept
     {
-        return texture_ != nullptr;
+        return baseColorTexture_ != nullptr;
     }
 
     [[nodiscard]] const Texture& emissiveTexture() const noexcept
@@ -246,13 +246,13 @@ public:
         name_ = name;
     }
 
-    [[nodiscard]] Colour3 diffuse() const noexcept
+    [[nodiscard]] Colour3 baseColor() const noexcept
     {
-        return diffuse_;
+        return baseColor_;
     }
-    void diffuse(Colour3 c) noexcept
+    void baseColor(Colour3 c) noexcept
     {
-        diffuse_ = c;
+        baseColor_ = c;
     }
 
     [[nodiscard]] Colour3 emissive() const noexcept
@@ -541,7 +541,7 @@ public:
 
 private:
     std::string name_;
-    Colour3 diffuse_{};
+    Colour3 baseColor_{};
     Colour3 emissive_{};
     float roughness_{0.0f};
     float metallic_{0.0f};
@@ -581,7 +581,7 @@ private:
     bool doubleSided_{false};
     bool unlit_{false};
 
-    const Texture* texture_{nullptr};
+    const Texture* baseColorTexture_{nullptr};
     const Texture* emissiveTexture_{nullptr};
     const Texture* normalTexture_{nullptr};
     const Texture* metallicRoughnessTexture_{nullptr};

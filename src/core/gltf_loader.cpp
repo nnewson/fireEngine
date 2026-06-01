@@ -51,28 +51,20 @@ struct SupportedExtension
     fastgltf::Extensions flag;
 };
 
-constexpr std::array<SupportedExtension, 10> kSupportedExtensions = {
-    SupportedExtension{std::string_view{"KHR_materials_emissive_strength"},
-                       fastgltf::Extensions::KHR_materials_emissive_strength},
-    SupportedExtension{std::string_view{"KHR_texture_transform"},
-                       fastgltf::Extensions::KHR_texture_transform},
-    SupportedExtension{std::string_view{"KHR_texture_basisu"},
-                       fastgltf::Extensions::KHR_texture_basisu},
-    SupportedExtension{std::string_view{"KHR_materials_variants"},
-                       fastgltf::Extensions::KHR_materials_variants},
-    SupportedExtension{std::string_view{"KHR_materials_unlit"},
-                       fastgltf::Extensions::KHR_materials_unlit},
-    SupportedExtension{std::string_view{"KHR_lights_punctual"},
-                       fastgltf::Extensions::KHR_lights_punctual},
-    SupportedExtension{std::string_view{"KHR_materials_transmission"},
-                       fastgltf::Extensions::KHR_materials_transmission},
-    SupportedExtension{std::string_view{"KHR_materials_ior"},
-                       fastgltf::Extensions::KHR_materials_ior},
-    SupportedExtension{std::string_view{"KHR_materials_clearcoat"},
-                       fastgltf::Extensions::KHR_materials_clearcoat},
-    SupportedExtension{std::string_view{"KHR_materials_volume"},
-                       fastgltf::Extensions::KHR_materials_volume},
-};
+constexpr auto kSupportedExtensions = std::to_array<SupportedExtension>({
+    {std::string_view{"KHR_materials_emissive_strength"},
+     fastgltf::Extensions::KHR_materials_emissive_strength},
+    {std::string_view{"KHR_texture_transform"}, fastgltf::Extensions::KHR_texture_transform},
+    {std::string_view{"KHR_texture_basisu"}, fastgltf::Extensions::KHR_texture_basisu},
+    {std::string_view{"KHR_materials_variants"}, fastgltf::Extensions::KHR_materials_variants},
+    {std::string_view{"KHR_materials_unlit"}, fastgltf::Extensions::KHR_materials_unlit},
+    {std::string_view{"KHR_lights_punctual"}, fastgltf::Extensions::KHR_lights_punctual},
+    {std::string_view{"KHR_materials_transmission"},
+     fastgltf::Extensions::KHR_materials_transmission},
+    {std::string_view{"KHR_materials_ior"}, fastgltf::Extensions::KHR_materials_ior},
+    {std::string_view{"KHR_materials_clearcoat"}, fastgltf::Extensions::KHR_materials_clearcoat},
+    {std::string_view{"KHR_materials_volume"}, fastgltf::Extensions::KHR_materials_volume},
+});
 
 constexpr fastgltf::Extensions supportedExtensionMask() noexcept
 {
@@ -1719,7 +1711,7 @@ void applyResolvedMaterialTextures(Material& material, const ResolvedMaterialTex
 {
     if (textures.baseColour != nullptr)
     {
-        material.texture(textures.baseColour);
+        material.baseColorTexture(textures.baseColour);
     }
     if (textures.emissive != nullptr)
     {
@@ -1922,9 +1914,9 @@ Material GltfLoader::loadMaterial(const fastgltf::Asset& asset,
         material.name(std::string(gltfMat.name));
 
         const auto& pbr = gltfMat.pbrData;
-        material.diffuse({static_cast<float>(pbr.baseColorFactor.x()),
-                          static_cast<float>(pbr.baseColorFactor.y()),
-                          static_cast<float>(pbr.baseColorFactor.z())});
+        material.baseColor({static_cast<float>(pbr.baseColorFactor.x()),
+                            static_cast<float>(pbr.baseColorFactor.y()),
+                            static_cast<float>(pbr.baseColorFactor.z())});
         material.alpha(static_cast<float>(pbr.baseColorFactor.w()));
         material.metallic(static_cast<float>(pbr.metallicFactor));
         material.roughness(static_cast<float>(pbr.roughnessFactor));

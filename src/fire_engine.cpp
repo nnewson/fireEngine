@@ -15,6 +15,7 @@
 #include <fire_engine/graphics/vertex.hpp>
 #include <fire_engine/scene/mesh.hpp>
 #include <fire_engine/scene/node.hpp>
+#include <fire_engine/scene/scene_graph_format.hpp>
 
 namespace fire_engine
 {
@@ -60,7 +61,7 @@ void FireEngine::addFloorPlane()
     // pointers stay valid across the insert.
     auto& mat = assets_.addMaterial(Material{});
     mat.name("FloorWhite");
-    mat.diffuse(white);
+    mat.baseColor(white);
     mat.alpha(1.0f);
     mat.roughness(1.0f);
     mat.metallic(0.0f);

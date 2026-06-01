@@ -1,7 +1,6 @@
 #include <fire_engine/graphics/colour3.hpp>
 
 #include <limits>
-#include <sstream>
 
 #include <gtest/gtest.h>
 
@@ -149,72 +148,6 @@ TEST(Colour3Equality, NaNNotEqual)
     Colour3 a{nan, 0.0f, 0.0f};
     Colour3 b{nan, 0.0f, 0.0f};
     EXPECT_FALSE(a == b);
-}
-
-// ==========================================================================
-// Stream extraction (operator>>)
-// ==========================================================================
-
-TEST(Colour3Stream, BasicParse)
-{
-    std::istringstream iss("0.1 0.2 0.3");
-    Colour3 c{};
-    iss >> c;
-    EXPECT_TRUE(iss);
-    expectNear(c, 0.1f, 0.2f, 0.3f);
-}
-
-TEST(Colour3Stream, IntegerValues)
-{
-    std::istringstream iss("1 0 1");
-    Colour3 c{};
-    iss >> c;
-    EXPECT_TRUE(iss);
-    expectNear(c, 1.0f, 0.0f, 1.0f);
-}
-
-TEST(Colour3Stream, ScientificNotation)
-{
-    std::istringstream iss("1e-1 2.5e-1 5e-1");
-    Colour3 c{};
-    iss >> c;
-    EXPECT_TRUE(iss);
-    expectNear(c, 0.1f, 0.25f, 0.5f);
-}
-
-TEST(Colour3Stream, InsufficientData)
-{
-    std::istringstream iss("0.5 0.5");
-    Colour3 c{};
-    iss >> c;
-    EXPECT_TRUE(iss.fail());
-}
-
-TEST(Colour3Stream, InvalidInput)
-{
-    std::istringstream iss("red green blue");
-    Colour3 c{};
-    iss >> c;
-    EXPECT_TRUE(iss.fail());
-}
-
-TEST(Colour3Stream, ExtraDataIgnored)
-{
-    std::istringstream iss("0.1 0.2 0.3 0.4");
-    Colour3 c{};
-    iss >> c;
-    EXPECT_TRUE(iss);
-    expectNear(c, 0.1f, 0.2f, 0.3f);
-}
-
-TEST(Colour3Stream, MultipleReads)
-{
-    std::istringstream iss("0.1 0.2 0.3 0.4 0.5 0.6");
-    Colour3 a{}, b{};
-    iss >> a >> b;
-    EXPECT_TRUE(iss);
-    expectNear(a, 0.1f, 0.2f, 0.3f);
-    expectNear(b, 0.4f, 0.5f, 0.6f);
 }
 
 // ==========================================================================

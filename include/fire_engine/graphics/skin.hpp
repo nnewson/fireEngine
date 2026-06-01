@@ -1,10 +1,10 @@
 #pragma once
 
 #include <cstddef>
+#include <string>
 #include <vector>
 
 #include <fire_engine/math/mat4.hpp>
-#include <fire_engine/render/constants.hpp>
 
 namespace fire_engine
 {

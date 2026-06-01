@@ -50,7 +50,7 @@ public:
     void createRenderFinishedSemaphores(size_t count);
 
 private:
-    [[nodiscard]] vk::raii::CommandPool createCommandPool(const Device& device);
+    [[nodiscard]] static vk::raii::CommandPool createCommandPool(const Device& device);
     void createCommandBuffers();
     void createSyncObjects();
 

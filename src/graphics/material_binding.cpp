@@ -44,9 +44,9 @@ void writeUv(UvXform& dst, const UvTransform& transform) noexcept
 MaterialUBO toMaterialUBO(const Material& mat)
 {
     MaterialUBO ubo{};
-    ubo.diffuseAlpha[0] = mat.diffuse().r();
-    ubo.diffuseAlpha[1] = mat.diffuse().g();
-    ubo.diffuseAlpha[2] = mat.diffuse().b();
+    ubo.diffuseAlpha[0] = mat.baseColor().r();
+    ubo.diffuseAlpha[1] = mat.baseColor().g();
+    ubo.diffuseAlpha[2] = mat.baseColor().b();
     ubo.diffuseAlpha[3] = mat.alpha();
     ubo.emissiveRoughness[0] = mat.emissive().r();
     ubo.emissiveRoughness[1] = mat.emissive().g();
@@ -56,7 +56,7 @@ MaterialUBO toMaterialUBO(const Material& mat)
     ubo.materialParams[1] = mat.normalScale();
     ubo.materialParams[2] = mat.alphaMode() == AlphaMode::Mask ? mat.alphaCutoff() : 0.0f;
     ubo.materialParams[3] = mat.occlusionStrength();
-    ubo.textureFlags[0] = mat.hasTexture() ? 1 : 0;
+    ubo.textureFlags[0] = mat.hasBaseColorTexture() ? 1 : 0;
     ubo.textureFlags[1] = mat.hasEmissiveTexture() ? 1 : 0;
     ubo.textureFlags[2] = mat.hasNormalTexture() ? 1 : 0;
     ubo.textureFlags[3] = mat.hasMetallicRoughnessTexture() ? 1 : 0;
@@ -122,7 +122,8 @@ bool materialsEquivalent(const Material& lhs, const Material& rhs)
         return false;
     }
 
-    return sameTextureSlot(lhs.hasTexture(), rhs.hasTexture(), lhs.texture(), rhs.texture()) &&
+    return sameTextureSlot(lhs.hasBaseColorTexture(), rhs.hasBaseColorTexture(),
+                           lhs.baseColorTexture(), rhs.baseColorTexture()) &&
            sameTextureSlot(lhs.hasEmissiveTexture(), rhs.hasEmissiveTexture(),
                            lhs.emissiveTexture(), rhs.emissiveTexture()) &&
            sameTextureSlot(lhs.hasNormalTexture(), rhs.hasNormalTexture(), lhs.normalTexture(),
@@ -148,9 +149,9 @@ MaterialTextureHandles materialTextureHandles(const Material& material) noexcept
     MaterialTextureHandles handles{};
     handles.fill(NullTexture);
 
-    if (material.hasTexture())
+    if (material.hasBaseColorTexture())
     {
-        handles[slotIndex(MaterialTextureSlot::BaseColour)] = material.texture().handle();
+        handles[slotIndex(MaterialTextureSlot::BaseColour)] = material.baseColorTexture().handle();
     }
     if (material.hasEmissiveTexture())
     {

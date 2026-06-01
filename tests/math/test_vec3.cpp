@@ -2,7 +2,6 @@
 
 #include <cmath>
 #include <limits>
-#include <sstream>
 
 #include <gtest/gtest.h>
 
@@ -696,72 +695,6 @@ TEST(Vec3Normalise, Diagonal)
     Vec3 n = Vec3::normalise(v);
     float expected = 1.0f / std::sqrt(3.0f);
     expectNear(n, expected, expected, expected);
-}
-
-// ==========================================================================
-// Stream extraction (operator>>)
-// ==========================================================================
-
-TEST(Vec3Stream, BasicParse)
-{
-    std::istringstream iss("1.5 2.5 3.5");
-    Vec3 v{};
-    iss >> v;
-    EXPECT_TRUE(iss);
-    expectNear(v, 1.5f, 2.5f, 3.5f);
-}
-
-TEST(Vec3Stream, NegativeValues)
-{
-    std::istringstream iss("-1.0 -2.0 -3.0");
-    Vec3 v{};
-    iss >> v;
-    EXPECT_TRUE(iss);
-    expectNear(v, -1.0f, -2.0f, -3.0f);
-}
-
-TEST(Vec3Stream, ScientificNotation)
-{
-    std::istringstream iss("1e2 2.5e-1 -3e0");
-    Vec3 v{};
-    iss >> v;
-    EXPECT_TRUE(iss);
-    expectNear(v, 100.0f, 0.25f, -3.0f);
-}
-
-TEST(Vec3Stream, InsufficientData)
-{
-    std::istringstream iss("1.0 2.0");
-    Vec3 v{};
-    iss >> v;
-    EXPECT_TRUE(iss.fail());
-}
-
-TEST(Vec3Stream, InvalidInput)
-{
-    std::istringstream iss("abc def ghi");
-    Vec3 v{};
-    iss >> v;
-    EXPECT_TRUE(iss.fail());
-}
-
-TEST(Vec3Stream, ExtraDataIgnored)
-{
-    std::istringstream iss("1.0 2.0 3.0 4.0 5.0");
-    Vec3 v{};
-    iss >> v;
-    EXPECT_TRUE(iss);
-    expectNear(v, 1.0f, 2.0f, 3.0f);
-}
-
-TEST(Vec3Stream, MultipleReadsFromSameStream)
-{
-    std::istringstream iss("1.0 2.0 3.0 4.0 5.0 6.0");
-    Vec3 a{}, b{};
-    iss >> a >> b;
-    EXPECT_TRUE(iss);
-    expectNear(a, 1.0f, 2.0f, 3.0f);
-    expectNear(b, 4.0f, 5.0f, 6.0f);
 }
 
 // ==========================================================================

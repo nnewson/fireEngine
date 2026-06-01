@@ -2,7 +2,6 @@
 
 #include <cmath>
 #include <cstddef>
-#include <istream>
 
 #include <fire_engine/math/constants.hpp>
 
@@ -147,15 +146,6 @@ public:
             }
         }
         return true;
-    }
-
-    friend std::istream& operator>>(std::istream& is, Derived& v)
-    {
-        for (std::size_t i = 0; i < N; ++i)
-        {
-            is >> v.data_[i];
-        }
-        return is;
     }
 
 protected:

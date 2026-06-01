@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <limits>
 
 #include <fire_engine/render/device.hpp>
@@ -100,11 +101,7 @@ void Transmission::rebuildSceneColorChain()
 
     const auto extent = swapchain_->extent();
     const uint32_t maxDim = std::max(extent.width, extent.height);
-    sceneColorMipLevels_ = 1u;
-    while ((maxDim >> sceneColorMipLevels_) > 0)
-    {
-        ++sceneColorMipLevels_;
-    }
+    sceneColorMipLevels_ = static_cast<uint32_t>(std::bit_width(maxDim));
 
     sceneColorHandle_ =
         resources_->createSceneColorTarget(extent.width, extent.height, sceneColorMipLevels_);

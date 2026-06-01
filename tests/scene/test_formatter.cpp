@@ -1,4 +1,4 @@
-#include <fire_engine/scene/scene_graph.hpp>
+#include <fire_engine/scene/scene_graph_format.hpp>
 
 #include <format>
 
