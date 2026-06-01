@@ -75,7 +75,7 @@ struct MaterialUBO
 
 struct SkinUBO
 {
-    Mat4 joints[MAX_JOINTS];
+    Mat4 joints[kMaxJoints];
 };
 
 struct MorphUBO
@@ -84,7 +84,7 @@ struct MorphUBO
     alignas(4) int morphTargetCount{0};
     alignas(4) int vertexCount{0};
     int _pad0{0};
-    float weights[MAX_MORPH_TARGETS]{};
+    float weights[kMaxMorphTargets]{};
 };
 
 struct SkyboxUBO
@@ -113,9 +113,9 @@ struct EnvironmentCaptureUBO
 //   cone.x        — cos(innerCone)
 //   cone.y        — cos(outerCone)
 //   cone.z        — shadow index. For spot lights, layer in spot 2D-array
-//                   shadow map (0..MAX_SPOT_SHADOW_CASTERS-1). For point
+//                   shadow map (0..kMaxSpotShadowCasters-1). For point
 //                   lights, cube layer in point cubemap-array shadow map
-//                   (0..MAX_POINT_SHADOW_CASTERS-1). -1 = no shadow caster.
+//                   (0..kMaxPointShadowCasters-1). -1 = no shadow caster.
 //                   Stored as float; cast int() in shader.
 struct LightData
 {
@@ -133,9 +133,9 @@ struct LightUBO
     alignas(16) Mat4 cascadeViewProj[4]{};
     // Spot-light view-projection matrices for shadow sampling. Indexed by
     // LightData::cone.z (shadow index). Identity when the slot is unused.
-    alignas(16) Mat4 spotViewProj[MAX_SPOT_SHADOW_CASTERS]{};
+    alignas(16) Mat4 spotViewProj[kMaxSpotShadowCasters]{};
     // Per-skinned-object self-shadow matrices. Indexed by ForwardPushConstants::selfShadowSlot.
-    alignas(16) Mat4 selfShadowViewProj[MAX_SKINNED_SELF_SHADOW_CASTERS]{};
+    alignas(16) Mat4 selfShadowViewProj[kMaxSkinnedSelfShadowCasters]{};
     // View-space far-plane distances for each cascade (x..w = cascades 0..3).
     alignas(16) float cascadeSplits[4]{};
     alignas(16) float iblParams[4]{}; // x = maxReflectionLod, y/z = IBL strengths
@@ -143,7 +143,7 @@ struct LightUBO
     alignas(16) float shadowParams[4]{};
     // x = punctual minBias, y = punctual slopeBias.
     alignas(16) float pointSpotShadowParams[4]{};
-    // x = skyboxIntensity, y = environmentShadowStrength,
+    // x = kSkyboxIntensity, y = kEnvironmentShadowStrength,
     // z = debug view (0=off, 1=normals, 2=NdotL, 3=shadow visibility,
     // 4=directional raw depth: red=receiver, green=stored, blue=cascade).
     // w = disable all shadow-map visibility lookups when > 0.5.
@@ -155,7 +155,7 @@ struct LightUBO
     int _pad0{0};
     int _pad1{0};
     int _pad2{0};
-    LightData lights[MAX_LIGHTS]{};
+    LightData lights[kMaxLights]{};
 };
 
 struct EnvironmentPrefilterPushConstants
@@ -179,17 +179,17 @@ struct EnvironmentPrefilterPushConstants
 //   [0..3]   directional cascades 0..3
 //   [4..]    spot lights, layout 4 + spotIndex
 //   [4+S..]  point lights, layout (4 + S) + 6 * cubeIndex + face
-// where S = MAX_SPOT_SHADOW_CASTERS.
-inline constexpr int SHADOW_CASCADE_MATRIX_BASE = 0;
-inline constexpr int SHADOW_SPOT_MATRIX_BASE = 4;
-inline constexpr int SHADOW_POINT_MATRIX_BASE = SHADOW_SPOT_MATRIX_BASE + MAX_SPOT_SHADOW_CASTERS;
-inline constexpr int SHADOW_TOTAL_MATRIX_COUNT =
-    SHADOW_POINT_MATRIX_BASE + 6 * MAX_POINT_SHADOW_CASTERS;
+// where S = kMaxSpotShadowCasters.
+inline constexpr int kShadowCascadeMatrixBase = 0;
+inline constexpr int kShadowSpotMatrixBase = 4;
+inline constexpr int kShadowPointMatrixBase = kShadowSpotMatrixBase + kMaxSpotShadowCasters;
+inline constexpr int kShadowTotalMatrixCount =
+    kShadowPointMatrixBase + 6 * kMaxPointShadowCasters;
 
 struct ShadowUBO
 {
     alignas(16) Mat4 model;
-    alignas(16) Mat4 lightViewProj[SHADOW_TOTAL_MATRIX_COUNT];
+    alignas(16) Mat4 lightViewProj[kShadowTotalMatrixCount];
     alignas(4) int hasSkin{0};
 };
 
@@ -201,9 +201,9 @@ struct ShadowPushConstants
     alignas(4) int selfShadowSlot{-1};
     // Normalized-depth gap required before a fragment counts as the second
     // surface behind the first light-facing surface.
-    float selfShadowDepthEpsilon{skinnedSelfShadowDepthEpsilon};
+    float selfShadowDepthEpsilon{kSkinnedSelfShadowDepthEpsilon};
     float _pad0{0.0f};
-    // Point shadow (matrixIndex >= SHADOW_POINT_MATRIX_BASE): xyz = light
+    // Point shadow (matrixIndex >= kShadowPointMatrixBase): xyz = light
     // world position, w = effective range. shadow.frag writes linear distance
     // / range so the cube-array compare sampler agrees with the main shader.
     // Zero for cascade/spot shadow passes.
@@ -234,7 +234,7 @@ struct BloomPushConstants
 struct PostProcessPushConstants
 {
     // 0 = bloom off (output identical to pre-bloom). Typical 0.02–0.08.
-    alignas(4) float bloomStrength{0.0f};
+    alignas(4) float kBloomStrength{0.0f};
     float _pad0{0.0f};
     float _pad1{0.0f};
     float _pad2{0.0f};

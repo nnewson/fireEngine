@@ -20,15 +20,15 @@ class Resources;
 
 struct MappedBufferSet
 {
-    std::array<BufferHandle, MAX_FRAMES_IN_FLIGHT> buffers{NullBuffer, NullBuffer};
-    std::array<MappedMemory, MAX_FRAMES_IN_FLIGHT> mapped{};
+    std::array<BufferHandle, kMaxFramesInFlight> buffers{NullBuffer, NullBuffer};
+    std::array<MappedMemory, kMaxFramesInFlight> mapped{};
 };
 
 struct GeometryDescriptorInfo
 {
-    std::array<BufferHandle, MAX_FRAMES_IN_FLIGHT> materialBufs{NullBuffer, NullBuffer};
-    std::array<BufferHandle, MAX_FRAMES_IN_FLIGHT> skinBufs{NullBuffer, NullBuffer};
-    std::array<BufferHandle, MAX_FRAMES_IN_FLIGHT> morphUboBufs{NullBuffer, NullBuffer};
+    std::array<BufferHandle, kMaxFramesInFlight> materialBufs{NullBuffer, NullBuffer};
+    std::array<BufferHandle, kMaxFramesInFlight> skinBufs{NullBuffer, NullBuffer};
+    std::array<BufferHandle, kMaxFramesInFlight> morphUboBufs{NullBuffer, NullBuffer};
     BufferHandle morphSsbo{NullBuffer};
     std::size_t morphSsboSize{0};
     std::array<TextureHandle, materialTextureSlotCount> materialTextures{
@@ -38,7 +38,7 @@ struct GeometryDescriptorInfo
 
 struct ObjectDescriptorRequest
 {
-    std::array<BufferHandle, MAX_FRAMES_IN_FLIGHT> uniformBufs{NullBuffer, NullBuffer};
+    std::array<BufferHandle, kMaxFramesInFlight> uniformBufs{NullBuffer, NullBuffer};
     // Shadow maps, IBL textures, light UBO, and sceneColor live on the
     // forward globals descriptor (set 1) — see GlobalDescriptorRequest above.
     std::vector<GeometryDescriptorInfo> geometries;
@@ -46,7 +46,7 @@ struct ObjectDescriptorRequest
 
 struct ObjectDescriptorResult
 {
-    std::vector<std::array<DescriptorSetHandle, MAX_FRAMES_IN_FLIGHT>> descSets;
+    std::vector<std::array<DescriptorSetHandle, kMaxFramesInFlight>> descSets;
 };
 
 // Per-frame globals for the forward pipeline's set 1 — bound once at the
@@ -55,7 +55,7 @@ struct ObjectDescriptorResult
 // recreated.
 struct GlobalDescriptorRequest
 {
-    std::array<BufferHandle, MAX_FRAMES_IN_FLIGHT> lightBufs{NullBuffer, NullBuffer};
+    std::array<BufferHandle, kMaxFramesInFlight> lightBufs{NullBuffer, NullBuffer};
     TextureHandle shadowMap{NullTexture};
     TextureHandle worldShadowMap{NullTexture};
     TextureHandle selfShadowMap{NullTexture};
@@ -70,9 +70,9 @@ struct GlobalDescriptorRequest
 
 struct ShadowGeometryDescriptorInfo
 {
-    std::array<BufferHandle, MAX_FRAMES_IN_FLIGHT> shadowUboBufs{NullBuffer, NullBuffer};
-    std::array<BufferHandle, MAX_FRAMES_IN_FLIGHT> skinBufs{NullBuffer, NullBuffer};
-    std::array<BufferHandle, MAX_FRAMES_IN_FLIGHT> morphUboBufs{NullBuffer, NullBuffer};
+    std::array<BufferHandle, kMaxFramesInFlight> shadowUboBufs{NullBuffer, NullBuffer};
+    std::array<BufferHandle, kMaxFramesInFlight> skinBufs{NullBuffer, NullBuffer};
+    std::array<BufferHandle, kMaxFramesInFlight> morphUboBufs{NullBuffer, NullBuffer};
     BufferHandle morphSsbo{NullBuffer};
     std::size_t morphSsboSize{0};
 };
@@ -84,7 +84,7 @@ struct ShadowDescriptorRequest
 
 struct ShadowDescriptorResult
 {
-    std::vector<std::array<DescriptorSetHandle, MAX_FRAMES_IN_FLIGHT>> descSets;
+    std::vector<std::array<DescriptorSetHandle, kMaxFramesInFlight>> descSets;
 };
 
 class Descriptors
@@ -105,10 +105,10 @@ public:
     [[nodiscard]] ShadowDescriptorResult
     createShadowDescriptors(const ShadowDescriptorRequest& req);
 
-    // Allocates MAX_FRAMES_IN_FLIGHT descriptor sets for the forward
+    // Allocates kMaxFramesInFlight descriptor sets for the forward
     // pipeline's set 1 layout and writes every global binding (light UBO,
     // shadow maps, IBL, sceneColor).
-    [[nodiscard]] std::array<DescriptorSetHandle, MAX_FRAMES_IN_FLIGHT>
+    [[nodiscard]] std::array<DescriptorSetHandle, kMaxFramesInFlight>
     createGlobalDescriptors(const GlobalDescriptorRequest& req);
 
     // Rewrites every binding on the supplied global descriptor sets to point
@@ -117,7 +117,7 @@ public:
     // existing sets stop dangling against destroyed samplers/views. Pool /
     // set allocation is untouched.
     void
-    updateGlobalDescriptors(const std::array<DescriptorSetHandle, MAX_FRAMES_IN_FLIGHT>& sets,
+    updateGlobalDescriptors(const std::array<DescriptorSetHandle, kMaxFramesInFlight>& sets,
                             const GlobalDescriptorRequest& req);
 
     void shadowDescriptorSetLayout(vk::DescriptorSetLayout layout) noexcept
@@ -130,35 +130,35 @@ public:
         return shadowDescLayout_;
     }
 
-    [[nodiscard]] std::array<DescriptorSetHandle, MAX_FRAMES_IN_FLIGHT>
+    [[nodiscard]] std::array<DescriptorSetHandle, kMaxFramesInFlight>
     createSingleUboDescriptors(vk::DescriptorSetLayout layout, const MappedBufferSet& ubo,
                                vk::DeviceSize uboSize);
 
-    [[nodiscard]] std::array<DescriptorSetHandle, MAX_FRAMES_IN_FLIGHT>
+    [[nodiscard]] std::array<DescriptorSetHandle, kMaxFramesInFlight>
     createUboImageSamplerDescriptors(vk::DescriptorSetLayout layout, const MappedBufferSet& ubo,
                                      vk::DeviceSize uboSize, TextureHandle texture);
 
-    [[nodiscard]] std::array<DescriptorSetHandle, MAX_FRAMES_IN_FLIGHT>
+    [[nodiscard]] std::array<DescriptorSetHandle, kMaxFramesInFlight>
     createSkyboxDescriptors(vk::DescriptorSetLayout layout, const MappedBufferSet& skyboxUbo,
                             vk::DeviceSize skyboxUboSize, TextureHandle texture,
                             const MappedBufferSet& lightUbo, vk::DeviceSize lightUboSize);
 
-    [[nodiscard]] std::array<DescriptorSetHandle, MAX_FRAMES_IN_FLIGHT>
+    [[nodiscard]] std::array<DescriptorSetHandle, kMaxFramesInFlight>
     createSingleImageSamplerDescriptors(vk::DescriptorSetLayout layout, TextureHandle texture);
 
     void updateSingleImageSamplerDescriptors(
-        const std::array<DescriptorSetHandle, MAX_FRAMES_IN_FLIGHT>& sets, TextureHandle texture);
+        const std::array<DescriptorSetHandle, kMaxFramesInFlight>& sets, TextureHandle texture);
 
     [[nodiscard]] DescriptorSetHandle createImageViewDescriptor(vk::DescriptorSetLayout layout,
                                                                 vk::ImageView view,
                                                                 vk::Sampler sampler);
 
-    [[nodiscard]] std::array<DescriptorSetHandle, MAX_FRAMES_IN_FLIGHT>
+    [[nodiscard]] std::array<DescriptorSetHandle, kMaxFramesInFlight>
     createPostProcessDescriptors(vk::DescriptorSetLayout layout, TextureHandle hdrTarget,
                                  TextureHandle bloomChain);
 
     void
-    updatePostProcessDescriptors(const std::array<DescriptorSetHandle, MAX_FRAMES_IN_FLIGHT>& sets,
+    updatePostProcessDescriptors(const std::array<DescriptorSetHandle, kMaxFramesInFlight>& sets,
                                  TextureHandle hdrTarget, TextureHandle bloomChain);
 
     [[nodiscard]] vk::DescriptorSet vulkanDescriptorSet(DescriptorSetHandle handle) const noexcept;

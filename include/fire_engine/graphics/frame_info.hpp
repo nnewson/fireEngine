@@ -34,7 +34,7 @@ struct FrameInfo
     // spot lights, and the six faces of each point light. Layout matches
     // ShadowUBO::lightViewProj. Object::render copies the full array into the
     // per-draw ShadowUBO; the shadow vertex shader picks one via push constant.
-    std::array<Mat4, SHADOW_TOTAL_MATRIX_COUNT> shadowViewProjs{};
+    std::array<Mat4, kShadowTotalMatrixCount> shadowViewProjs{};
 };
 
 } // namespace fire_engine

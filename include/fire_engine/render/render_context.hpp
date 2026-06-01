@@ -33,7 +33,7 @@ struct RenderContext
     std::vector<DrawCommand>* drawCommands{nullptr};
     AlphaPipelines pipelines{};
     PipelineHandle shadowPipeline{NullPipeline};
-    std::array<Mat4, SHADOW_TOTAL_MATRIX_COUNT> shadowViewProjs{};
+    std::array<Mat4, kShadowTotalMatrixCount> shadowViewProjs{};
 
     [[nodiscard]] FrameInfo frameInfo() const noexcept;
 };

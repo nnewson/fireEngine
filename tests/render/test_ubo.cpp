@@ -26,7 +26,7 @@ TEST(MorphUBO, DefaultInitialisation)
     EXPECT_EQ(ubo.hasMorph, 0);
     EXPECT_EQ(ubo.morphTargetCount, 0);
     EXPECT_EQ(ubo.vertexCount, 0);
-    for (int i = 0; i < fire_engine::MAX_MORPH_TARGETS; ++i)
+    for (int i = 0; i < fire_engine::kMaxMorphTargets; ++i)
     {
         EXPECT_FLOAT_EQ(ubo.weights[i], 0.0f);
     }
@@ -34,15 +34,15 @@ TEST(MorphUBO, DefaultInitialisation)
 
 TEST(MorphUBO, MaxMorphTargetsConstant)
 {
-    EXPECT_GE(fire_engine::MAX_MORPH_TARGETS, 2);
-    EXPECT_EQ(fire_engine::MAX_MORPH_TARGETS, 8);
+    EXPECT_GE(fire_engine::kMaxMorphTargets, 2);
+    EXPECT_EQ(fire_engine::kMaxMorphTargets, 8);
 }
 
 TEST(MorphUBO, WeightsArraySize)
 {
     MorphUBO ubo{};
     EXPECT_EQ(sizeof(ubo.weights) / sizeof(float),
-              static_cast<std::size_t>(fire_engine::MAX_MORPH_TARGETS));
+              static_cast<std::size_t>(fire_engine::kMaxMorphTargets));
 }
 
 TEST(MorphUBO, SetWeights)
@@ -306,7 +306,7 @@ TEST(UBO, LightUBODefaults)
         EXPECT_FLOAT_EQ(ubo.shadowParams[i], 0.0f);
         EXPECT_FLOAT_EQ(ubo.environmentParams[i], 0.0f);
     }
-    for (int i = 0; i < fire_engine::MAX_LIGHTS; ++i)
+    for (int i = 0; i < fire_engine::kMaxLights; ++i)
     {
         for (int j = 0; j < 4; ++j)
         {
@@ -379,7 +379,7 @@ TEST(UBO, ShadowPushConstantsCanCarryInlineLightMatrix)
     ShadowPushConstants pc{};
     EXPECT_EQ(pc.matrixIndex, 0);
     EXPECT_EQ(pc.selfShadowSlot, -1);
-    EXPECT_FLOAT_EQ(pc.selfShadowDepthEpsilon, fire_engine::skinnedSelfShadowDepthEpsilon);
+    EXPECT_FLOAT_EQ(pc.selfShadowDepthEpsilon, fire_engine::kSkinnedSelfShadowDepthEpsilon);
     EXPECT_EQ(sizeof(ShadowPushConstants) % 16, 0u);
     EXPECT_EQ(pc.lightViewProj, fire_engine::Mat4::identity());
 }

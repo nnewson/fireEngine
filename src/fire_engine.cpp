@@ -126,7 +126,7 @@ void FireEngine::loadScene(std::string_view scene_path)
         auto& sun = sunNode->component().emplace<Light>();
         sun.type(Light::Type::Directional);
         sun.colour(Colour3{1.0f, 1.0f, 1.0f});
-        sun.intensity(directionalLightIntensity);
+        sun.intensity(kDirectionalLightIntensity);
         const Vec3 sunForward = Vec3::normalise(Vec3{1.0f, -1.0f, 1.0f});
         sunNode->transform().rotation(Quaternion::fromVectors(Vec3{0.0f, 0.0f, -1.0f}, sunForward));
         scene_.addNode(std::move(sunNode));

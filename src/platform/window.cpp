@@ -8,7 +8,12 @@ namespace fire_engine
 Window::Window(size_t width, size_t height, std::string_view title)
 {
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-    window_ = glfwCreateWindow(width, height, title.data(), nullptr, nullptr);
+    window_ = glfwCreateWindow(static_cast<int>(width), static_cast<int>(height), title.data(),
+                               nullptr, nullptr);
+    if (window_ == nullptr)
+    {
+        throw std::runtime_error("glfwCreateWindow failed");
+    }
     glfwSetWindowUserPointer(window_, this);
     glfwSetFramebufferSizeCallback(window_,
                                    [](GLFWwindow* w, int, int)

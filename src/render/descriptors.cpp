@@ -122,7 +122,7 @@ void Descriptors::retainDescriptorSets(DescriptorPoolEntry& poolEntry,
 ObjectDescriptorResult Descriptors::createObjectDescriptors(const ObjectDescriptorRequest& req)
 {
     auto numGeometries = static_cast<uint32_t>(req.geometries.size());
-    uint32_t totalSets = numGeometries * MAX_FRAMES_IN_FLIGHT;
+    uint32_t totalSets = numGeometries * kMaxFramesInFlight;
 
     std::array<vk::DescriptorPoolSize, 3> poolSizes = {{
         // 4 uniform buffers per set: frame UBO, material UBO, skin UBO, morph UBO.
@@ -141,9 +141,9 @@ ObjectDescriptorResult Descriptors::createObjectDescriptors(const ObjectDescript
     {
         const auto& geo = req.geometries[g];
         auto sets = allocateDescriptorSets(*poolEntry.pool, pipeline_->descriptorSetLayout(),
-                                           MAX_FRAMES_IN_FLIGHT);
+                                           kMaxFramesInFlight);
 
-        for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
+        for (int i = 0; i < kMaxFramesInFlight; ++i)
         {
             vk::DescriptorBufferInfo uboBufInfo = makeDescriptorBufferInfo(
                 resources_->vulkanBuffer(req.uniformBufs[i]), sizeof(UniformBufferObject));
@@ -290,24 +290,24 @@ void Descriptors::writeGlobalBindings(vk::DescriptorSet set, const GlobalDescrip
     device_->device().updateDescriptorSets(writes, {});
 }
 
-std::array<DescriptorSetHandle, MAX_FRAMES_IN_FLIGHT>
+std::array<DescriptorSetHandle, kMaxFramesInFlight>
 Descriptors::createGlobalDescriptors(const GlobalDescriptorRequest& req)
 {
     // One global set per frame-in-flight. Pool sizes are exact per the
     // ForwardGlobalBinding enum: 1 UBO + 4 CIS (IBL ×3 + sceneColor) + 6 SI
     // (shadow maps ×5 + debug colour) + 2 plain samplers (compare + debug).
     std::array<vk::DescriptorPoolSize, 4> poolSizes = {{
-        {vk::DescriptorType::eUniformBuffer, MAX_FRAMES_IN_FLIGHT},
-        {vk::DescriptorType::eCombinedImageSampler, MAX_FRAMES_IN_FLIGHT * 4},
-        {vk::DescriptorType::eSampledImage, MAX_FRAMES_IN_FLIGHT * 6},
-        {vk::DescriptorType::eSampler, MAX_FRAMES_IN_FLIGHT * 2},
+        {vk::DescriptorType::eUniformBuffer, kMaxFramesInFlight},
+        {vk::DescriptorType::eCombinedImageSampler, kMaxFramesInFlight * 4},
+        {vk::DescriptorType::eSampledImage, kMaxFramesInFlight * 6},
+        {vk::DescriptorType::eSampler, kMaxFramesInFlight * 2},
     }};
-    auto& poolEntry = createDescriptorPool(poolSizes, MAX_FRAMES_IN_FLIGHT);
+    auto& poolEntry = createDescriptorPool(poolSizes, kMaxFramesInFlight);
     auto sets = allocateDescriptorSets(*poolEntry.pool, pipeline_->globalDescriptorSetLayout(),
-                                       MAX_FRAMES_IN_FLIGHT);
+                                       kMaxFramesInFlight);
 
-    std::array<DescriptorSetHandle, MAX_FRAMES_IN_FLIGHT> result;
-    for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
+    std::array<DescriptorSetHandle, kMaxFramesInFlight> result;
+    for (int i = 0; i < kMaxFramesInFlight; ++i)
     {
         writeGlobalBindings(*sets[i], req, i);
         result[i] = registerDescriptorSet(*sets[i]);
@@ -317,10 +317,10 @@ Descriptors::createGlobalDescriptors(const GlobalDescriptorRequest& req)
 }
 
 void Descriptors::updateGlobalDescriptors(
-    const std::array<DescriptorSetHandle, MAX_FRAMES_IN_FLIGHT>& sets,
+    const std::array<DescriptorSetHandle, kMaxFramesInFlight>& sets,
     const GlobalDescriptorRequest& req)
 {
-    for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
+    for (int i = 0; i < kMaxFramesInFlight; ++i)
     {
         writeGlobalBindings(vulkanDescriptorSet(sets[i]), req, i);
     }
@@ -372,7 +372,7 @@ void Descriptors::updateObjectGeometryTextures(DescriptorSetHandle set,
 ShadowDescriptorResult Descriptors::createShadowDescriptors(const ShadowDescriptorRequest& req)
 {
     auto numGeometries = static_cast<uint32_t>(req.geometries.size());
-    uint32_t totalSets = numGeometries * MAX_FRAMES_IN_FLIGHT;
+    uint32_t totalSets = numGeometries * kMaxFramesInFlight;
 
     std::array<vk::DescriptorPoolSize, 4> poolSizes = {{
         {vk::DescriptorType::eUniformBuffer, totalSets * 3},
@@ -389,9 +389,9 @@ ShadowDescriptorResult Descriptors::createShadowDescriptors(const ShadowDescript
     {
         const auto& geo = req.geometries[g];
         auto sets =
-            allocateDescriptorSets(*poolEntry.pool, shadowDescLayout_, MAX_FRAMES_IN_FLIGHT);
+            allocateDescriptorSets(*poolEntry.pool, shadowDescLayout_, kMaxFramesInFlight);
 
-        for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
+        for (int i = 0; i < kMaxFramesInFlight; ++i)
         {
             vk::DescriptorBufferInfo shadowUboInfo = makeDescriptorBufferInfo(
                 resources_->vulkanBuffer(geo.shadowUboBufs[i]), sizeof(ShadowUBO));
@@ -436,18 +436,18 @@ ShadowDescriptorResult Descriptors::createShadowDescriptors(const ShadowDescript
     return result;
 }
 
-std::array<DescriptorSetHandle, MAX_FRAMES_IN_FLIGHT>
+std::array<DescriptorSetHandle, kMaxFramesInFlight>
 Descriptors::createSingleUboDescriptors(vk::DescriptorSetLayout layout, const MappedBufferSet& ubo,
                                         vk::DeviceSize uboSize)
 {
     std::array<vk::DescriptorPoolSize, 1> poolSizes = {{
-        {vk::DescriptorType::eUniformBuffer, MAX_FRAMES_IN_FLIGHT},
+        {vk::DescriptorType::eUniformBuffer, kMaxFramesInFlight},
     }};
-    auto& poolEntry = createDescriptorPool(poolSizes, MAX_FRAMES_IN_FLIGHT);
-    auto sets = allocateDescriptorSets(*poolEntry.pool, layout, MAX_FRAMES_IN_FLIGHT);
+    auto& poolEntry = createDescriptorPool(poolSizes, kMaxFramesInFlight);
+    auto sets = allocateDescriptorSets(*poolEntry.pool, layout, kMaxFramesInFlight);
 
-    std::array<DescriptorSetHandle, MAX_FRAMES_IN_FLIGHT> result{};
-    for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
+    std::array<DescriptorSetHandle, kMaxFramesInFlight> result{};
+    for (int i = 0; i < kMaxFramesInFlight; ++i)
     {
         vk::DescriptorBufferInfo bufInfo =
             makeDescriptorBufferInfo(resources_->vulkanBuffer(ubo.buffers[i]), uboSize);
@@ -467,20 +467,20 @@ Descriptors::createSingleUboDescriptors(vk::DescriptorSetLayout layout, const Ma
     return result;
 }
 
-std::array<DescriptorSetHandle, MAX_FRAMES_IN_FLIGHT>
+std::array<DescriptorSetHandle, kMaxFramesInFlight>
 Descriptors::createUboImageSamplerDescriptors(vk::DescriptorSetLayout layout,
                                               const MappedBufferSet& ubo, vk::DeviceSize uboSize,
                                               TextureHandle texture)
 {
     std::array<vk::DescriptorPoolSize, 2> poolSizes = {{
-        {vk::DescriptorType::eUniformBuffer, MAX_FRAMES_IN_FLIGHT},
-        {vk::DescriptorType::eCombinedImageSampler, MAX_FRAMES_IN_FLIGHT},
+        {vk::DescriptorType::eUniformBuffer, kMaxFramesInFlight},
+        {vk::DescriptorType::eCombinedImageSampler, kMaxFramesInFlight},
     }};
-    auto& poolEntry = createDescriptorPool(poolSizes, MAX_FRAMES_IN_FLIGHT);
-    auto sets = allocateDescriptorSets(*poolEntry.pool, layout, MAX_FRAMES_IN_FLIGHT);
+    auto& poolEntry = createDescriptorPool(poolSizes, kMaxFramesInFlight);
+    auto sets = allocateDescriptorSets(*poolEntry.pool, layout, kMaxFramesInFlight);
 
-    std::array<DescriptorSetHandle, MAX_FRAMES_IN_FLIGHT> result{};
-    for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
+    std::array<DescriptorSetHandle, kMaxFramesInFlight> result{};
+    for (int i = 0; i < kMaxFramesInFlight; ++i)
     {
         vk::DescriptorBufferInfo bufInfo =
             makeDescriptorBufferInfo(resources_->vulkanBuffer(ubo.buffers[i]), uboSize);
@@ -507,19 +507,19 @@ Descriptors::createUboImageSamplerDescriptors(vk::DescriptorSetLayout layout,
     return result;
 }
 
-std::array<DescriptorSetHandle, MAX_FRAMES_IN_FLIGHT> Descriptors::createSkyboxDescriptors(
+std::array<DescriptorSetHandle, kMaxFramesInFlight> Descriptors::createSkyboxDescriptors(
     vk::DescriptorSetLayout layout, const MappedBufferSet& skyboxUbo, vk::DeviceSize skyboxUboSize,
     TextureHandle texture, const MappedBufferSet& lightUbo, vk::DeviceSize lightUboSize)
 {
     std::array<vk::DescriptorPoolSize, 2> poolSizes = {{
-        {vk::DescriptorType::eUniformBuffer, MAX_FRAMES_IN_FLIGHT * 2},
-        {vk::DescriptorType::eCombinedImageSampler, MAX_FRAMES_IN_FLIGHT},
+        {vk::DescriptorType::eUniformBuffer, kMaxFramesInFlight * 2},
+        {vk::DescriptorType::eCombinedImageSampler, kMaxFramesInFlight},
     }};
-    auto& poolEntry = createDescriptorPool(poolSizes, MAX_FRAMES_IN_FLIGHT);
-    auto sets = allocateDescriptorSets(*poolEntry.pool, layout, MAX_FRAMES_IN_FLIGHT);
+    auto& poolEntry = createDescriptorPool(poolSizes, kMaxFramesInFlight);
+    auto sets = allocateDescriptorSets(*poolEntry.pool, layout, kMaxFramesInFlight);
 
-    std::array<DescriptorSetHandle, MAX_FRAMES_IN_FLIGHT> result{};
-    for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
+    std::array<DescriptorSetHandle, kMaxFramesInFlight> result{};
+    for (int i = 0; i < kMaxFramesInFlight; ++i)
     {
         vk::DescriptorBufferInfo skyboxBufInfo =
             makeDescriptorBufferInfo(resources_->vulkanBuffer(skyboxUbo.buffers[i]), skyboxUboSize);
@@ -553,18 +553,18 @@ std::array<DescriptorSetHandle, MAX_FRAMES_IN_FLIGHT> Descriptors::createSkyboxD
     return result;
 }
 
-std::array<DescriptorSetHandle, MAX_FRAMES_IN_FLIGHT>
+std::array<DescriptorSetHandle, kMaxFramesInFlight>
 Descriptors::createSingleImageSamplerDescriptors(vk::DescriptorSetLayout layout,
                                                  TextureHandle texture)
 {
     std::array<vk::DescriptorPoolSize, 1> poolSizes = {{
-        {vk::DescriptorType::eCombinedImageSampler, MAX_FRAMES_IN_FLIGHT},
+        {vk::DescriptorType::eCombinedImageSampler, kMaxFramesInFlight},
     }};
-    auto& poolEntry = createDescriptorPool(poolSizes, MAX_FRAMES_IN_FLIGHT);
-    auto sets = allocateDescriptorSets(*poolEntry.pool, layout, MAX_FRAMES_IN_FLIGHT);
+    auto& poolEntry = createDescriptorPool(poolSizes, kMaxFramesInFlight);
+    auto sets = allocateDescriptorSets(*poolEntry.pool, layout, kMaxFramesInFlight);
 
-    std::array<DescriptorSetHandle, MAX_FRAMES_IN_FLIGHT> result{};
-    for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
+    std::array<DescriptorSetHandle, kMaxFramesInFlight> result{};
+    for (int i = 0; i < kMaxFramesInFlight; ++i)
     {
         result[i] = registerDescriptorSet(*sets[i]);
     }
@@ -575,12 +575,12 @@ Descriptors::createSingleImageSamplerDescriptors(vk::DescriptorSetLayout layout,
 }
 
 void Descriptors::updateSingleImageSamplerDescriptors(
-    const std::array<DescriptorSetHandle, MAX_FRAMES_IN_FLIGHT>& sets, TextureHandle texture)
+    const std::array<DescriptorSetHandle, kMaxFramesInFlight>& sets, TextureHandle texture)
 {
     vk::DescriptorImageInfo imgInfo = makeDescriptorImageInfo(
         resources_->vulkanSampler(texture), resources_->vulkanImageView(texture),
         vk::ImageLayout::eShaderReadOnlyOptimal);
-    for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
+    for (int i = 0; i < kMaxFramesInFlight; ++i)
     {
         vk::WriteDescriptorSet write{
             .dstSet = descriptorSetTable_[static_cast<uint32_t>(sets[i])],
@@ -618,18 +618,18 @@ DescriptorSetHandle Descriptors::createImageViewDescriptor(vk::DescriptorSetLayo
     return handle;
 }
 
-std::array<DescriptorSetHandle, MAX_FRAMES_IN_FLIGHT>
+std::array<DescriptorSetHandle, kMaxFramesInFlight>
 Descriptors::createPostProcessDescriptors(vk::DescriptorSetLayout layout, TextureHandle hdrTarget,
                                           TextureHandle bloomChain)
 {
     std::array<vk::DescriptorPoolSize, 1> poolSizes = {{
-        {vk::DescriptorType::eCombinedImageSampler, MAX_FRAMES_IN_FLIGHT * 2},
+        {vk::DescriptorType::eCombinedImageSampler, kMaxFramesInFlight * 2},
     }};
-    auto& poolEntry = createDescriptorPool(poolSizes, MAX_FRAMES_IN_FLIGHT);
-    auto sets = allocateDescriptorSets(*poolEntry.pool, layout, MAX_FRAMES_IN_FLIGHT);
+    auto& poolEntry = createDescriptorPool(poolSizes, kMaxFramesInFlight);
+    auto sets = allocateDescriptorSets(*poolEntry.pool, layout, kMaxFramesInFlight);
 
-    std::array<DescriptorSetHandle, MAX_FRAMES_IN_FLIGHT> result{};
-    for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
+    std::array<DescriptorSetHandle, kMaxFramesInFlight> result{};
+    for (int i = 0; i < kMaxFramesInFlight; ++i)
     {
         result[i] = registerDescriptorSet(*sets[i]);
     }
@@ -640,11 +640,11 @@ Descriptors::createPostProcessDescriptors(vk::DescriptorSetLayout layout, Textur
 }
 
 void Descriptors::updatePostProcessDescriptors(
-    const std::array<DescriptorSetHandle, MAX_FRAMES_IN_FLIGHT>& sets, TextureHandle hdrTarget,
+    const std::array<DescriptorSetHandle, kMaxFramesInFlight>& sets, TextureHandle hdrTarget,
     TextureHandle bloomChain)
 {
     vk::ImageView bloomMip0 = resources_->vulkanBloomMipView(bloomChain, 0);
-    for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
+    for (int i = 0; i < kMaxFramesInFlight; ++i)
     {
         vk::DescriptorImageInfo hdrInfo = makeDescriptorImageInfo(
             resources_->vulkanSampler(hdrTarget), resources_->vulkanImageView(hdrTarget),

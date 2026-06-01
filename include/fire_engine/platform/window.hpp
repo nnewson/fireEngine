@@ -30,7 +30,7 @@ public:
     }
 
     [[nodiscard]]
-    GLFWwindow* getWindow() const noexcept
+    GLFWwindow* handle() const noexcept
     {
         return window_;
     }

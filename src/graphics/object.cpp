@@ -150,13 +150,13 @@ void Object::load(Resources& resources)
     }
     // Create shared uniform buffers (model/view/proj)
     auto uniformSet = resources.createMappedUniformBuffers(sizeof(UniformBufferObject));
-    for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
+    for (int i = 0; i < kMaxFramesInFlight; ++i)
     {
         uniformMapped_[i] = uniformSet.mapped[i];
     }
 
     Resources::ObjectDescriptorRequest req;
-    for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
+    for (int i = 0; i < kMaxFramesInFlight; ++i)
     {
         req.uniformBufs[i] = uniformSet.buffers[i];
     }
@@ -168,7 +168,7 @@ void Object::load(Resources& resources)
         // Material buffers
         MaterialUBO matUbo = toMaterialUBO(*binding.activeMaterial);
         auto matSet = resources.createMappedUniformBuffers(sizeof(MaterialUBO));
-        for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
+        for (int i = 0; i < kMaxFramesInFlight; ++i)
         {
             binding.materialMapped[i] = matSet.mapped[i];
             geoInfo.materialBufs[i] = matSet.buffers[i];
@@ -177,12 +177,12 @@ void Object::load(Resources& resources)
 
         // Skin buffers
         SkinUBO skinUbo{};
-        for (std::size_t j = 0; j < MAX_JOINTS; ++j)
+        for (std::size_t j = 0; j < kMaxJoints; ++j)
         {
             skinUbo.joints[j] = Mat4::identity();
         }
         auto skinSet = resources.createMappedUniformBuffers(sizeof(SkinUBO));
-        for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
+        for (int i = 0; i < kMaxFramesInFlight; ++i)
         {
             binding.skinMapped[i] = skinSet.mapped[i];
             geoInfo.skinBufs[i] = skinSet.buffers[i];
@@ -192,7 +192,7 @@ void Object::load(Resources& resources)
         // Morph UBO buffers
         MorphUBO morphUbo{};
         auto morphUboSet = resources.createMappedUniformBuffers(sizeof(MorphUBO));
-        for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
+        for (int i = 0; i < kMaxFramesInFlight; ++i)
         {
             binding.morphUboMapped[i] = morphUboSet.mapped[i];
             geoInfo.morphUboBufs[i] = morphUboSet.buffers[i];
@@ -249,7 +249,7 @@ void Object::load(Resources& resources)
             m = Mat4::identity();
         }
         auto shadowSet = resources.createMappedUniformBuffers(sizeof(ShadowUBO));
-        for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
+        for (int i = 0; i < kMaxFramesInFlight; ++i)
         {
             binding.shadowMapped[i] = shadowSet.mapped[i];
             shadowInfo.shadowUboBufs[i] = shadowSet.buffers[i];
@@ -389,7 +389,7 @@ std::vector<DrawCommand> Object::render(const FrameInfo& frame, const Mat4& worl
     ubo.view = Mat4::lookAt(frame.cameraPosition, frame.cameraTarget, {0, 1, 0});
     float aspect =
         static_cast<float>(frame.viewportWidth) / static_cast<float>(frame.viewportHeight);
-    ubo.proj = Mat4::perspective(cameraFovRadians, aspect, cameraNearPlane, cameraFarPlane);
+    ubo.proj = Mat4::perspective(kCameraFovRadians, aspect, kCameraNearPlane, kCameraFarPlane);
     ubo.cameraPos[0] = frame.cameraPosition.x();
     ubo.cameraPos[1] = frame.cameraPosition.y();
     ubo.cameraPos[2] = frame.cameraPosition.z();
@@ -405,7 +405,7 @@ std::vector<DrawCommand> Object::render(const FrameInfo& frame, const Mat4& worl
     {
         jointMatrices = &skin_->cachedJointMatrices();
         SkinUBO skinUbo{};
-        for (std::size_t j = 0; j < jointMatrices->size() && j < MAX_JOINTS; ++j)
+        for (std::size_t j = 0; j < jointMatrices->size() && j < kMaxJoints; ++j)
         {
             skinUbo.joints[j] = (*jointMatrices)[j];
         }
@@ -438,7 +438,7 @@ std::vector<DrawCommand> Object::render(const FrameInfo& frame, const Mat4& worl
             morphUbo.morphTargetCount = static_cast<int>(numTargets);
             morphUbo.vertexCount = static_cast<int>(binding.geometry->vertices().size());
             for (std::size_t w = 0;
-                 w < morphWeights_.size() && w < static_cast<std::size_t>(MAX_MORPH_TARGETS); ++w)
+                 w < morphWeights_.size() && w < static_cast<std::size_t>(kMaxMorphTargets); ++w)
             {
                 morphUbo.weights[w] = morphWeights_[w];
             }

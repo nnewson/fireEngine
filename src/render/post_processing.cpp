@@ -37,13 +37,13 @@ void PostProcessing::buildBloomResources()
     uint32_t bloomWidth = std::max(1u, extent.width / 2);
     uint32_t bloomHeight = std::max(1u, extent.height / 2);
 
-    bloomChainHandle_ = resources_->createBloomChain(bloomWidth, bloomHeight, bloomMipCount);
+    bloomChainHandle_ = resources_->createBloomChain(bloomWidth, bloomHeight, kBloomMipCount);
 
     std::vector<vk::ImageView> downViews;
     std::vector<vk::Extent2D> downExtents;
-    downViews.reserve(bloomMipCount);
-    downExtents.reserve(bloomMipCount);
-    for (uint32_t m = 0; m < bloomMipCount; ++m)
+    downViews.reserve(kBloomMipCount);
+    downExtents.reserve(kBloomMipCount);
+    for (uint32_t m = 0; m < kBloomMipCount; ++m)
     {
         downViews.push_back(resources_->vulkanBloomMipView(bloomChainHandle_, m));
         downExtents.push_back({std::max(1u, bloomWidth >> m), std::max(1u, bloomHeight >> m)});
@@ -52,9 +52,9 @@ void PostProcessing::buildBloomResources()
 
     std::vector<vk::ImageView> upViews;
     std::vector<vk::Extent2D> upExtents;
-    upViews.reserve(bloomMipCount - 1);
-    upExtents.reserve(bloomMipCount - 1);
-    for (uint32_t m = 0; m < bloomMipCount - 1; ++m)
+    upViews.reserve(kBloomMipCount - 1);
+    upExtents.reserve(kBloomMipCount - 1);
+    for (uint32_t m = 0; m < kBloomMipCount - 1; ++m)
     {
         upViews.push_back(resources_->vulkanBloomMipView(bloomChainHandle_, m));
         upExtents.push_back({std::max(1u, bloomWidth >> m), std::max(1u, bloomHeight >> m)});
@@ -62,12 +62,12 @@ void PostProcessing::buildBloomResources()
     bloomUpPass_.createColourFramebuffersPerMip(*device_, upViews, upExtents);
 
     bloomDownDescSets_.clear();
-    bloomDownDescSets_.reserve(bloomMipCount);
+    bloomDownDescSets_.reserve(kBloomMipCount);
     bloomDownDescSets_.push_back(resources_->descriptors().createImageViewDescriptor(
         bloomDownsamplePipeline_.descriptorSetLayout(),
         resources_->vulkanImageView(offscreenColourHandle_),
         resources_->vulkanSampler(offscreenColourHandle_)));
-    for (uint32_t m = 0; m < bloomMipCount - 1; ++m)
+    for (uint32_t m = 0; m < kBloomMipCount - 1; ++m)
     {
         bloomDownDescSets_.push_back(resources_->descriptors().createImageViewDescriptor(
             bloomDownsamplePipeline_.descriptorSetLayout(),
@@ -76,8 +76,8 @@ void PostProcessing::buildBloomResources()
     }
 
     bloomUpDescSets_.clear();
-    bloomUpDescSets_.reserve(bloomMipCount - 1);
-    for (uint32_t m = 0; m < bloomMipCount - 1; ++m)
+    bloomUpDescSets_.reserve(kBloomMipCount - 1);
+    for (uint32_t m = 0; m < kBloomMipCount - 1; ++m)
     {
         bloomUpDescSets_.push_back(resources_->descriptors().createImageViewDescriptor(
             bloomUpsamplePipeline_.descriptorSetLayout(),
@@ -95,7 +95,7 @@ void PostProcessing::recordBloomPasses(vk::CommandBuffer cmd) const
     const vk::PipelineLayout downLayout = bloomDownsamplePipeline_.pipelineLayout();
     const vk::PipelineLayout upLayout = bloomUpsamplePipeline_.pipelineLayout();
 
-    for (uint32_t m = 0; m < bloomMipCount; ++m)
+    for (uint32_t m = 0; m < kBloomMipCount; ++m)
     {
         uint32_t dstW = std::max(1u, bloomWidth >> m);
         uint32_t dstH = std::max(1u, bloomHeight >> m);
@@ -132,7 +132,7 @@ void PostProcessing::recordBloomPasses(vk::CommandBuffer cmd) const
         cmd.endRenderPass();
     }
 
-    for (int m = static_cast<int>(bloomMipCount) - 2; m >= 0; --m)
+    for (int m = static_cast<int>(kBloomMipCount) - 2; m >= 0; --m)
     {
         uint32_t dstW = std::max(1u, bloomWidth >> m);
         uint32_t dstH = std::max(1u, bloomHeight >> m);
@@ -221,7 +221,7 @@ void PostProcessing::recordPostProcessPass(vk::CommandBuffer cmd, uint32_t image
     cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, postProcessPipeline_.pipelineLayout(),
                            0, ppSet, {});
     PostProcessPushConstants ppc{};
-    ppc.bloomStrength = bloomStrength;
+    ppc.kBloomStrength = kBloomStrength;
     cmd.pushConstants<PostProcessPushConstants>(postProcessPipeline_.pipelineLayout(),
                                                 vk::ShaderStageFlagBits::eFragment, 0, ppc);
     cmd.bindIndexBuffer(resources_->vulkanBuffer(postProcessIndexBuffer_), 0,

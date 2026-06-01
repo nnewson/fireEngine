@@ -66,15 +66,15 @@ private:
         const Material* defaultMaterial{nullptr};
         const Material* activeMaterial{nullptr};
         std::vector<const Material*> variantMaterials;
-        std::array<bool, MAX_FRAMES_IN_FLIGHT> descriptorDirty{false, false};
+        std::array<bool, kMaxFramesInFlight> descriptorDirty{false, false};
 
-        std::array<MappedMemory, MAX_FRAMES_IN_FLIGHT> materialMapped{};
-        std::array<MappedMemory, MAX_FRAMES_IN_FLIGHT> skinMapped{};
-        std::array<MappedMemory, MAX_FRAMES_IN_FLIGHT> morphUboMapped{};
-        std::array<MappedMemory, MAX_FRAMES_IN_FLIGHT> shadowMapped{};
-        std::array<DescriptorSetHandle, MAX_FRAMES_IN_FLIGHT> descSets{NullDescriptorSet,
+        std::array<MappedMemory, kMaxFramesInFlight> materialMapped{};
+        std::array<MappedMemory, kMaxFramesInFlight> skinMapped{};
+        std::array<MappedMemory, kMaxFramesInFlight> morphUboMapped{};
+        std::array<MappedMemory, kMaxFramesInFlight> shadowMapped{};
+        std::array<DescriptorSetHandle, kMaxFramesInFlight> descSets{NullDescriptorSet,
                                                                        NullDescriptorSet};
-        std::array<DescriptorSetHandle, MAX_FRAMES_IN_FLIGHT> shadowDescSets{NullDescriptorSet,
+        std::array<DescriptorSetHandle, kMaxFramesInFlight> shadowDescSets{NullDescriptorSet,
                                                                              NullDescriptorSet};
     };
 
@@ -88,7 +88,7 @@ private:
     Resources* resources_{nullptr};
     uint32_t objectId_{0};
 
-    std::array<MappedMemory, MAX_FRAMES_IN_FLIGHT> uniformMapped_{};
+    std::array<MappedMemory, kMaxFramesInFlight> uniformMapped_{};
 
     std::vector<GeometryBindings> bindings_;
 };

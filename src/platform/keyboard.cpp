@@ -7,7 +7,7 @@ namespace fire_engine
 
 void Keyboard::poll(const Window& window)
 {
-    GLFWwindow* w = window.getWindow();
+    GLFWwindow* w = window.handle();
     escape_ = glfwGetKey(w, GLFW_KEY_ESCAPE) == GLFW_PRESS;
     w_ = glfwGetKey(w, GLFW_KEY_W) == GLFW_PRESS;
     s_ = glfwGetKey(w, GLFW_KEY_S) == GLFW_PRESS;

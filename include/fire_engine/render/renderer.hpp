@@ -175,18 +175,18 @@ private:
     TextureHandle prefilteredCubemapHandle_{NullTexture};
     TextureHandle brdfLutHandle_{NullTexture};
     Resources::MappedBufferSet skyboxUbo_;
-    std::array<DescriptorSetHandle, MAX_FRAMES_IN_FLIGHT> skyboxDescSets_{};
+    std::array<DescriptorSetHandle, kMaxFramesInFlight> skyboxDescSets_{};
     BufferHandle skyboxIndexBuffer_{NullBuffer};
     Resources::MappedBufferSet lightUbo_;
     // Forward pipeline globals (descriptor set 1) — one set per frame-in-flight,
     // bound once at the start of every forward pass.
-    std::array<DescriptorSetHandle, MAX_FRAMES_IN_FLIGHT> globalDescSets_{};
-    std::array<Mat4, SHADOW_TOTAL_MATRIX_COUNT> shadowViewProjs_{};
+    std::array<DescriptorSetHandle, kMaxFramesInFlight> globalDescSets_{};
+    std::array<Mat4, kShadowTotalMatrixCount> shadowViewProjs_{};
     LightUBO lightData_{};
     Vec3 directionalLightDir_{1.0f, -1.0f, 1.0f};
     int activeSpotCasters_{0};
     int activePointCasters_{0};
-    std::array<PointShadowCaster, MAX_POINT_SHADOW_CASTERS> pointCasters_{};
+    std::array<PointShadowCaster, kMaxPointShadowCasters> pointCasters_{};
     std::vector<vk::Fence> imagesInFlight_{};
     uint32_t currentFrame_{0};
     std::string environmentPath_;

@@ -46,7 +46,7 @@ enum class ForwardBinding : std::uint32_t
 // Forward-pipeline globals live on descriptor set 1 — bound once per frame,
 // reused by every object. Migrating them off the per-object set 0 keeps
 // per-object descriptor allocation small and means swapchain-resize-driven
-// texture recreations only need to rewrite MAX_FRAMES_IN_FLIGHT sets, not
+// texture recreations only need to rewrite kMaxFramesInFlight sets, not
 // N×frames sets.
 //
 // Order is grouped: light → cascade/world/self/spot/point shadows → debug

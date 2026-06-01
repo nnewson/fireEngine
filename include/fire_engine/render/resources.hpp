@@ -164,12 +164,12 @@ public:
 
     // --- Shared light UBO (bound to every forward descriptor set) ---
 
-    void lightBuffers(const std::array<BufferHandle, MAX_FRAMES_IN_FLIGHT>& bufs) noexcept
+    void lightBuffers(const std::array<BufferHandle, kMaxFramesInFlight>& bufs) noexcept
     {
         lightBuffers_ = bufs;
     }
 
-    [[nodiscard]] const std::array<BufferHandle, MAX_FRAMES_IN_FLIGHT>&
+    [[nodiscard]] const std::array<BufferHandle, kMaxFramesInFlight>&
     lightBuffers() const noexcept
     {
         return lightBuffers_;
@@ -292,7 +292,7 @@ private:
     };
     std::vector<PipelineEntry> pipelines_;
 
-    std::array<BufferHandle, MAX_FRAMES_IN_FLIGHT> lightBuffers_{NullBuffer, NullBuffer};
+    std::array<BufferHandle, kMaxFramesInFlight> lightBuffers_{NullBuffer, NullBuffer};
     SharedTextures shared_;
     vk::raii::Sampler shadowDebugSampler_{nullptr};
     uint32_t nextObjectId_{1};

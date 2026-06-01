@@ -1020,7 +1020,7 @@ void Resources::releaseTexture(TextureHandle handle)
 Resources::MappedBufferSet Resources::createMappedUniformBuffers(std::size_t size)
 {
     MappedBufferSet result;
-    for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
+    for (int i = 0; i < kMaxFramesInFlight; ++i)
     {
         auto [buf, mem] = device_->createBuffer(
             static_cast<vk::DeviceSize>(size), vk::BufferUsageFlagBits::eUniformBuffer,
@@ -1047,7 +1047,7 @@ Resources::MappedBufferSet Resources::createMappedStorageBuffer(std::size_t size
         mem.unmapMemory();
     }
     auto handle = storeBuffer(std::move(buf), std::move(mem));
-    for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
+    for (int i = 0; i < kMaxFramesInFlight; ++i)
     {
         result.buffers[i] = handle;
         result.mapped[i] = nullptr;

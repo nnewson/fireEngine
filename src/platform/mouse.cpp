@@ -7,7 +7,7 @@ namespace fire_engine
 
 void Mouse::poll(const Window& window)
 {
-    GLFWwindow* w = window.getWindow();
+    GLFWwindow* w = window.handle();
     double currentX = 0.0;
     double currentY = 0.0;
     glfwGetCursorPos(w, &currentX, &currentY);
@@ -31,7 +31,7 @@ void Mouse::poll(const Window& window)
 
 void Mouse::registerScrollCallback(const Window& window)
 {
-    glfwSetScrollCallback(window.getWindow(), scrollCallback);
+    glfwSetScrollCallback(window.handle(), scrollCallback);
 }
 
 void Mouse::scrollCallback(GLFWwindow* /*window*/, double /*xoffset*/, double yoffset)

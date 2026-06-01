@@ -39,7 +39,7 @@ const Lighting* primaryDirectionalLight(std::span<const Lighting> lights) noexce
 // the light array was full and the light was discarded.
 int packLight(LightUBO& lightData, int& slot, const Lighting& light) noexcept
 {
-    if (slot >= MAX_LIGHTS)
+    if (slot >= kMaxLights)
     {
         return -1;
     }
@@ -225,12 +225,12 @@ void Renderer::computeShadowCascades(LightUBO& out, Vec3 cameraPosition, Vec3 ca
 {
     // Camera basis + light basis (shared by every cascade fit).
     const Vec3 lightDir = directionalLightDir_;
-    const float tanHalfFov = std::tan(cameraFovRadians * 0.5f);
+    const float tanHalfFov = std::tan(kCameraFovRadians * 0.5f);
     const ViewBasis basis = makeViewBasis(cameraPosition, cameraTarget);
     const Vec3 lightUp = stableUpForForward(lightDir);
     const Vec3 lightRight = normaliseOr(Vec3::crossProduct(lightDir, lightUp), {1.0f, 0.0f, 0.0f});
     const Vec3 lightUpOrtho = normaliseOr(Vec3::crossProduct(lightRight, lightDir), lightUp);
-    const float shadowMapExtentF = static_cast<float>(shadowMapExtent);
+    const float shadowMapExtentF = static_cast<float>(kShadowMapExtent);
 
     // Bounding-sphere fit for a single sub-frustum slice. Captures the light
     // basis above, called once per cascade.
@@ -276,28 +276,28 @@ void Renderer::computeShadowCascades(LightUBO& out, Vec3 cameraPosition, Vec3 ca
         const Vec3 snappedCentre =
             lightRight * snappedU + lightUpOrtho * snappedV + lightDir * centreW;
 
-        const Vec3 lightPos = snappedCentre - lightDir * (radius + shadowDepthBackExtend);
+        const Vec3 lightPos = snappedCentre - lightDir * (radius + kShadowDepthBackExtend);
         const Mat4 lightView = Mat4::lookAt(lightPos, snappedCentre, lightUpOrtho);
         const Mat4 lightProj = Mat4::ortho(-radius, radius, -radius, radius, 0.0f,
-                                           2.0f * radius + 2.0f * shadowDepthBackExtend);
+                                           2.0f * radius + 2.0f * kShadowDepthBackExtend);
         return lightProj * lightView;
     };
 
     // Log-uniform cascade splits — Practical Split Scheme. Keeps close cascades
-    // small for near-camera detail while still covering shadowFarPlane.
-    float splits[shadowCascadeCount];
-    for (uint32_t i = 0; i < shadowCascadeCount; ++i)
+    // small for near-camera detail while still covering kShadowFarPlane.
+    float splits[kShadowCascadeCount];
+    for (uint32_t i = 0; i < kShadowCascadeCount; ++i)
     {
-        const float p = static_cast<float>(i + 1) / static_cast<float>(shadowCascadeCount);
-        const float linear = cameraNearPlane + (shadowFarPlane - cameraNearPlane) * p;
-        const float logSplit = cameraNearPlane * std::pow(shadowFarPlane / cameraNearPlane, p);
+        const float p = static_cast<float>(i + 1) / static_cast<float>(kShadowCascadeCount);
+        const float linear = kCameraNearPlane + (kShadowFarPlane - kCameraNearPlane) * p;
+        const float logSplit = kCameraNearPlane * std::pow(kShadowFarPlane / kCameraNearPlane, p);
         splits[i] =
-            shadowCascadeSplitLambda * logSplit + (1.0f - shadowCascadeSplitLambda) * linear;
+            kShadowCascadeSplitLambda * logSplit + (1.0f - kShadowCascadeSplitLambda) * linear;
     }
 
-    Mat4 cascadeViewProj[shadowCascadeCount];
-    float sliceNear = cameraNearPlane;
-    for (uint32_t i = 0; i < shadowCascadeCount; ++i)
+    Mat4 cascadeViewProj[kShadowCascadeCount];
+    float sliceNear = kCameraNearPlane;
+    for (uint32_t i = 0; i < kShadowCascadeCount; ++i)
     {
         cascadeViewProj[i] = fitCascade(sliceNear, splits[i]);
         sliceNear = splits[i];
@@ -305,9 +305,9 @@ void Renderer::computeShadowCascades(LightUBO& out, Vec3 cameraPosition, Vec3 ca
 
     // Reset the shadow matrix array each frame, then write cascade slots.
     shadowViewProjs_.fill(Mat4::identity());
-    for (uint32_t i = 0; i < shadowCascadeCount; ++i)
+    for (uint32_t i = 0; i < kShadowCascadeCount; ++i)
     {
-        shadowViewProjs_[SHADOW_CASCADE_MATRIX_BASE + i] = cascadeViewProj[i];
+        shadowViewProjs_[kShadowCascadeMatrixBase + i] = cascadeViewProj[i];
         out.cascadeViewProj[i] = cascadeViewProj[i];
         out.cascadeSplits[i] = splits[i];
     }
@@ -315,33 +315,33 @@ void Renderer::computeShadowCascades(LightUBO& out, Vec3 cameraPosition, Vec3 ca
 
 void Renderer::assignSpotShadow(LightUBO& out, int packedSlot, const Lighting& light)
 {
-    if (activeSpotCasters_ >= MAX_SPOT_SHADOW_CASTERS)
+    if (activeSpotCasters_ >= kMaxSpotShadowCasters)
     {
         return;
     }
     const int shadowIndex = activeSpotCasters_++;
     const float fov =
         std::max(2.0f * std::acos(std::clamp(light.outerConeCos, -1.0f, 1.0f)), 0.01f);
-    const float far = light.range > 0.0f ? light.range : pointShadowInfiniteRangeFallback;
-    const Mat4 proj = Mat4::perspective(fov, 1.0f, pointShadowNearPlane, far);
+    const float far = light.range > 0.0f ? light.range : kPointShadowInfiniteRangeFallback;
+    const Mat4 proj = Mat4::perspective(fov, 1.0f, kPointShadowNearPlane, far);
     const Vec3 dir = Vec3::normalise(light.worldDirection);
     const Vec3 up = stableUpForForward(dir);
     const Mat4 view = Mat4::lookAt(light.worldPosition, light.worldPosition + dir, up);
     const Mat4 viewProj = proj * view;
-    shadowViewProjs_[SHADOW_SPOT_MATRIX_BASE + shadowIndex] = viewProj;
+    shadowViewProjs_[kShadowSpotMatrixBase + shadowIndex] = viewProj;
     out.spotViewProj[shadowIndex] = viewProj;
     out.lights[packedSlot].cone[2] = static_cast<float>(shadowIndex);
 }
 
 void Renderer::assignPointShadow(LightUBO& out, int packedSlot, const Lighting& light)
 {
-    if (activePointCasters_ >= MAX_POINT_SHADOW_CASTERS)
+    if (activePointCasters_ >= kMaxPointShadowCasters)
     {
         return;
     }
     const int shadowIndex = activePointCasters_++;
-    const float far = light.range > 0.0f ? light.range : pointShadowInfiniteRangeFallback;
-    const Mat4 proj = Mat4::perspective(0.5f * pi, 1.0f, pointShadowNearPlane, far);
+    const float far = light.range > 0.0f ? light.range : kPointShadowInfiniteRangeFallback;
+    const Mat4 proj = Mat4::perspective(0.5f * pi, 1.0f, kPointShadowNearPlane, far);
     // Vulkan cubemap face order: +X, -X, +Y, -Y, +Z, -Z. Up vectors match the
     // IBL prefilter convention used elsewhere in the engine so cube sampling
     // stays consistent across face boundaries.
@@ -357,7 +357,7 @@ void Renderer::assignPointShadow(LightUBO& out, int packedSlot, const Lighting& 
     {
         const Mat4 view =
             Mat4::lookAt(light.worldPosition, light.worldPosition + faceForward[face], faceUp[face]);
-        shadowViewProjs_[SHADOW_POINT_MATRIX_BASE + 6 * shadowIndex + face] = proj * view;
+        shadowViewProjs_[kShadowPointMatrixBase + 6 * shadowIndex + face] = proj * view;
     }
     out.lights[packedSlot].cone[2] = static_cast<float>(shadowIndex);
     // Stash the effective range used for shadow projection so the shadow-pass
@@ -372,16 +372,16 @@ void Renderer::writeIblAndDebugParams(LightUBO& out) const
                                    ? resources_.textureMipLevels(prefilteredCubemapHandle_)
                                    : 1u;
     out.iblParams[0] = static_cast<float>(mipLevels > 0 ? mipLevels - 1 : 0);
-    out.iblParams[1] = diffuseIblStrength;
-    out.iblParams[2] = specularIblStrength;
-    out.shadowParams[0] = shadowMinBias;
-    out.shadowParams[1] = shadowSlopeBias;
-    out.shadowParams[2] = shadowFilterRadius;
-    out.shadowParams[3] = shadowNormalOffset;
-    out.pointSpotShadowParams[0] = pointSpotShadowMinBias;
-    out.pointSpotShadowParams[1] = pointSpotShadowSlopeBias;
-    out.environmentParams[0] = skyboxIntensity;
-    out.environmentParams[1] = environmentShadowStrength;
+    out.iblParams[1] = kDiffuseIblStrength;
+    out.iblParams[2] = kSpecularIblStrength;
+    out.shadowParams[0] = kShadowMinBias;
+    out.shadowParams[1] = kShadowSlopeBias;
+    out.shadowParams[2] = kShadowFilterRadius;
+    out.shadowParams[3] = kShadowNormalOffset;
+    out.pointSpotShadowParams[0] = kPointSpotShadowMinBias;
+    out.pointSpotShadowParams[1] = kPointSpotShadowSlopeBias;
+    out.environmentParams[0] = kSkyboxIntensity;
+    out.environmentParams[1] = kEnvironmentShadowStrength;
     out.environmentParams[2] = static_cast<float>(debug_.view);
     out.environmentParams[3] = debug_.noShadows ? 1.0f : 0.0f;
 }
@@ -400,7 +400,7 @@ void Renderer::assignSelfShadowSlots(std::vector<DrawCommand>& drawCommands)
         {
             continue;
         }
-        if (nextSlot >= MAX_SKINNED_SELF_SHADOW_CASTERS)
+        if (nextSlot >= kMaxSkinnedSelfShadowCasters)
         {
             break;
         }
@@ -584,7 +584,7 @@ void Renderer::drawFrame(Window& display, SceneGraph& scene, Vec3 cameraPosition
     cmd.end();
 
     submitAndPresent(display, cmd, *imageIndex);
-    currentFrame_ = (currentFrame_ + 1) % MAX_FRAMES_IN_FLIGHT;
+    currentFrame_ = (currentFrame_ + 1) % kMaxFramesInFlight;
 }
 
 std::optional<uint32_t> Renderer::acquireNextImage(Window& display)
@@ -694,7 +694,7 @@ void Renderer::recordSkybox(Vec3 cameraPosition, Vec3 cameraTarget,
 {
     const ViewBasis basis = makeViewBasis(cameraPosition, cameraTarget);
 
-    constexpr float skyboxFov = cameraFovRadians;
+    constexpr float skyboxFov = kCameraFovRadians;
     auto extent = swapchain_.extent();
     float aspect = static_cast<float>(extent.width) / static_cast<float>(extent.height);
     float tanHalfFov = std::tan(skyboxFov * 0.5f);

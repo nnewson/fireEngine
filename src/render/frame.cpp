@@ -27,7 +27,7 @@ void Frame::createCommandBuffers()
     vk::CommandBufferAllocateInfo ai{
         .commandPool = *cmdPool_,
         .level = vk::CommandBufferLevel::ePrimary,
-        .commandBufferCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT),
+        .commandBufferCount = static_cast<uint32_t>(kMaxFramesInFlight),
     };
     auto bufs = device_->allocateCommandBuffers(ai);
     cmdBufs_.reserve(bufs.size());
@@ -44,9 +44,9 @@ void Frame::createSyncObjects()
         .flags = vk::FenceCreateFlagBits::eSignaled,
     };
 
-    imageAvail_.reserve(MAX_FRAMES_IN_FLIGHT);
-    inFlight_.reserve(MAX_FRAMES_IN_FLIGHT);
-    for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
+    imageAvail_.reserve(kMaxFramesInFlight);
+    inFlight_.reserve(kMaxFramesInFlight);
+    for (int i = 0; i < kMaxFramesInFlight; ++i)
     {
         imageAvail_.emplace_back(*device_, sci);
         inFlight_.emplace_back(*device_, fci);

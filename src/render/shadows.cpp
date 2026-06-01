@@ -76,58 +76,58 @@ Shadows::Shadows(const Device& device, Resources& resources)
         selfShadowFirstPipeline_.pipeline(), selfShadowFirstPipeline_.pipelineLayout());
     selfShadowSecondPipelineHandle_ = resources_->registerPipeline(
         selfShadowSecondPipeline_.pipeline(), selfShadowSecondPipeline_.pipelineLayout());
-    shadowMapHandle_ = resources_->createShadowMap(shadowMapExtent, shadowCascadeCount);
+    shadowMapHandle_ = resources_->createShadowMap(kShadowMapExtent, kShadowCascadeCount);
     shadowColourHandle_ =
-        resources_->createShadowColourAttachment(shadowMapExtent, shadowCascadeCount, true);
+        resources_->createShadowColourAttachment(kShadowMapExtent, kShadowCascadeCount, true);
     createLayeredShadowFramebuffer(*device_, *resources_, shadowPass_, shadowMapHandle_,
-                                   shadowColourHandle_, shadowMapExtent, shadowCascadeCount);
+                                   shadowColourHandle_, kShadowMapExtent, kShadowCascadeCount);
 
-    worldShadowMapHandle_ = resources_->createShadowMap(shadowMapExtent, shadowCascadeCount);
+    worldShadowMapHandle_ = resources_->createShadowMap(kShadowMapExtent, kShadowCascadeCount);
     worldShadowColourHandle_ =
-        resources_->createShadowColourAttachment(shadowMapExtent, shadowCascadeCount, false);
+        resources_->createShadowColourAttachment(kShadowMapExtent, kShadowCascadeCount, false);
     createLayeredShadowFramebuffer(*device_, *resources_, worldShadowPass_, worldShadowMapHandle_,
-                                   worldShadowColourHandle_, shadowMapExtent, shadowCascadeCount);
+                                   worldShadowColourHandle_, kShadowMapExtent, kShadowCascadeCount);
 
     selfShadowFirstMapHandle_ =
-        resources_->createShadowMap(skinnedSelfShadowMapExtent, MAX_SKINNED_SELF_SHADOW_CASTERS);
+        resources_->createShadowMap(kSkinnedSelfShadowMapExtent, kMaxSkinnedSelfShadowCasters);
     selfShadowFirstColourHandle_ = resources_->createShadowColourAttachment(
-        skinnedSelfShadowMapExtent, MAX_SKINNED_SELF_SHADOW_CASTERS, false);
+        kSkinnedSelfShadowMapExtent, kMaxSkinnedSelfShadowCasters, false);
     createLayeredShadowFramebuffer(*device_, *resources_, selfShadowFirstPass_,
                                    selfShadowFirstMapHandle_, selfShadowFirstColourHandle_,
-                                   skinnedSelfShadowMapExtent, MAX_SKINNED_SELF_SHADOW_CASTERS);
+                                   kSkinnedSelfShadowMapExtent, kMaxSkinnedSelfShadowCasters);
 
     selfShadowMapHandle_ =
-        resources_->createShadowMap(skinnedSelfShadowMapExtent, MAX_SKINNED_SELF_SHADOW_CASTERS);
+        resources_->createShadowMap(kSkinnedSelfShadowMapExtent, kMaxSkinnedSelfShadowCasters);
     selfShadowColourHandle_ = resources_->createShadowColourAttachment(
-        skinnedSelfShadowMapExtent, MAX_SKINNED_SELF_SHADOW_CASTERS, false);
+        kSkinnedSelfShadowMapExtent, kMaxSkinnedSelfShadowCasters, false);
     createLayeredShadowFramebuffer(*device_, *resources_, selfShadowSecondPass_,
                                    selfShadowMapHandle_, selfShadowColourHandle_,
-                                   skinnedSelfShadowMapExtent, MAX_SKINNED_SELF_SHADOW_CASTERS);
+                                   kSkinnedSelfShadowMapExtent, kMaxSkinnedSelfShadowCasters);
 
     // Spot casters share a 2D-array depth image, one layer per caster.
     spotShadowMapHandle_ =
-        resources_->createShadowMap(spotShadowMapExtent, MAX_SPOT_SHADOW_CASTERS);
-    spotShadowColourHandle_ = resources_->createShadowColourAttachment(spotShadowMapExtent);
+        resources_->createShadowMap(kSpotShadowMapExtent, kMaxSpotShadowCasters);
+    spotShadowColourHandle_ = resources_->createShadowColourAttachment(kSpotShadowMapExtent);
     std::vector<vk::ImageView> spotDepthViews;
-    spotDepthViews.reserve(MAX_SPOT_SHADOW_CASTERS);
-    for (uint32_t i = 0; i < MAX_SPOT_SHADOW_CASTERS; ++i)
+    spotDepthViews.reserve(kMaxSpotShadowCasters);
+    for (uint32_t i = 0; i < kMaxSpotShadowCasters; ++i)
     {
         spotDepthViews.push_back(resources_->vulkanShadowMapLayerView(spotShadowMapHandle_, i));
     }
     std::array<vk::ImageView, 1> spotColourViews = {
         resources_->vulkanImageView(spotShadowColourHandle_)};
     spotShadowPass_.createShadowFramebuffer(*device_, spotColourViews, spotDepthViews,
-                                            spotShadowMapExtent);
+                                            kSpotShadowMapExtent);
 
     // Point casters: one cubemap-array depth image, six face framebuffers per
     // caster. Layout 6 * cube + face matches Resources::vulkanPointShadowFaceView
     // and the matrixIndex layout in ShadowUBO::lightViewProj.
     pointShadowMapHandle_ =
-        resources_->createPointShadowMap(pointShadowMapExtent, MAX_POINT_SHADOW_CASTERS);
-    pointShadowColourHandle_ = resources_->createShadowColourAttachment(pointShadowMapExtent);
+        resources_->createPointShadowMap(kPointShadowMapExtent, kMaxPointShadowCasters);
+    pointShadowColourHandle_ = resources_->createShadowColourAttachment(kPointShadowMapExtent);
     std::vector<vk::ImageView> pointFaceViews;
-    pointFaceViews.reserve(static_cast<std::size_t>(MAX_POINT_SHADOW_CASTERS) * 6);
-    for (uint32_t cube = 0; cube < MAX_POINT_SHADOW_CASTERS; ++cube)
+    pointFaceViews.reserve(static_cast<std::size_t>(kMaxPointShadowCasters) * 6);
+    for (uint32_t cube = 0; cube < kMaxPointShadowCasters; ++cube)
     {
         for (uint32_t face = 0; face < 6; ++face)
         {
@@ -138,7 +138,7 @@ Shadows::Shadows(const Device& device, Resources& resources)
     std::array<vk::ImageView, 1> pointColourViews = {
         resources_->vulkanImageView(pointShadowColourHandle_)};
     pointShadowPass_.createShadowFramebuffer(*device_, pointColourViews, pointFaceViews,
-                                             pointShadowMapExtent);
+                                             kPointShadowMapExtent);
 
     resources_->descriptors().shadowDescriptorSetLayout(shadowPipeline_.descriptorSetLayout());
     auto& shared = resources_->sharedTextures();
@@ -198,30 +198,30 @@ void Shadows::recordPass(vk::CommandBuffer cmd, const std::vector<DrawCommand>& 
         cmd.endRenderPass();
     };
 
-    for (uint32_t cascade = 0; cascade < shadowCascadeCount; ++cascade)
+    for (uint32_t cascade = 0; cascade < kShadowCascadeCount; ++cascade)
     {
         ShadowPushConstants pc{};
-        pc.matrixIndex = SHADOW_CASCADE_MATRIX_BASE + static_cast<int>(cascade);
+        pc.matrixIndex = kShadowCascadeMatrixBase + static_cast<int>(cascade);
         recordShadowIteration(shadowPass_.renderPass(), shadowPass_.framebuffer(cascade),
-                              shadowMapExtent, pc, shadowDraws, shadowPipelineHandle_,
-                              directionalShadowRasterBiasConstant,
-                              directionalShadowRasterBiasSlope);
+                              kShadowMapExtent, pc, shadowDraws, shadowPipelineHandle_,
+                              kDirectionalShadowRasterBiasConstant,
+                              kDirectionalShadowRasterBiasSlope);
         recordShadowIteration(worldShadowPass_.renderPass(), worldShadowPass_.framebuffer(cascade),
-                              shadowMapExtent, pc, worldOnlyShadowDraws, shadowPipelineHandle_,
-                              directionalShadowRasterBiasConstant,
-                              directionalShadowRasterBiasSlope);
+                              kShadowMapExtent, pc, worldOnlyShadowDraws, shadowPipelineHandle_,
+                              kDirectionalShadowRasterBiasConstant,
+                              kDirectionalShadowRasterBiasSlope);
     }
 
-    std::array<std::vector<DrawCommand>, MAX_SKINNED_SELF_SHADOW_CASTERS> selfShadowSlotDraws;
+    std::array<std::vector<DrawCommand>, kMaxSkinnedSelfShadowCasters> selfShadowSlotDraws;
     for (const auto& dc : selfShadowDraws)
     {
-        if (dc.selfShadowSlot >= 0 && dc.selfShadowSlot < MAX_SKINNED_SELF_SHADOW_CASTERS)
+        if (dc.selfShadowSlot >= 0 && dc.selfShadowSlot < kMaxSkinnedSelfShadowCasters)
         {
             selfShadowSlotDraws[static_cast<std::size_t>(dc.selfShadowSlot)].push_back(dc);
         }
     }
 
-    for (int slot = 0; slot < MAX_SKINNED_SELF_SHADOW_CASTERS; ++slot)
+    for (int slot = 0; slot < kMaxSkinnedSelfShadowCasters; ++slot)
     {
         const std::vector<DrawCommand>& slotDraws =
             selfShadowSlotDraws[static_cast<std::size_t>(slot)];
@@ -234,40 +234,40 @@ void Shadows::recordPass(vk::CommandBuffer cmd, const std::vector<DrawCommand>& 
         }
         recordShadowIteration(selfShadowFirstPass_.renderPass(),
                               selfShadowFirstPass_.framebuffer(static_cast<std::size_t>(slot)),
-                              skinnedSelfShadowMapExtent, pc, slotDraws,
+                              kSkinnedSelfShadowMapExtent, pc, slotDraws,
                               selfShadowFirstPipelineHandle_, 0.0f, 0.0f);
         recordShadowIteration(selfShadowSecondPass_.renderPass(),
                               selfShadowSecondPass_.framebuffer(static_cast<std::size_t>(slot)),
-                              skinnedSelfShadowMapExtent, pc, slotDraws,
+                              kSkinnedSelfShadowMapExtent, pc, slotDraws,
                               selfShadowSecondPipelineHandle_, 0.0f, 0.0f);
     }
 
-    for (int s = 0; s < activeSpotCasters && s < MAX_SPOT_SHADOW_CASTERS; ++s)
+    for (int s = 0; s < activeSpotCasters && s < kMaxSpotShadowCasters; ++s)
     {
         ShadowPushConstants pc{};
-        pc.matrixIndex = SHADOW_SPOT_MATRIX_BASE + s;
+        pc.matrixIndex = kShadowSpotMatrixBase + s;
         recordShadowIteration(spotShadowPass_.renderPass(),
                               spotShadowPass_.framebuffer(static_cast<std::size_t>(s)),
-                              spotShadowMapExtent, pc, shadowDraws, shadowPipelineHandle_,
-                              punctualShadowRasterBiasConstant, punctualShadowRasterBiasSlope);
+                              kSpotShadowMapExtent, pc, shadowDraws, shadowPipelineHandle_,
+                              kPunctualShadowRasterBiasConstant, kPunctualShadowRasterBiasSlope);
     }
 
     for (std::size_t p = 0;
-         p < pointCasters.size() && p < static_cast<std::size_t>(MAX_POINT_SHADOW_CASTERS); ++p)
+         p < pointCasters.size() && p < static_cast<std::size_t>(kMaxPointShadowCasters); ++p)
     {
         for (uint32_t face = 0; face < 6; ++face)
         {
             ShadowPushConstants pc{};
             pc.matrixIndex =
-                SHADOW_POINT_MATRIX_BASE + 6 * static_cast<int>(p) + static_cast<int>(face);
+                kShadowPointMatrixBase + 6 * static_cast<int>(p) + static_cast<int>(face);
             pc.lightPosRange[0] = pointCasters[p].worldPosition.x();
             pc.lightPosRange[1] = pointCasters[p].worldPosition.y();
             pc.lightPosRange[2] = pointCasters[p].worldPosition.z();
             pc.lightPosRange[3] = pointCasters[p].range;
             recordShadowIteration(pointShadowPass_.renderPass(),
-                                  pointShadowPass_.framebuffer(6 * p + face), pointShadowMapExtent,
+                                  pointShadowPass_.framebuffer(6 * p + face), kPointShadowMapExtent,
                                   pc, shadowDraws, shadowPipelineHandle_,
-                                  punctualShadowRasterBiasConstant, punctualShadowRasterBiasSlope);
+                                  kPunctualShadowRasterBiasConstant, kPunctualShadowRasterBiasSlope);
         }
     }
 }

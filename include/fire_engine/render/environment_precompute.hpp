@@ -45,7 +45,7 @@ public:
         return brdfLutHandle_;
     }
 
-    [[nodiscard]] const std::array<DescriptorSetHandle, MAX_FRAMES_IN_FLIGHT>&
+    [[nodiscard]] const std::array<DescriptorSetHandle, kMaxFramesInFlight>&
     skyboxDescriptorSets() const noexcept
     {
         return skyboxDescriptorSets_;
@@ -68,7 +68,7 @@ private:
     TextureHandle irradianceCubemapHandle_{NullTexture};
     TextureHandle prefilteredCubemapHandle_{NullTexture};
     TextureHandle brdfLutHandle_{NullTexture};
-    std::array<DescriptorSetHandle, MAX_FRAMES_IN_FLIGHT> skyboxDescriptorSets_{};
+    std::array<DescriptorSetHandle, kMaxFramesInFlight> skyboxDescriptorSets_{};
 };
 
 } // namespace fire_engine
