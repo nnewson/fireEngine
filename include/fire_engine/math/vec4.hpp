@@ -16,7 +16,11 @@ public:
         data_[2] = z;
         data_[3] = w;
     }
-    constexpr Vec4(const Vec3& vec3) noexcept
+
+    // Lifts a Vec3 to a homogeneous Vec4 with w=1. Explicit because the
+    // shape change is semantically meaningful — losing or gaining a w
+    // component shouldn't happen implicitly via vec4 + vec3 etc.
+    constexpr explicit Vec4(const Vec3& vec3) noexcept
     {
         data_[0] = vec3.x();
         data_[1] = vec3.y();
@@ -75,7 +79,11 @@ public:
         data_[3] = w;
     }
 
-    operator Vec3() const noexcept
+    // Drops the w component. Explicit because silent truncation is exactly
+    // the bug we want to avoid (e.g. vec3 = matrix * vec4 quietly losing
+    // the homogeneous coordinate).
+    [[nodiscard]]
+    constexpr explicit operator Vec3() const noexcept
     {
         return {data_[0], data_[1], data_[2]};
     }

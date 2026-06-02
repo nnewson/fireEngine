@@ -83,10 +83,31 @@ public:
         return {-x_, -y_, -z_, -w_};
     }
 
+    // Strict bit-for-bit equality. Two quaternions that differ by a single ULP
+    // compare not-equal — use approxEqual when you want tolerance. Note: also
+    // strict in the sign of the imaginary parts, so q and -q (which represent
+    // the same rotation) compare not-equal.
     [[nodiscard]]
     constexpr bool operator==(const Quaternion& rhs) const noexcept
     {
         return x_ == rhs.x_ && y_ == rhs.y_ && z_ == rhs.z_ && w_ == rhs.w_;
+    }
+
+    [[nodiscard]]
+    constexpr bool bitwiseEqual(const Quaternion& rhs) const noexcept
+    {
+        return *this == rhs;
+    }
+
+    [[nodiscard]]
+    constexpr bool approxEqual(const Quaternion& rhs, float eps = float_epsilon) const noexcept
+    {
+        const float dx = x_ - rhs.x_;
+        const float dy = y_ - rhs.y_;
+        const float dz = z_ - rhs.z_;
+        const float dw = w_ - rhs.w_;
+        return dx <= eps && dx >= -eps && dy <= eps && dy >= -eps && dz <= eps && dz >= -eps &&
+               dw <= eps && dw >= -eps;
     }
 
     [[nodiscard]]

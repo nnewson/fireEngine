@@ -2,6 +2,7 @@
 
 #include <cmath>
 
+#include <fire_engine/math/constants.hpp>
 #include <fire_engine/math/vec3.hpp>
 #include <fire_engine/math/vec4.hpp>
 #include <fire_engine/math/view_basis.hpp>
@@ -81,12 +82,34 @@ public:
                 m_[3] * rhs.x() + m_[7] * rhs.y() + m_[11] * rhs.z() + m_[15] * rhs.w()};
     }
 
+    // Strict bit-for-bit equality. Two matrices that differ by a single ULP
+    // compare not-equal — use approxEqual when you want tolerance.
     [[nodiscard]]
     constexpr bool operator==(const Mat4& rhs) const noexcept
     {
         for (int i = 0; i < 16; ++i)
         {
             if (m_[i] != rhs.m_[i])
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    [[nodiscard]]
+    constexpr bool bitwiseEqual(const Mat4& rhs) const noexcept
+    {
+        return *this == rhs;
+    }
+
+    [[nodiscard]]
+    constexpr bool approxEqual(const Mat4& rhs, float eps = float_epsilon) const noexcept
+    {
+        for (int i = 0; i < 16; ++i)
+        {
+            const float diff = m_[i] - rhs.m_[i];
+            if (diff > eps || diff < -eps)
             {
                 return false;
             }

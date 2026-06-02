@@ -207,7 +207,7 @@ Build:
 cmake --build build
 ```
 
-Run the tests (962 tests):
+Run the tests (969 tests):
 
 ```bash
 ./build/test_fire_engine

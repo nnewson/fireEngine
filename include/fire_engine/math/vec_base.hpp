@@ -97,7 +97,9 @@ public:
         return Derived::dotProduct(self(), rhs);
     }
 
-    [[nodiscard]] constexpr float magnitude() const noexcept
+    // std::sqrt is not constexpr before C++26, so magnitude (and the
+    // normalise helpers that depend on it) cannot be constexpr either.
+    [[nodiscard]] float magnitude() const noexcept
     {
         return std::sqrt(magnitudeSquared());
     }
@@ -113,7 +115,7 @@ public:
     }
 
     [[nodiscard]]
-    static constexpr Derived normalise(const Derived& v) noexcept
+    static Derived normalise(const Derived& v) noexcept
     {
         float len = v.magnitude();
         if (len < float_epsilon)
@@ -129,18 +131,40 @@ public:
         return result;
     }
 
-    constexpr Derived& normalise() noexcept
+    Derived& normalise() noexcept
     {
         self() = normalise(self());
         return self();
     }
 
+    // Strict bit-for-bit equality. Two values that differ by a single ULP
+    // compare not-equal — use approxEqual when you want tolerance.
     [[nodiscard]]
     friend constexpr bool operator==(const Derived& lhs, const Derived& rhs) noexcept
     {
         for (std::size_t i = 0; i < N; ++i)
         {
             if (lhs.data_[i] != rhs.data_[i])
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    [[nodiscard]]
+    constexpr bool bitwiseEqual(const Derived& rhs) const noexcept
+    {
+        return self() == rhs;
+    }
+
+    [[nodiscard]]
+    constexpr bool approxEqual(const Derived& rhs, float eps = float_epsilon) const noexcept
+    {
+        for (std::size_t i = 0; i < N; ++i)
+        {
+            const float diff = data_[i] - rhs.data_[i];
+            if (diff > eps || diff < -eps)
             {
                 return false;
             }

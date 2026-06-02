@@ -137,6 +137,31 @@ TEST(Vec3Equality, NegativeZeroEqualsPositiveZero)
     EXPECT_TRUE(a == b);
 }
 
+TEST(Vec3Equality, BitwiseEqualMatchesOperator)
+{
+    Vec3 a{1.0f, 2.0f, 3.0f};
+    Vec3 b{1.0f, 2.0f, 3.0f};
+    Vec3 c{1.0f, 2.0f, 3.5f};
+    EXPECT_TRUE(a.bitwiseEqual(b));
+    EXPECT_FALSE(a.bitwiseEqual(c));
+}
+
+TEST(Vec3Equality, ApproxEqualWithinTolerance)
+{
+    Vec3 a{1.0f, 2.0f, 3.0f};
+    Vec3 b{1.0f + 1e-7f, 2.0f - 1e-7f, 3.0f};
+    EXPECT_FALSE(a == b);
+    EXPECT_TRUE(a.approxEqual(b, 1e-6f));
+    EXPECT_FALSE(a.approxEqual(b, 1e-9f));
+}
+
+TEST(Vec3Equality, ApproxEqualDefaultEpsilon)
+{
+    Vec3 a{1.0f, 2.0f, 3.0f};
+    Vec3 b{1.0f, 2.0f, 3.0f};
+    EXPECT_TRUE(a.approxEqual(b));
+}
+
 // ==========================================================================
 // Addition
 // ==========================================================================

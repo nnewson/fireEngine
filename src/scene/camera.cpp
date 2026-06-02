@@ -36,7 +36,7 @@ void Camera::update(const InputState& input_state, const Transform& transform)
 
     const Mat4 world = transform.world();
     const Vec3 localTarget = computeTarget(localPosition_, localYaw_, localPitch_);
-    worldPosition_ = world * Vec4{localPosition_};
+    worldPosition_ = Vec3{world * Vec4{localPosition_}};
 
     Vec3 worldForward = static_cast<Vec3>(world * Vec4{localTarget}) - worldPosition_;
     if (worldForward.magnitudeSquared() < float_epsilon)

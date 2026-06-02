@@ -182,6 +182,25 @@ TEST(Mat4Equality, ZeroMatrices)
     EXPECT_TRUE(a == b);
 }
 
+TEST(Mat4Equality, BitwiseEqualMatchesOperator)
+{
+    Mat4 a = Mat4::identity();
+    Mat4 b = Mat4::identity();
+    Mat4 c = Mat4::scale(Vec3{2.0f, 1.0f, 1.0f});
+    EXPECT_TRUE(a.bitwiseEqual(b));
+    EXPECT_FALSE(a.bitwiseEqual(c));
+}
+
+TEST(Mat4Equality, ApproxEqualWithinTolerance)
+{
+    Mat4 a = Mat4::identity();
+    Mat4 b = Mat4::identity();
+    b[0, 0] = 1.0f + 1e-7f;
+    EXPECT_FALSE(a == b);
+    EXPECT_TRUE(a.approxEqual(b, 1e-6f));
+    EXPECT_FALSE(a.approxEqual(b, 1e-9f));
+}
+
 // ==========================================================================
 // Multiplication
 // ==========================================================================

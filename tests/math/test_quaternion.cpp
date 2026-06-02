@@ -85,6 +85,24 @@ TEST(QuaternionEquality, DifferentValuesNotEqual)
     EXPECT_FALSE(a == b);
 }
 
+TEST(QuaternionEquality, BitwiseEqualMatchesOperator)
+{
+    Quaternion a{0.1f, 0.2f, 0.3f, 0.4f};
+    Quaternion b{0.1f, 0.2f, 0.3f, 0.4f};
+    Quaternion c{0.1f, 0.2f, 0.3f, 0.5f};
+    EXPECT_TRUE(a.bitwiseEqual(b));
+    EXPECT_FALSE(a.bitwiseEqual(c));
+}
+
+TEST(QuaternionEquality, ApproxEqualWithinTolerance)
+{
+    Quaternion a{0.1f, 0.2f, 0.3f, 0.4f};
+    Quaternion b{0.1f + 1e-7f, 0.2f, 0.3f, 0.4f - 1e-7f};
+    EXPECT_FALSE(a == b);
+    EXPECT_TRUE(a.approxEqual(b, 1e-6f));
+    EXPECT_FALSE(a.approxEqual(b, 1e-9f));
+}
+
 TEST(QuaternionUnaryMinus, NegatesAllComponents)
 {
     Quaternion q{0.1f, -0.2f, 0.3f, -0.4f};

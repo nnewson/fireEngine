@@ -71,13 +71,13 @@ AABB transformBounds(const AABB& localBounds, Mat4 world)
         Vec3{localMax.x(), localMax.y(), localMax.z()},
     };
 
-    Vec3 transformed = world * Vec4{corners[0]};
+    Vec3 transformed = Vec3{world * Vec4{corners[0]}};
     Vec3 min = transformed;
     Vec3 max = transformed;
 
     for (std::size_t i = 1; i < corners.size(); ++i)
     {
-        transformed = world * Vec4{corners[i]};
+        transformed = Vec3{world * Vec4{corners[i]}};
         min.x(std::min(min.x(), transformed.x()));
         min.y(std::min(min.y(), transformed.y()));
         min.z(std::min(min.z(), transformed.z()));
