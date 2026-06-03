@@ -11,6 +11,7 @@
 #include <fire_engine/render/pipeline.hpp>
 #include <fire_engine/render/render_pass.hpp>
 #include <fire_engine/render/ubo.hpp>
+#include <fire_engine/render/viewport.hpp>
 
 namespace fire_engine
 {
@@ -180,14 +181,8 @@ void EnvironmentPrecompute::createSkyboxEnvironment(
             .flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit,
         });
 
-        vk::Viewport viewport{
-            .x = 0.0f,
-            .y = 0.0f,
-            .width = static_cast<float>(kSkyboxCubemapExtent),
-            .height = static_cast<float>(kSkyboxCubemapExtent),
-            .minDepth = 0.0f,
-            .maxDepth = 1.0f,
-        };
+        vk::Viewport viewport = makeFullViewport(static_cast<float>(kSkyboxCubemapExtent),
+                                                 static_cast<float>(kSkyboxCubemapExtent));
         vk::Rect2D renderArea{
             .offset = vk::Offset2D{.x = 0, .y = 0},
             .extent = vk::Extent2D{.width = kSkyboxCubemapExtent, .height = kSkyboxCubemapExtent},
@@ -373,14 +368,8 @@ void EnvironmentPrecompute::createIrradianceEnvironment()
             .flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit,
         });
 
-        vk::Viewport viewport{
-            .x = 0.0f,
-            .y = 0.0f,
-            .width = static_cast<float>(kIrradianceCubemapExtent),
-            .height = static_cast<float>(kIrradianceCubemapExtent),
-            .minDepth = 0.0f,
-            .maxDepth = 1.0f,
-        };
+        vk::Viewport viewport = makeFullViewport(static_cast<float>(kIrradianceCubemapExtent),
+                                                 static_cast<float>(kIrradianceCubemapExtent));
         vk::Rect2D renderArea{
             .offset = vk::Offset2D{.x = 0, .y = 0},
             .extent =
@@ -503,14 +492,8 @@ void EnvironmentPrecompute::createPrefilteredEnvironment()
                                         static_cast<float>(kPrefilteredCubemapMipLevels - 1)
                                   : 0.0f;
 
-            vk::Viewport viewport{
-                .x = 0.0f,
-                .y = 0.0f,
-                .width = static_cast<float>(mipExtent),
-                .height = static_cast<float>(mipExtent),
-                .minDepth = 0.0f,
-                .maxDepth = 1.0f,
-            };
+            vk::Viewport viewport =
+                makeFullViewport(static_cast<float>(mipExtent), static_cast<float>(mipExtent));
             vk::Rect2D renderArea{
                 .offset = vk::Offset2D{.x = 0, .y = 0},
                 .extent = vk::Extent2D{.width = mipExtent, .height = mipExtent},
@@ -596,14 +579,8 @@ void EnvironmentPrecompute::createBrdfLut()
             .flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit,
         });
 
-        vk::Viewport viewport{
-            .x = 0.0f,
-            .y = 0.0f,
-            .width = static_cast<float>(kBrdfLutExtent),
-            .height = static_cast<float>(kBrdfLutExtent),
-            .minDepth = 0.0f,
-            .maxDepth = 1.0f,
-        };
+        vk::Viewport viewport = makeFullViewport(static_cast<float>(kBrdfLutExtent),
+                                                 static_cast<float>(kBrdfLutExtent));
         vk::Rect2D renderArea{
             .offset = vk::Offset2D{.x = 0, .y = 0},
             .extent = vk::Extent2D{.width = kBrdfLutExtent, .height = kBrdfLutExtent},

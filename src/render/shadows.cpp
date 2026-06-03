@@ -4,6 +4,7 @@
 
 #include <fire_engine/render/device.hpp>
 #include <fire_engine/render/ubo.hpp>
+#include <fire_engine/render/viewport.hpp>
 
 namespace fire_engine
 {
@@ -166,14 +167,8 @@ void Shadows::recordPass(vk::CommandBuffer cmd, const std::vector<DrawCommand>& 
             const ShadowPushConstants& pc, const std::vector<DrawCommand>& draws,
             PipelineHandle pipelineHandle, float depthBiasConstant, float depthBiasSlope)
     {
-        vk::Viewport vp{
-            .x = 0.0f,
-            .y = 0.0f,
-            .width = static_cast<float>(extent),
-            .height = static_cast<float>(extent),
-            .minDepth = 0.0f,
-            .maxDepth = 1.0f,
-        };
+        vk::Viewport vp =
+            makeFullViewport(static_cast<float>(extent), static_cast<float>(extent));
         vk::Rect2D scissor{
             .offset = vk::Offset2D{.x = 0, .y = 0},
             .extent = vk::Extent2D{.width = extent, .height = extent},

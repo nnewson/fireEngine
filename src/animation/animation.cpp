@@ -223,9 +223,9 @@ Vec3 sampleScale(const std::vector<Animation::ScaleKeyframe>& kf, Animation::Int
 
 float Animation::duration() const noexcept
 {
-    if (duration_ >= 0.0f)
+    if (explicitDuration_)
     {
-        return duration_;
+        return *explicitDuration_;
     }
     float rotDur = rotationKeyframes_.empty() ? 0.0f : rotationKeyframes_.back().time;
     float transDur = translationKeyframes_.empty() ? 0.0f : translationKeyframes_.back().time;

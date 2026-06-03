@@ -14,6 +14,13 @@ namespace fire_engine
 namespace
 {
 
+// GPU-side sentinel for "no Beer–Lambert attenuation". Large enough that
+// exp(-d / distance) ≈ 1 across any plausible scene depth, but finite so the
+// shader can branch on it without an infinity guard. The CPU-side spec default
+// is std::numeric_limits<float>::infinity(); this constant is the value we
+// shove into the UBO when CPU says "no attenuation".
+inline constexpr float kMaxAttenuationDistance = 1.0e6f;
+
 [[nodiscard]]
 bool sameTextureSlot(bool hasA, bool hasB, const Texture& texA, const Texture& texB) noexcept
 {
@@ -108,7 +115,7 @@ MaterialUBO toMaterialUBO(const Material& mat)
 
     const float attenuationDistance = mat.attenuationDistance();
     ubo.attenuation[3] = attenuationDistance <= 0.0f || !std::isfinite(attenuationDistance)
-                             ? 1.0e6f
+                             ? kMaxAttenuationDistance
                              : attenuationDistance;
     return ubo;
 }

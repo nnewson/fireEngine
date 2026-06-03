@@ -3,6 +3,7 @@
 #include <cmath>
 
 #include <fire_engine/input/input_state.hpp>
+#include <fire_engine/math/constants.hpp>
 #include <fire_engine/math/mat4.hpp>
 #include <fire_engine/math/vec3.hpp>
 #include <fire_engine/scene/transform.hpp>
@@ -104,14 +105,13 @@ private:
 
     static float clampPitch(float p) noexcept
     {
-        constexpr float maxPitch = 1.5f;
-        if (p > maxPitch)
+        if (p > kCameraMaxPitch)
         {
-            return maxPitch;
+            return kCameraMaxPitch;
         }
-        if (p < -maxPitch)
+        if (p < -kCameraMaxPitch)
         {
-            return -maxPitch;
+            return -kCameraMaxPitch;
         }
         return p;
     }

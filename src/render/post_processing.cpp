@@ -5,6 +5,7 @@
 #include <fire_engine/render/constants.hpp>
 #include <fire_engine/render/device.hpp>
 #include <fire_engine/render/ubo.hpp>
+#include <fire_engine/render/viewport.hpp>
 
 namespace fire_engine
 {
@@ -112,12 +113,7 @@ void PostProcessing::recordBloomPasses(vk::CommandBuffer cmd) const
             .renderArea = renderArea,
         };
         cmd.beginRenderPass(begin, vk::SubpassContents::eInline);
-        cmd.setViewport(0, vk::Viewport{.x = 0.0f,
-                                        .y = 0.0f,
-                                        .width = static_cast<float>(dstW),
-                                        .height = static_cast<float>(dstH),
-                                        .minDepth = 0.0f,
-                                        .maxDepth = 1.0f});
+        cmd.setViewport(0, makeFullViewport(static_cast<float>(dstW), static_cast<float>(dstH)));
         cmd.setScissor(0, renderArea);
         cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, bloomDownsamplePipeline_.pipeline());
         cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, downLayout, 0,
@@ -149,12 +145,7 @@ void PostProcessing::recordBloomPasses(vk::CommandBuffer cmd) const
             .renderArea = renderArea,
         };
         cmd.beginRenderPass(begin, vk::SubpassContents::eInline);
-        cmd.setViewport(0, vk::Viewport{.x = 0.0f,
-                                        .y = 0.0f,
-                                        .width = static_cast<float>(dstW),
-                                        .height = static_cast<float>(dstH),
-                                        .minDepth = 0.0f,
-                                        .maxDepth = 1.0f});
+        cmd.setViewport(0, makeFullViewport(static_cast<float>(dstW), static_cast<float>(dstH)));
         cmd.setScissor(0, renderArea);
         cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, bloomUpsamplePipeline_.pipeline());
         cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, upLayout, 0,
@@ -205,15 +196,7 @@ void PostProcessing::recordPostProcessPass(vk::CommandBuffer cmd, uint32_t image
     };
     cmd.beginRenderPass(ppBegin, vk::SubpassContents::eInline);
 
-    vk::Viewport vp{
-        .x = 0.0f,
-        .y = 0.0f,
-        .width = static_cast<float>(extent.width),
-        .height = static_cast<float>(extent.height),
-        .minDepth = 0.0f,
-        .maxDepth = 1.0f,
-    };
-    cmd.setViewport(0, vp);
+    cmd.setViewport(0, makeFullViewport(extent));
     cmd.setScissor(0, renderArea);
     cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, postProcessPipeline_.pipeline());
 

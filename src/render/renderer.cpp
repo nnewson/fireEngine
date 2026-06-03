@@ -12,8 +12,10 @@
 #include <fire_engine/math/view_basis.hpp>
 #include <fire_engine/render/environment_precompute.hpp>
 #include <fire_engine/render/render_context.hpp>
+#include <fire_engine/render/cubemap_basis.hpp>
 #include <fire_engine/render/swapchain.hpp>
 #include <fire_engine/render/ubo.hpp>
+#include <fire_engine/render/viewport.hpp>
 #include <fire_engine/scene/scene_graph.hpp>
 
 namespace fire_engine
@@ -342,22 +344,13 @@ void Renderer::assignPointShadow(LightUBO& out, int packedSlot, const Lighting& 
     const int shadowIndex = activePointCasters_++;
     const float far = light.range > 0.0f ? light.range : kPointShadowInfiniteRangeFallback;
     const Mat4 proj = Mat4::perspective(0.5f * pi, 1.0f, kPointShadowNearPlane, far);
-    // Vulkan cubemap face order: +X, -X, +Y, -Y, +Z, -Z. Up vectors match the
-    // IBL prefilter convention used elsewhere in the engine so cube sampling
-    // stays consistent across face boundaries.
-    constexpr Vec3 faceForward[6] = {
-        Vec3{1.0f, 0.0f, 0.0f},  Vec3{-1.0f, 0.0f, 0.0f}, Vec3{0.0f, 1.0f, 0.0f},
-        Vec3{0.0f, -1.0f, 0.0f}, Vec3{0.0f, 0.0f, 1.0f},  Vec3{0.0f, 0.0f, -1.0f},
-    };
-    constexpr Vec3 faceUp[6] = {
-        Vec3{0.0f, -1.0f, 0.0f}, Vec3{0.0f, -1.0f, 0.0f}, Vec3{0.0f, 0.0f, 1.0f},
-        Vec3{0.0f, 0.0f, -1.0f}, Vec3{0.0f, -1.0f, 0.0f}, Vec3{0.0f, -1.0f, 0.0f},
-    };
-    for (uint32_t face = 0; face < 6; ++face)
+    for (std::size_t face = 0; face < kCubemapFaceCount; ++face)
     {
-        const Mat4 view =
-            Mat4::lookAt(light.worldPosition, light.worldPosition + faceForward[face], faceUp[face]);
-        shadowViewProjs_[kShadowPointMatrixBase + 6 * shadowIndex + face] = proj * view;
+        const Mat4 view = Mat4::lookAt(light.worldPosition,
+                                       light.worldPosition + kCubemapFaceForward[face],
+                                       kCubemapFaceUp[face]);
+        shadowViewProjs_[kShadowPointMatrixBase + kCubemapFaceCount * shadowIndex + face] =
+            proj * view;
     }
     out.lights[packedSlot].cone[2] = static_cast<float>(shadowIndex);
     // Stash the effective range used for shadow projection so the shadow-pass
@@ -638,15 +631,7 @@ void Renderer::beginRenderPass(vk::CommandBuffer cmd)
 
     cmd.beginRenderPass(rpBegin, vk::SubpassContents::eInline);
 
-    vk::Viewport viewport{
-        .x = 0.0f,
-        .y = 0.0f,
-        .width = static_cast<float>(extent.width),
-        .height = static_cast<float>(extent.height),
-        .minDepth = 0.0f,
-        .maxDepth = 1.0f,
-    };
-    cmd.setViewport(0, viewport);
+    cmd.setViewport(0, makeFullViewport(extent));
     cmd.setScissor(0, renderArea);
 }
 

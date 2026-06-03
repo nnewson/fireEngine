@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -196,11 +197,12 @@ public:
     }
 
     [[nodiscard]] float duration() const noexcept;
-    // Explicit loop duration override so channels on the same glTF animation loop
-    // in lockstep across its full span. Negative (default) = max of own channels.
-    void duration(float d) noexcept
+    // Explicit loop duration override so channels on the same glTF animation
+    // loop in lockstep across its full span. std::nullopt (default) = take the
+    // max of the channel keyframes.
+    void duration(std::optional<float> d) noexcept
     {
-        duration_ = d;
+        explicitDuration_ = d;
     }
 
     [[nodiscard]] Mat4 sample(float t) const noexcept;
@@ -228,7 +230,7 @@ private:
     std::vector<std::vector<float>> weightInTangents_;
     std::vector<std::vector<float>> weightOutTangents_;
 
-    float duration_{-1.0f};
+    std::optional<float> explicitDuration_;
 };
 
 } // namespace fire_engine

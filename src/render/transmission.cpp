@@ -7,6 +7,7 @@
 
 #include <fire_engine/render/device.hpp>
 #include <fire_engine/render/ubo.hpp>
+#include <fire_engine/render/viewport.hpp>
 
 namespace fire_engine
 {
@@ -274,12 +275,7 @@ void Transmission::recordForwardTransmissionPass(
         .renderArea = renderArea,
     };
     cmd.beginRenderPass(begin, vk::SubpassContents::eInline);
-    cmd.setViewport(0, vk::Viewport{.x = 0.0f,
-                                    .y = 0.0f,
-                                    .width = static_cast<float>(extent.width),
-                                    .height = static_cast<float>(extent.height),
-                                    .minDepth = 0.0f,
-                                    .maxDepth = 1.0f});
+    cmd.setViewport(0, makeFullViewport(extent));
     cmd.setScissor(0, renderArea);
     recordTransmissionDrawBucket(cmd, transmissiveDraws, *resources_, globalSet);
     cmd.endRenderPass();
