@@ -141,6 +141,7 @@ add_custom_target(assets ALL
 enable_testing()
 
 add_executable(test_fire_engine
+    tests/collision/test_aabb.cpp
     tests/collision/test_sweep_and_prune_broad_phase.cpp
     tests/collision/test_narrow_phase.cpp
     tests/physics/test_physics_world.cpp
