@@ -12,44 +12,6 @@ namespace fire_engine
 
 namespace
 {
-enum class Axis
-{
-    X,
-    Y,
-    Z,
-};
-
-[[nodiscard]]
-float axisMin(const AABB& bounds, Axis axis) noexcept
-{
-    switch (axis)
-    {
-    case Axis::X:
-        return bounds.min.x();
-    case Axis::Y:
-        return bounds.min.y();
-    case Axis::Z:
-        return bounds.min.z();
-    }
-
-    return bounds.min.x();
-}
-
-[[nodiscard]]
-float axisMax(const AABB& bounds, Axis axis) noexcept
-{
-    switch (axis)
-    {
-    case Axis::X:
-        return bounds.max.x();
-    case Axis::Y:
-        return bounds.max.y();
-    case Axis::Z:
-        return bounds.max.z();
-    }
-
-    return bounds.max.x();
-}
 
 [[nodiscard]]
 Vec3 axisNormal(Axis axis, float direction) noexcept
@@ -70,7 +32,7 @@ Vec3 axisNormal(Axis axis, float direction) noexcept
 [[nodiscard]]
 bool intervalsOverlap(const AABB& lhs, const AABB& rhs, Axis axis) noexcept
 {
-    return axisMin(lhs, axis) <= axisMax(rhs, axis) && axisMax(lhs, axis) >= axisMin(rhs, axis);
+    return lhs.axisMin(axis) <= rhs.axisMax(axis) && lhs.axisMax(axis) >= rhs.axisMin(axis);
 }
 
 [[nodiscard]]
@@ -112,8 +74,8 @@ Vec3 startingOverlapNormal(const AABB& movingBounds, const AABB& targetBounds) n
 
     for (Axis axis : axes)
     {
-        const float depth = std::min(axisMax(movingBounds, axis), axisMax(targetBounds, axis)) -
-                            std::max(axisMin(movingBounds, axis), axisMin(targetBounds, axis));
+        const float depth = std::min(movingBounds.axisMax(axis), targetBounds.axisMax(axis)) -
+                            std::max(movingBounds.axisMin(axis), targetBounds.axisMin(axis));
         if (depth < bestDepth)
         {
             bestDepth = depth;
@@ -122,9 +84,9 @@ Vec3 startingOverlapNormal(const AABB& movingBounds, const AABB& targetBounds) n
     }
 
     const float movingCentre =
-        (axisMin(movingBounds, bestAxis) + axisMax(movingBounds, bestAxis)) * 0.5f;
+        (movingBounds.axisMin(bestAxis) + movingBounds.axisMax(bestAxis)) * 0.5f;
     const float targetCentre =
-        (axisMin(targetBounds, bestAxis) + axisMax(targetBounds, bestAxis)) * 0.5f;
+        (targetBounds.axisMin(bestAxis) + targetBounds.axisMax(bestAxis)) * 0.5f;
     return axisNormal(bestAxis, movingCentre < targetCentre ? -1.0f : 1.0f);
 }
 
@@ -170,14 +132,14 @@ std::optional<SweptAabbContact> NarrowPhase::sweptAabb(const Collider& moving,
         }
         else if (delta > 0.0f)
         {
-            axisEntry = (axisMin(targetStart, axis) - axisMax(movingStart, axis)) / delta;
-            axisExit = (axisMax(targetStart, axis) - axisMin(movingStart, axis)) / delta;
+            axisEntry = (targetStart.axisMin(axis) - movingStart.axisMax(axis)) / delta;
+            axisExit = (targetStart.axisMax(axis) - movingStart.axisMin(axis)) / delta;
             axisEntryNormal = axisNormal(axis, -1.0f);
         }
         else
         {
-            axisEntry = (axisMax(targetStart, axis) - axisMin(movingStart, axis)) / delta;
-            axisExit = (axisMin(targetStart, axis) - axisMax(movingStart, axis)) / delta;
+            axisEntry = (targetStart.axisMax(axis) - movingStart.axisMin(axis)) / delta;
+            axisExit = (targetStart.axisMin(axis) - movingStart.axisMax(axis)) / delta;
             axisEntryNormal = axisNormal(axis, 1.0f);
         }
 

@@ -11,38 +11,6 @@ namespace
 
 constexpr std::size_t kInvalidPairIndex = std::numeric_limits<std::size_t>::max();
 
-[[nodiscard]]
-float axisMin(const AABB& bounds, CollisionAxis axis) noexcept
-{
-    switch (axis)
-    {
-    case CollisionAxis::X:
-        return bounds.min.x();
-    case CollisionAxis::Y:
-        return bounds.min.y();
-    case CollisionAxis::Z:
-        return bounds.min.z();
-    }
-
-    return bounds.min.x();
-}
-
-[[nodiscard]]
-float axisMax(const AABB& bounds, CollisionAxis axis) noexcept
-{
-    switch (axis)
-    {
-    case CollisionAxis::X:
-        return bounds.max.x();
-    case CollisionAxis::Y:
-        return bounds.max.y();
-    case CollisionAxis::Z:
-        return bounds.max.z();
-    }
-
-    return bounds.max.x();
-}
-
 } // namespace
 
 ColliderId SweepAndPruneBroadPhase::addCollider(Collider& collider)
@@ -636,8 +604,8 @@ bool SweepAndPruneBroadPhase::overlapsOnAxis(const Collider& lhs, const Collider
 {
     const AABB lhsBounds = lhs.sweptWorldBounds();
     const AABB rhsBounds = rhs.sweptWorldBounds();
-    return axisMin(lhsBounds, axis) <= axisMax(rhsBounds, axis) &&
-           axisMax(lhsBounds, axis) >= axisMin(rhsBounds, axis);
+    return lhsBounds.axisMin(axis) <= rhsBounds.axisMax(axis) &&
+           lhsBounds.axisMax(axis) >= rhsBounds.axisMin(axis);
 }
 
 bool SweepAndPruneBroadPhase::canCollide(const Collider& lhs, const Collider& rhs) noexcept

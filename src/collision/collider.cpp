@@ -13,38 +13,6 @@ namespace
 {
 
 [[nodiscard]]
-float axisMin(const AABB& bounds, CollisionAxis axis) noexcept
-{
-    switch (axis)
-    {
-    case CollisionAxis::X:
-        return bounds.min.x();
-    case CollisionAxis::Y:
-        return bounds.min.y();
-    case CollisionAxis::Z:
-        return bounds.min.z();
-    }
-
-    return bounds.min.x();
-}
-
-[[nodiscard]]
-float axisMax(const AABB& bounds, CollisionAxis axis) noexcept
-{
-    switch (axis)
-    {
-    case CollisionAxis::X:
-        return bounds.max.x();
-    case CollisionAxis::Y:
-        return bounds.max.y();
-    case CollisionAxis::Z:
-        return bounds.max.z();
-    }
-
-    return bounds.max.x();
-}
-
-[[nodiscard]]
 AABB mergeBounds(const AABB& lhs, const AABB& rhs) noexcept
 {
     return AABB{
@@ -278,11 +246,11 @@ void Collider::updateEndPointValues() noexcept
     {
         if (endPoint->isMin())
         {
-            endPoint->value(axisMin(sweptWorldBounds_, endPoint->axis()));
+            endPoint->value(sweptWorldBounds_.axisMin(endPoint->axis()));
         }
         else
         {
-            endPoint->value(axisMax(sweptWorldBounds_, endPoint->axis()));
+            endPoint->value(sweptWorldBounds_.axisMax(endPoint->axis()));
         }
     }
 }

@@ -51,7 +51,7 @@ The engine uses a scenegraph where each `Node` holds a `Transform` (position, un
 
 Physics is split across three layers:
 
-- **`collision/`** contains low-level collision primitives. `Collider` stores local/world/swept AABBs, collision layer/mask filtering, a stable `ColliderId`, and six owned SAP `EndPoint`s. `SweepAndPruneBroadPhase` owns endpoint lists and emits broadphase `CollisionPair`s. `NarrowPhase` currently provides swept-AABB contact tests.
+- **`collision/`** contains low-level collision primitives. `AABB` (in `collision/aabb.hpp`) is the shared value type used by every collision/physics consumer, with `axisMin(Axis)` / `axisMax(Axis)` / `center()` / `extent()` accessors; it's used directly by `Collider`, the narrow-/broad-phase, glTF loading, and graphics. `Collider` stores local/world/swept AABBs, collision layer/mask filtering, a stable `ColliderId`, and six owned SAP `EndPoint`s. `SweepAndPruneBroadPhase` owns endpoint lists and emits broadphase `CollisionPair`s. `NarrowPhase` currently provides swept-AABB contact tests.
 - **`physics/`** owns simulation state. `PhysicsWorld` stores bodies, colliders, shapes, materials, the broadphase, and the narrowphase. `PhysicsBody` stores type, velocity, mass/inverse mass, angular velocity, gravity scale, restitution, and friction. `ColliderShape` supports AABB, box, sphere, and capsule authoring, with all explicit shapes currently converted to an AABB proxy for contact testing.
 - **`scene/`** stores only opaque physics handles. Scene nodes stay responsible for transforms, hierarchy, input, animation, and rendering; physics ownership stays in `PhysicsWorld`.
 
@@ -207,7 +207,7 @@ Build:
 cmake --build build
 ```
 
-Run the tests (969 tests):
+Run the tests (975 tests):
 
 ```bash
 ./build/test_fire_engine

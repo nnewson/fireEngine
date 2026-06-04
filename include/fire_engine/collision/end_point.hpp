@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <limits>
 
+#include <fire_engine/collision/aabb.hpp>
 #include <fire_engine/collision/collider_id.hpp>
 
 namespace fire_engine
@@ -11,12 +12,11 @@ namespace fire_engine
 class Collider;
 class SweepAndPruneBroadPhase;
 
-enum class CollisionAxis
-{
-    X,
-    Y,
-    Z
-};
+// CollisionAxis is the original name used by the broadphase + endpoint code.
+// It is now an alias for Axis (defined in collision/aabb.hpp) so
+// AABB::axisMin / AABB::axisMax can be used directly without an explicit
+// conversion.
+using CollisionAxis = Axis;
 
 class EndPoint
 {

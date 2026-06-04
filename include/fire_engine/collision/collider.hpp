@@ -3,6 +3,7 @@
 #include <array>
 #include <cstdint>
 
+#include <fire_engine/collision/aabb.hpp>
 #include <fire_engine/collision/end_point.hpp>
 #include <fire_engine/math/mat4.hpp>
 
@@ -10,12 +11,6 @@ namespace fire_engine
 {
 
 class SweepAndPruneBroadPhase;
-
-struct AABB
-{
-    Vec3 min;
-    Vec3 max;
-};
 
 class Collider
 {
