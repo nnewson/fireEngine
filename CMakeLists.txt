@@ -145,6 +145,7 @@ add_executable(test_fire_engine
     tests/collision/test_sweep_and_prune_broad_phase.cpp
     tests/collision/test_narrow_phase.cpp
     tests/physics/test_physics_world.cpp
+    tests/physics/test_physics_handle.cpp
     tests/math/test_mat4.cpp
     tests/math/test_quaternion.cpp
     tests/math/test_vec2.cpp
