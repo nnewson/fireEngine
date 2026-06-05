@@ -3,12 +3,11 @@
 #include <array>
 
 #include <fire_engine/graphics/gpu_handle.hpp>
-#include <fire_engine/render/descriptor_bindings.hpp>
+#include <fire_engine/graphics/material.hpp>
 
 namespace fire_engine
 {
 
-class Material;
 struct MaterialUBO;
 
 using MaterialTextureHandles = std::array<TextureHandle, materialTextureSlotCount>;

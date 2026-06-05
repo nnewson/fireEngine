@@ -7,8 +7,8 @@
 #include <fire_engine/graphics/draw_command.hpp>
 #include <fire_engine/graphics/frame_info.hpp>
 #include <fire_engine/graphics/gpu_handle.hpp>
+#include <fire_engine/graphics/gpu_limits.hpp>
 #include <fire_engine/math/mat4.hpp>
-#include <fire_engine/render/constants.hpp>
 
 namespace fire_engine
 {

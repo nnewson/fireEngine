@@ -4,6 +4,8 @@
 #include <cstddef>
 #include <cstdint>
 
+#include <fire_engine/graphics/material.hpp>
+
 namespace fire_engine
 {
 
@@ -92,22 +94,9 @@ enum class PostProcessBinding : std::uint32_t
     BloomInput = 1,
 };
 
-enum class MaterialTextureSlot : std::size_t
-{
-    BaseColour,
-    Emissive,
-    Normal,
-    MetallicRoughness,
-    Occlusion,
-    Transmission,
-    Clearcoat,
-    ClearcoatRoughness,
-    ClearcoatNormal,
-    Thickness,
-};
-
-inline constexpr std::size_t materialTextureSlotCount{10};
-
+// MaterialTextureSlot, materialTextureSlotCount and slotIndex() live in
+// graphics/material.hpp (the slots a material owns). This header keeps only the
+// render-layer concern: mapping each slot to its descriptor ForwardBinding.
 struct MaterialTextureBinding
 {
     MaterialTextureSlot slot;
@@ -127,12 +116,6 @@ inline constexpr std::array<MaterialTextureBinding, materialTextureSlotCount>
         {MaterialTextureSlot::ClearcoatNormal, ForwardBinding::ClearcoatNormalTexture},
         {MaterialTextureSlot::Thickness, ForwardBinding::ThicknessTexture},
     }};
-
-[[nodiscard]]
-constexpr std::size_t slotIndex(MaterialTextureSlot slot) noexcept
-{
-    return static_cast<std::size_t>(slot);
-}
 
 [[nodiscard]]
 constexpr std::uint32_t bindingIndex(ForwardBinding binding) noexcept

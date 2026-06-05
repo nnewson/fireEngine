@@ -4,9 +4,9 @@
 #include <cstdint>
 
 #include <fire_engine/graphics/gpu_handle.hpp>
+#include <fire_engine/graphics/gpu_limits.hpp>
 #include <fire_engine/math/mat4.hpp>
 #include <fire_engine/math/vec3.hpp>
-#include <fire_engine/render/ubo.hpp>
 
 namespace fire_engine
 {

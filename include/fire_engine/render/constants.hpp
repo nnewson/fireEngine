@@ -1,30 +1,23 @@
 #pragma once
 
-#include <cstddef>
 #include <cstdint>
 
+#include <fire_engine/graphics/gpu_limits.hpp>
 #include <fire_engine/math/constants.hpp>
 
-// Single source of truth for engine-wide rendering tunables. Every value that
-// might want to be tweaked (light intensity, shadow biases, cascade split λ,
-// bloom strength, IBL extents, camera FOV, etc.) lives here so a one-knob
+// Single source of truth for engine-wide rendering tunables. Every scalar value
+// that might want to be tweaked (light intensity, shadow biases, cascade split
+// λ, bloom strength, IBL extents, camera FOV, etc.) lives here so a one-knob
 // adjustment never has to chase usages across the codebase.
+//
+// GPU data-layout limits (frames-in-flight, joint/morph/light caps, shadow
+// caster counts, shadow matrix layout) live in graphics/gpu_limits.hpp because
+// the Vulkan-free graphics layer also needs them to size its arrays. That
+// header is included above, so every constant remains reachable through a
+// single include of this file.
 
 namespace fire_engine
 {
-
-// ---------------------------------------------------------------------------
-// Frame and resource limits
-// ---------------------------------------------------------------------------
-
-inline constexpr int kMaxFramesInFlight = 2;
-inline constexpr std::size_t kMaxJoints = 64;
-inline constexpr int kMaxMorphTargets = 8;
-// Cap on lights consumed by the forward shader's main lighting loop. Sized so
-// the LightUBO array fits comfortably under any sane Vulkan UBO limit. Bump
-// when scenes routinely exceed this; or swap to an SSBO at that point.
-inline constexpr int kMaxLights = 8;
-inline constexpr int kMaxSkinnedSelfShadowCasters = 4;
 
 // ---------------------------------------------------------------------------
 // Camera projection — shared between Object::render (perspective matrix)
@@ -53,9 +46,6 @@ inline constexpr float kEnvironmentShadowStrength = 0.0f;
 // ---------------------------------------------------------------------------
 
 inline constexpr uint32_t kShadowMapExtent = 2048;
-// Per-cascade layer in the 2D-array shadow map. 4 cascades cover camera-near
-// through kShadowFarPlane via log-uniform splits.
-inline constexpr uint32_t kShadowCascadeCount = 4;
 // Past this distance, casters don't shadow — keeps the cascade ortho fits
 // tight. Anything in shadow range stays inside [kCameraNearPlane, kShadowFarPlane].
 inline constexpr float kShadowFarPlane = 50.0f;
@@ -76,11 +66,8 @@ inline constexpr float kShadowNormalOffset = 0.0f;
 inline constexpr float kDirectionalShadowRasterBiasConstant = 0.0f;
 inline constexpr float kDirectionalShadowRasterBiasSlope = 0.0f;
 
-// Shadow casters for punctual lights. Caps are independent of kMaxLights;
-// excess punctual lights remain unshadowed. First-N policy in gather order.
-// Total ShadowUBO matrix slots: 4 cascades + spot + point*6.
-inline constexpr int kMaxSpotShadowCasters = 4;
-inline constexpr int kMaxPointShadowCasters = 4;
+// Punctual shadow caster caps (kMaxSpotShadowCasters / kMaxPointShadowCasters)
+// and the derived ShadowUBO matrix layout live in graphics/gpu_limits.hpp.
 inline constexpr uint32_t kSpotShadowMapExtent = 1024;
 inline constexpr uint32_t kPointShadowMapExtent = 512;
 inline constexpr uint32_t kSkinnedSelfShadowMapExtent = 1024;

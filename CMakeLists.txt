@@ -199,3 +199,13 @@ endforeach()
 
 include(GoogleTest)
 gtest_discover_tests(test_fire_engine)
+
+# Layering guard: the Vulkan-free graphics layer must not include render/ from
+# its public headers. Runs as a CTest case so `ctest` catches regressions
+# without a GPU.
+add_test(
+  NAME graphics_layer_no_render_includes
+  COMMAND ${CMAKE_COMMAND}
+    -DGRAPHICS_INCLUDE_DIR=${PROJECT_SOURCE_DIR}/include/fire_engine/graphics
+    -P ${PROJECT_SOURCE_DIR}/cmake/check_graphics_layering.cmake
+)

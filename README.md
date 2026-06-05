@@ -28,7 +28,7 @@ I've no doubt these are all solved problems nowadays with the Unreal engine et a
 - **Custom collision and physics path** — glTF `extras.Physics` can create `Static`, `Kinematic`, and `Dynamic` bodies with layer/mask filtering, authored AABB/box/sphere/capsule proxy shapes, linear velocity, mass, restitution, friction, and gravity scale. `PhysicsWorld` owns body/collider state, `SweepAndPruneBroadPhase` gathers AABB candidate pairs, `NarrowPhase` performs swept-AABB time-of-impact tests, and `SceneGraph::submitPhysics` / `SceneGraph::applyPhysics` bridge scene-authored and physics-authored transforms each frame
 - **Backend-decoupled graphics layer** — graphics classes use opaque handles (`BufferHandle`, `TextureHandle`, `DescriptorSetHandle`, `PipelineHandle`) and emit `DrawCommand` structs with no Vulkan dependencies. IBL cubemaps, BRDF LUT, shadow map, bloom chain are all owned by the render layer and referenced through the same handle types
 - **Vulkan rendering** via vulkan.hpp C++ bindings with a **frequency-split forward descriptor layout**: set 0 holds 15 per-object/per-material bindings (frame UBO, material UBO + ten material textures, skin/morph buffers), set 1 holds 13 globals shared by every draw (light UBO, five shadow maps, debug image, compare/debug samplers, three IBL textures, sceneColor). Set 0 is allocated per object × frame; set 1 once per frame and bound at the start of each forward pass. Separate descriptor layouts exist for skybox, shadow, post-process, and bloom passes
-- **Single source of truth for tunables** — every rendering knob (light intensity, IBL strengths, shadow biases, cascade split λ, bloom strength, cascade count, IBL extents, camera FOV) lives in `include/fire_engine/render/constants.hpp`
+- **Single source of truth for tunables** — every scalar rendering knob (light intensity, IBL strengths, shadow biases, cascade split λ, bloom strength, IBL extents, camera FOV) lives in `include/fire_engine/render/constants.hpp`. GPU data-layout limits that the Vulkan-free graphics layer also needs (frames-in-flight, joint/morph/light counts, shadow caster caps + matrix layout, cascade count) live one layer down in `include/fire_engine/graphics/gpu_limits.hpp`, which `constants.hpp` includes — so render-side code still sees every constant through one include, while graphics headers stay free of `render/`
 - **Texture mapping** via [stb_image](https://github.com/nothings/stb), including HDR equirectangular loading for the skybox; uploaded to GPU through staging buffers
 - **First-person camera** with keyboard (WASD + E/F for vertical) and mouse controls
 - **GLSL shaders** compiled to SPIR-V at build time via `glslc`
@@ -207,7 +207,7 @@ Build:
 cmake --build build
 ```
 
-Run the tests (975 tests):
+Run the tests (979 tests):
 
 ```bash
 ./build/test_fire_engine

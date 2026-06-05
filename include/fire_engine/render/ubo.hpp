@@ -1,5 +1,6 @@
 #pragma once
 
+#include <fire_engine/graphics/gpu_limits.hpp>
 #include <fire_engine/math/mat4.hpp>
 #include <fire_engine/render/constants.hpp>
 
@@ -174,18 +175,11 @@ struct EnvironmentPrefilterPushConstants
     float _pad2{0.0f};
 };
 
-// Shadow vertex shader projects each vertex into light-space using one of
-// these matrices, picked via ShadowPushConstants::matrixIndex.
-//   [0..3]   directional cascades 0..3
-//   [4..]    spot lights, layout 4 + spotIndex
-//   [4+S..]  point lights, layout (4 + S) + 6 * cubeIndex + face
-// where S = kMaxSpotShadowCasters.
-inline constexpr int kShadowCascadeMatrixBase = 0;
-inline constexpr int kShadowSpotMatrixBase = 4;
-inline constexpr int kShadowPointMatrixBase = kShadowSpotMatrixBase + kMaxSpotShadowCasters;
-inline constexpr int kShadowTotalMatrixCount =
-    kShadowPointMatrixBase + 6 * kMaxPointShadowCasters;
-
+// Shadow matrix layout (kShadowCascadeMatrixBase / kShadowSpotMatrixBase /
+// kShadowPointMatrixBase / kShadowTotalMatrixCount) lives in
+// graphics/gpu_limits.hpp — the graphics-side FrameInfo sizes an array to match
+// ShadowUBO::lightViewProj, so the count must be visible without including
+// render/.
 struct ShadowUBO
 {
     alignas(16) Mat4 model;

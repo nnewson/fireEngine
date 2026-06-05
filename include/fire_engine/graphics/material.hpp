@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <string>
@@ -17,6 +18,32 @@ enum class AlphaMode : uint8_t
     Mask,
     Blend,
 };
+
+// The texture slots a material can carry, in the canonical order the render
+// layer packs them into MaterialUBO::uv[] and the per-object descriptor set.
+// Lives here (graphics) so material code can size slot arrays without reaching
+// into render/; the slot-to-descriptor-binding mapping stays render-side.
+enum class MaterialTextureSlot : std::size_t
+{
+    BaseColour,
+    Emissive,
+    Normal,
+    MetallicRoughness,
+    Occlusion,
+    Transmission,
+    Clearcoat,
+    ClearcoatRoughness,
+    ClearcoatNormal,
+    Thickness,
+};
+
+inline constexpr std::size_t materialTextureSlotCount{10};
+
+[[nodiscard]]
+constexpr std::size_t slotIndex(MaterialTextureSlot slot) noexcept
+{
+    return static_cast<std::size_t>(slot);
+}
 
 // KHR_texture_transform per-slot UV transform. Default = identity (offset 0,
 // scale 1, rotation 0) means "no transform" — matches the spec's behaviour
