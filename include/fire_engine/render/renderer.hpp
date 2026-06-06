@@ -141,7 +141,17 @@ private:
     [[nodiscard]] DrawBuckets buildDrawBuckets(const std::vector<DrawCommand>& drawCommands) const;
     void recordDrawBucket(vk::CommandBuffer cmd, const std::vector<DrawCommand>& bucket,
                           PipelineHandle& lastBoundPipeline) const;
+
+    // drawFrame() phases, in per-frame execution order. Each records into the
+    // supplied command buffer (already in the recording state).
+    void updateFrameLighting(SceneGraph& scene, Vec3 cameraPosition, Vec3 cameraTarget);
+    [[nodiscard]] DrawBuckets collectDrawCommands(vk::CommandBuffer cmd, SceneGraph& scene,
+                                                  Vec3 cameraPosition, Vec3 cameraTarget);
+    void recordShadowPass(vk::CommandBuffer cmd, const DrawBuckets& buckets);
     void recordForwardPass(vk::CommandBuffer cmd, const DrawBuckets& buckets);
+    void recordTransmissionPass(vk::CommandBuffer cmd, const DrawBuckets& buckets);
+    void recordPostProcessing(vk::CommandBuffer cmd, uint32_t imageIndex);
+
     void recreateSwapchain(const Window& display);
     // Snapshots the current state of sharedTextures + lightUbo_ buffers into a
     // GlobalDescriptorRequest. Used at ctor time to populate the set 1

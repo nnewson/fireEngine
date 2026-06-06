@@ -521,24 +521,18 @@ void Renderer::recordForwardPass(vk::CommandBuffer cmd, const DrawBuckets& bucke
     cmd.endRenderPass();
 }
 
-void Renderer::drawFrame(Window& display, SceneGraph& scene, Vec3 cameraPosition, Vec3 cameraTarget)
+void Renderer::updateFrameLighting(SceneGraph& scene, Vec3 cameraPosition, Vec3 cameraTarget)
 {
-    auto imageIndex = acquireNextImage(display);
-    if (!imageIndex)
-    {
-        return;
-    }
-
-    auto cmd = frame_.commandBuffer(currentFrame_);
-    cmd.reset();
-    cmd.begin(vk::CommandBufferBeginInfo{});
-
     const auto extent = swapchain_.extent();
     const float aspect = static_cast<float>(extent.width) / static_cast<float>(extent.height);
 
     auto lights = scene.gatherLights();
     updateLightData(cameraPosition, cameraTarget, aspect, lights);
+}
 
+Renderer::DrawBuckets Renderer::collectDrawCommands(vk::CommandBuffer cmd, SceneGraph& scene,
+                                                    Vec3 cameraPosition, Vec3 cameraTarget)
+{
     std::vector<DrawCommand> drawCommands;
     recordSkybox(cameraPosition, cameraTarget, drawCommands);
 
@@ -559,24 +553,57 @@ void Renderer::drawFrame(Window& display, SceneGraph& scene, Vec3 cameraPosition
     scene.render(ctx);
 
     assignSelfShadowSlots(drawCommands);
-    DrawBuckets buckets = buildDrawBuckets(drawCommands);
+    return buildDrawBuckets(drawCommands);
+}
+
+void Renderer::recordShadowPass(vk::CommandBuffer cmd, const DrawBuckets& buckets)
+{
     std::span<const PointShadowCaster> pointCasterSpan{
         pointCasters_.data(), static_cast<std::size_t>(activePointCasters_)};
     shadows_.recordPass(cmd, buckets.shadow, buckets.worldShadow, buckets.selfShadow,
                         activeSpotCasters_, pointCasterSpan);
-    recordForwardPass(cmd, buckets);
-    if (!buckets.transmissive.empty())
+}
+
+void Renderer::recordTransmissionPass(vk::CommandBuffer cmd, const DrawBuckets& buckets)
+{
+    if (buckets.transmissive.empty())
     {
-        transmission_.recordPass(cmd, buckets.transmissive,
-                                 resources_.vulkanDescriptorSet(globalDescSets_[currentFrame_]));
+        return;
     }
+    transmission_.recordPass(cmd, buckets.transmissive,
+                             resources_.vulkanDescriptorSet(globalDescSets_[currentFrame_]));
+}
+
+void Renderer::recordPostProcessing(vk::CommandBuffer cmd, uint32_t imageIndex)
+{
     postProcessing_.transitionOffscreenForSampling(cmd);
     postProcessing_.recordBloomPasses(cmd);
-    postProcessing_.recordPostProcessPass(cmd, *imageIndex, currentFrame_);
+    postProcessing_.recordPostProcessPass(cmd, imageIndex, currentFrame_);
+}
+
+void Renderer::drawFrame(Window& display, SceneGraph& scene, Vec3 cameraPosition, Vec3 cameraTarget)
+{
+    auto imageIndex = acquireNextImage(display);
+    if (!imageIndex)
+    {
+        return;
+    }
+
+    auto cmd = frame_.commandBuffer(currentFrame_);
+    cmd.reset();
+    cmd.begin(vk::CommandBufferBeginInfo{});
+
+    updateFrameLighting(scene, cameraPosition, cameraTarget);
+    DrawBuckets buckets = collectDrawCommands(cmd, scene, cameraPosition, cameraTarget);
+
+    recordShadowPass(cmd, buckets);
+    recordForwardPass(cmd, buckets);
+    recordTransmissionPass(cmd, buckets);
+    recordPostProcessing(cmd, *imageIndex);
 
     cmd.end();
-
     submitAndPresent(display, cmd, *imageIndex);
+
     currentFrame_ = (currentFrame_ + 1) % kMaxFramesInFlight;
 }
 
