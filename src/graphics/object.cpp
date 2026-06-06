@@ -9,7 +9,6 @@
 #include <fire_engine/math/constants.hpp>
 #include <fire_engine/math/vec4.hpp>
 #include <fire_engine/math/view_basis.hpp>
-#include <fire_engine/render/constants.hpp>
 #include <fire_engine/render/resources.hpp>
 #include <fire_engine/render/ubo.hpp>
 
@@ -148,6 +147,13 @@ void Object::load(Resources& resources)
     {
         objectId_ = resources.allocateObjectId();
     }
+
+    const ObjectDescriptorRequest req = createForwardBindings(resources);
+    createShadowBindings(resources, req);
+}
+
+ObjectDescriptorRequest Object::createForwardBindings(Resources& resources)
+{
     // Create shared uniform buffers (model/view/proj)
     auto uniformSet = resources.createMappedUniformBuffers(sizeof(UniformBufferObject));
     for (int i = 0; i < kMaxFramesInFlight; ++i)
@@ -232,6 +238,11 @@ void Object::load(Resources& resources)
         bindings_[g].descSets = descResult.descSets[g];
     }
 
+    return req;
+}
+
+void Object::createShadowBindings(Resources& resources, const ObjectDescriptorRequest& req)
+{
     // Shadow descriptor sets reuse the forward skin / morph / morphSsbo
     // buffers allocated above — no duplicate uploads — plus a new per-geometry
     // ShadowUBO buffer carrying model + per-cascade lightViewProj[4] + hasSkin.
@@ -383,31 +394,41 @@ Bounds3 Object::computeShadowBounds(const std::vector<Mat4>& jointMatrices, bool
 
 std::vector<DrawCommand> Object::render(const FrameInfo& frame, const Mat4& world)
 {
-    // Write shared UBO
+    const bool hasSkin = skin_ != nullptr && !skin_->empty();
+
+    std::vector<Mat4> emptyJointMatrices;
+    const std::vector<Mat4>& jointMatrices =
+        hasSkin ? skin_->cachedJointMatrices() : emptyJointMatrices;
+
+    writeForwardUniforms(frame, world, hasSkin, jointMatrices);
+    writeShadowUniforms(frame, world, hasSkin);
+
+    const Bounds3 shadowBounds = computeShadowBounds(jointMatrices, hasSkin, world);
+    return buildDrawCommands(frame, world, hasSkin, shadowBounds);
+}
+
+void Object::writeForwardUniforms(const FrameInfo& frame, const Mat4& world, bool hasSkin,
+                                  const std::vector<Mat4>& jointMatrices)
+{
+    // Shared per-object UBO. view/proj are computed once per frame and carried
+    // on FrameInfo (see RenderContext::frameInfo), not recomputed here.
     UniformBufferObject ubo{};
     ubo.model = world;
-    ubo.view = Mat4::lookAt(frame.cameraPosition, frame.cameraTarget, {0, 1, 0});
-    float aspect =
-        static_cast<float>(frame.viewportWidth) / static_cast<float>(frame.viewportHeight);
-    ubo.proj = Mat4::perspective(kCameraFovRadians, aspect, kCameraNearPlane, kCameraFarPlane);
+    ubo.view = frame.view;
+    ubo.proj = frame.proj;
     ubo.cameraPos[0] = frame.cameraPosition.x();
     ubo.cameraPos[1] = frame.cameraPosition.y();
     ubo.cameraPos[2] = frame.cameraPosition.z();
     ubo.cameraPos[3] = 0.0f;
-    ubo.hasSkin = (skin_ != nullptr && !skin_->empty()) ? 1 : 0;
+    ubo.hasSkin = hasSkin ? 1 : 0;
     std::memcpy(uniformMapped_[frame.currentFrame], &ubo, sizeof(ubo));
 
-    std::vector<Mat4> emptyJointMatrices;
-    const std::vector<Mat4>* jointMatrices = &emptyJointMatrices;
-
-    // Upload cached joint matrices if skinned
-    if (ubo.hasSkin == 1)
+    if (hasSkin)
     {
-        jointMatrices = &skin_->cachedJointMatrices();
         SkinUBO skinUbo{};
-        for (std::size_t j = 0; j < jointMatrices->size() && j < kMaxJoints; ++j)
+        for (std::size_t j = 0; j < jointMatrices.size() && j < kMaxJoints; ++j)
         {
-            skinUbo.joints[j] = (*jointMatrices)[j];
+            skinUbo.joints[j] = jointMatrices[j];
         }
         for (auto& binding : bindings_)
         {
@@ -415,7 +436,6 @@ std::vector<DrawCommand> Object::render(const FrameInfo& frame, const Mat4& worl
         }
     }
 
-    // Upload morph weights
     for (auto& binding : bindings_)
     {
         MaterialUBO matUbo = toMaterialUBO(*binding.activeMaterial);
@@ -445,32 +465,35 @@ std::vector<DrawCommand> Object::render(const FrameInfo& frame, const Mat4& worl
         }
         std::memcpy(binding.morphUboMapped[frame.currentFrame], &morphUbo, sizeof(morphUbo));
     }
+}
 
-    // Camera forward used to project draw centroids for back-to-front sort of
-    // blend draws. Each mesh instance is taken as its world-translation origin
-    // — fine for the scenes the engine renders today (flat decals etc.); a
-    // future AABB-based centroid would be the natural upgrade.
-    const Vec3 forwardVec = makeViewBasis(frame.cameraPosition, frame.cameraTarget).forward;
-
-    // Write shadow UBO (model + per-cascade lightViewProj[4] + hasSkin) and
-    // emit a matching shadow DrawCommand alongside the forward command. The
-    // renderer later buckets by pipeline so shadow draws replay inside the
-    // shadow pass and forward draws replay inside the forward pass.
+void Object::writeShadowUniforms(const FrameInfo& frame, const Mat4& world, bool hasSkin)
+{
+    // Shadow UBO (model + per-cascade lightViewProj[4] + hasSkin). The renderer
+    // buckets by pipeline so shadow draws replay inside the shadow pass and
+    // forward draws inside the forward pass.
     ShadowUBO shadowData{};
     shadowData.model = world;
     for (std::size_t i = 0; i < frame.shadowViewProjs.size(); ++i)
     {
         shadowData.lightViewProj[i] = frame.shadowViewProjs[i];
     }
-    shadowData.hasSkin = ubo.hasSkin;
+    shadowData.hasSkin = hasSkin ? 1 : 0;
     for (auto& binding : bindings_)
     {
         std::memcpy(binding.shadowMapped[frame.currentFrame], &shadowData, sizeof(shadowData));
     }
+}
 
-    const Bounds3 shadowBounds = computeShadowBounds(*jointMatrices, ubo.hasSkin == 1, world);
+std::vector<DrawCommand> Object::buildDrawCommands(const FrameInfo& frame, const Mat4& world,
+                                                   bool hasSkin, const Bounds3& shadowBounds) const
+{
+    // Camera forward used to project draw centroids for back-to-front sort of
+    // blend draws. Each mesh instance is taken as its world-translation origin
+    // — fine for the scenes the engine renders today (flat decals etc.); a
+    // future AABB-based centroid would be the natural upgrade.
+    const Vec3 forwardVec = makeViewBasis(frame.cameraPosition, frame.cameraTarget).forward;
 
-    // Build draw commands
     std::vector<DrawCommand> commands;
     commands.reserve(bindings_.size() * 2);
     for (const auto& binding : bindings_)
@@ -502,7 +525,7 @@ std::vector<DrawCommand> Object::render(const FrameInfo& frame, const Mat4& worl
         cmd.pipeline = pipe;
         cmd.sortDepth = depth;
         cmd.objectId = objectId_;
-        cmd.hasSkin = ubo.hasSkin == 1;
+        cmd.hasSkin = hasSkin;
         cmd.shadowBounds = shadowBounds;
         // KHR_materials_transmission F3: defer this draw to the second forward
         // sub-pass so its fragment shader can sample the post-opaque HDR

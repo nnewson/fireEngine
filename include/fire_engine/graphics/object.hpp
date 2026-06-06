@@ -18,6 +18,7 @@ class Material;
 class Resources;
 class Skin;
 struct GeometryDescriptorInfo;
+struct ObjectDescriptorRequest;
 
 class Object
 {
@@ -82,6 +83,20 @@ private:
                                       Resources& resources);
     [[nodiscard]] Bounds3 computeShadowBounds(const std::vector<Mat4>& jointMatrices, bool hasSkin,
                                               const Mat4& world) const noexcept;
+
+    // load() phases: forward (set 0) descriptors return the per-geometry buffer
+    // handles in the request; shadow descriptors reuse those buffers.
+    [[nodiscard]] ObjectDescriptorRequest createForwardBindings(Resources& resources);
+    void createShadowBindings(Resources& resources, const ObjectDescriptorRequest& req);
+
+    // render() phases: write the per-frame UBOs (shared/skin/material/morph),
+    // write the shadow UBO, then assemble forward + shadow draw commands.
+    void writeForwardUniforms(const FrameInfo& frame, const Mat4& world, bool hasSkin,
+                              const std::vector<Mat4>& jointMatrices);
+    void writeShadowUniforms(const FrameInfo& frame, const Mat4& world, bool hasSkin);
+    [[nodiscard]] std::vector<DrawCommand> buildDrawCommands(const FrameInfo& frame,
+                                                             const Mat4& world, bool hasSkin,
+                                                             const Bounds3& shadowBounds) const;
 
     Skin* skin_{nullptr};
     std::vector<float> morphWeights_;

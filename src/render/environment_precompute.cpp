@@ -331,20 +331,22 @@ void EnvironmentPrecompute::createSkyboxEnvironment(
 
         oneTimeSubmit(*device_,
                       [&](vk::CommandBuffer cmd)
-        {
-            renderCubemapFaces(cmd, environmentPass, environmentPipeline, ds, kSkyboxCubemapExtent,
-                               [](uint32_t face)
-                               {
-                                   EnvironmentCaptureUBO capture{};
-                                   capture.faceIndex = static_cast<int>(face);
-                                   capture.faceExtent = static_cast<int>(kSkyboxCubemapExtent);
-                                   return capture;
-                               });
-            // Build the source mip chain so the prefilter pass can do
-            // mip-weighted importance sampling against this cubemap.
-            generateCubemapMipChain(cmd, resources_->vulkanImage(skyboxCubemapHandle_),
-                                    kSkyboxCubemapExtent, kSkyboxCubemapMipLevels);
-        });
+                      {
+                          renderCubemapFaces(
+                              cmd, environmentPass, environmentPipeline, ds, kSkyboxCubemapExtent,
+                              [](uint32_t face)
+                              {
+                                  EnvironmentCaptureUBO capture{};
+                                  capture.faceIndex = static_cast<int>(face);
+                                  capture.faceExtent = static_cast<int>(kSkyboxCubemapExtent);
+                                  return capture;
+                              });
+                          // Build the source mip chain so the prefilter pass can do
+                          // mip-weighted importance sampling against this cubemap.
+                          generateCubemapMipChain(cmd,
+                                                  resources_->vulkanImage(skyboxCubemapHandle_),
+                                                  kSkyboxCubemapExtent, kSkyboxCubemapMipLevels);
+                      });
     }
     catch (const std::exception& e)
     {
@@ -385,17 +387,17 @@ void EnvironmentPrecompute::createIrradianceEnvironment()
 
         oneTimeSubmit(*device_,
                       [&](vk::CommandBuffer cmd)
-        {
-            renderCubemapFaces(cmd, irradiancePass, irradiancePipeline, ds,
-                               kIrradianceCubemapExtent,
-                               [](uint32_t face)
-                               {
-                                   EnvironmentCaptureUBO capture{};
-                                   capture.faceIndex = static_cast<int>(face);
-                                   capture.faceExtent = static_cast<int>(kIrradianceCubemapExtent);
-                                   return capture;
-                               });
-        });
+                      {
+                          renderCubemapFaces(
+                              cmd, irradiancePass, irradiancePipeline, ds, kIrradianceCubemapExtent,
+                              [](uint32_t face)
+                              {
+                                  EnvironmentCaptureUBO capture{};
+                                  capture.faceIndex = static_cast<int>(face);
+                                  capture.faceExtent = static_cast<int>(kIrradianceCubemapExtent);
+                                  return capture;
+                              });
+                      });
     }
     catch (const std::exception& e)
     {
@@ -440,33 +442,34 @@ void EnvironmentPrecompute::createPrefilteredEnvironment()
 
         const vk::DescriptorSet ds = resources_->vulkanDescriptorSet(captureSets[0]);
 
-        oneTimeSubmit(*device_,
-                      [&](vk::CommandBuffer cmd)
-        {
-            mipExtent = kPrefilteredCubemapExtent;
-            for (uint32_t level = 0; level < kPrefilteredCubemapMipLevels; ++level)
+        oneTimeSubmit(
+            *device_,
+            [&](vk::CommandBuffer cmd)
             {
-                float roughness = kPrefilteredCubemapMipLevels > 1
-                                      ? static_cast<float>(level) /
-                                            static_cast<float>(kPrefilteredCubemapMipLevels - 1)
-                                      : 0.0f;
+                mipExtent = kPrefilteredCubemapExtent;
+                for (uint32_t level = 0; level < kPrefilteredCubemapMipLevels; ++level)
+                {
+                    float roughness = kPrefilteredCubemapMipLevels > 1
+                                          ? static_cast<float>(level) /
+                                                static_cast<float>(kPrefilteredCubemapMipLevels - 1)
+                                          : 0.0f;
 
-                renderCubemapFaces(
-                    cmd, prefilterPasses[level], prefilterPipeline, ds, mipExtent,
-                    [&](uint32_t face)
-                    {
-                        EnvironmentPrefilterPushConstants capture{};
-                        capture.faceIndex = static_cast<int>(face);
-                        capture.faceExtent = static_cast<int>(mipExtent);
-                        capture.roughness = roughness;
-                        capture.sourceFaceExtent = static_cast<int>(kSkyboxCubemapExtent);
-                        capture.sourceMaxMip = static_cast<float>(kSkyboxCubemapMipLevels - 1);
-                        return capture;
-                    });
+                    renderCubemapFaces(
+                        cmd, prefilterPasses[level], prefilterPipeline, ds, mipExtent,
+                        [&](uint32_t face)
+                        {
+                            EnvironmentPrefilterPushConstants capture{};
+                            capture.faceIndex = static_cast<int>(face);
+                            capture.faceExtent = static_cast<int>(mipExtent);
+                            capture.roughness = roughness;
+                            capture.sourceFaceExtent = static_cast<int>(kSkyboxCubemapExtent);
+                            capture.sourceMaxMip = static_cast<float>(kSkyboxCubemapMipLevels - 1);
+                            return capture;
+                        });
 
-                mipExtent = std::max(1u, mipExtent / 2);
-            }
-        });
+                    mipExtent = std::max(1u, mipExtent / 2);
+                }
+            });
     }
     catch (const std::exception& e)
     {
@@ -501,21 +504,22 @@ void EnvironmentPrecompute::createBrdfLut()
 
         oneTimeSubmit(*device_,
                       [&](vk::CommandBuffer cmd)
-        {
-            vk::RenderPassBeginInfo beginInfo{
-                .renderPass = brdfPass.renderPass(),
-                .framebuffer = brdfPass.framebuffer(0),
-                .renderArea = renderArea,
-                .clearValueCount = 1,
-                .pClearValues = &clearColour,
-            };
-            cmd.beginRenderPass(beginInfo, vk::SubpassContents::eInline);
-            cmd.setViewport(0, viewport);
-            cmd.setScissor(0, renderArea);
-            cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, brdfPipeline.pipeline());
-            cmd.draw(3, 1, 0, 0);
-            cmd.endRenderPass();
-        });
+                      {
+                          vk::RenderPassBeginInfo beginInfo{
+                              .renderPass = brdfPass.renderPass(),
+                              .framebuffer = brdfPass.framebuffer(0),
+                              .renderArea = renderArea,
+                              .clearValueCount = 1,
+                              .pClearValues = &clearColour,
+                          };
+                          cmd.beginRenderPass(beginInfo, vk::SubpassContents::eInline);
+                          cmd.setViewport(0, viewport);
+                          cmd.setScissor(0, renderArea);
+                          cmd.bindPipeline(vk::PipelineBindPoint::eGraphics,
+                                           brdfPipeline.pipeline());
+                          cmd.draw(3, 1, 0, 0);
+                          cmd.endRenderPass();
+                      });
     }
     catch (const std::exception& e)
     {

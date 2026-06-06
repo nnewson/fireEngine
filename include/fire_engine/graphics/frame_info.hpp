@@ -28,6 +28,10 @@ struct FrameInfo
     uint32_t viewportHeight{0};
     Vec3 cameraPosition;
     Vec3 cameraTarget;
+    // Camera view and projection for the frame, computed once when the
+    // FrameInfo is built (see RenderContext::frameInfo) rather than per object.
+    Mat4 view{Mat4::identity()};
+    Mat4 proj{Mat4::identity()};
     AlphaPipelines pipelines{};
     PipelineHandle shadowPipeline{NullPipeline};
     // Light-space view-projection matrices for every shadow caster — cascades,
