@@ -117,6 +117,34 @@ void Descriptors::retainDescriptorSets(DescriptorPoolEntry& poolEntry,
     }
 }
 
+std::array<DescriptorSetHandle, kMaxFramesInFlight>
+Descriptors::allocateFrameSets(DescriptorPoolEntry& poolEntry, vk::DescriptorSetLayout layout,
+                               const FrameWriter& writeFrame)
+{
+    auto sets = allocateDescriptorSets(*poolEntry.pool, layout, kMaxFramesInFlight);
+
+    std::array<DescriptorSetHandle, kMaxFramesInFlight> result{};
+    for (int i = 0; i < kMaxFramesInFlight; ++i)
+    {
+        if (writeFrame)
+        {
+            writeFrame(*sets[i], i);
+        }
+        result[i] = registerDescriptorSet(*sets[i]);
+    }
+
+    retainDescriptorSets(poolEntry, sets);
+    return result;
+}
+
+std::array<DescriptorSetHandle, kMaxFramesInFlight>
+Descriptors::buildFrameSets(std::span<const vk::DescriptorPoolSize> poolSizes,
+                            vk::DescriptorSetLayout layout, const FrameWriter& writeFrame)
+{
+    auto& poolEntry = createDescriptorPool(poolSizes, kMaxFramesInFlight);
+    return allocateFrameSets(poolEntry, layout, writeFrame);
+}
+
 ObjectDescriptorResult Descriptors::createObjectDescriptors(const ObjectDescriptorRequest& req)
 {
     auto numGeometries = static_cast<uint32_t>(req.geometries.size());
@@ -138,84 +166,85 @@ ObjectDescriptorResult Descriptors::createObjectDescriptors(const ObjectDescript
     for (uint32_t g = 0; g < numGeometries; ++g)
     {
         const auto& geo = req.geometries[g];
-        auto sets = allocateDescriptorSets(*poolEntry.pool, pipeline_->descriptorSetLayout(),
-                                           kMaxFramesInFlight);
-
-        for (int i = 0; i < kMaxFramesInFlight; ++i)
-        {
-            vk::DescriptorBufferInfo uboBufInfo = makeDescriptorBufferInfo(
-                resources_->vulkanBuffer(req.uniformBufs[i]), sizeof(UniformBufferObject));
-            vk::DescriptorBufferInfo matBufInfo = makeDescriptorBufferInfo(
-                resources_->vulkanBuffer(geo.materialBufs[i]), sizeof(MaterialUBO));
-            auto materialImageInfo = [&](MaterialTextureSlot slot)
+        result.descSets[g] = allocateFrameSets(
+            poolEntry, pipeline_->descriptorSetLayout(),
+            [&](vk::DescriptorSet set, int i)
             {
-                const TextureHandle texture = materialTexture(geo, slot);
-                return makeDescriptorImageInfo(resources_->vulkanSampler(texture),
-                                               resources_->vulkanImageView(texture),
-                                               vk::ImageLayout::eShaderReadOnlyOptimal);
-            };
+                vk::DescriptorBufferInfo uboBufInfo = makeDescriptorBufferInfo(
+                    resources_->vulkanBuffer(req.uniformBufs[i]), sizeof(UniformBufferObject));
+                vk::DescriptorBufferInfo matBufInfo = makeDescriptorBufferInfo(
+                    resources_->vulkanBuffer(geo.materialBufs[i]), sizeof(MaterialUBO));
+                auto materialImageInfo = [&](MaterialTextureSlot slot)
+                {
+                    const TextureHandle texture = materialTexture(geo, slot);
+                    return makeDescriptorImageInfo(resources_->vulkanSampler(texture),
+                                                   resources_->vulkanImageView(texture),
+                                                   vk::ImageLayout::eShaderReadOnlyOptimal);
+                };
 
-            vk::DescriptorImageInfo texInfo = materialImageInfo(MaterialTextureSlot::BaseColour);
-            vk::DescriptorBufferInfo skinBufInfo = makeDescriptorBufferInfo(
-                resources_->vulkanBuffer(geo.skinBufs[i]), sizeof(SkinUBO));
-            vk::DescriptorBufferInfo morphUboBufInfo = makeDescriptorBufferInfo(
-                resources_->vulkanBuffer(geo.morphUboBufs[i]), sizeof(MorphUBO));
+                vk::DescriptorImageInfo texInfo =
+                    materialImageInfo(MaterialTextureSlot::BaseColour);
+                vk::DescriptorBufferInfo skinBufInfo = makeDescriptorBufferInfo(
+                    resources_->vulkanBuffer(geo.skinBufs[i]), sizeof(SkinUBO));
+                vk::DescriptorBufferInfo morphUboBufInfo = makeDescriptorBufferInfo(
+                    resources_->vulkanBuffer(geo.morphUboBufs[i]), sizeof(MorphUBO));
 
-            vk::DeviceSize ssboSize = geo.morphSsboSize > 0
-                                          ? static_cast<vk::DeviceSize>(geo.morphSsboSize)
-                                          : sizeof(float) * 4;
-            vk::DescriptorBufferInfo morphSsboBufInfo =
-                makeDescriptorBufferInfo(resources_->vulkanBuffer(geo.morphSsbo), ssboSize);
+                vk::DeviceSize ssboSize = geo.morphSsboSize > 0
+                                              ? static_cast<vk::DeviceSize>(geo.morphSsboSize)
+                                              : sizeof(float) * 4;
+                vk::DescriptorBufferInfo morphSsboBufInfo =
+                    makeDescriptorBufferInfo(resources_->vulkanBuffer(geo.morphSsbo), ssboSize);
 
-            vk::DescriptorImageInfo emissiveTexInfo =
-                materialImageInfo(MaterialTextureSlot::Emissive);
-            vk::DescriptorImageInfo normalTexInfo = materialImageInfo(MaterialTextureSlot::Normal);
-            vk::DescriptorImageInfo mrTexInfo =
-                materialImageInfo(MaterialTextureSlot::MetallicRoughness);
-            vk::DescriptorImageInfo occTexInfo = materialImageInfo(MaterialTextureSlot::Occlusion);
-            vk::DescriptorImageInfo transTexInfo =
-                materialImageInfo(MaterialTextureSlot::Transmission);
-            vk::DescriptorImageInfo ccTexInfo = materialImageInfo(MaterialTextureSlot::Clearcoat);
-            vk::DescriptorImageInfo ccRoughTexInfo =
-                materialImageInfo(MaterialTextureSlot::ClearcoatRoughness);
-            vk::DescriptorImageInfo ccNormalTexInfo =
-                materialImageInfo(MaterialTextureSlot::ClearcoatNormal);
-            vk::DescriptorImageInfo thicknessTexInfo =
-                materialImageInfo(MaterialTextureSlot::Thickness);
-            const vk::DescriptorSet set = *sets[i];
-            constexpr auto kUbo = vk::DescriptorType::eUniformBuffer;
-            constexpr auto kSsbo = vk::DescriptorType::eStorageBuffer;
-            constexpr auto kCis = vk::DescriptorType::eCombinedImageSampler;
-            std::array<vk::WriteDescriptorSet, 15> writes = {{
-                writeBuffer(set, bindingIndex(ForwardBinding::Frame), kUbo, uboBufInfo),
-                writeBuffer(set, bindingIndex(ForwardBinding::Material), kUbo, matBufInfo),
-                writeImage(set, bindingIndex(ForwardBinding::BaseColourTexture), kCis, texInfo),
-                writeBuffer(set, bindingIndex(ForwardBinding::Skin), kUbo, skinBufInfo),
-                writeBuffer(set, bindingIndex(ForwardBinding::Morph), kUbo, morphUboBufInfo),
-                writeBuffer(set, bindingIndex(ForwardBinding::MorphTargets), kSsbo,
-                            morphSsboBufInfo),
-                writeImage(set, bindingIndex(ForwardBinding::EmissiveTexture), kCis,
-                           emissiveTexInfo),
-                writeImage(set, bindingIndex(ForwardBinding::NormalTexture), kCis, normalTexInfo),
-                writeImage(set, bindingIndex(ForwardBinding::MetallicRoughnessTexture), kCis,
-                           mrTexInfo),
-                writeImage(set, bindingIndex(ForwardBinding::OcclusionTexture), kCis, occTexInfo),
-                writeImage(set, bindingIndex(ForwardBinding::TransmissionTexture), kCis,
-                           transTexInfo),
-                writeImage(set, bindingIndex(ForwardBinding::ClearcoatTexture), kCis, ccTexInfo),
-                writeImage(set, bindingIndex(ForwardBinding::ClearcoatRoughnessTexture), kCis,
-                           ccRoughTexInfo),
-                writeImage(set, bindingIndex(ForwardBinding::ClearcoatNormalTexture), kCis,
-                           ccNormalTexInfo),
-                writeImage(set, bindingIndex(ForwardBinding::ThicknessTexture), kCis,
-                           thicknessTexInfo),
-            }};
-            device_->device().updateDescriptorSets(writes, {});
-
-            result.descSets[g][i] = registerDescriptorSet(*sets[i]);
-        }
-
-        retainDescriptorSets(poolEntry, sets);
+                vk::DescriptorImageInfo emissiveTexInfo =
+                    materialImageInfo(MaterialTextureSlot::Emissive);
+                vk::DescriptorImageInfo normalTexInfo =
+                    materialImageInfo(MaterialTextureSlot::Normal);
+                vk::DescriptorImageInfo mrTexInfo =
+                    materialImageInfo(MaterialTextureSlot::MetallicRoughness);
+                vk::DescriptorImageInfo occTexInfo =
+                    materialImageInfo(MaterialTextureSlot::Occlusion);
+                vk::DescriptorImageInfo transTexInfo =
+                    materialImageInfo(MaterialTextureSlot::Transmission);
+                vk::DescriptorImageInfo ccTexInfo =
+                    materialImageInfo(MaterialTextureSlot::Clearcoat);
+                vk::DescriptorImageInfo ccRoughTexInfo =
+                    materialImageInfo(MaterialTextureSlot::ClearcoatRoughness);
+                vk::DescriptorImageInfo ccNormalTexInfo =
+                    materialImageInfo(MaterialTextureSlot::ClearcoatNormal);
+                vk::DescriptorImageInfo thicknessTexInfo =
+                    materialImageInfo(MaterialTextureSlot::Thickness);
+                constexpr auto kUbo = vk::DescriptorType::eUniformBuffer;
+                constexpr auto kSsbo = vk::DescriptorType::eStorageBuffer;
+                constexpr auto kCis = vk::DescriptorType::eCombinedImageSampler;
+                std::array<vk::WriteDescriptorSet, 15> writes = {{
+                    writeBuffer(set, bindingIndex(ForwardBinding::Frame), kUbo, uboBufInfo),
+                    writeBuffer(set, bindingIndex(ForwardBinding::Material), kUbo, matBufInfo),
+                    writeImage(set, bindingIndex(ForwardBinding::BaseColourTexture), kCis, texInfo),
+                    writeBuffer(set, bindingIndex(ForwardBinding::Skin), kUbo, skinBufInfo),
+                    writeBuffer(set, bindingIndex(ForwardBinding::Morph), kUbo, morphUboBufInfo),
+                    writeBuffer(set, bindingIndex(ForwardBinding::MorphTargets), kSsbo,
+                                morphSsboBufInfo),
+                    writeImage(set, bindingIndex(ForwardBinding::EmissiveTexture), kCis,
+                               emissiveTexInfo),
+                    writeImage(set, bindingIndex(ForwardBinding::NormalTexture), kCis,
+                               normalTexInfo),
+                    writeImage(set, bindingIndex(ForwardBinding::MetallicRoughnessTexture), kCis,
+                               mrTexInfo),
+                    writeImage(set, bindingIndex(ForwardBinding::OcclusionTexture), kCis,
+                               occTexInfo),
+                    writeImage(set, bindingIndex(ForwardBinding::TransmissionTexture), kCis,
+                               transTexInfo),
+                    writeImage(set, bindingIndex(ForwardBinding::ClearcoatTexture), kCis,
+                               ccTexInfo),
+                    writeImage(set, bindingIndex(ForwardBinding::ClearcoatRoughnessTexture), kCis,
+                               ccRoughTexInfo),
+                    writeImage(set, bindingIndex(ForwardBinding::ClearcoatNormalTexture), kCis,
+                               ccNormalTexInfo),
+                    writeImage(set, bindingIndex(ForwardBinding::ThicknessTexture), kCis,
+                               thicknessTexInfo),
+                }};
+                device_->device().updateDescriptorSets(writes, {});
+            });
     }
 
     return result;
@@ -300,18 +329,8 @@ Descriptors::createGlobalDescriptors(const GlobalDescriptorRequest& req)
         {vk::DescriptorType::eSampledImage, kMaxFramesInFlight * 6},
         {vk::DescriptorType::eSampler, kMaxFramesInFlight * 2},
     }};
-    auto& poolEntry = createDescriptorPool(poolSizes, kMaxFramesInFlight);
-    auto sets = allocateDescriptorSets(*poolEntry.pool, pipeline_->globalDescriptorSetLayout(),
-                                       kMaxFramesInFlight);
-
-    std::array<DescriptorSetHandle, kMaxFramesInFlight> result;
-    for (int i = 0; i < kMaxFramesInFlight; ++i)
-    {
-        writeGlobalBindings(*sets[i], req, i);
-        result[i] = registerDescriptorSet(*sets[i]);
-    }
-    retainDescriptorSets(poolEntry, sets);
-    return result;
+    return buildFrameSets(poolSizes, pipeline_->globalDescriptorSetLayout(),
+                          [&](vk::DescriptorSet set, int i) { writeGlobalBindings(set, req, i); });
 }
 
 void Descriptors::updateGlobalDescriptors(
@@ -386,48 +405,45 @@ ShadowDescriptorResult Descriptors::createShadowDescriptors(const ShadowDescript
     for (uint32_t g = 0; g < numGeometries; ++g)
     {
         const auto& geo = req.geometries[g];
-        auto sets = allocateDescriptorSets(*poolEntry.pool, shadowDescLayout_, kMaxFramesInFlight);
+        result.descSets[g] = allocateFrameSets(
+            poolEntry, shadowDescLayout_,
+            [&](vk::DescriptorSet set, int i)
+            {
+                vk::DescriptorBufferInfo shadowUboInfo = makeDescriptorBufferInfo(
+                    resources_->vulkanBuffer(geo.shadowUboBufs[i]), sizeof(ShadowUBO));
+                vk::DescriptorBufferInfo skinBufInfo = makeDescriptorBufferInfo(
+                    resources_->vulkanBuffer(geo.skinBufs[i]), sizeof(SkinUBO));
+                vk::DescriptorBufferInfo morphUboBufInfo = makeDescriptorBufferInfo(
+                    resources_->vulkanBuffer(geo.morphUboBufs[i]), sizeof(MorphUBO));
+                vk::DeviceSize ssboSize = geo.morphSsboSize > 0
+                                              ? static_cast<vk::DeviceSize>(geo.morphSsboSize)
+                                              : sizeof(float) * 4;
+                vk::DescriptorBufferInfo morphSsboInfo =
+                    makeDescriptorBufferInfo(resources_->vulkanBuffer(geo.morphSsbo), ssboSize);
+                vk::DescriptorImageInfo selfShadowFirstInfo = makeDescriptorImageInfo(
+                    {},
+                    resources_->vulkanImageView(resources_->sharedTextures().selfShadowFirstMap),
+                    vk::ImageLayout::eDepthStencilReadOnlyOptimal);
+                vk::DescriptorImageInfo selfShadowSamplerInfo = makeDescriptorImageInfo(
+                    resources_->vulkanShadowDebugSampler(), {}, vk::ImageLayout::eUndefined);
 
-        for (int i = 0; i < kMaxFramesInFlight; ++i)
-        {
-            vk::DescriptorBufferInfo shadowUboInfo = makeDescriptorBufferInfo(
-                resources_->vulkanBuffer(geo.shadowUboBufs[i]), sizeof(ShadowUBO));
-            vk::DescriptorBufferInfo skinBufInfo = makeDescriptorBufferInfo(
-                resources_->vulkanBuffer(geo.skinBufs[i]), sizeof(SkinUBO));
-            vk::DescriptorBufferInfo morphUboBufInfo = makeDescriptorBufferInfo(
-                resources_->vulkanBuffer(geo.morphUboBufs[i]), sizeof(MorphUBO));
-            vk::DeviceSize ssboSize = geo.morphSsboSize > 0
-                                          ? static_cast<vk::DeviceSize>(geo.morphSsboSize)
-                                          : sizeof(float) * 4;
-            vk::DescriptorBufferInfo morphSsboInfo =
-                makeDescriptorBufferInfo(resources_->vulkanBuffer(geo.morphSsbo), ssboSize);
-            vk::DescriptorImageInfo selfShadowFirstInfo = makeDescriptorImageInfo(
-                {}, resources_->vulkanImageView(resources_->sharedTextures().selfShadowFirstMap),
-                vk::ImageLayout::eDepthStencilReadOnlyOptimal);
-            vk::DescriptorImageInfo selfShadowSamplerInfo = makeDescriptorImageInfo(
-                resources_->vulkanShadowDebugSampler(), {}, vk::ImageLayout::eUndefined);
-
-            const vk::DescriptorSet set = *sets[i];
-            constexpr auto kUbo = vk::DescriptorType::eUniformBuffer;
-            constexpr auto kSsbo = vk::DescriptorType::eStorageBuffer;
-            constexpr auto kSi = vk::DescriptorType::eSampledImage;
-            constexpr auto kSamp = vk::DescriptorType::eSampler;
-            std::array<vk::WriteDescriptorSet, 6> writes = {{
-                writeBuffer(set, bindingIndex(ShadowBinding::Shadow), kUbo, shadowUboInfo),
-                writeBuffer(set, bindingIndex(ShadowBinding::Skin), kUbo, skinBufInfo),
-                writeBuffer(set, bindingIndex(ShadowBinding::Morph), kUbo, morphUboBufInfo),
-                writeBuffer(set, bindingIndex(ShadowBinding::MorphTargets), kSsbo, morphSsboInfo),
-                writeImage(set, bindingIndex(ShadowBinding::SelfShadowFirstMap), kSi,
-                           selfShadowFirstInfo),
-                writeImage(set, bindingIndex(ShadowBinding::SelfShadowDepthSampler), kSamp,
-                           selfShadowSamplerInfo),
-            }};
-            device_->device().updateDescriptorSets(writes, {});
-
-            result.descSets[g][i] = registerDescriptorSet(*sets[i]);
-        }
-
-        retainDescriptorSets(poolEntry, sets);
+                constexpr auto kUbo = vk::DescriptorType::eUniformBuffer;
+                constexpr auto kSsbo = vk::DescriptorType::eStorageBuffer;
+                constexpr auto kSi = vk::DescriptorType::eSampledImage;
+                constexpr auto kSamp = vk::DescriptorType::eSampler;
+                std::array<vk::WriteDescriptorSet, 6> writes = {{
+                    writeBuffer(set, bindingIndex(ShadowBinding::Shadow), kUbo, shadowUboInfo),
+                    writeBuffer(set, bindingIndex(ShadowBinding::Skin), kUbo, skinBufInfo),
+                    writeBuffer(set, bindingIndex(ShadowBinding::Morph), kUbo, morphUboBufInfo),
+                    writeBuffer(set, bindingIndex(ShadowBinding::MorphTargets), kSsbo,
+                                morphSsboInfo),
+                    writeImage(set, bindingIndex(ShadowBinding::SelfShadowFirstMap), kSi,
+                               selfShadowFirstInfo),
+                    writeImage(set, bindingIndex(ShadowBinding::SelfShadowDepthSampler), kSamp,
+                               selfShadowSamplerInfo),
+                }};
+                device_->device().updateDescriptorSets(writes, {});
+            });
     }
 
     return result;
@@ -440,28 +456,20 @@ Descriptors::createSingleUboDescriptors(vk::DescriptorSetLayout layout, const Ma
     std::array<vk::DescriptorPoolSize, 1> poolSizes = {{
         {vk::DescriptorType::eUniformBuffer, kMaxFramesInFlight},
     }};
-    auto& poolEntry = createDescriptorPool(poolSizes, kMaxFramesInFlight);
-    auto sets = allocateDescriptorSets(*poolEntry.pool, layout, kMaxFramesInFlight);
-
-    std::array<DescriptorSetHandle, kMaxFramesInFlight> result{};
-    for (int i = 0; i < kMaxFramesInFlight; ++i)
-    {
-        vk::DescriptorBufferInfo bufInfo =
-            makeDescriptorBufferInfo(resources_->vulkanBuffer(ubo.buffers[i]), uboSize);
-        vk::WriteDescriptorSet write{
-            .dstSet = *sets[i],
-            .dstBinding = 0,
-            .descriptorCount = 1,
-            .descriptorType = vk::DescriptorType::eUniformBuffer,
-            .pBufferInfo = &bufInfo,
-        };
-        device_->device().updateDescriptorSets(write, {});
-
-        result[i] = registerDescriptorSet(*sets[i]);
-    }
-
-    retainDescriptorSets(poolEntry, sets);
-    return result;
+    return buildFrameSets(poolSizes, layout,
+                          [&](vk::DescriptorSet set, int i)
+                          {
+                              vk::DescriptorBufferInfo bufInfo = makeDescriptorBufferInfo(
+                                  resources_->vulkanBuffer(ubo.buffers[i]), uboSize);
+                              vk::WriteDescriptorSet write{
+                                  .dstSet = set,
+                                  .dstBinding = 0,
+                                  .descriptorCount = 1,
+                                  .descriptorType = vk::DescriptorType::eUniformBuffer,
+                                  .pBufferInfo = &bufInfo,
+                              };
+                              device_->device().updateDescriptorSets(write, {});
+                          });
 }
 
 std::array<DescriptorSetHandle, kMaxFramesInFlight>
@@ -473,35 +481,29 @@ Descriptors::createUboImageSamplerDescriptors(vk::DescriptorSetLayout layout,
         {vk::DescriptorType::eUniformBuffer, kMaxFramesInFlight},
         {vk::DescriptorType::eCombinedImageSampler, kMaxFramesInFlight},
     }};
-    auto& poolEntry = createDescriptorPool(poolSizes, kMaxFramesInFlight);
-    auto sets = allocateDescriptorSets(*poolEntry.pool, layout, kMaxFramesInFlight);
-
-    std::array<DescriptorSetHandle, kMaxFramesInFlight> result{};
-    for (int i = 0; i < kMaxFramesInFlight; ++i)
-    {
-        vk::DescriptorBufferInfo bufInfo =
-            makeDescriptorBufferInfo(resources_->vulkanBuffer(ubo.buffers[i]), uboSize);
-        vk::DescriptorImageInfo texInfo = makeDescriptorImageInfo(
-            resources_->vulkanSampler(texture), resources_->vulkanImageView(texture),
-            vk::ImageLayout::eShaderReadOnlyOptimal);
-        std::array<vk::WriteDescriptorSet, 2> writes = {{
-            vk::WriteDescriptorSet{.dstSet = *sets[i],
-                                   .dstBinding = bindingIndex(SkyboxBinding::Skybox),
-                                   .descriptorCount = 1,
-                                   .descriptorType = vk::DescriptorType::eUniformBuffer,
-                                   .pBufferInfo = &bufInfo},
-            vk::WriteDescriptorSet{.dstSet = *sets[i],
-                                   .dstBinding = bindingIndex(SkyboxBinding::Cubemap),
-                                   .descriptorCount = 1,
-                                   .descriptorType = vk::DescriptorType::eCombinedImageSampler,
-                                   .pImageInfo = &texInfo},
-        }};
-        device_->device().updateDescriptorSets(writes, {});
-        result[i] = registerDescriptorSet(*sets[i]);
-    }
-
-    retainDescriptorSets(poolEntry, sets);
-    return result;
+    return buildFrameSets(
+        poolSizes, layout,
+        [&](vk::DescriptorSet set, int i)
+        {
+            vk::DescriptorBufferInfo bufInfo =
+                makeDescriptorBufferInfo(resources_->vulkanBuffer(ubo.buffers[i]), uboSize);
+            vk::DescriptorImageInfo texInfo = makeDescriptorImageInfo(
+                resources_->vulkanSampler(texture), resources_->vulkanImageView(texture),
+                vk::ImageLayout::eShaderReadOnlyOptimal);
+            std::array<vk::WriteDescriptorSet, 2> writes = {{
+                vk::WriteDescriptorSet{.dstSet = set,
+                                       .dstBinding = bindingIndex(SkyboxBinding::Skybox),
+                                       .descriptorCount = 1,
+                                       .descriptorType = vk::DescriptorType::eUniformBuffer,
+                                       .pBufferInfo = &bufInfo},
+                vk::WriteDescriptorSet{.dstSet = set,
+                                       .dstBinding = bindingIndex(SkyboxBinding::Cubemap),
+                                       .descriptorCount = 1,
+                                       .descriptorType = vk::DescriptorType::eCombinedImageSampler,
+                                       .pImageInfo = &texInfo},
+            }};
+            device_->device().updateDescriptorSets(writes, {});
+        });
 }
 
 std::array<DescriptorSetHandle, kMaxFramesInFlight> Descriptors::createSkyboxDescriptors(
@@ -512,42 +514,36 @@ std::array<DescriptorSetHandle, kMaxFramesInFlight> Descriptors::createSkyboxDes
         {vk::DescriptorType::eUniformBuffer, kMaxFramesInFlight * 2},
         {vk::DescriptorType::eCombinedImageSampler, kMaxFramesInFlight},
     }};
-    auto& poolEntry = createDescriptorPool(poolSizes, kMaxFramesInFlight);
-    auto sets = allocateDescriptorSets(*poolEntry.pool, layout, kMaxFramesInFlight);
-
-    std::array<DescriptorSetHandle, kMaxFramesInFlight> result{};
-    for (int i = 0; i < kMaxFramesInFlight; ++i)
-    {
-        vk::DescriptorBufferInfo skyboxBufInfo =
-            makeDescriptorBufferInfo(resources_->vulkanBuffer(skyboxUbo.buffers[i]), skyboxUboSize);
-        vk::DescriptorBufferInfo lightBufInfo =
-            makeDescriptorBufferInfo(resources_->vulkanBuffer(lightUbo.buffers[i]), lightUboSize);
-        vk::DescriptorImageInfo texInfo = makeDescriptorImageInfo(
-            resources_->vulkanSampler(texture), resources_->vulkanImageView(texture),
-            vk::ImageLayout::eShaderReadOnlyOptimal);
-        std::array<vk::WriteDescriptorSet, 3> writes = {{
-            vk::WriteDescriptorSet{.dstSet = *sets[i],
-                                   .dstBinding = 0,
-                                   .descriptorCount = 1,
-                                   .descriptorType = vk::DescriptorType::eUniformBuffer,
-                                   .pBufferInfo = &skyboxBufInfo},
-            vk::WriteDescriptorSet{.dstSet = *sets[i],
-                                   .dstBinding = 1,
-                                   .descriptorCount = 1,
-                                   .descriptorType = vk::DescriptorType::eCombinedImageSampler,
-                                   .pImageInfo = &texInfo},
-            vk::WriteDescriptorSet{.dstSet = *sets[i],
-                                   .dstBinding = bindingIndex(SkyboxBinding::Light),
-                                   .descriptorCount = 1,
-                                   .descriptorType = vk::DescriptorType::eUniformBuffer,
-                                   .pBufferInfo = &lightBufInfo},
-        }};
-        device_->device().updateDescriptorSets(writes, {});
-        result[i] = registerDescriptorSet(*sets[i]);
-    }
-
-    retainDescriptorSets(poolEntry, sets);
-    return result;
+    return buildFrameSets(
+        poolSizes, layout,
+        [&](vk::DescriptorSet set, int i)
+        {
+            vk::DescriptorBufferInfo skyboxBufInfo = makeDescriptorBufferInfo(
+                resources_->vulkanBuffer(skyboxUbo.buffers[i]), skyboxUboSize);
+            vk::DescriptorBufferInfo lightBufInfo = makeDescriptorBufferInfo(
+                resources_->vulkanBuffer(lightUbo.buffers[i]), lightUboSize);
+            vk::DescriptorImageInfo texInfo = makeDescriptorImageInfo(
+                resources_->vulkanSampler(texture), resources_->vulkanImageView(texture),
+                vk::ImageLayout::eShaderReadOnlyOptimal);
+            std::array<vk::WriteDescriptorSet, 3> writes = {{
+                vk::WriteDescriptorSet{.dstSet = set,
+                                       .dstBinding = 0,
+                                       .descriptorCount = 1,
+                                       .descriptorType = vk::DescriptorType::eUniformBuffer,
+                                       .pBufferInfo = &skyboxBufInfo},
+                vk::WriteDescriptorSet{.dstSet = set,
+                                       .dstBinding = 1,
+                                       .descriptorCount = 1,
+                                       .descriptorType = vk::DescriptorType::eCombinedImageSampler,
+                                       .pImageInfo = &texInfo},
+                vk::WriteDescriptorSet{.dstSet = set,
+                                       .dstBinding = bindingIndex(SkyboxBinding::Light),
+                                       .descriptorCount = 1,
+                                       .descriptorType = vk::DescriptorType::eUniformBuffer,
+                                       .pBufferInfo = &lightBufInfo},
+            }};
+            device_->device().updateDescriptorSets(writes, {});
+        });
 }
 
 std::array<DescriptorSetHandle, kMaxFramesInFlight>
@@ -557,16 +553,9 @@ Descriptors::createSingleImageSamplerDescriptors(vk::DescriptorSetLayout layout,
     std::array<vk::DescriptorPoolSize, 1> poolSizes = {{
         {vk::DescriptorType::eCombinedImageSampler, kMaxFramesInFlight},
     }};
-    auto& poolEntry = createDescriptorPool(poolSizes, kMaxFramesInFlight);
-    auto sets = allocateDescriptorSets(*poolEntry.pool, layout, kMaxFramesInFlight);
-
-    std::array<DescriptorSetHandle, kMaxFramesInFlight> result{};
-    for (int i = 0; i < kMaxFramesInFlight; ++i)
-    {
-        result[i] = registerDescriptorSet(*sets[i]);
-    }
-
-    retainDescriptorSets(poolEntry, sets);
+    // Allocation only; the writes are issued through the shared update path so
+    // creation and swapchain-resize recreation stay in lockstep.
+    auto result = buildFrameSets(poolSizes, layout, {});
     updateSingleImageSamplerDescriptors(result, texture);
     return result;
 }
@@ -622,16 +611,9 @@ Descriptors::createPostProcessDescriptors(vk::DescriptorSetLayout layout, Textur
     std::array<vk::DescriptorPoolSize, 1> poolSizes = {{
         {vk::DescriptorType::eCombinedImageSampler, kMaxFramesInFlight * 2},
     }};
-    auto& poolEntry = createDescriptorPool(poolSizes, kMaxFramesInFlight);
-    auto sets = allocateDescriptorSets(*poolEntry.pool, layout, kMaxFramesInFlight);
-
-    std::array<DescriptorSetHandle, kMaxFramesInFlight> result{};
-    for (int i = 0; i < kMaxFramesInFlight; ++i)
-    {
-        result[i] = registerDescriptorSet(*sets[i]);
-    }
-    retainDescriptorSets(poolEntry, sets);
-
+    // Allocation only; writes go through updatePostProcessDescriptors, which is
+    // also the swapchain-resize recreation path.
+    auto result = buildFrameSets(poolSizes, layout, {});
     updatePostProcessDescriptors(result, hdrTarget, bloomChain);
     return result;
 }

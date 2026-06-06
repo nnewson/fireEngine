@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <optional>
 #include <utility>
 
 namespace fire_engine
@@ -89,41 +90,77 @@ std::pair<std::size_t, float> findBracket(const std::vector<KF>& kf, float t) no
     return {i, alpha};
 }
 
-Quaternion sampleRotation(const std::vector<Animation::RotationKeyframe>& kf,
-                          Animation::Interpolation mode, const std::vector<Quaternion>& inTans,
-                          const std::vector<Quaternion>& outTans, float t) noexcept
+// Shared keyframe-channel sampler. The control flow is identical for every TRS
+// channel — empty → default, single key → that key, otherwise bracket the time
+// and switch on the interpolation mode — so it lives here once. Each channel
+// supplies the type-specific pieces as callables:
+//
+//   valueAt(i)        -> V                  value of keyframe i
+//   linear(v0, v1, a) -> V                  Linear blend (lerp / slerp)
+//   cubic(i, a)       -> std::optional<V>   Hermite result, or nullopt when the
+//                                           channel lacks tangent data (then we
+//                                           fall back to linear, not garbage)
+template <typename KF, typename V, typename ValueAt, typename Linear, typename Cubic>
+V sampleChannel(const std::vector<KF>& kf, Animation::Interpolation mode, float t,
+                const V& emptyValue, ValueAt valueAt, Linear linear, Cubic cubic)
 {
     if (kf.empty())
     {
-        return Quaternion::identity();
+        return emptyValue;
     }
     if (kf.size() == 1)
     {
-        return {kf[0].qx, kf[0].qy, kf[0].qz, kf[0].qw};
+        return valueAt(0);
     }
 
     auto [i, alpha] = findBracket(kf, t);
-    Quaternion q0{kf[i].qx, kf[i].qy, kf[i].qz, kf[i].qw};
     if (alpha == 0.0f)
     {
-        return q0;
+        return valueAt(i);
     }
-    Quaternion q1{kf[i + 1].qx, kf[i + 1].qy, kf[i + 1].qz, kf[i + 1].qw};
 
     switch (mode)
     {
     case Animation::Interpolation::Step:
-        return q0;
+        return valueAt(i);
 
     case Animation::Interpolation::CubicSpline:
-        if (i < outTans.size() && (i + 1) < inTans.size())
+        if (auto result = cubic(i, alpha))
         {
+            return *result;
+        }
+        // Missing tangent data — fall back to linear rather than garbage.
+        [[fallthrough]];
+
+    case Animation::Interpolation::Linear:
+    default:
+        return linear(valueAt(i), valueAt(i + 1), alpha);
+    }
+}
+
+Quaternion sampleRotation(const std::vector<Animation::RotationKeyframe>& kf,
+                          Animation::Interpolation mode, const std::vector<Quaternion>& inTans,
+                          const std::vector<Quaternion>& outTans, float t) noexcept
+{
+    return sampleChannel(
+        kf, mode, t, Quaternion::identity(),
+        [&](std::size_t i) { return Quaternion{kf[i].qx, kf[i].qy, kf[i].qz, kf[i].qw}; },
+        [](const Quaternion& q0, const Quaternion& q1, float a)
+        { return Quaternion::slerp(q0, q1, a); },
+        [&](std::size_t i, float a) -> std::optional<Quaternion>
+        {
+            if (i >= outTans.size() || (i + 1) >= inTans.size())
+            {
+                return std::nullopt;
+            }
             float dt = kf[i + 1].time - kf[i].time;
             // glTF spec: evaluate Hermite componentwise on the four quaternion
             // components, scale tangents by dt, then normalise the result.
+            Quaternion q0{kf[i].qx, kf[i].qy, kf[i].qz, kf[i].qw};
+            Quaternion q1{kf[i + 1].qx, kf[i + 1].qy, kf[i + 1].qz, kf[i + 1].qw};
             const Quaternion& m0 = outTans[i];
             const Quaternion& m1 = inTans[i + 1];
-            auto h = hermite(alpha);
+            auto h = hermite(a);
             Quaternion r{
                 h.h00 * q0.x() + h.h10 * (m0.x() * dt) + h.h01 * q1.x() + h.h11 * (m1.x() * dt),
                 h.h00 * q0.y() + h.h10 * (m0.y() * dt) + h.h01 * q1.y() + h.h11 * (m1.y() * dt),
@@ -131,92 +168,45 @@ Quaternion sampleRotation(const std::vector<Animation::RotationKeyframe>& kf,
                 h.h00 * q0.w() + h.h10 * (m0.w() * dt) + h.h01 * q1.w() + h.h11 * (m1.w() * dt),
             };
             return Quaternion::normalise(r);
-        }
-        // Missing tangent data — fall back to slerp rather than producing garbage.
-        [[fallthrough]];
-
-    case Animation::Interpolation::Linear:
-    default:
-        return Quaternion::slerp(q0, q1, alpha);
-    }
+        });
 }
 
 Vec3 sampleTranslation(const std::vector<Animation::TranslationKeyframe>& kf,
                        Animation::Interpolation mode, const std::vector<Vec3>& inTans,
                        const std::vector<Vec3>& outTans, float t) noexcept
 {
-    if (kf.empty())
-    {
-        return {};
-    }
-    if (kf.size() == 1)
-    {
-        return kf[0].position;
-    }
-
-    auto [i, alpha] = findBracket(kf, t);
-    if (alpha == 0.0f)
-    {
-        return kf[i].position;
-    }
-
-    switch (mode)
-    {
-    case Animation::Interpolation::Step:
-        return kf[i].position;
-
-    case Animation::Interpolation::CubicSpline:
-        if (i < outTans.size() && (i + 1) < inTans.size())
+    return sampleChannel(
+        kf, mode, t, Vec3{}, [&](std::size_t i) { return kf[i].position; },
+        [](const Vec3& v0, const Vec3& v1, float a) { return v0 + (v1 - v0) * a; },
+        [&](std::size_t i, float a) -> std::optional<Vec3>
         {
+            if (i >= outTans.size() || (i + 1) >= inTans.size())
+            {
+                return std::nullopt;
+            }
             float dt = kf[i + 1].time - kf[i].time;
             return hermiteVec3(kf[i].position, outTans[i] * dt, kf[i + 1].position,
-                               inTans[i + 1] * dt, alpha);
-        }
-        [[fallthrough]];
-
-    case Animation::Interpolation::Linear:
-    default:
-        return kf[i].position + (kf[i + 1].position - kf[i].position) * alpha;
-    }
+                               inTans[i + 1] * dt, a);
+        });
 }
 
 Vec3 sampleScale(const std::vector<Animation::ScaleKeyframe>& kf, Animation::Interpolation mode,
                  const std::vector<Vec3>& inTans, const std::vector<Vec3>& outTans,
                  float t) noexcept
 {
-    if (kf.empty())
-    {
-        return {1.0f, 1.0f, 1.0f};
-    }
-    if (kf.size() == 1)
-    {
-        return kf[0].scale;
-    }
-
-    auto [i, alpha] = findBracket(kf, t);
-    if (alpha == 0.0f)
-    {
-        return kf[i].scale;
-    }
-
-    switch (mode)
-    {
-    case Animation::Interpolation::Step:
-        return kf[i].scale;
-
-    case Animation::Interpolation::CubicSpline:
-        if (i < outTans.size() && (i + 1) < inTans.size())
+    return sampleChannel(
+        kf, mode, t, Vec3{1.0f, 1.0f, 1.0f}, [&](std::size_t i) { return kf[i].scale; },
+        [](const Vec3& v0, const Vec3& v1, float a) { return v0 + (v1 - v0) * a; },
+        [&](std::size_t i, float a) -> std::optional<Vec3>
         {
+            if (i >= outTans.size() || (i + 1) >= inTans.size())
+            {
+                return std::nullopt;
+            }
             float dt = kf[i + 1].time - kf[i].time;
             return hermiteVec3(kf[i].scale, outTans[i] * dt, kf[i + 1].scale, inTans[i + 1] * dt,
-                               alpha);
-        }
-        [[fallthrough]];
-
-    case Animation::Interpolation::Linear:
-    default:
-        return kf[i].scale + (kf[i + 1].scale - kf[i].scale) * alpha;
-    }
+                               a);
+        });
 }
 
 } // namespace

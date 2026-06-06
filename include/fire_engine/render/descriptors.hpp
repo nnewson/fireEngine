@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstddef>
+#include <functional>
 #include <span>
 #include <vector>
 
@@ -186,6 +187,25 @@ private:
     [[nodiscard]] std::vector<vk::raii::DescriptorSet>
     allocateDescriptorSets(vk::DescriptorPool pool, vk::DescriptorSetLayout layout,
                            uint32_t count) const;
+
+    // Called once per frame-in-flight to populate that frame's descriptor set.
+    // The callback builds its DescriptorImageInfo/BufferInfo locals and issues
+    // updateDescriptorSets itself, so those infos stay alive across the write.
+    using FrameWriter = std::function<void(vk::DescriptorSet set, int frame)>;
+
+    // Shared create envelope: allocate kMaxFramesInFlight sets of `layout` from
+    // `poolEntry`, run `writeFrame` on each (skipped when empty — callers that
+    // populate via a separate update*() helper pass {}), register and retain
+    // them, and return the per-frame handles.
+    std::array<DescriptorSetHandle, kMaxFramesInFlight>
+    allocateFrameSets(DescriptorPoolEntry& poolEntry, vk::DescriptorSetLayout layout,
+                      const FrameWriter& writeFrame);
+
+    // allocateFrameSets plus a fresh pool sized by `poolSizes` (maxSets =
+    // kMaxFramesInFlight) — the common single-group-per-frame case.
+    std::array<DescriptorSetHandle, kMaxFramesInFlight>
+    buildFrameSets(std::span<const vk::DescriptorPoolSize> poolSizes,
+                   vk::DescriptorSetLayout layout, const FrameWriter& writeFrame);
     [[nodiscard]] DescriptorSetHandle registerDescriptorSet(vk::DescriptorSet set);
     void retainDescriptorSets(DescriptorPoolEntry& poolEntry,
                               std::vector<vk::raii::DescriptorSet>& sets);
