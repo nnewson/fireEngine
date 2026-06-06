@@ -530,7 +530,9 @@ std::vector<DrawCommand> Object::buildDrawCommands(const FrameInfo& frame, const
         // KHR_materials_transmission F3: defer this draw to the second forward
         // sub-pass so its fragment shader can sample the post-opaque HDR
         // target via screen-space refraction.
-        cmd.transmissive = mat.transmissionFactor() > 0.0f || mat.hasTransmissionTexture();
+        const bool hasTransmissionFactor = mat.transmission() && mat.transmission()->factor > 0.0f;
+        cmd.transmissive =
+            hasTransmissionFactor || mat.texture(MaterialTextureSlot::Transmission).has();
         commands.push_back(cmd);
 
         if (binding.geometry->castsShadow() && frame.shadowPipeline != NullPipeline &&

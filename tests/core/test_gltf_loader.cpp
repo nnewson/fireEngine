@@ -25,8 +25,11 @@
 
 using fire_engine::AlphaMode;
 using fire_engine::GltfLoader;
+using fire_engine::ClearcoatParams;
 using fire_engine::Mat4;
 using fire_engine::Material;
+using fire_engine::MaterialTextureSlot;
+using fire_engine::TransmissionParams;
 using fire_engine::Node;
 using fire_engine::PhysicsBodyType;
 using fire_engine::SphereShape;
@@ -73,28 +76,31 @@ static fire_engine::UvTransform readUvTransform(const fastgltf::TextureInfo& inf
 // texCoord index (0 = TEXCOORD_0 default, 1 = TEXCOORD_1).
 static void applyTexCoordIndices(const fastgltf::Material& gltfMat, Material& material)
 {
+    using Slot = MaterialTextureSlot;
     if (gltfMat.pbrData.baseColorTexture.has_value())
     {
-        material.baseColorTexCoord(
-            static_cast<int>(gltfMat.pbrData.baseColorTexture.value().texCoordIndex));
+        material.texture(Slot::BaseColour).texCoord =
+            static_cast<int>(gltfMat.pbrData.baseColorTexture.value().texCoordIndex);
     }
     if (gltfMat.emissiveTexture.has_value())
     {
-        material.emissiveTexCoord(static_cast<int>(gltfMat.emissiveTexture.value().texCoordIndex));
+        material.texture(Slot::Emissive).texCoord =
+            static_cast<int>(gltfMat.emissiveTexture.value().texCoordIndex);
     }
     if (gltfMat.normalTexture.has_value())
     {
-        material.normalTexCoord(static_cast<int>(gltfMat.normalTexture.value().texCoordIndex));
+        material.texture(Slot::Normal).texCoord =
+            static_cast<int>(gltfMat.normalTexture.value().texCoordIndex);
     }
     if (gltfMat.pbrData.metallicRoughnessTexture.has_value())
     {
-        material.metallicRoughnessTexCoord(
-            static_cast<int>(gltfMat.pbrData.metallicRoughnessTexture.value().texCoordIndex));
+        material.texture(Slot::MetallicRoughness).texCoord =
+            static_cast<int>(gltfMat.pbrData.metallicRoughnessTexture.value().texCoordIndex);
     }
     if (gltfMat.occlusionTexture.has_value())
     {
-        material.occlusionTexCoord(
-            static_cast<int>(gltfMat.occlusionTexture.value().texCoordIndex));
+        material.texture(Slot::Occlusion).texCoord =
+            static_cast<int>(gltfMat.occlusionTexture.value().texCoordIndex);
     }
 }
 
@@ -1022,11 +1028,11 @@ TEST(MaterialTexCoordIndices, AbsentTexturesLeaveDefaultsZero)
     fastgltf::Material gltfMat{};
     Material material;
     applyTexCoordIndices(gltfMat, material);
-    EXPECT_EQ(material.baseColorTexCoord(), 0);
-    EXPECT_EQ(material.emissiveTexCoord(), 0);
-    EXPECT_EQ(material.normalTexCoord(), 0);
-    EXPECT_EQ(material.metallicRoughnessTexCoord(), 0);
-    EXPECT_EQ(material.occlusionTexCoord(), 0);
+    EXPECT_EQ(material.texture(MaterialTextureSlot::BaseColour).texCoord, 0);
+    EXPECT_EQ(material.texture(MaterialTextureSlot::Emissive).texCoord, 0);
+    EXPECT_EQ(material.texture(MaterialTextureSlot::Normal).texCoord, 0);
+    EXPECT_EQ(material.texture(MaterialTextureSlot::MetallicRoughness).texCoord, 0);
+    EXPECT_EQ(material.texture(MaterialTextureSlot::Occlusion).texCoord, 0);
 }
 
 TEST(MaterialTexCoordIndices, ExplicitTexCoordOnesRoundTrip)
@@ -1039,11 +1045,11 @@ TEST(MaterialTexCoordIndices, ExplicitTexCoordOnesRoundTrip)
     gltfMat.occlusionTexture.emplace().texCoordIndex = 1;
     Material material;
     applyTexCoordIndices(gltfMat, material);
-    EXPECT_EQ(material.baseColorTexCoord(), 1);
-    EXPECT_EQ(material.emissiveTexCoord(), 1);
-    EXPECT_EQ(material.normalTexCoord(), 1);
-    EXPECT_EQ(material.metallicRoughnessTexCoord(), 1);
-    EXPECT_EQ(material.occlusionTexCoord(), 1);
+    EXPECT_EQ(material.texture(MaterialTextureSlot::BaseColour).texCoord, 1);
+    EXPECT_EQ(material.texture(MaterialTextureSlot::Emissive).texCoord, 1);
+    EXPECT_EQ(material.texture(MaterialTextureSlot::Normal).texCoord, 1);
+    EXPECT_EQ(material.texture(MaterialTextureSlot::MetallicRoughness).texCoord, 1);
+    EXPECT_EQ(material.texture(MaterialTextureSlot::Occlusion).texCoord, 1);
 }
 
 TEST(MaterialTexCoordIndices, MixedSlotsRoundTrip)
@@ -1054,8 +1060,8 @@ TEST(MaterialTexCoordIndices, MixedSlotsRoundTrip)
     gltfMat.occlusionTexture.emplace().texCoordIndex = 1;
     Material material;
     applyTexCoordIndices(gltfMat, material);
-    EXPECT_EQ(material.baseColorTexCoord(), 0);
-    EXPECT_EQ(material.occlusionTexCoord(), 1);
+    EXPECT_EQ(material.texture(MaterialTextureSlot::BaseColour).texCoord, 0);
+    EXPECT_EQ(material.texture(MaterialTextureSlot::Occlusion).texCoord, 1);
 }
 
 // ==========================================================================
@@ -1186,9 +1192,15 @@ TEST(VertexColourExtraction, IgnoresAlphaChannel)
 // the extension is absent (matches the spec); the loader copies it through.
 // ---------------------------------------------------------------------------
 
+// Mirrors the loader: ior is grouped into the optional Transmission block,
+// engaged when transmission is authored or ior differs from the spec default.
 static void applyIor(const fastgltf::Material& gltfMat, Material& material)
 {
-    material.ior(static_cast<float>(gltfMat.ior));
+    const float ior = static_cast<float>(gltfMat.ior);
+    if (ior != 1.5f)
+    {
+        material.transmission(TransmissionParams{0.0f, ior});
+    }
 }
 
 TEST(LoadMaterialIor, DefaultIsFifteen)
@@ -1196,7 +1208,8 @@ TEST(LoadMaterialIor, DefaultIsFifteen)
     fastgltf::Material gltfMat;
     Material material;
     applyIor(gltfMat, material);
-    EXPECT_FLOAT_EQ(material.ior(), 1.5f);
+    EXPECT_FALSE(material.transmission().has_value());
+    EXPECT_FLOAT_EQ(material.transmission().value_or(TransmissionParams{}).ior, 1.5f);
 }
 
 TEST(LoadMaterialIor, AuthoredValuePropagates)
@@ -1205,7 +1218,8 @@ TEST(LoadMaterialIor, AuthoredValuePropagates)
     gltfMat.ior = 2.42f; // diamond
     Material material;
     applyIor(gltfMat, material);
-    EXPECT_FLOAT_EQ(material.ior(), 2.42f);
+    ASSERT_TRUE(material.transmission().has_value());
+    EXPECT_FLOAT_EQ(material.transmission()->ior, 2.42f);
 }
 
 // ---------------------------------------------------------------------------
@@ -1220,12 +1234,14 @@ static void applyClearcoat(const fastgltf::Material& gltfMat, Material& material
         return;
     }
     const auto& cc = *gltfMat.clearcoat;
-    material.clearcoatFactor(static_cast<float>(cc.clearcoatFactor));
-    material.clearcoatRoughness(static_cast<float>(cc.clearcoatRoughnessFactor));
+    ClearcoatParams clearcoat;
+    clearcoat.factor = static_cast<float>(cc.clearcoatFactor);
+    clearcoat.roughness = static_cast<float>(cc.clearcoatRoughnessFactor);
     if (cc.clearcoatNormalTexture.has_value())
     {
-        material.clearcoatNormalScale(static_cast<float>(cc.clearcoatNormalTexture->scale));
+        clearcoat.normalScale = static_cast<float>(cc.clearcoatNormalTexture->scale);
     }
+    material.clearcoat(clearcoat);
 }
 
 TEST(LoadMaterialClearcoat, AbsentExtensionLeavesDefaults)
@@ -1233,9 +1249,11 @@ TEST(LoadMaterialClearcoat, AbsentExtensionLeavesDefaults)
     fastgltf::Material gltfMat;
     Material material;
     applyClearcoat(gltfMat, material);
-    EXPECT_FLOAT_EQ(material.clearcoatFactor(), 0.0f);
-    EXPECT_FLOAT_EQ(material.clearcoatRoughness(), 0.0f);
-    EXPECT_FLOAT_EQ(material.clearcoatNormalScale(), 1.0f);
+    EXPECT_FALSE(material.clearcoat().has_value());
+    const ClearcoatParams defaults = material.clearcoat().value_or(ClearcoatParams{});
+    EXPECT_FLOAT_EQ(defaults.factor, 0.0f);
+    EXPECT_FLOAT_EQ(defaults.roughness, 0.0f);
+    EXPECT_FLOAT_EQ(defaults.normalScale, 1.0f);
 }
 
 TEST(LoadMaterialClearcoat, AuthoredFactorAndRoughnessPropagate)
@@ -1246,8 +1264,9 @@ TEST(LoadMaterialClearcoat, AuthoredFactorAndRoughnessPropagate)
     gltfMat.clearcoat->clearcoatRoughnessFactor = 0.2f;
     Material material;
     applyClearcoat(gltfMat, material);
-    EXPECT_FLOAT_EQ(material.clearcoatFactor(), 0.75f);
-    EXPECT_FLOAT_EQ(material.clearcoatRoughness(), 0.2f);
+    ASSERT_TRUE(material.clearcoat().has_value());
+    EXPECT_FLOAT_EQ(material.clearcoat()->factor, 0.75f);
+    EXPECT_FLOAT_EQ(material.clearcoat()->roughness, 0.2f);
 }
 
 TEST(LoadMaterialClearcoat, NormalScalePropagates)
@@ -1259,7 +1278,8 @@ TEST(LoadMaterialClearcoat, NormalScalePropagates)
     info.scale = 0.4f;
     Material material;
     applyClearcoat(gltfMat, material);
-    EXPECT_FLOAT_EQ(material.clearcoatNormalScale(), 0.4f);
+    ASSERT_TRUE(material.clearcoat().has_value());
+    EXPECT_FLOAT_EQ(material.clearcoat()->normalScale, 0.4f);
 }
 
 // ---------------------------------------------------------------------------
@@ -1274,11 +1294,13 @@ static void applyVolume(const fastgltf::Material& gltfMat, fire_engine::Material
         return;
     }
     const auto& vol = *gltfMat.volume;
-    material.thicknessFactor(static_cast<float>(vol.thicknessFactor));
-    material.attenuationColor(fire_engine::Colour3{static_cast<float>(vol.attenuationColor.x()),
+    fire_engine::VolumeParams volume;
+    volume.thicknessFactor = static_cast<float>(vol.thicknessFactor);
+    volume.attenuationColor = fire_engine::Colour3{static_cast<float>(vol.attenuationColor.x()),
                                                    static_cast<float>(vol.attenuationColor.y()),
-                                                   static_cast<float>(vol.attenuationColor.z())});
-    material.attenuationDistance(static_cast<float>(vol.attenuationDistance));
+                                                   static_cast<float>(vol.attenuationColor.z())};
+    volume.attenuationDistance = static_cast<float>(vol.attenuationDistance);
+    material.volume(volume);
 }
 
 TEST(LoadMaterialVolume, AbsentExtensionLeavesDefaults)
@@ -1286,8 +1308,11 @@ TEST(LoadMaterialVolume, AbsentExtensionLeavesDefaults)
     fastgltf::Material gltfMat;
     Material material;
     applyVolume(gltfMat, material);
-    EXPECT_FLOAT_EQ(material.thicknessFactor(), 0.0f);
-    EXPECT_TRUE(std::isinf(material.attenuationDistance()));
+    EXPECT_FALSE(material.volume().has_value());
+    const fire_engine::VolumeParams defaults =
+        material.volume().value_or(fire_engine::VolumeParams{});
+    EXPECT_FLOAT_EQ(defaults.thicknessFactor, 0.0f);
+    EXPECT_TRUE(std::isinf(defaults.attenuationDistance));
 }
 
 TEST(LoadMaterialVolume, ThicknessFactorPropagates)
@@ -1297,7 +1322,8 @@ TEST(LoadMaterialVolume, ThicknessFactorPropagates)
     gltfMat.volume->thicknessFactor = 0.5f;
     Material material;
     applyVolume(gltfMat, material);
-    EXPECT_FLOAT_EQ(material.thicknessFactor(), 0.5f);
+    ASSERT_TRUE(material.volume().has_value());
+    EXPECT_FLOAT_EQ(material.volume()->thicknessFactor, 0.5f);
 }
 
 TEST(LoadMaterialVolume, AttenuationColorAndDistancePropagate)
@@ -1308,6 +1334,7 @@ TEST(LoadMaterialVolume, AttenuationColorAndDistancePropagate)
     gltfMat.volume->attenuationDistance = 4.0f;
     Material material;
     applyVolume(gltfMat, material);
-    EXPECT_EQ(material.attenuationColor(), fire_engine::Colour3(0.3f, 0.5f, 0.7f));
-    EXPECT_FLOAT_EQ(material.attenuationDistance(), 4.0f);
+    ASSERT_TRUE(material.volume().has_value());
+    EXPECT_EQ(material.volume()->attenuationColor, fire_engine::Colour3(0.3f, 0.5f, 0.7f));
+    EXPECT_FLOAT_EQ(material.volume()->attenuationDistance, 4.0f);
 }

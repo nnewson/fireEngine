@@ -361,9 +361,24 @@ void main() {
         N = normalize(fragNormal);
     }
 
+    // Double-sided geometry: when a back face is rasterised (cull-none blend /
+    // double-sided pipelines) the interpolated normal still points along the
+    // authored front, so flip it to face the viewer. Without this the view-
+    // dependent terms (IBL reflection R = reflect(-V, N), transmission
+    // refract(-V, N)) evaluate against a normal pointing away from the camera
+    // and produce a bright patch that tracks the camera — most visible on thin
+    // transmissive surfaces such as a lamp shade. Single-sided (back-face
+    // culled) draws only rasterise front faces, so this is a no-op there.
+    if (!gl_FrontFacing) {
+        N = -N;
+    }
+
     // Use the geometric mesh normal for shadow receiver bias; tangent-space
     // normal maps affect BRDF shading, not geometric visibility.
     vec3 shadowNormal = normalize(fragNormal);
+    if (!gl_FrontFacing) {
+        shadowNormal = -shadowNormal;
+    }
 
     vec3 V = normalize(ubo.cameraPos.xyz - fragWorldPos);
     float NdotV = max(dot(N, V), 0.001);
@@ -448,6 +463,11 @@ void main() {
         vec3 cnSamp = texture(clearcoatNormalMap, ccNuv).rgb * 2.0 - 1.0;
         cnSamp.xy *= ccNormalScale;
         N_cc = normalize(fragTBN * cnSamp);
+        // Match the base-normal back-face flip (N_cc inherits the already-
+        // flipped N otherwise, but a clearcoat normal map rebuilds it here).
+        if (!gl_FrontFacing) {
+            N_cc = -N_cc;
+        }
     }
 
     // LightUBO::lights[]. Only the first directional (i==0, type==0) gets CSM
@@ -702,7 +722,7 @@ void main() {
                                length(ubo.model[2].xyz));
         float worldThickness = thickness * max(max(modelScale.x, modelScale.y), modelScale.z);
 
-        // Exit point in world space, projected to screen UV.
+        // Exit point in world space, projected to screen UV (F3 refraction).
         vec3 exitPos = fragWorldPos + refractDir * worldThickness;
         vec4 exitClip = ubo.proj * ubo.view * vec4(exitPos, 1.0);
         vec2 sampleUv = exitClip.xy / max(exitClip.w, 1e-4) * 0.5 + 0.5;
@@ -711,16 +731,23 @@ void main() {
         sampleUv = clamp(sampleUv, vec2(0.0), vec2(1.0));
 
         float maxLod = float(textureQueryLevels(sceneColorMap) - 1);
-        // Rough transmission blur should collapse as the interface disappears.
-        // For IOR = 1.0 there is no refractive boundary, so even a high authored
-        // roughness should not smear the background into a milky patch. Scale
-        // the blur by interface strength and normalise against the glTF default
-        // dielectric IOR of 1.5 (F0 ~= 0.04) so default materials preserve the
-        // previous look while Air-like materials trend toward no blur.
-        float defaultDielectricF0 = 0.04;
-        float interfaceStrength = sqrt(clamp(dielectricF0 / defaultDielectricF0, 0.0, 1.0));
-        float lod = roughness * interfaceStrength * maxLod;
-        vec3 transmissionSample = textureLod(sceneColorMap, sampleUv, lod).rgb;
+        float lod = roughness * maxLod;
+        vec3 sceneSample = textureLod(sceneColorMap, sampleUv, lod).rgb;
+
+        // Thin-walled vs volumetric transmission, keyed on KHR_materials_volume
+        // thickness. A thin-walled surface (no volume — the paper lamp shade,
+        // thickness 0) scatters: it reads as a uniform basecolor tint with a
+        // faint env contribution. That is view-independent, so it has no
+        // screen-space image to track the camera as a bright blob. A volumetric
+        // surface (thickness > 0 — the TransmissionRoughnessTest panels, 0.005)
+        // refracts the scene behind it, blurred by roughness. The threshold sits
+        // below the panels' 0.005 so they read as volumetric while the shade
+        // (exactly 0) reads as thin-walled.
+        const float kEnvTint = 0.2;
+        vec3 envTint = texture(irradianceMap, refractDir).rgb * light.iblParams.y;
+        vec3 envSurface = vec3(1.0) + kEnvTint * envTint;
+        float volumetric = smoothstep(0.0, 0.001, thickness);
+        vec3 surface = mix(envSurface, sceneSample, volumetric);
 
         // Beer-Lambert absorption over the path through the volume.
         // attenuationColor at attenuationDistance is the colour the light
@@ -730,7 +757,7 @@ void main() {
         vec3 absorption = -log(max(attenColour, vec3(1e-5))) / max(attenDist, 1e-5);
         vec3 transmittance = exp(-absorption * worldThickness);
 
-        transmittedLight = transmission * baseColor * transmissionSample * transmittance;
+        transmittedLight = transmission * baseColor * surface * transmittance;
     }
 
     // Diffuse lobes are scaled — NOT replaced — by (1 - transmission). Specular
