@@ -526,9 +526,8 @@ void Pipeline::createPipelineLayout(const PipelineConfig& config)
     // globals set 1, only when the config declared globalBindings (forward
     // pipelines opt in; skybox / post-process / shadow / IBL precompute don't).
     const bool hasGlobal = static_cast<bool>(*globalDescSetLayout_);
-    std::array<vk::DescriptorSetLayout, 2> setLayouts{*descSetLayout_,
-                                                      hasGlobal ? *globalDescSetLayout_
-                                                                : vk::DescriptorSetLayout{}};
+    std::array<vk::DescriptorSetLayout, 2> setLayouts{
+        *descSetLayout_, hasGlobal ? *globalDescSetLayout_ : vk::DescriptorSetLayout{}};
     vk::PipelineLayoutCreateInfo plci{
         .setLayoutCount = hasGlobal ? 2u : 1u,
         .pSetLayouts = setLayouts.data(),

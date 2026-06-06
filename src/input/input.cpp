@@ -3,7 +3,7 @@
 namespace fire_engine
 {
 
-InputState Input::update(const Window& window, float deltaTime)
+InputState Input::update(Window& window, float deltaTime)
 {
     window.pollEvents();
 
@@ -14,27 +14,27 @@ InputState Input::update(const Window& window, float deltaTime)
     // E/F world-space vertical movement on Y.
     Vec3 delta{};
 
-    if (keyboard_.w())
+    if (keyboard_.pressed(Key::W))
     {
         delta.z(delta.z() + speed_ * deltaTime);
     }
-    if (keyboard_.s())
+    if (keyboard_.pressed(Key::S))
     {
         delta.z(delta.z() - speed_ * deltaTime);
     }
-    if (keyboard_.a())
+    if (keyboard_.pressed(Key::A))
     {
         delta.x(delta.x() + speed_ * deltaTime);
     }
-    if (keyboard_.d())
+    if (keyboard_.pressed(Key::D))
     {
         delta.x(delta.x() - speed_ * deltaTime);
     }
-    if (keyboard_.e())
+    if (keyboard_.pressed(Key::E))
     {
         delta.y(delta.y() + speed_ * deltaTime);
     }
-    if (keyboard_.f())
+    if (keyboard_.pressed(Key::F))
     {
         delta.y(delta.y() - speed_ * deltaTime);
     }
@@ -51,11 +51,11 @@ InputState Input::update(const Window& window, float deltaTime)
 
     ControllerState controllerState;
     Vec3 controllerDelta{};
-    if (keyboard_.left())
+    if (keyboard_.pressed(Key::Left))
     {
         controllerDelta.x(controllerDelta.x() - deltaTime);
     }
-    if (keyboard_.right())
+    if (keyboard_.pressed(Key::Right))
     {
         controllerDelta.x(controllerDelta.x() + deltaTime);
     }
@@ -69,7 +69,7 @@ InputState Input::update(const Window& window, float deltaTime)
     }
 
     // Scroll wheel = zoom
-    double scroll = mouse_.consumeScrollDelta();
+    double scroll = window.consumeScrollDelta();
     if (scroll != 0.0)
     {
         cameraState.deltaZoom(static_cast<float>(scroll) * zoomSpeed_);
@@ -80,31 +80,27 @@ InputState Input::update(const Window& window, float deltaTime)
     state.cameraState(cameraState);
     state.controllerState(controllerState);
 
-    if (keyboard_.one())
+    if (keyboard_.pressed(Key::One))
     {
         state.animationState().activeAnimation(0);
     }
-    else if (keyboard_.two())
+    else if (keyboard_.pressed(Key::Two))
     {
         state.animationState().activeAnimation(1);
     }
-    else if (keyboard_.three())
+    else if (keyboard_.pressed(Key::Three))
     {
         state.animationState().activeAnimation(2);
     }
 
-    if (keyboard_.v() && !previousVariantKey_)
+    const bool variantKey = keyboard_.pressed(Key::V);
+    if (variantKey && !previousVariantKey_)
     {
         state.variantState().cycleDelta(keyboard_.shift() ? -1 : 1);
     }
-    previousVariantKey_ = keyboard_.v();
+    previousVariantKey_ = variantKey;
 
     return state;
-}
-
-void Input::enable(const Window& window)
-{
-    mouse_.registerScrollCallback(window);
 }
 
 } // namespace fire_engine

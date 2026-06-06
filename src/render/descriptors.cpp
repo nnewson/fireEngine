@@ -22,8 +22,7 @@ TextureHandle materialTexture(const GeometryDescriptorInfo& geometry,
 // createObjectDescriptors / createShadowDescriptors / updateObjectGeometryTextures
 // read as one line per binding instead of five.
 [[nodiscard]]
-vk::WriteDescriptorSet writeBuffer(vk::DescriptorSet set, uint32_t binding,
-                                   vk::DescriptorType type,
+vk::WriteDescriptorSet writeBuffer(vk::DescriptorSet set, uint32_t binding, vk::DescriptorType type,
                                    const vk::DescriptorBufferInfo& info) noexcept
 {
     return vk::WriteDescriptorSet{.dstSet = set,
@@ -34,8 +33,7 @@ vk::WriteDescriptorSet writeBuffer(vk::DescriptorSet set, uint32_t binding,
 }
 
 [[nodiscard]]
-vk::WriteDescriptorSet writeImage(vk::DescriptorSet set, uint32_t binding,
-                                  vk::DescriptorType type,
+vk::WriteDescriptorSet writeImage(vk::DescriptorSet set, uint32_t binding, vk::DescriptorType type,
                                   const vk::DescriptorImageInfo& info) noexcept
 {
     return vk::WriteDescriptorSet{.dstSet = set,
@@ -388,8 +386,7 @@ ShadowDescriptorResult Descriptors::createShadowDescriptors(const ShadowDescript
     for (uint32_t g = 0; g < numGeometries; ++g)
     {
         const auto& geo = req.geometries[g];
-        auto sets =
-            allocateDescriptorSets(*poolEntry.pool, shadowDescLayout_, kMaxFramesInFlight);
+        auto sets = allocateDescriptorSets(*poolEntry.pool, shadowDescLayout_, kMaxFramesInFlight);
 
         for (int i = 0; i < kMaxFramesInFlight; ++i)
         {

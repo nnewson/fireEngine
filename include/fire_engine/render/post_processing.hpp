@@ -53,7 +53,7 @@ private:
     std::vector<DescriptorSetHandle> bloomDownDescSets_{};
     std::vector<DescriptorSetHandle> bloomUpDescSets_{};
     std::array<DescriptorSetHandle, kMaxFramesInFlight> postProcessDescSets_{NullDescriptorSet,
-                                                                               NullDescriptorSet};
+                                                                             NullDescriptorSet};
     BufferHandle postProcessIndexBuffer_{NullBuffer};
 };
 

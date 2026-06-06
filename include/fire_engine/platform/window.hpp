@@ -46,6 +46,17 @@ public:
         framebufferResized_ = resized;
     }
 
+    // Scroll arrives asynchronously via a GLFW callback that reaches this Window
+    // through the window user pointer (set in the constructor). Polling code
+    // drains the accumulated delta each frame; returns 0 when nothing scrolled.
+    [[nodiscard]]
+    double consumeScrollDelta() noexcept
+    {
+        double delta = scrollDelta_;
+        scrollDelta_ = 0.0;
+        return delta;
+    }
+
     static void pollEvents();
     static void waitEvents();
 
@@ -61,6 +72,7 @@ public:
 private:
     GLFWwindow* window_ = nullptr;
     bool framebufferResized_ = false;
+    double scrollDelta_ = 0.0;
 };
 
 } // namespace fire_engine

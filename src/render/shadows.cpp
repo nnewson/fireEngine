@@ -106,8 +106,7 @@ Shadows::Shadows(const Device& device, Resources& resources)
                                    kSkinnedSelfShadowMapExtent, kMaxSkinnedSelfShadowCasters);
 
     // Spot casters share a 2D-array depth image, one layer per caster.
-    spotShadowMapHandle_ =
-        resources_->createShadowMap(kSpotShadowMapExtent, kMaxSpotShadowCasters);
+    spotShadowMapHandle_ = resources_->createShadowMap(kSpotShadowMapExtent, kMaxSpotShadowCasters);
     spotShadowColourHandle_ = resources_->createShadowColourAttachment(kSpotShadowMapExtent);
     std::vector<vk::ImageView> spotDepthViews;
     spotDepthViews.reserve(kMaxSpotShadowCasters);
@@ -167,8 +166,7 @@ void Shadows::recordPass(vk::CommandBuffer cmd, const std::vector<DrawCommand>& 
             const ShadowPushConstants& pc, const std::vector<DrawCommand>& draws,
             PipelineHandle pipelineHandle, float depthBiasConstant, float depthBiasSlope)
     {
-        vk::Viewport vp =
-            makeFullViewport(static_cast<float>(extent), static_cast<float>(extent));
+        vk::Viewport vp = makeFullViewport(static_cast<float>(extent), static_cast<float>(extent));
         vk::Rect2D scissor{
             .offset = vk::Offset2D{.x = 0, .y = 0},
             .extent = vk::Extent2D{.width = extent, .height = extent},
@@ -259,10 +257,10 @@ void Shadows::recordPass(vk::CommandBuffer cmd, const std::vector<DrawCommand>& 
             pc.lightPosRange[1] = pointCasters[p].worldPosition.y();
             pc.lightPosRange[2] = pointCasters[p].worldPosition.z();
             pc.lightPosRange[3] = pointCasters[p].range;
-            recordShadowIteration(pointShadowPass_.renderPass(),
-                                  pointShadowPass_.framebuffer(6 * p + face), kPointShadowMapExtent,
-                                  pc, shadowDraws, shadowPipelineHandle_,
-                                  kPunctualShadowRasterBiasConstant, kPunctualShadowRasterBiasSlope);
+            recordShadowIteration(
+                pointShadowPass_.renderPass(), pointShadowPass_.framebuffer(6 * p + face),
+                kPointShadowMapExtent, pc, shadowDraws, shadowPipelineHandle_,
+                kPunctualShadowRasterBiasConstant, kPunctualShadowRasterBiasSlope);
         }
     }
 }

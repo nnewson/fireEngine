@@ -29,14 +29,4 @@ void Mouse::poll(const Window& window)
     rightButton_ = glfwGetMouseButton(w, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
 }
 
-void Mouse::registerScrollCallback(const Window& window)
-{
-    glfwSetScrollCallback(window.handle(), scrollCallback);
-}
-
-void Mouse::scrollCallback(GLFWwindow* /*window*/, double /*xoffset*/, double yoffset)
-{
-    scrollAccumulator_ += yoffset;
-}
-
 } // namespace fire_engine

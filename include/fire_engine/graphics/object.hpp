@@ -73,9 +73,9 @@ private:
         std::array<MappedMemory, kMaxFramesInFlight> morphUboMapped{};
         std::array<MappedMemory, kMaxFramesInFlight> shadowMapped{};
         std::array<DescriptorSetHandle, kMaxFramesInFlight> descSets{NullDescriptorSet,
-                                                                       NullDescriptorSet};
+                                                                     NullDescriptorSet};
         std::array<DescriptorSetHandle, kMaxFramesInFlight> shadowDescSets{NullDescriptorSet,
-                                                                             NullDescriptorSet};
+                                                                           NullDescriptorSet};
     };
 
     static void applyMaterialTextures(GeometryDescriptorInfo& geoInfo, const Material& mat,

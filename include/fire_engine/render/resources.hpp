@@ -169,8 +169,7 @@ public:
         lightBuffers_ = bufs;
     }
 
-    [[nodiscard]] const std::array<BufferHandle, kMaxFramesInFlight>&
-    lightBuffers() const noexcept
+    [[nodiscard]] const std::array<BufferHandle, kMaxFramesInFlight>& lightBuffers() const noexcept
     {
         return lightBuffers_;
     }

@@ -22,6 +22,12 @@ Window::Window(size_t width, size_t height, std::string_view title)
                                            static_cast<Window*>(glfwGetWindowUserPointer(w));
                                        self->framebufferResized_ = true;
                                    });
+    glfwSetScrollCallback(window_,
+                          [](GLFWwindow* w, double, double yoffset)
+                          {
+                              auto* self = static_cast<Window*>(glfwGetWindowUserPointer(w));
+                              self->scrollDelta_ += yoffset;
+                          });
 }
 
 Window::~Window()

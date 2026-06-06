@@ -65,8 +65,7 @@ Transmission::Transmission(const Device& device, const Swapchain& swapchain, Res
     rebuildSceneColorChain();
 }
 
-void Transmission::recordPass(vk::CommandBuffer cmd,
-                              std::span<const DrawCommand> transmissiveDraws,
+void Transmission::recordPass(vk::CommandBuffer cmd, std::span<const DrawCommand> transmissiveDraws,
                               vk::DescriptorSet globalSet) const
 {
     if (transmissiveDraws.empty())
@@ -260,9 +259,9 @@ void Transmission::recordSceneColorCapture(vk::CommandBuffer cmd) const
                         vk::PipelineStageFlagBits::eColorAttachmentOutput, {}, {}, {}, hdrBack);
 }
 
-void Transmission::recordForwardTransmissionPass(
-    vk::CommandBuffer cmd, std::span<const DrawCommand> transmissiveDraws,
-    vk::DescriptorSet globalSet) const
+void Transmission::recordForwardTransmissionPass(vk::CommandBuffer cmd,
+                                                 std::span<const DrawCommand> transmissiveDraws,
+                                                 vk::DescriptorSet globalSet) const
 {
     auto extent = swapchain_->extent();
     vk::Rect2D renderArea{

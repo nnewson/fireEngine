@@ -39,7 +39,6 @@ void FireEngine::run(size_t width, size_t height, std::string_view app_name,
                      RendererDebug debug)
 {
     window_ = std::make_unique<Window>(width, height, app_name);
-    input_.enable(*window_);
 
     renderer_ = std::make_unique<Renderer>(*window_, std::string(skybox_path), debug);
 

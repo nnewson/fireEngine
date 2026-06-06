@@ -1,7 +1,5 @@
 #pragma once
 
-struct GLFWwindow;
-
 namespace fire_engine
 {
 
@@ -19,15 +17,6 @@ public:
     Mouse& operator=(Mouse&&) noexcept = default;
 
     void poll(const Window& window);
-
-    void registerScrollCallback(const Window& window);
-
-    [[nodiscard]] double consumeScrollDelta() noexcept
-    {
-        double delta = scrollAccumulator_;
-        scrollAccumulator_ = 0.0;
-        return delta;
-    }
 
     [[nodiscard]] double x() const noexcept
     {
@@ -55,10 +44,6 @@ public:
     }
 
 private:
-    static void scrollCallback(GLFWwindow* window, double xoffset, double yoffset);
-
-    static inline double scrollAccumulator_{0.0};
-
     double lastX_{0.0};
     double lastY_{0.0};
     double deltaX_{0.0};

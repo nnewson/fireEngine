@@ -10,9 +10,9 @@
 #include <fire_engine/graphics/image.hpp>
 #include <fire_engine/math/constants.hpp>
 #include <fire_engine/math/view_basis.hpp>
+#include <fire_engine/render/cubemap_basis.hpp>
 #include <fire_engine/render/environment_precompute.hpp>
 #include <fire_engine/render/render_context.hpp>
-#include <fire_engine/render/cubemap_basis.hpp>
 #include <fire_engine/render/swapchain.hpp>
 #include <fire_engine/render/ubo.hpp>
 #include <fire_engine/render/viewport.hpp>
@@ -346,9 +346,9 @@ void Renderer::assignPointShadow(LightUBO& out, int packedSlot, const Lighting& 
     const Mat4 proj = Mat4::perspective(0.5f * pi, 1.0f, kPointShadowNearPlane, far);
     for (std::size_t face = 0; face < kCubemapFaceCount; ++face)
     {
-        const Mat4 view = Mat4::lookAt(light.worldPosition,
-                                       light.worldPosition + kCubemapFaceForward[face],
-                                       kCubemapFaceUp[face]);
+        const Mat4 view =
+            Mat4::lookAt(light.worldPosition, light.worldPosition + kCubemapFaceForward[face],
+                         kCubemapFaceUp[face]);
         shadowViewProjs_[kShadowPointMatrixBase + kCubemapFaceCount * shadowIndex + face] =
             proj * view;
     }

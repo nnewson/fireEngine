@@ -1,9 +1,35 @@
 #pragma once
 
+#include <array>
+#include <cstddef>
+
 namespace fire_engine
 {
 
 class Window;
+
+// Logical keys the engine polls each frame. Order is the single source of truth
+// for the pressed-state array and the GLFW keycode table in keyboard.cpp — keep
+// the two in lockstep. `Count` must stay last so it sizes the array.
+enum class Key : std::size_t
+{
+    Escape,
+    W,
+    S,
+    A,
+    D,
+    E,
+    F,
+    V,
+    One,
+    Two,
+    Three,
+    LeftShift,
+    RightShift,
+    Left,
+    Right,
+    Count,
+};
 
 class Keyboard
 {
@@ -18,79 +44,19 @@ public:
 
     void poll(const Window& window);
 
-    [[nodiscard]] bool escape() const noexcept
+    [[nodiscard]] bool pressed(Key key) const noexcept
     {
-        return escape_;
+        return pressed_[static_cast<std::size_t>(key)];
     }
-    [[nodiscard]] bool w() const noexcept
-    {
-        return w_;
-    }
-    [[nodiscard]] bool s() const noexcept
-    {
-        return s_;
-    }
-    [[nodiscard]] bool a() const noexcept
-    {
-        return a_;
-    }
-    [[nodiscard]] bool d() const noexcept
-    {
-        return d_;
-    }
-    [[nodiscard]] bool e() const noexcept
-    {
-        return e_;
-    }
-    [[nodiscard]] bool f() const noexcept
-    {
-        return f_;
-    }
-    [[nodiscard]] bool v() const noexcept
-    {
-        return v_;
-    }
-    [[nodiscard]] bool one() const noexcept
-    {
-        return one_;
-    }
-    [[nodiscard]] bool two() const noexcept
-    {
-        return two_;
-    }
-    [[nodiscard]] bool three() const noexcept
-    {
-        return three_;
-    }
+
+    // Either shift counts as "shift held" for modifier checks.
     [[nodiscard]] bool shift() const noexcept
     {
-        return leftShift_ || rightShift_;
-    }
-    [[nodiscard]] bool left() const noexcept
-    {
-        return left_;
-    }
-    [[nodiscard]] bool right() const noexcept
-    {
-        return right_;
+        return pressed(Key::LeftShift) || pressed(Key::RightShift);
     }
 
 private:
-    bool escape_{false};
-    bool w_{false};
-    bool s_{false};
-    bool a_{false};
-    bool d_{false};
-    bool e_{false};
-    bool f_{false};
-    bool v_{false};
-    bool one_{false};
-    bool two_{false};
-    bool three_{false};
-    bool leftShift_{false};
-    bool rightShift_{false};
-    bool left_{false};
-    bool right_{false};
+    std::array<bool, static_cast<std::size_t>(Key::Count)> pressed_{};
 };
 
 } // namespace fire_engine

@@ -116,9 +116,8 @@ public:
     // Transmission::recreate (and any future shadow-map recreations) so the
     // existing sets stop dangling against destroyed samplers/views. Pool /
     // set allocation is untouched.
-    void
-    updateGlobalDescriptors(const std::array<DescriptorSetHandle, kMaxFramesInFlight>& sets,
-                            const GlobalDescriptorRequest& req);
+    void updateGlobalDescriptors(const std::array<DescriptorSetHandle, kMaxFramesInFlight>& sets,
+                                 const GlobalDescriptorRequest& req);
 
     void shadowDescriptorSetLayout(vk::DescriptorSetLayout layout) noexcept
     {

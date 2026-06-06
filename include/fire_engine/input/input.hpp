@@ -19,9 +19,8 @@ public:
     Input(Input&&) noexcept = default;
     Input& operator=(Input&&) noexcept = default;
 
-    [[nodiscard]] InputState update(const Window& window, float deltaTime);
-
-    void enable(const Window& window);
+    // Non-const: draining the window's accumulated scroll delta mutates it.
+    [[nodiscard]] InputState update(Window& window, float deltaTime);
 
 private:
     Keyboard keyboard_;

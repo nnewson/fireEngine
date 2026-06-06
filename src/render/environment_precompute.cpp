@@ -433,8 +433,8 @@ void EnvironmentPrecompute::createPrefilteredEnvironment()
         sampler.wrapT = WrapMode::ClampToEdge;
 
         prefilteredCubemapHandle_ = resources_->createRenderTargetCubemap(
-            kPrefilteredCubemapExtent, kPrefilteredCubemapMipLevels, vk::Format::eR32G32B32A32Sfloat,
-            sampler);
+            kPrefilteredCubemapExtent, kPrefilteredCubemapMipLevels,
+            vk::Format::eR32G32B32A32Sfloat, sampler);
 
         RenderPass prefilterPassTemplate = RenderPass::createOffscreenColour(
             *device_, resources_->textureFormat(prefilteredCubemapHandle_));
