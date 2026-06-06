@@ -3,7 +3,6 @@
 #include <cstring>
 #include <memory>
 #include <print>
-#include <variant>
 
 #include <fire_engine/fire_engine.hpp>
 
@@ -101,7 +100,7 @@ void FireEngine::loadScene(std::string_view scene_path)
 
     if (activeCamera != nullptr)
     {
-        camera_ = std::get_if<Camera>(&activeCamera->component());
+        camera_ = activeCamera->componentAs<Camera>();
     }
 
     if (camera_ == nullptr)

@@ -1,8 +1,10 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <deque>
 #include <optional>
+#include <unordered_map>
 #include <vector>
 
 #include <fire_engine/collision/narrow_phase.hpp>
@@ -118,6 +120,13 @@ private:
     PhysicsColliderHandle nextColliderHandle_{PhysicsColliderHandle{1U}};
     std::vector<BodyEntry> bodies_;
     std::deque<ColliderEntry> colliders_;
+    // Side-tables for O(1) lookup into the entry containers, keyed by handle
+    // value and (for the broadphase's pair pointers) by Collider address.
+    // Entries are tombstoned, never erased before clear(), so the stored indices
+    // stay valid for the container's lifetime; find* still checks `active`.
+    std::unordered_map<std::uint32_t, std::size_t> bodyIndexByHandle_;
+    std::unordered_map<std::uint32_t, std::size_t> colliderIndexByHandle_;
+    std::unordered_map<const Collider*, std::size_t> colliderIndexByPointer_;
     SweepAndPruneBroadPhase broadPhase_;
     NarrowPhase narrowPhase_;
     Vec3 gravity_{0.0f, -9.81f, 0.0f};

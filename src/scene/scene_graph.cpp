@@ -1,5 +1,3 @@
-#include <variant>
-
 #include <fire_engine/scene/light.hpp>
 #include <fire_engine/scene/scene_graph.hpp>
 
@@ -10,7 +8,7 @@ namespace
 {
 void gatherLightsRecursive(const Node& node, std::vector<Lighting>& out)
 {
-    if (auto* light = std::get_if<Light>(&node.component()))
+    if (const auto* light = node.componentAs<Light>())
     {
         out.push_back(Light::toLighting(*light, node.composedWorld()));
     }
@@ -22,7 +20,7 @@ void gatherLightsRecursive(const Node& node, std::vector<Lighting>& out)
 
 bool hasDirectionalLightRecursive(const Node& node)
 {
-    if (auto* light = std::get_if<Light>(&node.component()))
+    if (const auto* light = node.componentAs<Light>())
     {
         if (light->type() == Light::Type::Directional)
         {

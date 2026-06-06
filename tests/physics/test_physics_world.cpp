@@ -10,6 +10,7 @@ using fire_engine::Node;
 using fire_engine::PhysicsBodyDesc;
 using fire_engine::PhysicsBodyHandle;
 using fire_engine::PhysicsBodyType;
+using fire_engine::PhysicsColliderHandle;
 using fire_engine::PhysicsWorld;
 using fire_engine::SceneGraph;
 using fire_engine::Vec3;
@@ -49,6 +50,54 @@ TEST(PhysicsWorld, CreatesBodiesAndCollidersWithStableHandles)
     EXPECT_EQ(physics.bodyCount(), 1U);
     EXPECT_EQ(physics.colliderCount(), 1U);
     EXPECT_TRUE(physics.validateBroadPhase());
+}
+
+TEST(PhysicsWorld, DestroyBodyTombstonesBodyAndItsColliders)
+{
+    PhysicsWorld physics;
+
+    PhysicsBodyDesc desc;
+    desc.type = PhysicsBodyType::Static;
+    const auto first = physics.createBody(desc);
+    const auto firstCollider = physics.createCollider(first, unitCollider());
+
+    desc.position = Vec3{5.0f, 0.0f, 0.0f};
+    const auto second = physics.createBody(desc);
+    const auto secondCollider = physics.createCollider(second, unitCollider());
+
+    ASSERT_TRUE(physics.valid(first));
+    ASSERT_TRUE(physics.valid(firstCollider));
+    EXPECT_EQ(physics.bodyCount(), 2U);
+    EXPECT_EQ(physics.colliderCount(), 2U);
+
+    EXPECT_TRUE(physics.destroyBody(first));
+
+    // The first body and its collider are gone; the second entry is untouched
+    // even though both share the same backing containers and side-tables.
+    EXPECT_FALSE(physics.valid(first));
+    EXPECT_FALSE(physics.valid(firstCollider));
+    EXPECT_TRUE(physics.valid(second));
+    EXPECT_TRUE(physics.valid(secondCollider));
+    EXPECT_EQ(physics.bodyCount(), 1U);
+    EXPECT_EQ(physics.colliderCount(), 1U);
+    EXPECT_TRUE(physics.validateBroadPhase());
+
+    // A fresh body created after a destroy still resolves through the
+    // side-tables and gets a distinct handle.
+    const auto third = physics.createBody(desc);
+    EXPECT_TRUE(physics.valid(third));
+    EXPECT_NE(third, first);
+    EXPECT_EQ(physics.bodyCount(), 2U);
+}
+
+TEST(PhysicsWorld, DestroyBodyRejectsUnknownAndAlreadyDestroyedHandles)
+{
+    PhysicsWorld physics;
+    EXPECT_FALSE(physics.destroyBody(PhysicsBodyHandle{}));
+
+    const auto body = createBox(physics, PhysicsBodyType::Static, {});
+    EXPECT_TRUE(physics.destroyBody(body));
+    EXPECT_FALSE(physics.destroyBody(body)); // already tombstoned
 }
 
 TEST(PhysicsWorld, DynamicBodyIntegratesVelocityOnStep)

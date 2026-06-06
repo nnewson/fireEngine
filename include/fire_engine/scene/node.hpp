@@ -3,6 +3,8 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
+#include <variant>
 #include <vector>
 
 #include <fire_engine/input/input_state.hpp>
@@ -53,6 +55,32 @@ public:
     [[nodiscard]] const Components& component() const noexcept
     {
         return component_;
+    }
+
+    // Typed access to the component variant. Returns nullptr when the active
+    // alternative is not T — so `if (auto* m = node.componentAs<Mesh>())` reads
+    // the intent without spelling out std::get_if at every call site.
+    template <typename T>
+    [[nodiscard]] T* componentAs() noexcept
+    {
+        return std::get_if<T>(&component_);
+    }
+    template <typename T>
+    [[nodiscard]] const T* componentAs() const noexcept
+    {
+        return std::get_if<T>(&component_);
+    }
+
+    // Dispatch a visitor over whichever component is active.
+    template <typename Visitor>
+    decltype(auto) visitComponent(Visitor&& visitor)
+    {
+        return std::visit(std::forward<Visitor>(visitor), component_);
+    }
+    template <typename Visitor>
+    decltype(auto) visitComponent(Visitor&& visitor) const
+    {
+        return std::visit(std::forward<Visitor>(visitor), component_);
     }
 
     [[nodiscard]] bool hasControllable() const noexcept

@@ -27,6 +27,7 @@ PhysicsBodyHandle PhysicsWorld::createBody(const PhysicsBodyDesc& desc)
     transform.scale(desc.scale);
     transform.update(Mat4::identity());
 
+    bodyIndexByHandle_.emplace(handle.value(), bodies_.size());
     bodies_.push_back({handle, body, transform, desc.position, true, {}});
     return handle;
 }
@@ -49,8 +50,10 @@ PhysicsColliderHandle PhysicsWorld::createCollider(PhysicsBodyHandle bodyHandle,
     collider.collisionMask(desc.collisionMask);
     collider.resetFrame(owner->transform.world());
 
+    colliderIndexByHandle_.emplace(handle.value(), colliders_.size());
     colliders_.push_back(
         {handle, bodyHandle, std::move(collider), desc.shape, desc.material, true});
+    colliderIndexByPointer_.emplace(&colliders_.back().collider, colliders_.size() - 1);
     owner->colliders.push_back(handle);
     broadPhase_.addCollider(colliders_.back().collider);
     return handle;
@@ -84,6 +87,9 @@ void PhysicsWorld::clear()
     broadPhase_.clear();
     bodies_.clear();
     colliders_.clear();
+    bodyIndexByHandle_.clear();
+    colliderIndexByHandle_.clear();
+    colliderIndexByPointer_.clear();
     nextBodyHandle_ = PhysicsBodyHandle{1U};
     nextColliderHandle_ = PhysicsColliderHandle{1U};
 }
@@ -190,39 +196,58 @@ void PhysicsWorld::setBodyVelocity(PhysicsBodyHandle handle, Vec3 velocity) noex
 
 PhysicsWorld::BodyEntry* PhysicsWorld::findBody(PhysicsBodyHandle handle) noexcept
 {
-    const auto found = std::ranges::find_if(bodies_, [handle](const BodyEntry& entry)
-                                            { return entry.active && entry.handle == handle; });
-    return found == bodies_.end() ? nullptr : &*found;
+    const auto it = bodyIndexByHandle_.find(handle.value());
+    if (it == bodyIndexByHandle_.end())
+    {
+        return nullptr;
+    }
+    BodyEntry& entry = bodies_[it->second];
+    return entry.active ? &entry : nullptr;
 }
 
 const PhysicsWorld::BodyEntry* PhysicsWorld::findBody(PhysicsBodyHandle handle) const noexcept
 {
-    const auto found = std::ranges::find_if(bodies_, [handle](const BodyEntry& entry)
-                                            { return entry.active && entry.handle == handle; });
-    return found == bodies_.end() ? nullptr : &*found;
+    const auto it = bodyIndexByHandle_.find(handle.value());
+    if (it == bodyIndexByHandle_.end())
+    {
+        return nullptr;
+    }
+    const BodyEntry& entry = bodies_[it->second];
+    return entry.active ? &entry : nullptr;
 }
 
 PhysicsWorld::ColliderEntry* PhysicsWorld::findCollider(PhysicsColliderHandle handle) noexcept
 {
-    const auto found = std::ranges::find_if(colliders_, [handle](const ColliderEntry& entry)
-                                            { return entry.active && entry.handle == handle; });
-    return found == colliders_.end() ? nullptr : &*found;
+    const auto it = colliderIndexByHandle_.find(handle.value());
+    if (it == colliderIndexByHandle_.end())
+    {
+        return nullptr;
+    }
+    ColliderEntry& entry = colliders_[it->second];
+    return entry.active ? &entry : nullptr;
 }
 
 const PhysicsWorld::ColliderEntry*
 PhysicsWorld::findCollider(PhysicsColliderHandle handle) const noexcept
 {
-    const auto found = std::ranges::find_if(colliders_, [handle](const ColliderEntry& entry)
-                                            { return entry.active && entry.handle == handle; });
-    return found == colliders_.end() ? nullptr : &*found;
+    const auto it = colliderIndexByHandle_.find(handle.value());
+    if (it == colliderIndexByHandle_.end())
+    {
+        return nullptr;
+    }
+    const ColliderEntry& entry = colliders_[it->second];
+    return entry.active ? &entry : nullptr;
 }
 
 PhysicsWorld::ColliderEntry* PhysicsWorld::findCollider(const Collider* collider) noexcept
 {
-    const auto found =
-        std::ranges::find_if(colliders_, [collider](const ColliderEntry& entry)
-                             { return entry.active && &entry.collider == collider; });
-    return found == colliders_.end() ? nullptr : &*found;
+    const auto it = colliderIndexByPointer_.find(collider);
+    if (it == colliderIndexByPointer_.end())
+    {
+        return nullptr;
+    }
+    ColliderEntry& entry = colliders_[it->second];
+    return entry.active ? &entry : nullptr;
 }
 
 AABB PhysicsWorld::localBounds(const ColliderShape& shape) const noexcept
