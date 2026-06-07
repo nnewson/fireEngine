@@ -731,7 +731,15 @@ void main() {
         sampleUv = clamp(sampleUv, vec2(0.0), vec2(1.0));
 
         float maxLod = float(textureQueryLevels(sceneColorMap) - 1);
-        float lod = roughness * maxLod;
+        // KHR_materials_ior: the apparent blur of TRANSMITTED light grows with
+        // IOR (the interface distorts transmitted rays more) while the blur of
+        // REFLECTED light stays roughness-only. Scale the transmission lod by an
+        // interface strength derived from the IOR's dielectric F0, normalised so
+        // the glTF default IOR 1.5 (F0 = 0.04) reproduces the plain roughness
+        // blur. IOR 1.0 (F0 = 0) gives sharp transmission; higher IOR is
+        // progressively blurrier.
+        float interfaceStrength = sqrt(dielectricF0 / 0.04);
+        float lod = roughness * interfaceStrength * maxLod;
         vec3 sceneSample = textureLod(sceneColorMap, sampleUv, lod).rgb;
 
         // Thin-walled vs volumetric transmission, keyed on KHR_materials_volume
