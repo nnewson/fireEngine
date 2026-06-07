@@ -52,9 +52,4 @@ void Camera::update(const InputState& input_state, const Transform& transform)
     worldPitch_ = clampPitch(std::asin(std::clamp(worldForward.y(), -1.0f, 1.0f)));
 }
 
-Mat4 Camera::render(const RenderContext& /*ctx*/, const Mat4& world)
-{
-    return world;
-}
-
 } // namespace fire_engine

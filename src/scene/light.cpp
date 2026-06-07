@@ -1,7 +1,6 @@
 #include <cmath>
 
 #include <fire_engine/input/input_state.hpp>
-#include <fire_engine/render/render_context.hpp>
 #include <fire_engine/scene/light.hpp>
 #include <fire_engine/scene/transform.hpp>
 
@@ -37,13 +36,6 @@ Lighting Light::toLighting(const Light& light, const Mat4& world) noexcept
 
 void Light::update(const InputState& /*input_state*/, const Transform& /*transform*/)
 {
-}
-
-Mat4 Light::render(const RenderContext& /*ctx*/, const Mat4& world)
-{
-    // Lights are gathered before scene.render via SceneGraph::gatherLights —
-    // the render-pass walk is a no-op for Light components.
-    return world;
 }
 
 } // namespace fire_engine

@@ -10,8 +10,6 @@
 namespace fire_engine
 {
 
-struct RenderContext;
-
 class Light
 {
 public:
@@ -37,9 +35,6 @@ public:
     Light& operator=(Light&&) noexcept = default;
 
     void update(const InputState& input_state, const Transform& transform);
-
-    [[nodiscard]]
-    Mat4 render(const RenderContext& ctx, const Mat4& world);
 
     [[nodiscard]]
     Type type() const noexcept

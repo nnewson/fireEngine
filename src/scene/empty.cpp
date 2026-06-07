@@ -10,9 +10,4 @@ void Empty::update(const InputState& /*input_state*/, const Transform& /*transfo
 {
 }
 
-Mat4 Empty::render(const RenderContext& /*ctx*/, const Mat4& world)
-{
-    return world;
-}
-
 } // namespace fire_engine

@@ -55,8 +55,22 @@ void Node::resolve(const Mat4& parentComposedWorld)
 void Node::render(const RenderContext& ctx, const Mat4& parentWorld)
 {
     Mat4 world = parentWorld * transform_.local();
-    Mat4 childWorld = visitComponent([&ctx, &world](auto& component) -> Mat4
-                                     { return component.render(ctx, world); });
+    // Components that contribute to rendering (Animator, Mesh) define
+    // render(ctx, world); the rest (Empty, Camera, Light) are no-ops that just
+    // pass the world matrix down, handled here instead of each defining a
+    // trivial render().
+    Mat4 childWorld = visitComponent(
+        [&ctx, &world](auto& component) -> Mat4
+        {
+            if constexpr (requires { component.render(ctx, world); })
+            {
+                return component.render(ctx, world);
+            }
+            else
+            {
+                return world;
+            }
+        });
 
     for (auto& child : children_)
     {
