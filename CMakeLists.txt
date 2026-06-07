@@ -23,6 +23,9 @@ add_library(fireengine SHARED
     src/collision/sweep_and_prune_broad_phase.cpp
     src/collision/narrow_phase.cpp
     src/core/gltf_loader.cpp
+    src/core/gltf_loader_assets.cpp
+    src/core/gltf_loader_mesh.cpp
+    src/core/gltf_loader_animation.cpp
     src/core/shader_loader.cpp
     src/core/system.cpp
     src/core/tangent_generator.cpp

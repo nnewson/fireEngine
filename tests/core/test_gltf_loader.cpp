@@ -24,15 +24,15 @@
 #include <gtest/gtest.h>
 
 using fire_engine::AlphaMode;
-using fire_engine::GltfLoader;
 using fire_engine::ClearcoatParams;
+using fire_engine::GltfLoader;
 using fire_engine::Mat4;
 using fire_engine::Material;
 using fire_engine::MaterialTextureSlot;
-using fire_engine::TransmissionParams;
 using fire_engine::Node;
 using fire_engine::PhysicsBodyType;
 using fire_engine::SphereShape;
+using fire_engine::TransmissionParams;
 using fire_engine::Vec3;
 
 // Mirrors the occlusion-strength translation performed inside
