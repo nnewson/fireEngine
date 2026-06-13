@@ -54,17 +54,11 @@ private:
     PipelineHandle selfShadowFirstPipelineHandle_{NullPipeline};
     PipelineHandle selfShadowSecondPipelineHandle_{NullPipeline};
     TextureHandle shadowMapHandle_{NullTexture};
-    TextureHandle shadowColourHandle_{NullTexture};
     TextureHandle worldShadowMapHandle_{NullTexture};
-    TextureHandle worldShadowColourHandle_{NullTexture};
     TextureHandle selfShadowFirstMapHandle_{NullTexture};
-    TextureHandle selfShadowFirstColourHandle_{NullTexture};
     TextureHandle selfShadowMapHandle_{NullTexture};
-    TextureHandle selfShadowColourHandle_{NullTexture};
     TextureHandle spotShadowMapHandle_{NullTexture};
-    TextureHandle spotShadowColourHandle_{NullTexture};
     TextureHandle pointShadowMapHandle_{NullTexture};
-    TextureHandle pointShadowColourHandle_{NullTexture};
 };
 
 } // namespace fire_engine

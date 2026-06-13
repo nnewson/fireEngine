@@ -840,57 +840,6 @@ vk::ImageView Resources::vulkanPointShadowFaceView(TextureHandle handle, uint32_
     return *entry.faceViews[6u * cubeIndex + face];
 }
 
-TextureHandle Resources::createShadowColourAttachment(uint32_t extent, uint32_t layerCount,
-                                                      bool sampled)
-{
-    TextureHandle handle;
-    TextureEntry& entry = appendTextureEntry(handle, vk::Format::eB8G8R8A8Unorm);
-
-    vk::ImageCreateInfo imgCi = makeImageCreateInfo(
-        {}, vk::ImageType::e2D, entry.format,
-        vk::Extent3D{.width = extent, .height = extent, .depth = 1}, 1, layerCount,
-        vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled);
-    allocateImage(entry, imgCi);
-
-    vk::ImageViewType mainViewType =
-        layerCount > 1 ? vk::ImageViewType::e2DArray : vk::ImageViewType::e2D;
-    vk::ImageViewCreateInfo viewCi = makeImageViewCreateInfo(
-        *entry.image, mainViewType, entry.format,
-        makeImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, 1, 0, layerCount));
-    entry.view = vk::raii::ImageView(device_->device(), viewCi);
-
-    if (layerCount > 1)
-    {
-        entry.faceViews.reserve(layerCount);
-        for (uint32_t layer = 0; layer < layerCount; ++layer)
-        {
-            vk::ImageViewCreateInfo layerCi = makeImageViewCreateInfo(
-                *entry.image, vk::ImageViewType::e2D, entry.format,
-                makeImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, 1, layer, 1));
-            entry.faceViews.emplace_back(device_->device(), layerCi);
-        }
-    }
-
-    if (sampled)
-    {
-        vk::SamplerCreateInfo samplerCi = makeSamplerCreateInfo(
-            vk::Filter::eNearest, vk::Filter::eNearest, vk::SamplerMipmapMode::eNearest,
-            vk::SamplerAddressMode::eClampToBorder, vk::SamplerAddressMode::eClampToBorder,
-            vk::SamplerAddressMode::eClampToBorder, vk::False, 1.0f, vk::False,
-            vk::CompareOp::eAlways, 0.0f, 1.0f, vk::BorderColor::eFloatOpaqueWhite);
-        entry.sampler = vk::raii::Sampler(device_->device(), samplerCi);
-    }
-
-    return handle;
-}
-
-vk::ImageView Resources::vulkanShadowColourLayerView(TextureHandle handle,
-                                                     uint32_t layer) const noexcept
-{
-    const auto& entry = textures_[static_cast<uint32_t>(handle)];
-    return *entry.faceViews[layer];
-}
-
 TextureHandle Resources::createOffscreenColourTarget(vk::Extent2D extent)
 {
     TextureHandle handle;

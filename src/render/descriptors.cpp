@@ -261,11 +261,6 @@ void Descriptors::writeGlobalBindings(vk::DescriptorSet set, const GlobalDescrip
         return makeDescriptorImageInfo({}, resources_->vulkanImageView(handle),
                                        vk::ImageLayout::eDepthStencilReadOnlyOptimal);
     };
-    auto sampledColourImage = [this](TextureHandle handle)
-    {
-        return makeDescriptorImageInfo({}, resources_->vulkanImageView(handle),
-                                       vk::ImageLayout::eShaderReadOnlyOptimal);
-    };
     auto combinedSampler = [this](TextureHandle handle)
     {
         return makeDescriptorImageInfo(resources_->vulkanSampler(handle),
@@ -280,7 +275,9 @@ void Descriptors::writeGlobalBindings(vk::DescriptorSet set, const GlobalDescrip
     const vk::DescriptorImageInfo selfShadowMapInfo = sampledImage(req.selfShadowMap);
     const vk::DescriptorImageInfo spotShadowMapInfo = sampledImage(req.spotShadowMap);
     const vk::DescriptorImageInfo pointShadowMapInfo = sampledImage(req.pointShadowMap);
-    const vk::DescriptorImageInfo shadowDebugImageInfo = sampledColourImage(req.shadowDebugImage);
+    // shadowDebugImage is now the CSM depth map (sampled raw for the ShadowDepth
+    // debug view), so it uses the depth-read-only layout like the other maps.
+    const vk::DescriptorImageInfo shadowDebugImageInfo = sampledImage(req.shadowDebugImage);
     const vk::DescriptorImageInfo shadowCompareSamplerInfo =
         plainSampler(resources_->vulkanSampler(req.shadowMap));
     const vk::DescriptorImageInfo shadowDebugSamplerInfo =

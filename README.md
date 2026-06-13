@@ -174,7 +174,7 @@ The transient pipelines are destroyed once the bake completes; only the resultin
 - MASK is implemented via a fragment-shader `discard` when `alpha < alphaCutoff`; OPAQUE/BLEND write `alphaCutoff = 0.0` so the discard is inert
 - Resources class owns all GPU resources and exposes opaque handles (pipeline registry, IBL cubemaps, BRDF LUT, shadow maps with a shared comparison sampler, **bloom chain**)
 - Each Object creates its own descriptor pool and sets via Resources
-- Depth buffering and swapchain recreation on window resize (HDR framebuffer, bloom chain, post-process descriptors all rebuilt at new extent)
+- Depth buffering and swapchain recreation on window resize (HDR offscreen target, bloom chain, post-process descriptors all rebuilt at new extent)
 
 ### Vertex Shader Pipeline
 

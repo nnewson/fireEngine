@@ -84,41 +84,29 @@ Shadows::Shadows(const Device& device, Resources& resources)
     selfShadowSecondPipelineHandle_ = resources_->registerPipeline(
         selfShadowSecondPipeline_.pipeline(), selfShadowSecondPipeline_.pipelineLayout());
 
-    // Dynamic rendering needs no framebuffers: recordPass binds the per-layer
-    // depth/colour views straight into vk::RenderingInfo. We retain only the
-    // texture handles; per-layer views are fetched from Resources at record
-    // time. Every shadow depth image is created already transitioned to
-    // DepthStencilReadOnlyOptimal across all layers (createShadowMap), which is
-    // the resting layout the forward sampler expects and the per-iteration
-    // barriers cycle through.
+    // Dynamic rendering needs no framebuffers: recordPass binds each per-layer
+    // depth view straight into vk::RenderingInfo (depth-only — no colour
+    // attachment). We retain only the texture handles; per-layer views are
+    // fetched from Resources at record time. Every shadow depth image is created
+    // already transitioned to DepthStencilReadOnlyOptimal across all layers
+    // (createShadowMap), the resting layout the forward sampler expects and the
+    // per-iteration barriers cycle through.
     shadowMapHandle_ = resources_->createShadowMap(kShadowMapExtent, kShadowCascadeCount);
-    shadowColourHandle_ =
-        resources_->createShadowColourAttachment(kShadowMapExtent, kShadowCascadeCount, true);
-
     worldShadowMapHandle_ = resources_->createShadowMap(kShadowMapExtent, kShadowCascadeCount);
-    worldShadowColourHandle_ =
-        resources_->createShadowColourAttachment(kShadowMapExtent, kShadowCascadeCount, false);
 
     selfShadowFirstMapHandle_ =
         resources_->createShadowMap(kSkinnedSelfShadowMapExtent, kMaxSkinnedSelfShadowCasters);
-    selfShadowFirstColourHandle_ = resources_->createShadowColourAttachment(
-        kSkinnedSelfShadowMapExtent, kMaxSkinnedSelfShadowCasters, false);
-
     selfShadowMapHandle_ =
         resources_->createShadowMap(kSkinnedSelfShadowMapExtent, kMaxSkinnedSelfShadowCasters);
-    selfShadowColourHandle_ = resources_->createShadowColourAttachment(
-        kSkinnedSelfShadowMapExtent, kMaxSkinnedSelfShadowCasters, false);
 
     // Spot casters share a 2D-array depth image, one layer per caster.
     spotShadowMapHandle_ = resources_->createShadowMap(kSpotShadowMapExtent, kMaxSpotShadowCasters);
-    spotShadowColourHandle_ = resources_->createShadowColourAttachment(kSpotShadowMapExtent);
 
     // Point casters: one cubemap-array depth image, six faces per caster. Layout
     // 6 * cube + face matches Resources::vulkanPointShadowFaceView and the
     // matrixIndex layout in ShadowUBO::lightViewProj.
     pointShadowMapHandle_ =
         resources_->createPointShadowMap(kPointShadowMapExtent, kMaxPointShadowCasters);
-    pointShadowColourHandle_ = resources_->createShadowColourAttachment(kPointShadowMapExtent);
 
     resources_->descriptors().shadowDescriptorSetLayout(shadowPipeline_.descriptorSetLayout());
     auto& shared = resources_->sharedTextures();
@@ -128,7 +116,9 @@ Shadows::Shadows(const Device& device, Resources& resources)
     shared.selfShadowMap = selfShadowMapHandle_;
     shared.spotShadowMap = spotShadowMapHandle_;
     shared.pointShadowMap = pointShadowMapHandle_;
-    shared.shadowDebugImage = shadowColourHandle_;
+    // Debug ShadowDepth view samples the CSM depth map directly (raw depth ==
+    // the gl_FragCoord.z the old throwaway colour attachment stored).
+    shared.shadowDebugImage = shadowMapHandle_;
 }
 
 void Shadows::recordPass(vk::CommandBuffer cmd, const std::vector<DrawCommand>& shadowDraws,
@@ -136,20 +126,17 @@ void Shadows::recordPass(vk::CommandBuffer cmd, const std::vector<DrawCommand>& 
                          const std::vector<DrawCommand>& selfShadowDraws, int activeSpotCasters,
                          std::span<const PointShadowCaster> pointCasters) const
 {
-    const vk::ClearValue colourClear{
-        .color = vk::ClearColorValue{.float32 = {{0.0f, 0.0f, 0.0f, 1.0f}}}};
     const vk::ClearValue depthClear{.depthStencil =
                                         vk::ClearDepthStencilValue{.depth = 1.0f, .stencil = 0}};
 
-    // Renders one shadow layer with dynamic rendering. depthLayer/colourLayer are
-    // the array-layer subresources the barriers target; the views are the
-    // matching single-layer attachment views. Depth rests in
-    // DepthStencilReadOnlyOptimal (forward-sampler layout) between frames, so we
-    // cycle it ReadOnly → Attachment → ReadOnly; the throwaway colour is
-    // discarded (loadOp DontCare) and left ShaderReadOnly for the debug viz.
+    // Renders one shadow layer with depth-only dynamic rendering. depthLayer is
+    // the array-layer subresource the barriers target; depthView is the matching
+    // single-layer attachment view. Depth rests in DepthStencilReadOnlyOptimal
+    // (the forward-sampler layout) between frames, so we cycle it
+    // ReadOnly → Attachment → ReadOnly. No colour attachment: current MoltenVK
+    // commits depth-only stores under dynamic rendering.
     auto recordShadowIteration =
-        [&](vk::Image depthImage, uint32_t depthLayer, vk::ImageView depthView,
-            vk::Image colourImage, uint32_t colourLayer, vk::ImageView colourView, uint32_t extent,
+        [&](vk::Image depthImage, uint32_t depthLayer, vk::ImageView depthView, uint32_t extent,
             const ShadowPushConstants& pc, const std::vector<DrawCommand>& draws,
             PipelineHandle pipelineHandle, float depthBiasConstant, float depthBiasSlope)
     {
@@ -166,19 +153,7 @@ void Shadows::recordPass(vk::CommandBuffer cmd, const std::vector<DrawCommand>& 
                           vk::AccessFlagBits2::eShaderRead,
                           vk::PipelineStageFlagBits2::eEarlyFragmentTests,
                           vk::AccessFlagBits2::eDepthStencilAttachmentWrite);
-        imageLayerBarrier(cmd, colourImage, vk::ImageAspectFlagBits::eColor, colourLayer,
-                          vk::ImageLayout::eUndefined, vk::ImageLayout::eColorAttachmentOptimal,
-                          vk::PipelineStageFlagBits2::eColorAttachmentOutput, {},
-                          vk::PipelineStageFlagBits2::eColorAttachmentOutput,
-                          vk::AccessFlagBits2::eColorAttachmentWrite);
 
-        vk::RenderingAttachmentInfo colour{
-            .imageView = colourView,
-            .imageLayout = vk::ImageLayout::eColorAttachmentOptimal,
-            .loadOp = vk::AttachmentLoadOp::eDontCare,
-            .storeOp = vk::AttachmentStoreOp::eStore,
-            .clearValue = colourClear,
-        };
         vk::RenderingAttachmentInfo depth{
             .imageView = depthView,
             .imageLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal,
@@ -186,7 +161,7 @@ void Shadows::recordPass(vk::CommandBuffer cmd, const std::vector<DrawCommand>& 
             .storeOp = vk::AttachmentStoreOp::eStore,
             .clearValue = depthClear,
         };
-        cmd.beginRendering(makeRenderingInfo(scissor, {&colour, 1}, &depth));
+        cmd.beginRendering(makeRenderingInfo(scissor, {}, &depth));
         cmd.setViewport(0, vp);
         cmd.setScissor(0, scissor);
         cmd.setDepthBias(depthBiasConstant, 0.0f, depthBiasSlope);
@@ -205,51 +180,29 @@ void Shadows::recordPass(vk::CommandBuffer cmd, const std::vector<DrawCommand>& 
                           vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
                           vk::PipelineStageFlagBits2::eFragmentShader,
                           vk::AccessFlagBits2::eShaderRead);
-        imageLayerBarrier(
-            cmd, colourImage, vk::ImageAspectFlagBits::eColor, colourLayer,
-            vk::ImageLayout::eColorAttachmentOptimal, vk::ImageLayout::eShaderReadOnlyOptimal,
-            vk::PipelineStageFlagBits2::eColorAttachmentOutput,
-            vk::AccessFlagBits2::eColorAttachmentWrite, vk::PipelineStageFlagBits2::eFragmentShader,
-            vk::AccessFlagBits2::eShaderRead);
     };
 
-    // Layered maps (CSM/world/self): per-layer depth and colour attachment views.
+    // Layered maps (CSM/world/self): per-layer depth attachment view.
     auto layeredIteration =
-        [&](TextureHandle depthHandle, TextureHandle colourHandle, uint32_t layer, uint32_t extent,
+        [&](TextureHandle depthHandle, uint32_t layer, uint32_t extent,
             const ShadowPushConstants& pc, const std::vector<DrawCommand>& draws,
             PipelineHandle pipelineHandle, float depthBiasConstant, float depthBiasSlope)
     {
         recordShadowIteration(resources_->vulkanImage(depthHandle), layer,
-                              resources_->vulkanShadowMapLayerView(depthHandle, layer),
-                              resources_->vulkanImage(colourHandle), layer,
-                              resources_->vulkanShadowColourLayerView(colourHandle, layer), extent,
-                              pc, draws, pipelineHandle, depthBiasConstant, depthBiasSlope);
-    };
-
-    // Spot/point maps: per-layer/face depth view, single shared colour image
-    // (layer 0) reused across iterations.
-    auto sharedColourIteration =
-        [&](TextureHandle depthHandle, uint32_t depthLayer, vk::ImageView depthView,
-            TextureHandle colourHandle, uint32_t extent, const ShadowPushConstants& pc,
-            const std::vector<DrawCommand>& draws, PipelineHandle pipelineHandle,
-            float depthBiasConstant, float depthBiasSlope)
-    {
-        recordShadowIteration(resources_->vulkanImage(depthHandle), depthLayer, depthView,
-                              resources_->vulkanImage(colourHandle), 0,
-                              resources_->vulkanImageView(colourHandle), extent, pc, draws,
-                              pipelineHandle, depthBiasConstant, depthBiasSlope);
+                              resources_->vulkanShadowMapLayerView(depthHandle, layer), extent, pc,
+                              draws, pipelineHandle, depthBiasConstant, depthBiasSlope);
     };
 
     for (uint32_t cascade = 0; cascade < kShadowCascadeCount; ++cascade)
     {
         ShadowPushConstants pc{};
         pc.matrixIndex = kShadowCascadeMatrixBase + static_cast<int>(cascade);
-        layeredIteration(shadowMapHandle_, shadowColourHandle_, cascade, kShadowMapExtent, pc,
-                         shadowDraws, shadowPipelineHandle_, kDirectionalShadowRasterBiasConstant,
+        layeredIteration(shadowMapHandle_, cascade, kShadowMapExtent, pc, shadowDraws,
+                         shadowPipelineHandle_, kDirectionalShadowRasterBiasConstant,
                          kDirectionalShadowRasterBiasSlope);
-        layeredIteration(worldShadowMapHandle_, worldShadowColourHandle_, cascade, kShadowMapExtent,
-                         pc, worldOnlyShadowDraws, shadowPipelineHandle_,
-                         kDirectionalShadowRasterBiasConstant, kDirectionalShadowRasterBiasSlope);
+        layeredIteration(worldShadowMapHandle_, cascade, kShadowMapExtent, pc, worldOnlyShadowDraws,
+                         shadowPipelineHandle_, kDirectionalShadowRasterBiasConstant,
+                         kDirectionalShadowRasterBiasSlope);
     }
 
     std::array<std::vector<DrawCommand>, kMaxSkinnedSelfShadowCasters> selfShadowSlotDraws;
@@ -272,10 +225,10 @@ void Shadows::recordPass(vk::CommandBuffer cmd, const std::vector<DrawCommand>& 
         {
             pc.lightViewProj = slotDraws.front().selfShadowViewProj;
         }
-        layeredIteration(selfShadowFirstMapHandle_, selfShadowFirstColourHandle_,
-                         static_cast<uint32_t>(slot), kSkinnedSelfShadowMapExtent, pc, slotDraws,
-                         selfShadowFirstPipelineHandle_, 0.0f, 0.0f);
-        layeredIteration(selfShadowMapHandle_, selfShadowColourHandle_, static_cast<uint32_t>(slot),
+        layeredIteration(selfShadowFirstMapHandle_, static_cast<uint32_t>(slot),
+                         kSkinnedSelfShadowMapExtent, pc, slotDraws, selfShadowFirstPipelineHandle_,
+                         0.0f, 0.0f);
+        layeredIteration(selfShadowMapHandle_, static_cast<uint32_t>(slot),
                          kSkinnedSelfShadowMapExtent, pc, slotDraws,
                          selfShadowSecondPipelineHandle_, 0.0f, 0.0f);
     }
@@ -284,10 +237,10 @@ void Shadows::recordPass(vk::CommandBuffer cmd, const std::vector<DrawCommand>& 
     {
         ShadowPushConstants pc{};
         pc.matrixIndex = kShadowSpotMatrixBase + s;
-        sharedColourIteration(
-            spotShadowMapHandle_, static_cast<uint32_t>(s),
+        recordShadowIteration(
+            resources_->vulkanImage(spotShadowMapHandle_), static_cast<uint32_t>(s),
             resources_->vulkanShadowMapLayerView(spotShadowMapHandle_, static_cast<uint32_t>(s)),
-            spotShadowColourHandle_, kSpotShadowMapExtent, pc, shadowDraws, shadowPipelineHandle_,
+            kSpotShadowMapExtent, pc, shadowDraws, shadowPipelineHandle_,
             kPunctualShadowRasterBiasConstant, kPunctualShadowRasterBiasSlope);
     }
 
@@ -303,12 +256,12 @@ void Shadows::recordPass(vk::CommandBuffer cmd, const std::vector<DrawCommand>& 
             pc.lightPosRange[1] = pointCasters[p].worldPosition.y();
             pc.lightPosRange[2] = pointCasters[p].worldPosition.z();
             pc.lightPosRange[3] = pointCasters[p].range;
-            sharedColourIteration(pointShadowMapHandle_, static_cast<uint32_t>(6 * p + face),
-                                  resources_->vulkanPointShadowFaceView(
-                                      pointShadowMapHandle_, static_cast<uint32_t>(p), face),
-                                  pointShadowColourHandle_, kPointShadowMapExtent, pc, shadowDraws,
-                                  shadowPipelineHandle_, kPunctualShadowRasterBiasConstant,
-                                  kPunctualShadowRasterBiasSlope);
+            recordShadowIteration(
+                resources_->vulkanImage(pointShadowMapHandle_), static_cast<uint32_t>(6 * p + face),
+                resources_->vulkanPointShadowFaceView(pointShadowMapHandle_,
+                                                      static_cast<uint32_t>(p), face),
+                kPointShadowMapExtent, pc, shadowDraws, shadowPipelineHandle_,
+                kPunctualShadowRasterBiasConstant, kPunctualShadowRasterBiasSlope);
         }
     }
 }

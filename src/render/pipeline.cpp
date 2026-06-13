@@ -152,10 +152,10 @@ PipelineConfig Pipeline::shadowConfig()
     config.pushConstantRanges.emplace_back(vk::ShaderStageFlagBits::eVertex |
                                                vk::ShaderStageFlagBits::eFragment,
                                            0, static_cast<uint32_t>(sizeof(ShadowPushConstants)));
-    // Depth-only shadow pass keeps a throwaway B8G8R8A8 colour attachment (a
-    // MoltenVK TBDR quirk: depth-only render targets don't reliably commit
-    // their store) plus the sampled D32 depth.
-    config.colourFormats = {vk::Format::eB8G8R8A8Unorm};
+    // Depth-only shadow pass: a single sampled D32 depth attachment, no colour.
+    // (Historically a throwaway B8G8R8A8 colour attachment was attached to work
+    // around a MoltenVK TBDR depth-store quirk; dynamic rendering on current
+    // MoltenVK commits depth-only stores, so the colour target is dropped.)
     config.depthFormat = vk::Format::eD32Sfloat;
     config.depthWrite = true;
     config.depthCompare = vk::CompareOp::eLessOrEqual;
@@ -468,10 +468,13 @@ void Pipeline::createGraphicsPipeline(const PipelineConfig& config)
         .colorWriteMask = writeMask,
     };
 
+    // Depth-only pipelines (no colour formats, e.g. shadow passes) carry no
+    // blend attachment — the count must match colorAttachmentCount = 0.
+    const bool hasColour = !config.colourFormats.empty();
     vk::PipelineColorBlendStateCreateInfo colourBlend{
         .logicOpEnable = false,
-        .attachmentCount = 1,
-        .pAttachments = &colourBlendAtt,
+        .attachmentCount = hasColour ? 1u : 0u,
+        .pAttachments = hasColour ? &colourBlendAtt : nullptr,
     };
 
     createPipelineLayout(config);

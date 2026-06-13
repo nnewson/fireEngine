@@ -14,9 +14,11 @@ layout(push_constant) uniform ShadowPushConstants {
 } pc;
 
 layout(location = 0) in vec3 worldPos;
-layout(location = 0) out vec4 outColor;
 
 void main() {
+    // Depth-only pass: no colour output. The discards reject same-surface
+    // fragments (dual-depth self-shadow rejection); surviving fragments keep the
+    // fixed-function depth.
     if (pc.selfShadowSlot < 0 || pc.selfShadowSlot >= 4) {
         discard;
     }
@@ -29,6 +31,4 @@ void main() {
     if (currentDepth <= firstDepth + pc.selfShadowDepthEpsilon) {
         discard;
     }
-
-    outColor = vec4(currentDepth, currentDepth, currentDepth, 1.0);
 }

@@ -112,17 +112,6 @@ public:
     [[nodiscard]] vk::ImageView vulkanPointShadowFaceView(TextureHandle handle, uint32_t cubeIndex,
                                                           uint32_t face) const noexcept;
 
-    // MoltenVK workaround: depth-only render passes fail to store on Metal
-    // TBDR. Creates a B8G8R8A8 colour attachment so the shadow pass becomes a
-    // real (colour + depth) render pass. The shadow render pass transitions
-    // the colour attachment to ShaderReadOnly, so the image always carries
-    // Sampled usage. When sampled=true, a sampler is also created for
-    // shadow-depth debugging.
-    [[nodiscard]] TextureHandle
-    createShadowColourAttachment(uint32_t extent, uint32_t layerCount = 1, bool sampled = false);
-    [[nodiscard]] vk::ImageView vulkanShadowColourLayerView(TextureHandle handle,
-                                                            uint32_t layer) const noexcept;
-
     // Allocates an R16G16B16A16_SFLOAT colour image sized to the given extent,
     // usable as both a colour attachment (forward pass target) and a sampled
     // texture (post-process input). Linear-filter sampler, ClampToEdge.
