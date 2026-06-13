@@ -266,13 +266,16 @@ makeCommandBufferAllocateInfo(vk::CommandPool commandPool, uint32_t commandBuffe
     };
 }
 
-[[nodiscard]] vk::ImageMemoryBarrier
-makeImageMemoryBarrier(vk::AccessFlags srcAccessMask, vk::AccessFlags dstAccessMask,
+[[nodiscard]] vk::ImageMemoryBarrier2
+makeImageMemoryBarrier(vk::PipelineStageFlags2 srcStageMask, vk::AccessFlags2 srcAccessMask,
+                       vk::PipelineStageFlags2 dstStageMask, vk::AccessFlags2 dstAccessMask,
                        vk::ImageLayout oldLayout, vk::ImageLayout newLayout, vk::Image image,
                        vk::ImageSubresourceRange subresourceRange)
 {
-    return vk::ImageMemoryBarrier{
+    return vk::ImageMemoryBarrier2{
+        .srcStageMask = srcStageMask,
         .srcAccessMask = srcAccessMask,
+        .dstStageMask = dstStageMask,
         .dstAccessMask = dstAccessMask,
         .oldLayout = oldLayout,
         .newLayout = newLayout,
@@ -281,6 +284,13 @@ makeImageMemoryBarrier(vk::AccessFlags srcAccessMask, vk::AccessFlags dstAccessM
         .image = image,
         .subresourceRange = subresourceRange,
     };
+}
+
+// Records a single image barrier through the synchronization2 path.
+void recordImageBarrier(vk::CommandBuffer cmd, const vk::ImageMemoryBarrier2& barrier)
+{
+    cmd.pipelineBarrier2(
+        vk::DependencyInfo{.imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &barrier});
 }
 
 [[nodiscard]] vk::BufferImageCopy makeBufferImageCopy(vk::DeviceSize bufferOffset,
@@ -367,12 +377,12 @@ void transitionDepthImageToReadOnly(const Device& device, vk::CommandPool pool, 
         device, pool,
         [&](vk::CommandBuffer cmd)
         {
-            vk::ImageMemoryBarrier toReadOnly = makeImageMemoryBarrier(
-                {}, vk::AccessFlagBits::eShaderRead, vk::ImageLayout::eUndefined,
-                vk::ImageLayout::eDepthStencilReadOnlyOptimal, image,
+            vk::ImageMemoryBarrier2 toReadOnly = makeImageMemoryBarrier(
+                vk::PipelineStageFlagBits2::eTopOfPipe, {},
+                vk::PipelineStageFlagBits2::eFragmentShader, vk::AccessFlagBits2::eShaderRead,
+                vk::ImageLayout::eUndefined, vk::ImageLayout::eDepthStencilReadOnlyOptimal, image,
                 makeImageSubresourceRange(vk::ImageAspectFlagBits::eDepth, 0, 1, 0, layerCount));
-            cmd.pipelineBarrier(vk::PipelineStageFlagBits::eTopOfPipe,
-                                vk::PipelineStageFlagBits::eFragmentShader, {}, {}, {}, toReadOnly);
+            recordImageBarrier(cmd, toReadOnly);
         });
 }
 
@@ -450,25 +460,25 @@ void Resources::uploadImageFromHost(TextureEntry& entry, const void* pixels, vk:
         *device_, *cmdPool_,
         [&](vk::CommandBuffer cmd)
         {
-            vk::ImageMemoryBarrier toTransfer = makeImageMemoryBarrier(
-                {}, vk::AccessFlagBits::eTransferWrite, vk::ImageLayout::eUndefined,
+            vk::ImageMemoryBarrier2 toTransfer = makeImageMemoryBarrier(
+                vk::PipelineStageFlagBits2::eTopOfPipe, {}, vk::PipelineStageFlagBits2::eTransfer,
+                vk::AccessFlagBits2::eTransferWrite, vk::ImageLayout::eUndefined,
                 vk::ImageLayout::eTransferDstOptimal, *entry.image,
                 makeImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, mipLevels, 0,
                                           arrayLayers));
-            cmd.pipelineBarrier(vk::PipelineStageFlagBits::eTopOfPipe,
-                                vk::PipelineStageFlagBits::eTransfer, {}, {}, {}, toTransfer);
+            recordImageBarrier(cmd, toTransfer);
 
             cmd.copyBufferToImage(*stagingBuf, *entry.image, vk::ImageLayout::eTransferDstOptimal,
                                   regions);
 
-            vk::ImageMemoryBarrier toShader = makeImageMemoryBarrier(
-                vk::AccessFlagBits::eTransferWrite, vk::AccessFlagBits::eShaderRead,
+            vk::ImageMemoryBarrier2 toShader = makeImageMemoryBarrier(
+                vk::PipelineStageFlagBits2::eTransfer, vk::AccessFlagBits2::eTransferWrite,
+                vk::PipelineStageFlagBits2::eFragmentShader, vk::AccessFlagBits2::eShaderRead,
                 vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal,
                 *entry.image,
                 makeImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, mipLevels, 0,
                                           arrayLayers));
-            cmd.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,
-                                vk::PipelineStageFlagBits::eFragmentShader, {}, {}, {}, toShader);
+            recordImageBarrier(cmd, toShader);
         });
 }
 
@@ -976,12 +986,12 @@ TextureHandle Resources::createSceneColorTarget(uint32_t width, uint32_t height,
         *device_, *cmdPool_,
         [&](vk::CommandBuffer cmd)
         {
-            vk::ImageMemoryBarrier toShader = makeImageMemoryBarrier(
-                {}, vk::AccessFlagBits::eShaderRead, vk::ImageLayout::eUndefined,
-                vk::ImageLayout::eShaderReadOnlyOptimal, *entry.image,
+            vk::ImageMemoryBarrier2 toShader = makeImageMemoryBarrier(
+                vk::PipelineStageFlagBits2::eTopOfPipe, {},
+                vk::PipelineStageFlagBits2::eFragmentShader, vk::AccessFlagBits2::eShaderRead,
+                vk::ImageLayout::eUndefined, vk::ImageLayout::eShaderReadOnlyOptimal, *entry.image,
                 makeImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, mipLevels, 0, 1));
-            cmd.pipelineBarrier(vk::PipelineStageFlagBits::eTopOfPipe,
-                                vk::PipelineStageFlagBits::eFragmentShader, {}, {}, {}, toShader);
+            recordImageBarrier(cmd, toShader);
         });
 
     // Main view spans all mips so the shader's textureLod sample picks a mip

@@ -162,9 +162,11 @@ void PostProcessing::recordBloomPasses(vk::CommandBuffer cmd) const
 
 void PostProcessing::transitionOffscreenForSampling(vk::CommandBuffer cmd) const
 {
-    vk::ImageMemoryBarrier offscreenReadyForSampling{
-        .srcAccessMask = vk::AccessFlagBits::eColorAttachmentWrite,
-        .dstAccessMask = vk::AccessFlagBits::eShaderRead,
+    vk::ImageMemoryBarrier2 offscreenReadyForSampling{
+        .srcStageMask = vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+        .srcAccessMask = vk::AccessFlagBits2::eColorAttachmentWrite,
+        .dstStageMask = vk::PipelineStageFlagBits2::eFragmentShader,
+        .dstAccessMask = vk::AccessFlagBits2::eShaderRead,
         .oldLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
         .newLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
         .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
@@ -176,9 +178,8 @@ void PostProcessing::transitionOffscreenForSampling(vk::CommandBuffer cmd) const
                                                       .baseArrayLayer = 0,
                                                       .layerCount = 1},
     };
-    cmd.pipelineBarrier(vk::PipelineStageFlagBits::eColorAttachmentOutput,
-                        vk::PipelineStageFlagBits::eFragmentShader, {}, {}, {},
-                        offscreenReadyForSampling);
+    cmd.pipelineBarrier2(vk::DependencyInfo{.imageMemoryBarrierCount = 1,
+                                            .pImageMemoryBarriers = &offscreenReadyForSampling});
 }
 
 void PostProcessing::recordPostProcessPass(vk::CommandBuffer cmd, uint32_t imageIndex,

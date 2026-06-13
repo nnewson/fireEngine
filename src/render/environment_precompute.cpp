@@ -199,12 +199,14 @@ void generateCubemapMipChain(vk::CommandBuffer cmd, vk::Image image, uint32_t ba
     }
 
     auto barrier = [&](uint32_t baseMip, uint32_t mipCount, vk::ImageLayout oldLayout,
-                       vk::ImageLayout newLayout, vk::AccessFlags srcAccess,
-                       vk::AccessFlags dstAccess, vk::PipelineStageFlags srcStage,
-                       vk::PipelineStageFlags dstStage)
+                       vk::ImageLayout newLayout, vk::AccessFlags2 srcAccess,
+                       vk::AccessFlags2 dstAccess, vk::PipelineStageFlags2 srcStage,
+                       vk::PipelineStageFlags2 dstStage)
     {
-        vk::ImageMemoryBarrier b{
+        vk::ImageMemoryBarrier2 b{
+            .srcStageMask = srcStage,
             .srcAccessMask = srcAccess,
+            .dstStageMask = dstStage,
             .dstAccessMask = dstAccess,
             .oldLayout = oldLayout,
             .newLayout = newLayout,
@@ -218,12 +220,13 @@ void generateCubemapMipChain(vk::CommandBuffer cmd, vk::Image image, uint32_t ba
                                           .baseArrayLayer = 0,
                                           .layerCount = kCubemapFaceCount},
         };
-        cmd.pipelineBarrier(srcStage, dstStage, {}, {}, {}, b);
+        cmd.pipelineBarrier2(
+            vk::DependencyInfo{.imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &b});
     };
 
     barrier(0, 1, vk::ImageLayout::eShaderReadOnlyOptimal, vk::ImageLayout::eTransferSrcOptimal,
-            vk::AccessFlagBits::eShaderRead, vk::AccessFlagBits::eTransferRead,
-            vk::PipelineStageFlagBits::eFragmentShader, vk::PipelineStageFlagBits::eTransfer);
+            vk::AccessFlagBits2::eShaderRead, vk::AccessFlagBits2::eTransferRead,
+            vk::PipelineStageFlagBits2::eFragmentShader, vk::PipelineStageFlagBits2::eTransfer);
 
     int32_t srcExtent = static_cast<int32_t>(baseExtent);
     for (uint32_t mip = 1; mip < mipLevels; ++mip)
@@ -231,8 +234,8 @@ void generateCubemapMipChain(vk::CommandBuffer cmd, vk::Image image, uint32_t ba
         int32_t dstExtent = std::max(1, srcExtent / 2);
 
         barrier(mip, 1, vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal, {},
-                vk::AccessFlagBits::eTransferWrite, vk::PipelineStageFlagBits::eTopOfPipe,
-                vk::PipelineStageFlagBits::eTransfer);
+                vk::AccessFlagBits2::eTransferWrite, vk::PipelineStageFlagBits2::eTopOfPipe,
+                vk::PipelineStageFlagBits2::eTransfer);
 
         vk::ImageBlit blit{
             .srcSubresource =
@@ -254,21 +257,21 @@ void generateCubemapMipChain(vk::CommandBuffer cmd, vk::Image image, uint32_t ba
                       vk::ImageLayout::eTransferDstOptimal, blit, vk::Filter::eLinear);
 
         barrier(mip - 1, 1, vk::ImageLayout::eTransferSrcOptimal,
-                vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eTransferRead,
-                vk::AccessFlagBits::eShaderRead, vk::PipelineStageFlagBits::eTransfer,
-                vk::PipelineStageFlagBits::eFragmentShader);
+                vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits2::eTransferRead,
+                vk::AccessFlagBits2::eShaderRead, vk::PipelineStageFlagBits2::eTransfer,
+                vk::PipelineStageFlagBits2::eFragmentShader);
 
         barrier(mip, 1, vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eTransferSrcOptimal,
-                vk::AccessFlagBits::eTransferWrite, vk::AccessFlagBits::eTransferRead,
-                vk::PipelineStageFlagBits::eTransfer, vk::PipelineStageFlagBits::eTransfer);
+                vk::AccessFlagBits2::eTransferWrite, vk::AccessFlagBits2::eTransferRead,
+                vk::PipelineStageFlagBits2::eTransfer, vk::PipelineStageFlagBits2::eTransfer);
 
         srcExtent = dstExtent;
     }
 
     barrier(mipLevels - 1, 1, vk::ImageLayout::eTransferSrcOptimal,
-            vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eTransferRead,
-            vk::AccessFlagBits::eShaderRead, vk::PipelineStageFlagBits::eTransfer,
-            vk::PipelineStageFlagBits::eFragmentShader);
+            vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits2::eTransferRead,
+            vk::AccessFlagBits2::eShaderRead, vk::PipelineStageFlagBits2::eTransfer,
+            vk::PipelineStageFlagBits2::eFragmentShader);
 }
 
 } // namespace

@@ -125,9 +125,11 @@ void Transmission::recordSceneColorCapture(vk::CommandBuffer cmd) const
         };
     };
 
-    vk::ImageMemoryBarrier hdrToSrc{
-        .srcAccessMask = vk::AccessFlagBits::eShaderRead,
-        .dstAccessMask = vk::AccessFlagBits::eTransferRead,
+    vk::ImageMemoryBarrier2 hdrToSrc{
+        .srcStageMask = vk::PipelineStageFlagBits2::eFragmentShader,
+        .srcAccessMask = vk::AccessFlagBits2::eShaderRead,
+        .dstStageMask = vk::PipelineStageFlagBits2::eTransfer,
+        .dstAccessMask = vk::AccessFlagBits2::eTransferRead,
         .oldLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
         .newLayout = vk::ImageLayout::eTransferSrcOptimal,
         .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
@@ -135,12 +137,14 @@ void Transmission::recordSceneColorCapture(vk::CommandBuffer cmd) const
         .image = hdrImage,
         .subresourceRange = colourRange(0, 1),
     };
-    cmd.pipelineBarrier(vk::PipelineStageFlagBits::eFragmentShader,
-                        vk::PipelineStageFlagBits::eTransfer, {}, {}, {}, hdrToSrc);
+    cmd.pipelineBarrier2(
+        vk::DependencyInfo{.imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &hdrToSrc});
 
-    vk::ImageMemoryBarrier sceneToDst{
-        .srcAccessMask = vk::AccessFlagBits::eShaderRead,
-        .dstAccessMask = vk::AccessFlagBits::eTransferWrite,
+    vk::ImageMemoryBarrier2 sceneToDst{
+        .srcStageMask = vk::PipelineStageFlagBits2::eFragmentShader,
+        .srcAccessMask = vk::AccessFlagBits2::eShaderRead,
+        .dstStageMask = vk::PipelineStageFlagBits2::eTransfer,
+        .dstAccessMask = vk::AccessFlagBits2::eTransferWrite,
         .oldLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
         .newLayout = vk::ImageLayout::eTransferDstOptimal,
         .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
@@ -148,8 +152,8 @@ void Transmission::recordSceneColorCapture(vk::CommandBuffer cmd) const
         .image = sceneImage,
         .subresourceRange = colourRange(0, sceneColorMipLevels_),
     };
-    cmd.pipelineBarrier(vk::PipelineStageFlagBits::eFragmentShader,
-                        vk::PipelineStageFlagBits::eTransfer, {}, {}, {}, sceneToDst);
+    cmd.pipelineBarrier2(
+        vk::DependencyInfo{.imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &sceneToDst});
 
     vk::ImageBlit blit0{
         .srcSubresource = vk::ImageSubresourceLayers{.aspectMask = vk::ImageAspectFlagBits::eColor,
@@ -178,9 +182,11 @@ void Transmission::recordSceneColorCapture(vk::CommandBuffer cmd) const
     int32_t mipHeight = static_cast<int32_t>(extent.height);
     for (uint32_t i = 1; i < sceneColorMipLevels_; ++i)
     {
-        vk::ImageMemoryBarrier srcReady{
-            .srcAccessMask = vk::AccessFlagBits::eTransferWrite,
-            .dstAccessMask = vk::AccessFlagBits::eTransferRead,
+        vk::ImageMemoryBarrier2 srcReady{
+            .srcStageMask = vk::PipelineStageFlagBits2::eTransfer,
+            .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
+            .dstStageMask = vk::PipelineStageFlagBits2::eTransfer,
+            .dstAccessMask = vk::AccessFlagBits2::eTransferRead,
             .oldLayout = vk::ImageLayout::eTransferDstOptimal,
             .newLayout = vk::ImageLayout::eTransferSrcOptimal,
             .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
@@ -188,8 +194,8 @@ void Transmission::recordSceneColorCapture(vk::CommandBuffer cmd) const
             .image = sceneImage,
             .subresourceRange = colourRange(i - 1, 1),
         };
-        cmd.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,
-                            vk::PipelineStageFlagBits::eTransfer, {}, {}, {}, srcReady);
+        cmd.pipelineBarrier2(
+            vk::DependencyInfo{.imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &srcReady});
 
         const int32_t nextWidth = std::max(1, mipWidth >> 1);
         const int32_t nextHeight = std::max(1, mipHeight >> 1);
@@ -214,9 +220,11 @@ void Transmission::recordSceneColorCapture(vk::CommandBuffer cmd) const
         cmd.blitImage(sceneImage, vk::ImageLayout::eTransferSrcOptimal, sceneImage,
                       vk::ImageLayout::eTransferDstOptimal, blit, vk::Filter::eLinear);
 
-        vk::ImageMemoryBarrier srcDone{
-            .srcAccessMask = vk::AccessFlagBits::eTransferRead,
-            .dstAccessMask = vk::AccessFlagBits::eShaderRead,
+        vk::ImageMemoryBarrier2 srcDone{
+            .srcStageMask = vk::PipelineStageFlagBits2::eTransfer,
+            .srcAccessMask = vk::AccessFlagBits2::eTransferRead,
+            .dstStageMask = vk::PipelineStageFlagBits2::eFragmentShader,
+            .dstAccessMask = vk::AccessFlagBits2::eShaderRead,
             .oldLayout = vk::ImageLayout::eTransferSrcOptimal,
             .newLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
             .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
@@ -224,16 +232,18 @@ void Transmission::recordSceneColorCapture(vk::CommandBuffer cmd) const
             .image = sceneImage,
             .subresourceRange = colourRange(i - 1, 1),
         };
-        cmd.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,
-                            vk::PipelineStageFlagBits::eFragmentShader, {}, {}, {}, srcDone);
+        cmd.pipelineBarrier2(
+            vk::DependencyInfo{.imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &srcDone});
 
         mipWidth = nextWidth;
         mipHeight = nextHeight;
     }
 
-    vk::ImageMemoryBarrier lastMipDone{
-        .srcAccessMask = vk::AccessFlagBits::eTransferWrite,
-        .dstAccessMask = vk::AccessFlagBits::eShaderRead,
+    vk::ImageMemoryBarrier2 lastMipDone{
+        .srcStageMask = vk::PipelineStageFlagBits2::eTransfer,
+        .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
+        .dstStageMask = vk::PipelineStageFlagBits2::eFragmentShader,
+        .dstAccessMask = vk::AccessFlagBits2::eShaderRead,
         .oldLayout = vk::ImageLayout::eTransferDstOptimal,
         .newLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
         .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
@@ -241,13 +251,15 @@ void Transmission::recordSceneColorCapture(vk::CommandBuffer cmd) const
         .image = sceneImage,
         .subresourceRange = colourRange(sceneColorMipLevels_ - 1, 1),
     };
-    cmd.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,
-                        vk::PipelineStageFlagBits::eFragmentShader, {}, {}, {}, lastMipDone);
+    cmd.pipelineBarrier2(
+        vk::DependencyInfo{.imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &lastMipDone});
 
-    vk::ImageMemoryBarrier hdrBack{
-        .srcAccessMask = vk::AccessFlagBits::eTransferRead,
+    vk::ImageMemoryBarrier2 hdrBack{
+        .srcStageMask = vk::PipelineStageFlagBits2::eTransfer,
+        .srcAccessMask = vk::AccessFlagBits2::eTransferRead,
+        .dstStageMask = vk::PipelineStageFlagBits2::eColorAttachmentOutput,
         .dstAccessMask =
-            vk::AccessFlagBits::eColorAttachmentRead | vk::AccessFlagBits::eColorAttachmentWrite,
+            vk::AccessFlagBits2::eColorAttachmentRead | vk::AccessFlagBits2::eColorAttachmentWrite,
         .oldLayout = vk::ImageLayout::eTransferSrcOptimal,
         .newLayout = vk::ImageLayout::eColorAttachmentOptimal,
         .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
@@ -255,8 +267,8 @@ void Transmission::recordSceneColorCapture(vk::CommandBuffer cmd) const
         .image = hdrImage,
         .subresourceRange = colourRange(0, 1),
     };
-    cmd.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,
-                        vk::PipelineStageFlagBits::eColorAttachmentOutput, {}, {}, {}, hdrBack);
+    cmd.pipelineBarrier2(
+        vk::DependencyInfo{.imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &hdrBack});
 }
 
 void Transmission::recordForwardTransmissionPass(vk::CommandBuffer cmd,
