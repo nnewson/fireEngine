@@ -33,15 +33,14 @@ void Device::createInstance()
 {
     constexpr vk::ApplicationInfo appInfo{
         .pApplicationName = "FireEngine",
-        .applicationVersion = VK_MAKE_VERSION(1, 0, 0),
+        .applicationVersion = VK_MAKE_API_VERSION(0, 1, 0, 0),
         .pEngineName = "No Engine",
-        .engineVersion = VK_MAKE_VERSION(1, 0, 0),
+        .engineVersion = VK_MAKE_API_VERSION(0, 1, 0, 0),
         .apiVersion = vk::ApiVersion14,
     };
 
     auto exts = Window::requiredVulkanExtensions();
     exts.push_back(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
-    exts.push_back(VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME);
 
     if (enableValidation)
     {
