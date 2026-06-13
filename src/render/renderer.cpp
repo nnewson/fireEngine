@@ -664,20 +664,27 @@ void Renderer::beginRenderPass(vk::CommandBuffer cmd)
 
 void Renderer::submitAndPresent(Window& display, vk::CommandBuffer cmd, uint32_t imageIndex)
 {
-    vk::PipelineStageFlags waitStage = vk::PipelineStageFlagBits::eColorAttachmentOutput;
     auto imageAvail = frame_.imageAvailable(currentFrame_);
     auto renderDone = frame_.renderFinished(imageIndex);
-    vk::SubmitInfo si{
-        .waitSemaphoreCount = 1,
-        .pWaitSemaphores = &imageAvail,
-        .pWaitDstStageMask = &waitStage,
-        .commandBufferCount = 1,
-        .pCommandBuffers = &cmd,
-        .signalSemaphoreCount = 1,
-        .pSignalSemaphores = &renderDone,
+    vk::SemaphoreSubmitInfo waitInfo{
+        .semaphore = imageAvail,
+        .stageMask = vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+    };
+    vk::SemaphoreSubmitInfo signalInfo{
+        .semaphore = renderDone,
+        .stageMask = vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+    };
+    vk::CommandBufferSubmitInfo cmdInfo{.commandBuffer = cmd};
+    vk::SubmitInfo2 si{
+        .waitSemaphoreInfoCount = 1,
+        .pWaitSemaphoreInfos = &waitInfo,
+        .commandBufferInfoCount = 1,
+        .pCommandBufferInfos = &cmdInfo,
+        .signalSemaphoreInfoCount = 1,
+        .pSignalSemaphoreInfos = &signalInfo,
     };
 
-    device_.graphicsQueue().submit(si, frame_.inFlightFence(currentFrame_));
+    device_.graphicsQueue().submit2(si, frame_.inFlightFence(currentFrame_));
 
     auto swapchain = swapchain_.swapchain();
     vk::PresentInfoKHR pi{

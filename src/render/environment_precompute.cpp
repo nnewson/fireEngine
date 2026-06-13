@@ -139,9 +139,9 @@ void oneTimeSubmit(const Device& device, RecordFn&& record)
     record(*cmd);
 
     cmd.end();
-    vk::CommandBuffer rawCmd = *cmd;
-    vk::SubmitInfo submitInfo{.commandBufferCount = 1, .pCommandBuffers = &rawCmd};
-    device.graphicsQueue().submit(submitInfo);
+    vk::CommandBufferSubmitInfo cmdInfo{.commandBuffer = *cmd};
+    vk::SubmitInfo2 submitInfo{.commandBufferInfoCount = 1, .pCommandBufferInfos = &cmdInfo};
+    device.graphicsQueue().submit2(submitInfo);
     device.graphicsQueue().waitIdle();
 }
 
