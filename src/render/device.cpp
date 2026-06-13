@@ -179,17 +179,39 @@ void Device::createLogicalDevice()
             "GPU does not support imageCubeArray (required for point shadow maps)");
     }
 
+    // synchronization2 and dynamicRendering are core in Vulkan 1.3 and mandatory
+    // in 1.4, but must still be enabled explicitly before the matching APIs are
+    // legal to use. Verify the driver advertises them before requesting them.
+    auto supported13 =
+        physDevice_.getFeatures2<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan13Features>()
+            .get<vk::PhysicalDeviceVulkan13Features>();
+    if (!supported13.synchronization2)
+    {
+        throw std::runtime_error("GPU does not support synchronization2");
+    }
+    if (!supported13.dynamicRendering)
+    {
+        throw std::runtime_error("GPU does not support dynamicRendering");
+    }
+
     vk::PhysicalDeviceFeatures features{};
     features.samplerAnisotropy = vk::True;
     // Point light shadow maps use samplerCubeArrayShadow over a cubemap-array
     // depth image. Requires the imageCubeArray feature.
     features.imageCubeArray = vk::True;
 
+    // synchronization2: barriers/submits use the *2 APIs. dynamicRendering:
+    // rendering without VkRenderPass/VkFramebuffer objects.
+    vk::PhysicalDeviceVulkan13Features features13{};
+    features13.synchronization2 = vk::True;
+    features13.dynamicRendering = vk::True;
+
     // Shadow mapping uses sampler2DShadow (hardware PCF), which requires
     // compareEnable=VK_TRUE on the sampler. MoltenVK gates that behind the
     // portability-subset feature mutableComparisonSamplers — enable it here.
     vk::PhysicalDevicePortabilitySubsetFeaturesKHR portability{};
     portability.mutableComparisonSamplers = vk::True;
+    portability.pNext = &features13;
 
     vk::DeviceCreateInfo ci{
         .pNext = &portability,
