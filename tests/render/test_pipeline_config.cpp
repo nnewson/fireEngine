@@ -14,7 +14,7 @@ using fire_engine::ShadowBinding;
 TEST(PipelineConfig, ForwardConfigBindingsSplitBetweenSets)
 {
     using fire_engine::ForwardGlobalBinding;
-    auto config = Pipeline::forwardConfig({});
+    auto config = Pipeline::forwardConfig();
 
     // Set 0 — per-object / per-material bindings: frame, material, skin,
     // morph UBO + SSBO, base + 9 material textures (10 total).
@@ -60,7 +60,7 @@ TEST(PipelineConfig, ForwardConfigBindingsSplitBetweenSets)
 
 TEST(PipelineConfig, ForwardConfigIncludesSelfShadowPushConstant)
 {
-    auto config = Pipeline::forwardConfig({});
+    auto config = Pipeline::forwardConfig();
 
     ASSERT_EQ(config.pushConstantRanges.size(), 1u);
     EXPECT_EQ(config.pushConstantRanges[0].stageFlags, vk::ShaderStageFlagBits::eFragment);
@@ -71,7 +71,7 @@ TEST(PipelineConfig, ForwardConfigIncludesSelfShadowPushConstant)
 
 TEST(PipelineConfig, ShadowConfigCullsFrontFaces)
 {
-    auto config = Pipeline::shadowConfig({});
+    auto config = Pipeline::shadowConfig();
 
     EXPECT_EQ(config.cullMode, vk::CullModeFlagBits::eFront);
     EXPECT_TRUE(config.depthBiasEnable);
@@ -92,8 +92,8 @@ TEST(PipelineConfig, SelfShadowConfigsCulling)
     // Second pass culls front faces so only back-facing fragments survive,
     // which keeps the in-shader discard threshold from flipping on marginal
     // fragments and producing per-pixel flicker.
-    auto first = Pipeline::selfShadowFirstConfig({});
-    auto second = Pipeline::selfShadowSecondConfig({});
+    auto first = Pipeline::selfShadowFirstConfig();
+    auto second = Pipeline::selfShadowSecondConfig();
 
     EXPECT_EQ(first.cullMode, vk::CullModeFlagBits::eNone);
     EXPECT_EQ(first.fragShaderPath, "shadow.frag.spv");
@@ -103,7 +103,7 @@ TEST(PipelineConfig, SelfShadowConfigsCulling)
 
 TEST(PipelineConfig, SkyboxConfigIncludesCubemapSamplerBinding)
 {
-    auto config = Pipeline::skyboxConfig({});
+    auto config = Pipeline::skyboxConfig();
 
     ASSERT_EQ(config.bindings.size(), 3u);
     EXPECT_EQ(config.bindings[0].binding, 0u);

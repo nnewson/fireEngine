@@ -5,7 +5,6 @@
 
 #include <fire_engine/render/constants.hpp>
 #include <fire_engine/render/pipeline.hpp>
-#include <fire_engine/render/render_pass.hpp>
 #include <fire_engine/render/resources.hpp>
 #include <fire_engine/render/swapchain.hpp>
 
@@ -39,12 +38,8 @@ public:
 private:
     void buildBloomResources();
 
-    const Device* device_{nullptr};
     const Swapchain* swapchain_{nullptr};
     Resources* resources_{nullptr};
-    RenderPass postProcessPass_;
-    RenderPass bloomDownPass_;
-    RenderPass bloomUpPass_;
     Pipeline postProcessPipeline_;
     Pipeline bloomDownsamplePipeline_;
     Pipeline bloomUpsamplePipeline_;

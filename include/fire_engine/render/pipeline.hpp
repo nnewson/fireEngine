@@ -24,7 +24,10 @@ struct PipelineConfig
     // post-process, shadow, environment precompute).
     std::vector<vk::DescriptorSetLayoutBinding> globalBindings;
     std::vector<vk::PushConstantRange> pushConstantRanges;
-    vk::RenderPass renderPass{};
+    // Dynamic-rendering attachment formats: the pipeline is created with a
+    // VkPipelineRenderingCreateInfo built from these (no VkRenderPass).
+    std::vector<vk::Format> colourFormats;
+    vk::Format depthFormat{vk::Format::eUndefined};
     bool useVertexInput{true};
     bool depthTestEnable{true};
     bool depthWrite{true};
@@ -75,84 +78,84 @@ public:
         return *pipeline_;
     }
 
-    // Factory producing the PipelineConfig for the existing forward-lit
-    // pipeline. The render pass handle comes from the caller (usually a
-    // RenderPass::createForward() result).
-    [[nodiscard]] static PipelineConfig forwardConfig(vk::RenderPass renderPass);
+    // Factory producing the PipelineConfig for the forward-lit pipeline,
+    // targeting the HDR offscreen colour + shared D32 depth via dynamic
+    // rendering.
+    [[nodiscard]] static PipelineConfig forwardConfig();
 
     // Variant of forwardConfig with cullMode=None for glTF materials flagged
     // doubleSided. Otherwise identical to forwardConfig (shaders, bindings,
     // depth state).
-    [[nodiscard]] static PipelineConfig forwardDoubleSidedConfig(vk::RenderPass renderPass);
+    [[nodiscard]] static PipelineConfig forwardDoubleSidedConfig();
 
     // Variant of forwardConfig for glTF BLEND materials: cullMode=None,
     // depthWrite disabled, straight-alpha blending
     // (SRC_ALPHA / ONE_MINUS_SRC_ALPHA on colour; ONE / ONE_MINUS_SRC_ALPHA on
     // alpha).
-    [[nodiscard]] static PipelineConfig forwardBlendConfig(vk::RenderPass renderPass);
+    [[nodiscard]] static PipelineConfig forwardBlendConfig();
 
     // Factory producing the PipelineConfig for the environment skybox
     // pipeline. Shares the forward render pass, uses no vertex buffers
     // (fullscreen triangle via gl_VertexIndex), and disables depth writes
     // with LEQUAL compare so it only writes where no forward geometry has
     // drawn.
-    [[nodiscard]] static PipelineConfig skyboxConfig(vk::RenderPass renderPass);
+    [[nodiscard]] static PipelineConfig skyboxConfig();
 
     // Factory producing the PipelineConfig for equirectangular HDR ->
     // cubemap conversion. Draws a fullscreen triangle with no vertex input,
     // sampling a 2D panorama and writing one cubemap face at a time.
-    [[nodiscard]] static PipelineConfig environmentConvertConfig(vk::RenderPass renderPass);
+    [[nodiscard]] static PipelineConfig environmentConvertConfig(vk::Format colourFormat);
 
     // Factory producing the PipelineConfig for cubemap -> irradiance cubemap
     // convolution. Draws a fullscreen triangle with no vertex input,
     // sampling an environment cubemap and writing one low-resolution
     // irradiance face at a time.
-    [[nodiscard]] static PipelineConfig irradianceConvolutionConfig(vk::RenderPass renderPass);
+    [[nodiscard]] static PipelineConfig irradianceConvolutionConfig(vk::Format colourFormat);
 
     // Factory producing the PipelineConfig for specular environment
     // prefiltering. Draws a fullscreen triangle with no vertex input,
     // sampling an environment cubemap and writing one cubemap face / mip
     // level at a time.
-    [[nodiscard]] static PipelineConfig prefilterEnvironmentConfig(vk::RenderPass renderPass);
+    [[nodiscard]] static PipelineConfig prefilterEnvironmentConfig(vk::Format colourFormat);
 
     // Factory producing the PipelineConfig for BRDF LUT integration. Draws a
     // fullscreen triangle into a 2D floating-point render target with no
     // descriptor bindings.
-    [[nodiscard]] static PipelineConfig brdfIntegrationConfig(vk::RenderPass renderPass);
+    [[nodiscard]] static PipelineConfig brdfIntegrationConfig(vk::Format colourFormat);
 
     // Factory producing the PipelineConfig for a depth-only shadow pipeline.
     // Writes only depth into an offscreen D32_SFLOAT attachment (no colour
     // attachment). Uses front-face culling and depth bias to eliminate
     // receiver shadow acne. Bindings 0..3 are ShadowUBO / SkinUBO / MorphUBO /
     // MorphTargets SSBO, all vertex stage.
-    [[nodiscard]] static PipelineConfig shadowConfig(vk::RenderPass renderPass);
+    [[nodiscard]] static PipelineConfig shadowConfig();
 
     // First pass for skinned self-shadow maps. Same shader/layout as the
     // regular shadow path but no face culling so the first visible
     // light-facing surface is captured for dual-depth rejection.
-    [[nodiscard]] static PipelineConfig selfShadowFirstConfig(vk::RenderPass renderPass);
+    [[nodiscard]] static PipelineConfig selfShadowFirstConfig();
 
     // Second pass for skinned self-shadow maps. Uses the same vertex path and
     // descriptor layout as shadowConfig, but the fragment shader samples the
     // first-depth self map and discards same-surface fragments.
-    [[nodiscard]] static PipelineConfig selfShadowSecondConfig(vk::RenderPass renderPass);
+    [[nodiscard]] static PipelineConfig selfShadowSecondConfig();
 
     // Factory producing the PipelineConfig for the post-process pass.
     // Draws a fullscreen triangle via gl_VertexIndex sampling the offscreen
     // HDR forward target at binding 0, applying ACES tone mapping + gamma,
     // and writing the result into the swapchain colour attachment. Depth
     // test disabled, no culling, no vertex input.
-    [[nodiscard]] static PipelineConfig postProcessConfig(vk::RenderPass renderPass);
+    [[nodiscard]] static PipelineConfig postProcessConfig(vk::Format colourFormat);
 
     // Bloom downsample: fullscreen triangle, samples one input mip, writes
     // the next coarser mip. Push constant carries inverse-input-resolution
     // and a first-pass flag (Karis-average to suppress firefly halos).
-    [[nodiscard]] static PipelineConfig bloomDownsampleConfig(vk::RenderPass renderPass);
+    [[nodiscard]] static PipelineConfig bloomDownsampleConfig(vk::Format colourFormat);
 
     // Bloom upsample: fullscreen triangle, samples a coarser mip with a tent
     // filter, additively blends into the next finer mip. Push constant carries
     // inverse-input-resolution.
-    [[nodiscard]] static PipelineConfig bloomUpsampleConfig(vk::RenderPass renderPass);
+    [[nodiscard]] static PipelineConfig bloomUpsampleConfig(vk::Format colourFormat);
 
 private:
     void createDescriptorSetLayout(const std::vector<vk::DescriptorSetLayoutBinding>& bindings);

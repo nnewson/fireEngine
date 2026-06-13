@@ -759,8 +759,8 @@ TextureHandle Resources::createShadowMap(uint32_t extent, uint32_t layerCount)
         makeImageSubresourceRange(vk::ImageAspectFlagBits::eDepth, 0, 1, 0, layerCount));
     entry.view = vk::raii::ImageView(device_->device(), viewCi);
 
-    // Per-layer 2D views for use as framebuffer attachments — one shadow
-    // framebuffer binds one layer's depth via baseArrayLayer=L.
+    // Per-layer 2D views for use as dynamic-rendering depth attachments — one
+    // shadow iteration binds one layer's depth via baseArrayLayer=L.
     if (layerCount > 1)
     {
         entry.faceViews.reserve(layerCount);
@@ -810,8 +810,8 @@ TextureHandle Resources::createPointShadowMap(uint32_t faceExtent, uint32_t cube
         makeImageSubresourceRange(vk::ImageAspectFlagBits::eDepth, 0, 1, 0, totalLayers));
     entry.view = vk::raii::ImageView(device_->device(), viewCi);
 
-    // Per-face 2D depth views — `6 * cube + face`. Used as framebuffer
-    // attachments during the depth pass (one face per render-pass invocation).
+    // Per-face 2D depth views — `6 * cube + face`. Used as dynamic-rendering
+    // depth attachments during the depth pass (one face per begin/endRendering).
     entry.faceViews.reserve(totalLayers);
     for (uint32_t layer = 0; layer < totalLayers; ++layer)
     {

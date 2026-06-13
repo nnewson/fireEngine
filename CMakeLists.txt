@@ -50,7 +50,7 @@ add_library(fireengine SHARED
     src/render/pipeline.cpp
     src/render/post_processing.cpp
     src/render/render_context.cpp
-    src/render/render_pass.cpp
+    src/render/render_target.cpp
     src/render/renderer.cpp
     src/render/resources.cpp
     src/render/shadows.cpp

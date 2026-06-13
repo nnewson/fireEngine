@@ -13,6 +13,7 @@
 #include <fire_engine/render/cubemap_basis.hpp>
 #include <fire_engine/render/environment_precompute.hpp>
 #include <fire_engine/render/render_context.hpp>
+#include <fire_engine/render/render_target.hpp>
 #include <fire_engine/render/swapchain.hpp>
 #include <fire_engine/render/ubo.hpp>
 #include <fire_engine/render/viewport.hpp>
@@ -23,6 +24,34 @@ namespace fire_engine
 
 namespace
 {
+
+// Single-subresource layout transition through synchronization2, used to cycle
+// the forward HDR target and the shared depth image between attachment and
+// shader-read layouts (dynamic rendering does no implicit transitions).
+void forwardImageBarrier(vk::CommandBuffer cmd, vk::Image image, vk::ImageAspectFlags aspect,
+                         vk::ImageLayout oldLayout, vk::ImageLayout newLayout,
+                         vk::PipelineStageFlags2 srcStage, vk::AccessFlags2 srcAccess,
+                         vk::PipelineStageFlags2 dstStage, vk::AccessFlags2 dstAccess)
+{
+    vk::ImageMemoryBarrier2 b{
+        .srcStageMask = srcStage,
+        .srcAccessMask = srcAccess,
+        .dstStageMask = dstStage,
+        .dstAccessMask = dstAccess,
+        .oldLayout = oldLayout,
+        .newLayout = newLayout,
+        .srcQueueFamilyIndex = vk::QueueFamilyIgnored,
+        .dstQueueFamilyIndex = vk::QueueFamilyIgnored,
+        .image = image,
+        .subresourceRange = vk::ImageSubresourceRange{.aspectMask = aspect,
+                                                      .baseMipLevel = 0,
+                                                      .levelCount = 1,
+                                                      .baseArrayLayer = 0,
+                                                      .layerCount = 1},
+    };
+    cmd.pipelineBarrier2(
+        vk::DependencyInfo{.imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &b});
+}
 
 [[nodiscard]]
 const Lighting* primaryDirectionalLight(std::span<const Lighting> lights) noexcept
@@ -90,24 +119,19 @@ Mat4 fitSelfShadowMatrix(const Bounds3& bounds, Vec3 lightDir) noexcept
 Renderer::Renderer(const Window& window, std::string environmentPath, RendererDebug debug)
     : device_(window),
       swapchain_(device_, window),
-      forwardPass_(RenderPass::createForward(device_)),
-      pipelineOpaque_(device_, Pipeline::forwardConfig(forwardPass_.renderPass())),
-      pipelineOpaqueDoubleSided_(device_,
-                                 Pipeline::forwardDoubleSidedConfig(forwardPass_.renderPass())),
-      pipelineBlend_(device_, Pipeline::forwardBlendConfig(forwardPass_.renderPass())),
-      skyboxPipeline_(device_, Pipeline::skyboxConfig(forwardPass_.renderPass())),
+      pipelineOpaque_(device_, Pipeline::forwardConfig()),
+      pipelineOpaqueDoubleSided_(device_, Pipeline::forwardDoubleSidedConfig()),
+      pipelineBlend_(device_, Pipeline::forwardBlendConfig()),
+      skyboxPipeline_(device_, Pipeline::skyboxConfig()),
       frame_(device_, swapchain_),
       resources_(device_, pipelineOpaque_),
       postProcessing_(device_, swapchain_, resources_),
-      transmission_(device_, swapchain_, resources_, postProcessing_.offscreenColourTarget()),
+      transmission_(swapchain_, resources_, postProcessing_.offscreenColourTarget()),
       shadows_(device_, resources_),
       environmentPath_(std::move(environmentPath)),
       debug_(debug)
 {
     swapchain_.createDepthResources(device_);
-    forwardPass_.createForwardFramebuffer(
-        device_, resources_.vulkanImageView(postProcessing_.offscreenColourTarget()),
-        swapchain_.depthView(), swapchain_.extent());
     transmission_.recreate(postProcessing_.offscreenColourTarget());
     forwardOpaqueHandle_ =
         resources_.registerPipeline(pipelineOpaque_.pipeline(), pipelineOpaque_.pipelineLayout());
@@ -514,11 +538,11 @@ void Renderer::recordDrawBucket(vk::CommandBuffer cmd, const std::vector<DrawCom
 
 void Renderer::recordForwardPass(vk::CommandBuffer cmd, const DrawBuckets& buckets)
 {
-    beginRenderPass(cmd);
+    beginForwardRendering(cmd);
     auto lastBoundPipeline = PipelineHandle{std::numeric_limits<uint32_t>::max()};
     recordDrawBucket(cmd, buckets.opaque, lastBoundPipeline);
     recordDrawBucket(cmd, buckets.blend, lastBoundPipeline);
-    cmd.endRenderPass();
+    endForwardRendering(cmd);
 }
 
 void Renderer::updateFrameLighting(SceneGraph& scene, Vec3 cameraPosition, Vec3 cameraTarget)
@@ -636,30 +660,73 @@ std::optional<uint32_t> Renderer::acquireNextImage(Window& display)
     return imageIndex;
 }
 
-void Renderer::beginRenderPass(vk::CommandBuffer cmd)
+void Renderer::beginForwardRendering(vk::CommandBuffer cmd)
 {
     auto extent = swapchain_.extent();
-    std::array<vk::ClearValue, 2> clears = {
-        vk::ClearValue{.color = vk::ClearColorValue{.float32 = {{0.02f, 0.02f, 0.02f, 1.0f}}}},
-        vk::ClearValue{.depthStencil = vk::ClearDepthStencilValue{.depth = 1.0f, .stencil = 0}},
-    };
-
     vk::Rect2D renderArea{
         .offset = vk::Offset2D{.x = 0, .y = 0},
         .extent = extent,
     };
-    vk::RenderPassBeginInfo rpBegin{
-        .renderPass = forwardPass_.renderPass(),
-        .framebuffer = forwardPass_.framebuffer(0),
-        .renderArea = renderArea,
-        .clearValueCount = static_cast<uint32_t>(clears.size()),
-        .pClearValues = clears.data(),
-    };
 
-    cmd.beginRenderPass(rpBegin, vk::SubpassContents::eInline);
+    const vk::Image hdrImage = resources_.vulkanImage(postProcessing_.offscreenColourTarget());
+    const vk::Image depthImage = swapchain_.depthImage();
+
+    // Dynamic rendering does no implicit attachment transitions. The HDR target
+    // rests in ShaderReadOnly between frames (last frame's post-process sampled
+    // it) and the depth in DepthStencilAttachmentOptimal; both are cleared this
+    // pass (loadOp Clear), so we discard via Undefined and transition into the
+    // attachment layouts, gated on the prior frame's reads/writes.
+    forwardImageBarrier(cmd, hdrImage, vk::ImageAspectFlagBits::eColor, vk::ImageLayout::eUndefined,
+                        vk::ImageLayout::eColorAttachmentOptimal,
+                        vk::PipelineStageFlagBits2::eFragmentShader, {},
+                        vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+                        vk::AccessFlagBits2::eColorAttachmentWrite);
+    forwardImageBarrier(cmd, depthImage, vk::ImageAspectFlagBits::eDepth,
+                        vk::ImageLayout::eUndefined,
+                        vk::ImageLayout::eDepthStencilAttachmentOptimal,
+                        vk::PipelineStageFlagBits2::eLateFragmentTests, {},
+                        vk::PipelineStageFlagBits2::eEarlyFragmentTests,
+                        vk::AccessFlagBits2::eDepthStencilAttachmentWrite);
+
+    const vk::ClearValue colourClear{
+        .color = vk::ClearColorValue{.float32 = {{0.02f, 0.02f, 0.02f, 1.0f}}}};
+    const vk::ClearValue depthClear{.depthStencil =
+                                        vk::ClearDepthStencilValue{.depth = 1.0f, .stencil = 0}};
+    vk::RenderingAttachmentInfo colour{
+        .imageView = resources_.vulkanImageView(postProcessing_.offscreenColourTarget()),
+        .imageLayout = vk::ImageLayout::eColorAttachmentOptimal,
+        .loadOp = vk::AttachmentLoadOp::eClear,
+        .storeOp = vk::AttachmentStoreOp::eStore,
+        .clearValue = colourClear,
+    };
+    vk::RenderingAttachmentInfo depth{
+        .imageView = swapchain_.depthView(),
+        .imageLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal,
+        .loadOp = vk::AttachmentLoadOp::eClear,
+        .storeOp = vk::AttachmentStoreOp::eStore,
+        .clearValue = depthClear,
+    };
+    cmd.beginRendering(makeRenderingInfo(renderArea, {&colour, 1}, &depth));
 
     cmd.setViewport(0, makeFullViewport(extent));
     cmd.setScissor(0, renderArea);
+}
+
+void Renderer::endForwardRendering(vk::CommandBuffer cmd)
+{
+    cmd.endRendering();
+
+    // Mirror the old render pass's finalLayout: leave the HDR target in
+    // ShaderReadOnly so the transmission scene-capture / bloom / post-process
+    // can sample it. Depth keeps DepthStencilAttachmentOptimal for the
+    // transmission load. Depth store was DontCare under render passes, but we
+    // keep Store so the transmission depth-load has defined contents.
+    const vk::Image hdrImage = resources_.vulkanImage(postProcessing_.offscreenColourTarget());
+    forwardImageBarrier(
+        cmd, hdrImage, vk::ImageAspectFlagBits::eColor, vk::ImageLayout::eColorAttachmentOptimal,
+        vk::ImageLayout::eShaderReadOnlyOptimal, vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+        vk::AccessFlagBits2::eColorAttachmentWrite, vk::PipelineStageFlagBits2::eFragmentShader,
+        vk::AccessFlagBits2::eShaderRead);
 }
 
 void Renderer::submitAndPresent(Window& display, vk::CommandBuffer cmd, uint32_t imageIndex)
@@ -756,9 +823,6 @@ void Renderer::recreateSwapchain(const Window& display)
 
     swapchain_.recreate(device_, display);
     postProcessing_.recreate();
-    forwardPass_.createForwardFramebuffer(
-        device_, resources_.vulkanImageView(postProcessing_.offscreenColourTarget()),
-        swapchain_.depthView(), swapchain_.extent());
     transmission_.recreate(postProcessing_.offscreenColourTarget());
     // Rewrite the forward-globals (set 1) descriptors so they reference the
     // sampler/view from the freshly recreated sceneColor target (and any

@@ -16,7 +16,6 @@
 #include <fire_engine/render/frame.hpp>
 #include <fire_engine/render/pipeline.hpp>
 #include <fire_engine/render/post_processing.hpp>
-#include <fire_engine/render/render_pass.hpp>
 #include <fire_engine/render/resources.hpp>
 #include <fire_engine/render/shadows.hpp>
 #include <fire_engine/render/swapchain.hpp>
@@ -159,14 +158,14 @@ private:
     // releaseTexture/createTexture cycle has invalidated the old samplers.
     [[nodiscard]] GlobalDescriptorRequest buildGlobalDescriptorRequest() const;
     [[nodiscard]] std::optional<uint32_t> acquireNextImage(Window& display);
-    void beginRenderPass(vk::CommandBuffer cmd);
+    void beginForwardRendering(vk::CommandBuffer cmd);
+    void endForwardRendering(vk::CommandBuffer cmd);
     void submitAndPresent(Window& display, vk::CommandBuffer cmd, uint32_t imageIndex);
     void recordSkybox(Vec3 cameraPosition, Vec3 cameraTarget,
                       std::vector<DrawCommand>& drawCommands);
 
     Device device_;
     Swapchain swapchain_;
-    RenderPass forwardPass_;
     Pipeline pipelineOpaque_;
     Pipeline pipelineOpaqueDoubleSided_;
     Pipeline pipelineBlend_;

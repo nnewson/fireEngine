@@ -48,6 +48,10 @@ public:
     {
         return *depthView_;
     }
+    [[nodiscard]] vk::Image depthImage() const noexcept
+    {
+        return *depthImage_;
+    }
 
 private:
     void createSwapchain(const Device& device, const Window& window);

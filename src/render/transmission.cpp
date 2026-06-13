@@ -5,7 +5,7 @@
 #include <bit>
 #include <limits>
 
-#include <fire_engine/render/device.hpp>
+#include <fire_engine/render/render_target.hpp>
 #include <fire_engine/render/ubo.hpp>
 #include <fire_engine/render/viewport.hpp>
 
@@ -54,12 +54,10 @@ void recordTransmissionDrawBucket(vk::CommandBuffer cmd, std::span<const DrawCom
 
 } // namespace
 
-Transmission::Transmission(const Device& device, const Swapchain& swapchain, Resources& resources,
+Transmission::Transmission(const Swapchain& swapchain, Resources& resources,
                            TextureHandle offscreenColourHandle)
-    : device_{&device},
-      swapchain_{&swapchain},
+    : swapchain_{&swapchain},
       resources_{&resources},
-      forwardTransmissionPass_(RenderPass::createForwardTransmission(device)),
       offscreenColourHandle_{offscreenColourHandle}
 {
     rebuildSceneColorChain();
@@ -80,15 +78,7 @@ void Transmission::recordPass(vk::CommandBuffer cmd, std::span<const DrawCommand
 void Transmission::recreate(TextureHandle offscreenColourHandle)
 {
     offscreenColourHandle_ = offscreenColourHandle;
-    buildFramebuffer();
     rebuildSceneColorChain();
-}
-
-void Transmission::buildFramebuffer()
-{
-    forwardTransmissionPass_.createForwardFramebuffer(
-        *device_, resources_->vulkanImageView(offscreenColourHandle_), swapchain_->depthView(),
-        swapchain_->extent());
 }
 
 void Transmission::rebuildSceneColorChain()
@@ -280,16 +270,48 @@ void Transmission::recordForwardTransmissionPass(vk::CommandBuffer cmd,
         .offset = vk::Offset2D{.x = 0, .y = 0},
         .extent = extent,
     };
-    vk::RenderPassBeginInfo begin{
-        .renderPass = forwardTransmissionPass_.renderPass(),
-        .framebuffer = forwardTransmissionPass_.framebuffer(0),
-        .renderArea = renderArea,
+
+    // The HDR target was brought to ColorAttachmentOptimal by recordSceneColorCapture's
+    // closing hdrBack barrier; depth is still in DepthStencilAttachmentOptimal from
+    // the forward pass. Both are loaded (loadOp Load) and rendered on top.
+    vk::RenderingAttachmentInfo colour{
+        .imageView = resources_->vulkanImageView(offscreenColourHandle_),
+        .imageLayout = vk::ImageLayout::eColorAttachmentOptimal,
+        .loadOp = vk::AttachmentLoadOp::eLoad,
+        .storeOp = vk::AttachmentStoreOp::eStore,
     };
-    cmd.beginRenderPass(begin, vk::SubpassContents::eInline);
+    vk::RenderingAttachmentInfo depth{
+        .imageView = swapchain_->depthView(),
+        .imageLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal,
+        .loadOp = vk::AttachmentLoadOp::eLoad,
+        .storeOp = vk::AttachmentStoreOp::eDontCare,
+    };
+    cmd.beginRendering(makeRenderingInfo(renderArea, {&colour, 1}, &depth));
     cmd.setViewport(0, makeFullViewport(extent));
     cmd.setScissor(0, renderArea);
     recordTransmissionDrawBucket(cmd, transmissiveDraws, *resources_, globalSet);
-    cmd.endRenderPass();
+    cmd.endRendering();
+
+    // Mirror the old pass's finalLayout: leave the HDR target in ShaderReadOnly
+    // for bloom / post-process sampling.
+    vk::ImageMemoryBarrier2 toShaderRead{
+        .srcStageMask = vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+        .srcAccessMask = vk::AccessFlagBits2::eColorAttachmentWrite,
+        .dstStageMask = vk::PipelineStageFlagBits2::eFragmentShader,
+        .dstAccessMask = vk::AccessFlagBits2::eShaderRead,
+        .oldLayout = vk::ImageLayout::eColorAttachmentOptimal,
+        .newLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
+        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .image = resources_->vulkanImage(offscreenColourHandle_),
+        .subresourceRange = vk::ImageSubresourceRange{.aspectMask = vk::ImageAspectFlagBits::eColor,
+                                                      .baseMipLevel = 0,
+                                                      .levelCount = 1,
+                                                      .baseArrayLayer = 0,
+                                                      .layerCount = 1},
+    };
+    cmd.pipelineBarrier2(
+        vk::DependencyInfo{.imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &toShaderRead});
 }
 
 } // namespace fire_engine

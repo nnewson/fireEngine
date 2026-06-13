@@ -7,7 +7,6 @@
 #include <fire_engine/math/vec3.hpp>
 #include <fire_engine/render/constants.hpp>
 #include <fire_engine/render/pipeline.hpp>
-#include <fire_engine/render/render_pass.hpp>
 #include <fire_engine/render/resources.hpp>
 
 namespace fire_engine
@@ -47,9 +46,7 @@ public:
                     std::span<const PointShadowCaster> pointCasters) const;
 
 private:
-    const Device* device_{nullptr};
     Resources* resources_{nullptr};
-    RenderPass shadowPass_;
     Pipeline shadowPipeline_;
     Pipeline selfShadowFirstPipeline_;
     Pipeline selfShadowSecondPipeline_;
@@ -68,15 +65,6 @@ private:
     TextureHandle spotShadowColourHandle_{NullTexture};
     TextureHandle pointShadowMapHandle_{NullTexture};
     TextureHandle pointShadowColourHandle_{NullTexture};
-    // Framebuffers for each spot caster (one per layer in the spot 2D-array
-    // shadow map). Reuse the existing depth-only render pass — attachment
-    // descriptions are identical.
-    RenderPass spotShadowPass_;
-    // Framebuffers for each (cube, face) of every point caster.
-    RenderPass pointShadowPass_;
-    RenderPass worldShadowPass_;
-    RenderPass selfShadowFirstPass_;
-    RenderPass selfShadowSecondPass_;
 };
 
 } // namespace fire_engine

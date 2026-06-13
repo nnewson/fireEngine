@@ -42,9 +42,9 @@ void Swapchain::createDepthResources(const Device& device)
 
 void Swapchain::recreate(const Device& device, const Window& window)
 {
-    // Destroy in reverse dependency order. Framebuffers are owned by
-    // RenderPass now — the caller is responsible for recreating them after
-    // this call returns.
+    // Destroy in reverse dependency order. Dynamic rendering uses no
+    // framebuffers; the caller recreates dependent attachments (offscreen
+    // colour, bloom chain, scene-colour) after this call returns.
     views_.clear();
     depthView_ = nullptr;
     depthImage_ = nullptr;

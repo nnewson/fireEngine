@@ -24,7 +24,7 @@ Pipeline::Pipeline(const Device& device, const PipelineConfig& config)
     createGraphicsPipeline(config);
 }
 
-PipelineConfig Pipeline::forwardConfig(vk::RenderPass renderPass)
+PipelineConfig Pipeline::forwardConfig()
 {
     auto uniform = [](ForwardBinding binding, vk::ShaderStageFlags stages)
     {
@@ -101,20 +101,22 @@ PipelineConfig Pipeline::forwardConfig(vk::RenderPass renderPass)
     };
     config.pushConstantRanges.emplace_back(vk::ShaderStageFlagBits::eFragment, 0,
                                            static_cast<uint32_t>(sizeof(ForwardPushConstants)));
-    config.renderPass = renderPass;
+    // Forward target: HDR offscreen colour + shared D32 depth.
+    config.colourFormats = {vk::Format::eR16G16B16A16Sfloat};
+    config.depthFormat = vk::Format::eD32Sfloat;
     return config;
 }
 
-PipelineConfig Pipeline::forwardDoubleSidedConfig(vk::RenderPass renderPass)
+PipelineConfig Pipeline::forwardDoubleSidedConfig()
 {
-    PipelineConfig config = forwardConfig(renderPass);
+    PipelineConfig config = forwardConfig();
     config.cullMode = vk::CullModeFlagBits::eNone;
     return config;
 }
 
-PipelineConfig Pipeline::forwardBlendConfig(vk::RenderPass renderPass)
+PipelineConfig Pipeline::forwardBlendConfig()
 {
-    PipelineConfig config = forwardConfig(renderPass);
+    PipelineConfig config = forwardConfig();
     config.cullMode = vk::CullModeFlagBits::eNone;
     config.depthWrite = false;
     config.blendEnable = true;
@@ -125,7 +127,7 @@ PipelineConfig Pipeline::forwardBlendConfig(vk::RenderPass renderPass)
     return config;
 }
 
-PipelineConfig Pipeline::shadowConfig(vk::RenderPass renderPass)
+PipelineConfig Pipeline::shadowConfig()
 {
     PipelineConfig config;
     config.vertShaderPath = "shadow.vert.spv";
@@ -150,7 +152,11 @@ PipelineConfig Pipeline::shadowConfig(vk::RenderPass renderPass)
     config.pushConstantRanges.emplace_back(vk::ShaderStageFlagBits::eVertex |
                                                vk::ShaderStageFlagBits::eFragment,
                                            0, static_cast<uint32_t>(sizeof(ShadowPushConstants)));
-    config.renderPass = renderPass;
+    // Depth-only shadow pass keeps a throwaway B8G8R8A8 colour attachment (a
+    // MoltenVK TBDR quirk: depth-only render targets don't reliably commit
+    // their store) plus the sampled D32 depth.
+    config.colourFormats = {vk::Format::eB8G8R8A8Unorm};
+    config.depthFormat = vk::Format::eD32Sfloat;
     config.depthWrite = true;
     config.depthCompare = vk::CompareOp::eLessOrEqual;
     config.cullMode = vk::CullModeFlagBits::eFront;
@@ -161,9 +167,9 @@ PipelineConfig Pipeline::shadowConfig(vk::RenderPass renderPass)
     return config;
 }
 
-PipelineConfig Pipeline::selfShadowSecondConfig(vk::RenderPass renderPass)
+PipelineConfig Pipeline::selfShadowSecondConfig()
 {
-    PipelineConfig config = shadowConfig(renderPass);
+    PipelineConfig config = shadowConfig();
     config.fragShaderPath = "self_shadow_second.frag.spv";
     // Cull front faces so only back faces rasterise. Back faces are always
     // behind the first-pass front-face depth by definition, so the per-fragment
@@ -174,14 +180,14 @@ PipelineConfig Pipeline::selfShadowSecondConfig(vk::RenderPass renderPass)
     return config;
 }
 
-PipelineConfig Pipeline::selfShadowFirstConfig(vk::RenderPass renderPass)
+PipelineConfig Pipeline::selfShadowFirstConfig()
 {
-    PipelineConfig config = shadowConfig(renderPass);
+    PipelineConfig config = shadowConfig();
     config.cullMode = vk::CullModeFlagBits::eNone;
     return config;
 }
 
-PipelineConfig Pipeline::postProcessConfig(vk::RenderPass renderPass)
+PipelineConfig Pipeline::postProcessConfig(vk::Format colourFormat)
 {
     PipelineConfig config;
     config.vertShaderPath = "postprocess.vert.spv";
@@ -195,7 +201,7 @@ PipelineConfig Pipeline::postProcessConfig(vk::RenderPass renderPass)
     };
     config.pushConstantRanges.emplace_back(vk::ShaderStageFlagBits::eFragment, 0,
                                            static_cast<uint32_t>(sizeof(PostProcessPushConstants)));
-    config.renderPass = renderPass;
+    config.colourFormats = {colourFormat};
     config.useVertexInput = false;
     config.depthTestEnable = false;
     config.depthWrite = false;
@@ -203,7 +209,7 @@ PipelineConfig Pipeline::postProcessConfig(vk::RenderPass renderPass)
     return config;
 }
 
-PipelineConfig Pipeline::bloomDownsampleConfig(vk::RenderPass renderPass)
+PipelineConfig Pipeline::bloomDownsampleConfig(vk::Format colourFormat)
 {
     PipelineConfig config;
     config.vertShaderPath = "postprocess.vert.spv";
@@ -213,7 +219,7 @@ PipelineConfig Pipeline::bloomDownsampleConfig(vk::RenderPass renderPass)
     };
     config.pushConstantRanges.emplace_back(vk::ShaderStageFlagBits::eFragment, 0,
                                            static_cast<uint32_t>(sizeof(BloomPushConstants)));
-    config.renderPass = renderPass;
+    config.colourFormats = {colourFormat};
     config.useVertexInput = false;
     config.depthTestEnable = false;
     config.depthWrite = false;
@@ -221,9 +227,9 @@ PipelineConfig Pipeline::bloomDownsampleConfig(vk::RenderPass renderPass)
     return config;
 }
 
-PipelineConfig Pipeline::bloomUpsampleConfig(vk::RenderPass renderPass)
+PipelineConfig Pipeline::bloomUpsampleConfig(vk::Format colourFormat)
 {
-    PipelineConfig config = bloomDownsampleConfig(renderPass);
+    PipelineConfig config = bloomDownsampleConfig(colourFormat);
     config.fragShaderPath = "bloom_upsample.frag.spv";
     // Additive blend so each upsample step adds its tent contribution onto
     // the existing mip content (which was loaded via render-pass eLoad).
@@ -235,7 +241,7 @@ PipelineConfig Pipeline::bloomUpsampleConfig(vk::RenderPass renderPass)
     return config;
 }
 
-PipelineConfig Pipeline::skyboxConfig(vk::RenderPass renderPass)
+PipelineConfig Pipeline::skyboxConfig()
 {
     PipelineConfig config;
     config.vertShaderPath = "skybox.vert.spv";
@@ -248,7 +254,9 @@ PipelineConfig Pipeline::skyboxConfig(vk::RenderPass renderPass)
         {bindingIndex(SkyboxBinding::Light), vk::DescriptorType::eUniformBuffer, 1,
          vk::ShaderStageFlagBits::eFragment},
     };
-    config.renderPass = renderPass;
+    // Shares the forward HDR colour + D32 depth target.
+    config.colourFormats = {vk::Format::eR16G16B16A16Sfloat};
+    config.depthFormat = vk::Format::eD32Sfloat;
     config.useVertexInput = false;
     config.depthWrite = false;
     config.depthCompare = vk::CompareOp::eLessOrEqual;
@@ -256,7 +264,7 @@ PipelineConfig Pipeline::skyboxConfig(vk::RenderPass renderPass)
     return config;
 }
 
-PipelineConfig Pipeline::environmentConvertConfig(vk::RenderPass renderPass)
+PipelineConfig Pipeline::environmentConvertConfig(vk::Format colourFormat)
 {
     PipelineConfig config;
     config.vertShaderPath = "skybox.vert.spv";
@@ -266,7 +274,7 @@ PipelineConfig Pipeline::environmentConvertConfig(vk::RenderPass renderPass)
     };
     config.pushConstantRanges.emplace_back(vk::ShaderStageFlagBits::eFragment, 0,
                                            static_cast<uint32_t>(sizeof(EnvironmentCaptureUBO)));
-    config.renderPass = renderPass;
+    config.colourFormats = {colourFormat};
     config.useVertexInput = false;
     config.depthTestEnable = false;
     config.depthWrite = false;
@@ -274,7 +282,7 @@ PipelineConfig Pipeline::environmentConvertConfig(vk::RenderPass renderPass)
     return config;
 }
 
-PipelineConfig Pipeline::irradianceConvolutionConfig(vk::RenderPass renderPass)
+PipelineConfig Pipeline::irradianceConvolutionConfig(vk::Format colourFormat)
 {
     PipelineConfig config;
     config.vertShaderPath = "skybox.vert.spv";
@@ -284,7 +292,7 @@ PipelineConfig Pipeline::irradianceConvolutionConfig(vk::RenderPass renderPass)
     };
     config.pushConstantRanges.emplace_back(vk::ShaderStageFlagBits::eFragment, 0,
                                            static_cast<uint32_t>(sizeof(EnvironmentCaptureUBO)));
-    config.renderPass = renderPass;
+    config.colourFormats = {colourFormat};
     config.useVertexInput = false;
     config.depthTestEnable = false;
     config.depthWrite = false;
@@ -292,7 +300,7 @@ PipelineConfig Pipeline::irradianceConvolutionConfig(vk::RenderPass renderPass)
     return config;
 }
 
-PipelineConfig Pipeline::prefilterEnvironmentConfig(vk::RenderPass renderPass)
+PipelineConfig Pipeline::prefilterEnvironmentConfig(vk::Format colourFormat)
 {
     PipelineConfig config;
     config.vertShaderPath = "skybox.vert.spv";
@@ -303,7 +311,7 @@ PipelineConfig Pipeline::prefilterEnvironmentConfig(vk::RenderPass renderPass)
     config.pushConstantRanges.emplace_back(
         vk::ShaderStageFlagBits::eFragment, 0,
         static_cast<uint32_t>(sizeof(EnvironmentPrefilterPushConstants)));
-    config.renderPass = renderPass;
+    config.colourFormats = {colourFormat};
     config.useVertexInput = false;
     config.depthTestEnable = false;
     config.depthWrite = false;
@@ -311,12 +319,12 @@ PipelineConfig Pipeline::prefilterEnvironmentConfig(vk::RenderPass renderPass)
     return config;
 }
 
-PipelineConfig Pipeline::brdfIntegrationConfig(vk::RenderPass renderPass)
+PipelineConfig Pipeline::brdfIntegrationConfig(vk::Format colourFormat)
 {
     PipelineConfig config;
     config.vertShaderPath = "postprocess.vert.spv";
     config.fragShaderPath = "brdf_integration.frag.spv";
-    config.renderPass = renderPass;
+    config.colourFormats = {colourFormat};
     config.useVertexInput = false;
     config.depthTestEnable = false;
     config.depthWrite = false;
@@ -470,7 +478,16 @@ void Pipeline::createGraphicsPipeline(const PipelineConfig& config)
 
     const vk::PipelineColorBlendStateCreateInfo* colourBlendPtr = &colourBlend;
 
+    // Dynamic rendering: chain a VkPipelineRenderingCreateInfo carrying the
+    // attachment formats the pipeline renders into (no VkRenderPass).
+    vk::PipelineRenderingCreateInfo renderingInfo{
+        .colorAttachmentCount = static_cast<uint32_t>(config.colourFormats.size()),
+        .pColorAttachmentFormats = config.colourFormats.data(),
+        .depthAttachmentFormat = config.depthFormat,
+    };
+
     vk::GraphicsPipelineCreateInfo pci{
+        .pNext = &renderingInfo,
         .stageCount = static_cast<uint32_t>(stages.size()),
         .pStages = stages.data(),
         .pVertexInputState = &vertInput,
@@ -482,7 +499,6 @@ void Pipeline::createGraphicsPipeline(const PipelineConfig& config)
         .pColorBlendState = colourBlendPtr,
         .pDynamicState = &dynamicState,
         .layout = *pipelineLayout_,
-        .renderPass = config.renderPass,
         .subpass = 0,
     };
 

@@ -4,27 +4,56 @@
 
 #include <fire_engine/render/constants.hpp>
 #include <fire_engine/render/device.hpp>
+#include <fire_engine/render/render_target.hpp>
 #include <fire_engine/render/ubo.hpp>
 #include <fire_engine/render/viewport.hpp>
 
 namespace fire_engine
 {
 
+namespace
+{
+
+// Single-subresource layout transition through synchronization2, used to cycle
+// bloom-chain mips and the swapchain image between colour-attachment and
+// shader-read/present states (dynamic rendering does no implicit transitions).
+void imageBarrier(vk::CommandBuffer cmd, vk::Image image, vk::ImageAspectFlags aspect,
+                  uint32_t baseMip, vk::ImageLayout oldLayout, vk::ImageLayout newLayout,
+                  vk::PipelineStageFlags2 srcStage, vk::AccessFlags2 srcAccess,
+                  vk::PipelineStageFlags2 dstStage, vk::AccessFlags2 dstAccess)
+{
+    vk::ImageMemoryBarrier2 b{
+        .srcStageMask = srcStage,
+        .srcAccessMask = srcAccess,
+        .dstStageMask = dstStage,
+        .dstAccessMask = dstAccess,
+        .oldLayout = oldLayout,
+        .newLayout = newLayout,
+        .srcQueueFamilyIndex = vk::QueueFamilyIgnored,
+        .dstQueueFamilyIndex = vk::QueueFamilyIgnored,
+        .image = image,
+        .subresourceRange = vk::ImageSubresourceRange{.aspectMask = aspect,
+                                                      .baseMipLevel = baseMip,
+                                                      .levelCount = 1,
+                                                      .baseArrayLayer = 0,
+                                                      .layerCount = 1},
+    };
+    cmd.pipelineBarrier2(
+        vk::DependencyInfo{.imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &b});
+}
+
+} // namespace
+
 PostProcessing::PostProcessing(const Device& device, const Swapchain& swapchain,
                                Resources& resources)
-    : device_{&device},
-      swapchain_{&swapchain},
+    : swapchain_{&swapchain},
       resources_{&resources},
-      postProcessPass_(RenderPass::createPostProcess(device, swapchain)),
-      bloomDownPass_(RenderPass::createBloomDown(device, vk::Format::eR16G16B16A16Sfloat)),
-      bloomUpPass_(RenderPass::createBloomUp(device, vk::Format::eR16G16B16A16Sfloat)),
-      postProcessPipeline_(device, Pipeline::postProcessConfig(postProcessPass_.renderPass())),
+      postProcessPipeline_(device, Pipeline::postProcessConfig(swapchain.format())),
       bloomDownsamplePipeline_(device,
-                               Pipeline::bloomDownsampleConfig(bloomDownPass_.renderPass())),
-      bloomUpsamplePipeline_(device, Pipeline::bloomUpsampleConfig(bloomUpPass_.renderPass()))
+                               Pipeline::bloomDownsampleConfig(vk::Format::eR16G16B16A16Sfloat)),
+      bloomUpsamplePipeline_(device, Pipeline::bloomUpsampleConfig(vk::Format::eR16G16B16A16Sfloat))
 {
     offscreenColourHandle_ = resources_->createOffscreenColourTarget(swapchain_->extent());
-    postProcessPass_.createPostProcessFramebuffers(*device_, *swapchain_);
     buildBloomResources();
     std::array<uint16_t, 3> postProcessIndices{0, 1, 2};
     postProcessIndexBuffer_ = resources_->createIndexBuffer(postProcessIndices);
@@ -39,28 +68,6 @@ void PostProcessing::buildBloomResources()
     uint32_t bloomHeight = std::max(1u, extent.height / 2);
 
     bloomChainHandle_ = resources_->createBloomChain(bloomWidth, bloomHeight, kBloomMipCount);
-
-    std::vector<vk::ImageView> downViews;
-    std::vector<vk::Extent2D> downExtents;
-    downViews.reserve(kBloomMipCount);
-    downExtents.reserve(kBloomMipCount);
-    for (uint32_t m = 0; m < kBloomMipCount; ++m)
-    {
-        downViews.push_back(resources_->vulkanBloomMipView(bloomChainHandle_, m));
-        downExtents.push_back({std::max(1u, bloomWidth >> m), std::max(1u, bloomHeight >> m)});
-    }
-    bloomDownPass_.createColourFramebuffersPerMip(*device_, downViews, downExtents);
-
-    std::vector<vk::ImageView> upViews;
-    std::vector<vk::Extent2D> upExtents;
-    upViews.reserve(kBloomMipCount - 1);
-    upExtents.reserve(kBloomMipCount - 1);
-    for (uint32_t m = 0; m < kBloomMipCount - 1; ++m)
-    {
-        upViews.push_back(resources_->vulkanBloomMipView(bloomChainHandle_, m));
-        upExtents.push_back({std::max(1u, bloomWidth >> m), std::max(1u, bloomHeight >> m)});
-    }
-    bloomUpPass_.createColourFramebuffersPerMip(*device_, upViews, upExtents);
 
     bloomDownDescSets_.clear();
     bloomDownDescSets_.reserve(kBloomMipCount);
@@ -95,7 +102,13 @@ void PostProcessing::recordBloomPasses(vk::CommandBuffer cmd) const
 
     const vk::PipelineLayout downLayout = bloomDownsamplePipeline_.pipelineLayout();
     const vk::PipelineLayout upLayout = bloomUpsamplePipeline_.pipelineLayout();
+    const vk::Image bloomImage = resources_->vulkanImage(bloomChainHandle_);
 
+    // Downsample: each mip is written once then sampled by the next (coarser)
+    // pass, so we transition it Undefined → ColorAttachment (loadOp DontCare
+    // discards) for the draw and → ShaderReadOnly afterwards. The source mip's
+    // post-draw ShaderReadOnly barrier from the previous iteration provides the
+    // read-after-write ordering for this pass's sample.
     for (uint32_t m = 0; m < kBloomMipCount; ++m)
     {
         uint32_t dstW = std::max(1u, bloomWidth >> m);
@@ -107,12 +120,20 @@ void PostProcessing::recordBloomPasses(vk::CommandBuffer cmd) const
             .offset = vk::Offset2D{.x = 0, .y = 0},
             .extent = vk::Extent2D{.width = dstW, .height = dstH},
         };
-        vk::RenderPassBeginInfo begin{
-            .renderPass = bloomDownPass_.renderPass(),
-            .framebuffer = bloomDownPass_.framebuffer(m),
-            .renderArea = renderArea,
+
+        imageBarrier(cmd, bloomImage, vk::ImageAspectFlagBits::eColor, m,
+                     vk::ImageLayout::eUndefined, vk::ImageLayout::eColorAttachmentOptimal,
+                     vk::PipelineStageFlagBits2::eColorAttachmentOutput, {},
+                     vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+                     vk::AccessFlagBits2::eColorAttachmentWrite);
+
+        vk::RenderingAttachmentInfo colour{
+            .imageView = resources_->vulkanBloomMipView(bloomChainHandle_, m),
+            .imageLayout = vk::ImageLayout::eColorAttachmentOptimal,
+            .loadOp = vk::AttachmentLoadOp::eDontCare,
+            .storeOp = vk::AttachmentStoreOp::eStore,
         };
-        cmd.beginRenderPass(begin, vk::SubpassContents::eInline);
+        cmd.beginRendering(makeRenderingInfo(renderArea, {&colour, 1}, nullptr));
         cmd.setViewport(0, makeFullViewport(static_cast<float>(dstW), static_cast<float>(dstH)));
         cmd.setScissor(0, renderArea);
         cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, bloomDownsamplePipeline_.pipeline());
@@ -125,9 +146,20 @@ void PostProcessing::recordBloomPasses(vk::CommandBuffer cmd) const
         cmd.pushConstants<BloomPushConstants>(downLayout, vk::ShaderStageFlagBits::eFragment, 0,
                                               pc);
         cmd.draw(3, 1, 0, 0);
-        cmd.endRenderPass();
+        cmd.endRendering();
+
+        imageBarrier(cmd, bloomImage, vk::ImageAspectFlagBits::eColor, m,
+                     vk::ImageLayout::eColorAttachmentOptimal,
+                     vk::ImageLayout::eShaderReadOnlyOptimal,
+                     vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+                     vk::AccessFlagBits2::eColorAttachmentWrite,
+                     vk::PipelineStageFlagBits2::eFragmentShader, vk::AccessFlagBits2::eShaderRead);
     }
 
+    // Upsample: additively blend each coarser mip into the next finer one. The
+    // destination mip already holds its downsample result (loadOp Load), so it
+    // is transitioned ShaderReadOnly → ColorAttachment for the blend and back to
+    // ShaderReadOnly so the next finer pass (and the final tone-map) can sample.
     for (int m = static_cast<int>(kBloomMipCount) - 2; m >= 0; --m)
     {
         uint32_t dstW = std::max(1u, bloomWidth >> m);
@@ -139,12 +171,22 @@ void PostProcessing::recordBloomPasses(vk::CommandBuffer cmd) const
             .offset = vk::Offset2D{.x = 0, .y = 0},
             .extent = vk::Extent2D{.width = dstW, .height = dstH},
         };
-        vk::RenderPassBeginInfo begin{
-            .renderPass = bloomUpPass_.renderPass(),
-            .framebuffer = bloomUpPass_.framebuffer(static_cast<uint32_t>(m)),
-            .renderArea = renderArea,
+
+        imageBarrier(
+            cmd, bloomImage, vk::ImageAspectFlagBits::eColor, static_cast<uint32_t>(m),
+            vk::ImageLayout::eShaderReadOnlyOptimal, vk::ImageLayout::eColorAttachmentOptimal,
+            vk::PipelineStageFlagBits2::eFragmentShader, vk::AccessFlagBits2::eShaderRead,
+            vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+            vk::AccessFlagBits2::eColorAttachmentRead | vk::AccessFlagBits2::eColorAttachmentWrite);
+
+        vk::RenderingAttachmentInfo colour{
+            .imageView =
+                resources_->vulkanBloomMipView(bloomChainHandle_, static_cast<uint32_t>(m)),
+            .imageLayout = vk::ImageLayout::eColorAttachmentOptimal,
+            .loadOp = vk::AttachmentLoadOp::eLoad,
+            .storeOp = vk::AttachmentStoreOp::eStore,
         };
-        cmd.beginRenderPass(begin, vk::SubpassContents::eInline);
+        cmd.beginRendering(makeRenderingInfo(renderArea, {&colour, 1}, nullptr));
         cmd.setViewport(0, makeFullViewport(static_cast<float>(dstW), static_cast<float>(dstH)));
         cmd.setScissor(0, renderArea);
         cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, bloomUpsamplePipeline_.pipeline());
@@ -156,7 +198,14 @@ void PostProcessing::recordBloomPasses(vk::CommandBuffer cmd) const
         pc.isFirstPass = 0;
         cmd.pushConstants<BloomPushConstants>(upLayout, vk::ShaderStageFlagBits::eFragment, 0, pc);
         cmd.draw(3, 1, 0, 0);
-        cmd.endRenderPass();
+        cmd.endRendering();
+
+        imageBarrier(cmd, bloomImage, vk::ImageAspectFlagBits::eColor, static_cast<uint32_t>(m),
+                     vk::ImageLayout::eColorAttachmentOptimal,
+                     vk::ImageLayout::eShaderReadOnlyOptimal,
+                     vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+                     vk::AccessFlagBits2::eColorAttachmentWrite,
+                     vk::PipelineStageFlagBits2::eFragmentShader, vk::AccessFlagBits2::eShaderRead);
     }
 }
 
@@ -190,12 +239,25 @@ void PostProcessing::recordPostProcessPass(vk::CommandBuffer cmd, uint32_t image
         .offset = vk::Offset2D{.x = 0, .y = 0},
         .extent = extent,
     };
-    vk::RenderPassBeginInfo ppBegin{
-        .renderPass = postProcessPass_.renderPass(),
-        .framebuffer = postProcessPass_.framebuffer(imageIndex),
-        .renderArea = renderArea,
+
+    const vk::Image swapImage = swapchain_->images()[imageIndex];
+
+    // Bring the acquired swapchain image into colour-attachment layout (its
+    // contents are overwritten, loadOp DontCare). The acquire→write execution
+    // dependency is carried by the imageAvailable semaphore wait at submit.
+    imageBarrier(cmd, swapImage, vk::ImageAspectFlagBits::eColor, 0, vk::ImageLayout::eUndefined,
+                 vk::ImageLayout::eColorAttachmentOptimal,
+                 vk::PipelineStageFlagBits2::eColorAttachmentOutput, {},
+                 vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+                 vk::AccessFlagBits2::eColorAttachmentWrite);
+
+    vk::RenderingAttachmentInfo colour{
+        .imageView = *swapchain_->imageViews()[imageIndex],
+        .imageLayout = vk::ImageLayout::eColorAttachmentOptimal,
+        .loadOp = vk::AttachmentLoadOp::eDontCare,
+        .storeOp = vk::AttachmentStoreOp::eStore,
     };
-    cmd.beginRenderPass(ppBegin, vk::SubpassContents::eInline);
+    cmd.beginRendering(makeRenderingInfo(renderArea, {&colour, 1}, nullptr));
 
     cmd.setViewport(0, makeFullViewport(extent));
     cmd.setScissor(0, renderArea);
@@ -211,14 +273,21 @@ void PostProcessing::recordPostProcessPass(vk::CommandBuffer cmd, uint32_t image
     cmd.bindIndexBuffer(resources_->vulkanBuffer(postProcessIndexBuffer_), 0,
                         vk::IndexType::eUint16);
     cmd.drawIndexed(3, 1, 0, 0, 0);
-    cmd.endRenderPass();
+    cmd.endRendering();
+
+    // Transition to present layout. The render→present dependency is carried by
+    // the renderFinished semaphore signalled at submit, so dstStage is bottom.
+    imageBarrier(cmd, swapImage, vk::ImageAspectFlagBits::eColor, 0,
+                 vk::ImageLayout::eColorAttachmentOptimal, vk::ImageLayout::ePresentSrcKHR,
+                 vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+                 vk::AccessFlagBits2::eColorAttachmentWrite,
+                 vk::PipelineStageFlagBits2::eBottomOfPipe, {});
 }
 
 void PostProcessing::recreate()
 {
     resources_->releaseTexture(offscreenColourHandle_);
     offscreenColourHandle_ = resources_->createOffscreenColourTarget(swapchain_->extent());
-    postProcessPass_.createPostProcessFramebuffers(*device_, *swapchain_);
 
     resources_->releaseTexture(bloomChainHandle_);
     buildBloomResources();

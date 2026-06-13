@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <filesystem>
+#include <span>
 #include <stdexcept>
 
 #include <fire_engine/graphics/image.hpp>
@@ -10,7 +11,7 @@
 #include <fire_engine/render/cubemap_basis.hpp>
 #include <fire_engine/render/device.hpp>
 #include <fire_engine/render/pipeline.hpp>
-#include <fire_engine/render/render_pass.hpp>
+#include <fire_engine/render/render_target.hpp>
 #include <fire_engine/render/ubo.hpp>
 #include <fire_engine/render/viewport.hpp>
 
@@ -145,12 +146,45 @@ void oneTimeSubmit(const Device& device, RecordFn&& record)
     device.graphicsQueue().waitIdle();
 }
 
-// Renders the six cube faces of `pass` through `pipeline`, binding `ds` and
-// pushing the per-face constant returned by makePush(face). `extent` sizes the
-// square viewport/scissor. Shared by the equirect→cubemap, irradiance, and
-// per-mip prefilter passes.
+// Transitions `layerCount` colour layers at `baseMip` of `image` into the
+// given layout. Dynamic rendering performs no implicit attachment transitions,
+// so the precompute passes do them explicitly: Undefined → ColorAttachment
+// before rendering, ColorAttachment → ShaderReadOnly afterwards so the result
+// can be sampled.
+void colourLayerBarrier(vk::CommandBuffer cmd, vk::Image image, uint32_t baseMip,
+                        uint32_t layerCount, vk::ImageLayout oldLayout, vk::ImageLayout newLayout,
+                        vk::PipelineStageFlags2 srcStage, vk::AccessFlags2 srcAccess,
+                        vk::PipelineStageFlags2 dstStage, vk::AccessFlags2 dstAccess)
+{
+    vk::ImageMemoryBarrier2 b{
+        .srcStageMask = srcStage,
+        .srcAccessMask = srcAccess,
+        .dstStageMask = dstStage,
+        .dstAccessMask = dstAccess,
+        .oldLayout = oldLayout,
+        .newLayout = newLayout,
+        .srcQueueFamilyIndex = vk::QueueFamilyIgnored,
+        .dstQueueFamilyIndex = vk::QueueFamilyIgnored,
+        .image = image,
+        .subresourceRange = vk::ImageSubresourceRange{.aspectMask = vk::ImageAspectFlagBits::eColor,
+                                                      .baseMipLevel = baseMip,
+                                                      .levelCount = 1,
+                                                      .baseArrayLayer = 0,
+                                                      .layerCount = layerCount},
+    };
+    cmd.pipelineBarrier2(
+        vk::DependencyInfo{.imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &b});
+}
+
+// Renders the six cube faces at `mipLevel` of `image` through `pipeline` using
+// the per-face attachment views, binding `ds` and pushing the per-face constant
+// returned by makePush(face). `extent` sizes the square viewport/scissor.
+// Brackets the draws with explicit layout transitions (dynamic rendering does
+// not do them) and leaves every face in ShaderReadOnlyOptimal. Shared by the
+// equirect→cubemap, irradiance, and per-mip prefilter passes.
 template <typename MakePush>
-void renderCubemapFaces(vk::CommandBuffer cmd, const RenderPass& pass, const Pipeline& pipeline,
+void renderCubemapFaces(vk::CommandBuffer cmd, vk::Image image, uint32_t mipLevel,
+                        std::span<const vk::ImageView> faceViews, const Pipeline& pipeline,
                         vk::DescriptorSet ds, uint32_t extent, MakePush makePush)
 {
     const vk::Viewport viewport =
@@ -163,18 +197,24 @@ void renderCubemapFaces(vk::CommandBuffer cmd, const RenderPass& pass, const Pip
         .color = vk::ClearColorValue{.float32 = {{0.0f, 0.0f, 0.0f, 1.0f}}},
     };
 
+    colourLayerBarrier(cmd, image, mipLevel, kCubemapFaceCount, vk::ImageLayout::eUndefined,
+                       vk::ImageLayout::eColorAttachmentOptimal,
+                       vk::PipelineStageFlagBits2::eTopOfPipe, {},
+                       vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+                       vk::AccessFlagBits2::eColorAttachmentWrite);
+
     for (uint32_t face = 0; face < kCubemapFaceCount; ++face)
     {
         auto push = makePush(face);
 
-        vk::RenderPassBeginInfo beginInfo{
-            .renderPass = pass.renderPass(),
-            .framebuffer = pass.framebuffer(face),
-            .renderArea = renderArea,
-            .clearValueCount = 1,
-            .pClearValues = &clearColour,
+        vk::RenderingAttachmentInfo colour{
+            .imageView = faceViews[face],
+            .imageLayout = vk::ImageLayout::eColorAttachmentOptimal,
+            .loadOp = vk::AttachmentLoadOp::eClear,
+            .storeOp = vk::AttachmentStoreOp::eStore,
+            .clearValue = clearColour,
         };
-        cmd.beginRenderPass(beginInfo, vk::SubpassContents::eInline);
+        cmd.beginRendering(makeRenderingInfo(renderArea, {&colour, 1}, nullptr));
         cmd.setViewport(0, viewport);
         cmd.setScissor(0, renderArea);
         cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline.pipeline());
@@ -183,8 +223,14 @@ void renderCubemapFaces(vk::CommandBuffer cmd, const RenderPass& pass, const Pip
         cmd.pushConstants<decltype(push)>(pipeline.pipelineLayout(),
                                           vk::ShaderStageFlagBits::eFragment, 0, push);
         cmd.draw(3, 1, 0, 0);
-        cmd.endRenderPass();
+        cmd.endRendering();
     }
+
+    colourLayerBarrier(
+        cmd, image, mipLevel, kCubemapFaceCount, vk::ImageLayout::eColorAttachmentOptimal,
+        vk::ImageLayout::eShaderReadOnlyOptimal, vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+        vk::AccessFlagBits2::eColorAttachmentWrite, vk::PipelineStageFlagBits2::eFragmentShader,
+        vk::AccessFlagBits2::eShaderRead);
 }
 
 // Generates mips 1..mipLevels-1 of an already-rendered cubemap (all six layers)
@@ -320,36 +366,34 @@ void EnvironmentPrecompute::createSkyboxEnvironment(
             resources_->createRenderTargetCubemap(kSkyboxCubemapExtent, kSkyboxCubemapMipLevels,
                                                   vk::Format::eR32G32B32A32Sfloat, cubemapSampler);
 
-        RenderPass environmentPass = RenderPass::createOffscreenColour(
-            *device_, resources_->textureFormat(skyboxCubemapHandle_));
         Pipeline environmentPipeline(
-            *device_, Pipeline::environmentConvertConfig(environmentPass.renderPass()));
+            *device_,
+            Pipeline::environmentConvertConfig(resources_->textureFormat(skyboxCubemapHandle_)));
 
         auto faceViews = cubemapFaceViews(*resources_, skyboxCubemapHandle_);
-        environmentPass.createColourFramebuffers(*device_, faceViews, kSkyboxCubemapExtent);
 
         auto captureSets = resources_->descriptors().createSingleImageSamplerDescriptors(
             environmentPipeline.descriptorSetLayout(), equirectHandle);
         const vk::DescriptorSet ds = resources_->vulkanDescriptorSet(captureSets[0]);
 
-        oneTimeSubmit(*device_,
-                      [&](vk::CommandBuffer cmd)
-                      {
-                          renderCubemapFaces(
-                              cmd, environmentPass, environmentPipeline, ds, kSkyboxCubemapExtent,
-                              [](uint32_t face)
-                              {
-                                  EnvironmentCaptureUBO capture{};
-                                  capture.faceIndex = static_cast<int>(face);
-                                  capture.faceExtent = static_cast<int>(kSkyboxCubemapExtent);
-                                  return capture;
-                              });
-                          // Build the source mip chain so the prefilter pass can do
-                          // mip-weighted importance sampling against this cubemap.
-                          generateCubemapMipChain(cmd,
-                                                  resources_->vulkanImage(skyboxCubemapHandle_),
-                                                  kSkyboxCubemapExtent, kSkyboxCubemapMipLevels);
-                      });
+        oneTimeSubmit(
+            *device_,
+            [&](vk::CommandBuffer cmd)
+            {
+                renderCubemapFaces(cmd, resources_->vulkanImage(skyboxCubemapHandle_), 0, faceViews,
+                                   environmentPipeline, ds, kSkyboxCubemapExtent,
+                                   [](uint32_t face)
+                                   {
+                                       EnvironmentCaptureUBO capture{};
+                                       capture.faceIndex = static_cast<int>(face);
+                                       capture.faceExtent = static_cast<int>(kSkyboxCubemapExtent);
+                                       return capture;
+                                   });
+                // Build the source mip chain so the prefilter pass can do
+                // mip-weighted importance sampling against this cubemap.
+                generateCubemapMipChain(cmd, resources_->vulkanImage(skyboxCubemapHandle_),
+                                        kSkyboxCubemapExtent, kSkyboxCubemapMipLevels);
+            });
     }
     catch (const std::exception& e)
     {
@@ -376,13 +420,11 @@ void EnvironmentPrecompute::createIrradianceEnvironment()
         irradianceCubemapHandle_ = resources_->createRenderTargetCubemap(
             kIrradianceCubemapExtent, 1, vk::Format::eR32G32B32A32Sfloat, sampler);
 
-        RenderPass irradiancePass = RenderPass::createOffscreenColour(
-            *device_, resources_->textureFormat(irradianceCubemapHandle_));
-        Pipeline irradiancePipeline(
-            *device_, Pipeline::irradianceConvolutionConfig(irradiancePass.renderPass()));
+        Pipeline irradiancePipeline(*device_,
+                                    Pipeline::irradianceConvolutionConfig(
+                                        resources_->textureFormat(irradianceCubemapHandle_)));
 
         auto faceViews = cubemapFaceViews(*resources_, irradianceCubemapHandle_);
-        irradiancePass.createColourFramebuffers(*device_, faceViews, kIrradianceCubemapExtent);
 
         auto captureSets = resources_->descriptors().createSingleImageSamplerDescriptors(
             irradiancePipeline.descriptorSetLayout(), skyboxCubemapHandle_);
@@ -392,7 +434,8 @@ void EnvironmentPrecompute::createIrradianceEnvironment()
                       [&](vk::CommandBuffer cmd)
                       {
                           renderCubemapFaces(
-                              cmd, irradiancePass, irradiancePipeline, ds, kIrradianceCubemapExtent,
+                              cmd, resources_->vulkanImage(irradianceCubemapHandle_), 0, faceViews,
+                              irradiancePipeline, ds, kIrradianceCubemapExtent,
                               [](uint32_t face)
                               {
                                   EnvironmentCaptureUBO capture{};
@@ -422,26 +465,11 @@ void EnvironmentPrecompute::createPrefilteredEnvironment()
             kPrefilteredCubemapExtent, kPrefilteredCubemapMipLevels,
             vk::Format::eR32G32B32A32Sfloat, sampler);
 
-        RenderPass prefilterPassTemplate = RenderPass::createOffscreenColour(
-            *device_, resources_->textureFormat(prefilteredCubemapHandle_));
-        Pipeline prefilterPipeline(
-            *device_, Pipeline::prefilterEnvironmentConfig(prefilterPassTemplate.renderPass()));
+        Pipeline prefilterPipeline(*device_,
+                                   Pipeline::prefilterEnvironmentConfig(
+                                       resources_->textureFormat(prefilteredCubemapHandle_)));
         auto captureSets = resources_->descriptors().createSingleImageSamplerDescriptors(
             prefilterPipeline.descriptorSetLayout(), skyboxCubemapHandle_);
-
-        std::vector<RenderPass> prefilterPasses;
-        prefilterPasses.reserve(kPrefilteredCubemapMipLevels);
-
-        uint32_t mipExtent = kPrefilteredCubemapExtent;
-        for (uint32_t level = 0; level < kPrefilteredCubemapMipLevels; ++level)
-        {
-            RenderPass mipPass = RenderPass::createOffscreenColour(
-                *device_, resources_->textureFormat(prefilteredCubemapHandle_));
-            auto faceViews = cubemapFaceViews(*resources_, prefilteredCubemapHandle_, level);
-            mipPass.createColourFramebuffers(*device_, faceViews, mipExtent);
-            prefilterPasses.push_back(std::move(mipPass));
-            mipExtent = std::max(1u, mipExtent / 2);
-        }
 
         const vk::DescriptorSet ds = resources_->vulkanDescriptorSet(captureSets[0]);
 
@@ -449,7 +477,7 @@ void EnvironmentPrecompute::createPrefilteredEnvironment()
             *device_,
             [&](vk::CommandBuffer cmd)
             {
-                mipExtent = kPrefilteredCubemapExtent;
+                uint32_t mipExtent = kPrefilteredCubemapExtent;
                 for (uint32_t level = 0; level < kPrefilteredCubemapMipLevels; ++level)
                 {
                     float roughness = kPrefilteredCubemapMipLevels > 1
@@ -457,18 +485,22 @@ void EnvironmentPrecompute::createPrefilteredEnvironment()
                                                 static_cast<float>(kPrefilteredCubemapMipLevels - 1)
                                           : 0.0f;
 
-                    renderCubemapFaces(
-                        cmd, prefilterPasses[level], prefilterPipeline, ds, mipExtent,
-                        [&](uint32_t face)
-                        {
-                            EnvironmentPrefilterPushConstants capture{};
-                            capture.faceIndex = static_cast<int>(face);
-                            capture.faceExtent = static_cast<int>(mipExtent);
-                            capture.roughness = roughness;
-                            capture.sourceFaceExtent = static_cast<int>(kSkyboxCubemapExtent);
-                            capture.sourceMaxMip = static_cast<float>(kSkyboxCubemapMipLevels - 1);
-                            return capture;
-                        });
+                    auto faceViews =
+                        cubemapFaceViews(*resources_, prefilteredCubemapHandle_, level);
+                    renderCubemapFaces(cmd, resources_->vulkanImage(prefilteredCubemapHandle_),
+                                       level, faceViews, prefilterPipeline, ds, mipExtent,
+                                       [&](uint32_t face)
+                                       {
+                                           EnvironmentPrefilterPushConstants capture{};
+                                           capture.faceIndex = static_cast<int>(face);
+                                           capture.faceExtent = static_cast<int>(mipExtent);
+                                           capture.roughness = roughness;
+                                           capture.sourceFaceExtent =
+                                               static_cast<int>(kSkyboxCubemapExtent);
+                                           capture.sourceMaxMip =
+                                               static_cast<float>(kSkyboxCubemapMipLevels - 1);
+                                           return capture;
+                                       });
 
                     mipExtent = std::max(1u, mipExtent / 2);
                 }
@@ -488,13 +520,11 @@ void EnvironmentPrecompute::createBrdfLut()
     {
         brdfLutHandle_ = resources_->createOffscreenColourTarget({kBrdfLutExtent, kBrdfLutExtent});
 
-        RenderPass brdfPass =
-            RenderPass::createOffscreenColour(*device_, resources_->textureFormat(brdfLutHandle_));
-        Pipeline brdfPipeline(*device_, Pipeline::brdfIntegrationConfig(brdfPass.renderPass()));
+        Pipeline brdfPipeline(
+            *device_, Pipeline::brdfIntegrationConfig(resources_->textureFormat(brdfLutHandle_)));
 
-        std::array<vk::ImageView, 1> views = {resources_->vulkanImageView(brdfLutHandle_)};
-        brdfPass.createColourFramebuffers(*device_, views, kBrdfLutExtent);
-
+        const vk::ImageView brdfView = resources_->vulkanImageView(brdfLutHandle_);
+        const vk::Image brdfImage = resources_->vulkanImage(brdfLutHandle_);
         const vk::Viewport viewport = makeFullViewport(static_cast<float>(kBrdfLutExtent),
                                                        static_cast<float>(kBrdfLutExtent));
         const vk::Rect2D renderArea{
@@ -505,24 +535,37 @@ void EnvironmentPrecompute::createBrdfLut()
             .color = vk::ClearColorValue{.float32 = {{0.0f, 0.0f, 0.0f, 1.0f}}},
         };
 
-        oneTimeSubmit(*device_,
-                      [&](vk::CommandBuffer cmd)
-                      {
-                          vk::RenderPassBeginInfo beginInfo{
-                              .renderPass = brdfPass.renderPass(),
-                              .framebuffer = brdfPass.framebuffer(0),
-                              .renderArea = renderArea,
-                              .clearValueCount = 1,
-                              .pClearValues = &clearColour,
-                          };
-                          cmd.beginRenderPass(beginInfo, vk::SubpassContents::eInline);
-                          cmd.setViewport(0, viewport);
-                          cmd.setScissor(0, renderArea);
-                          cmd.bindPipeline(vk::PipelineBindPoint::eGraphics,
-                                           brdfPipeline.pipeline());
-                          cmd.draw(3, 1, 0, 0);
-                          cmd.endRenderPass();
-                      });
+        oneTimeSubmit(
+            *device_,
+            [&](vk::CommandBuffer cmd)
+            {
+                colourLayerBarrier(cmd, brdfImage, 0, 1, vk::ImageLayout::eUndefined,
+                                   vk::ImageLayout::eColorAttachmentOptimal,
+                                   vk::PipelineStageFlagBits2::eTopOfPipe, {},
+                                   vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+                                   vk::AccessFlagBits2::eColorAttachmentWrite);
+
+                vk::RenderingAttachmentInfo colour{
+                    .imageView = brdfView,
+                    .imageLayout = vk::ImageLayout::eColorAttachmentOptimal,
+                    .loadOp = vk::AttachmentLoadOp::eClear,
+                    .storeOp = vk::AttachmentStoreOp::eStore,
+                    .clearValue = clearColour,
+                };
+                cmd.beginRendering(makeRenderingInfo(renderArea, {&colour, 1}, nullptr));
+                cmd.setViewport(0, viewport);
+                cmd.setScissor(0, renderArea);
+                cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, brdfPipeline.pipeline());
+                cmd.draw(3, 1, 0, 0);
+                cmd.endRendering();
+
+                colourLayerBarrier(cmd, brdfImage, 0, 1, vk::ImageLayout::eColorAttachmentOptimal,
+                                   vk::ImageLayout::eShaderReadOnlyOptimal,
+                                   vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+                                   vk::AccessFlagBits2::eColorAttachmentWrite,
+                                   vk::PipelineStageFlagBits2::eFragmentShader,
+                                   vk::AccessFlagBits2::eShaderRead);
+            });
     }
     catch (const std::exception& e)
     {
