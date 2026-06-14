@@ -10,6 +10,7 @@
 #include <fire_engine/graphics/image.hpp>
 #include <fire_engine/math/constants.hpp>
 #include <fire_engine/math/view_basis.hpp>
+#include <fire_engine/render/compute_self_test.hpp>
 #include <fire_engine/render/cubemap_basis.hpp>
 #include <fire_engine/render/environment_precompute.hpp>
 #include <fire_engine/render/render_context.hpp>
@@ -131,6 +132,10 @@ Renderer::Renderer(const Window& window, std::string environmentPath, RendererDe
       environmentPath_(std::move(environmentPath)),
       debug_(debug)
 {
+#ifndef NDEBUG
+    // Smoke-test the compute pipeline path (Roadmap Milestone A) once at startup.
+    runComputeSelfTest(device_);
+#endif
     swapchain_.createDepthResources(device_);
     transmission_.recreate(postProcessing_.offscreenColourTarget());
     forwardOpaqueHandle_ =

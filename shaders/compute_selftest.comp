@@ -1,0 +1,26 @@
+#version 450
+
+// Minimal compute self-test kernel: increments every SSBO element by a
+// push-constant amount, guarded by an element count. Two chained dispatches of
+// this (with a buffer barrier between them) prove the compute pipeline path:
+// pipeline creation, storage-buffer binding, push constants, dispatch, and a
+// synchronization2 buffer barrier.
+
+layout(local_size_x = 64) in;
+
+layout(std430, binding = 0) buffer Data {
+    uint values[];
+};
+
+layout(push_constant) uniform Push {
+    uint count;
+    uint increment;
+} pc;
+
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    if (i >= pc.count) {
+        return;
+    }
+    values[i] += pc.increment;
+}

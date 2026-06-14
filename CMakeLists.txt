@@ -43,6 +43,8 @@ add_library(fireengine SHARED
     src/platform/window.cpp
     src/physics/physics_body.cpp
     src/physics/physics_world.cpp
+    src/render/compute_pipeline.cpp
+    src/render/compute_self_test.cpp
     src/render/device.cpp
     src/render/descriptors.cpp
     src/render/environment_precompute.cpp
@@ -109,6 +111,7 @@ set(SHADER_SOURCES
     shaders/postprocess.frag
     shaders/bloom_downsample.frag
     shaders/bloom_upsample.frag
+    shaders/compute_selftest.comp
 )
 
 foreach(shader IN LISTS SHADER_SOURCES)
@@ -171,6 +174,7 @@ add_executable(test_fire_engine
     tests/graphics/test_sampler_settings.cpp
     tests/render/test_ubo.cpp
     tests/render/test_pipeline_config.cpp
+    tests/render/test_compute_pipeline_config.cpp
     tests/core/test_shader_loader.cpp
     tests/core/test_system.cpp
     tests/core/test_gltf_loader.cpp
