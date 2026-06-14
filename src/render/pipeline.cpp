@@ -241,6 +241,34 @@ PipelineConfig Pipeline::bloomUpsampleConfig(vk::Format colourFormat)
     return config;
 }
 
+PipelineConfig Pipeline::particleConfig(vk::Format colourFormat)
+{
+    PipelineConfig config;
+    config.vertShaderPath = "particle.vert.spv";
+    config.fragShaderPath = "particle.frag.spv";
+    config.bindings = {
+        {0, vk::DescriptorType::eStorageBuffer, 1, vk::ShaderStageFlagBits::eVertex},
+        {1, vk::DescriptorType::eUniformBuffer, 1, vk::ShaderStageFlagBits::eVertex},
+        // Scene depth, sampled in the fragment shader for soft-particle fade.
+        {2, vk::DescriptorType::eCombinedImageSampler, 1, vk::ShaderStageFlagBits::eFragment},
+    };
+    config.pushConstantRanges.emplace_back(
+        vk::ShaderStageFlagBits::eFragment, 0,
+        static_cast<uint32_t>(sizeof(ParticleSoftPushConstants)));
+    config.colourFormats = {colourFormat};
+    config.useVertexInput = false;
+    config.depthTestEnable = false;
+    config.depthWrite = false;
+    config.cullMode = vk::CullModeFlagBits::eNone;
+    // Additive: particles add HDR glow on top of the scene (like bloomUpsample).
+    config.blendEnable = true;
+    config.srcColourBlend = vk::BlendFactor::eOne;
+    config.dstColourBlend = vk::BlendFactor::eOne;
+    config.srcAlphaBlend = vk::BlendFactor::eOne;
+    config.dstAlphaBlend = vk::BlendFactor::eOne;
+    return config;
+}
+
 PipelineConfig Pipeline::skyboxConfig()
 {
     PipelineConfig config;

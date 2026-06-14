@@ -17,6 +17,9 @@ struct ApplicationArgs
     // -f flag: drop a 100×100 white plane at y=0 into the loaded scene so
     // shadow casters from punctual lights have something to occlude.
     bool addFloor{false};
+    // -p flag: seed the demo GPU particle fountain. Off by default so normal
+    // scenes are unaffected.
+    bool addParticles{false};
     // Forwarded straight to the Renderer. Multiple --debug-* flags collapse to
     // the last one parsed (single debug view at a time); --no-shadows is
     // independent and combines with any view.
@@ -50,6 +53,11 @@ struct ApplicationArgs
         if (arg == "-f")
         {
             args.addFloor = true;
+            continue;
+        }
+        if (arg == "-p")
+        {
+            args.addParticles = true;
             continue;
         }
         if (arg == "--debug-normals")

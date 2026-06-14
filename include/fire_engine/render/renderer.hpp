@@ -14,6 +14,7 @@
 #include <fire_engine/render/constants.hpp>
 #include <fire_engine/render/device.hpp>
 #include <fire_engine/render/frame.hpp>
+#include <fire_engine/render/particle_system.hpp>
 #include <fire_engine/render/pipeline.hpp>
 #include <fire_engine/render/post_processing.hpp>
 #include <fire_engine/render/resources.hpp>
@@ -59,7 +60,8 @@ public:
     Renderer(Renderer&&) noexcept = default;
     Renderer& operator=(Renderer&&) noexcept = default;
 
-    void drawFrame(Window& display, SceneGraph& scene, Vec3 cameraPosition, Vec3 cameraTarget);
+    void drawFrame(Window& display, SceneGraph& scene, Vec3 cameraPosition, Vec3 cameraTarget,
+                   float dt);
 
     void waitIdle() const
     {
@@ -149,6 +151,7 @@ private:
     void recordShadowPass(vk::CommandBuffer cmd, const DrawBuckets& buckets);
     void recordForwardPass(vk::CommandBuffer cmd, const DrawBuckets& buckets);
     void recordTransmissionPass(vk::CommandBuffer cmd, const DrawBuckets& buckets);
+    void recordParticlePass(vk::CommandBuffer cmd);
     void recordPostProcessing(vk::CommandBuffer cmd, uint32_t imageIndex);
 
     void recreateSwapchain(const Window& display);
@@ -175,6 +178,7 @@ private:
     PostProcessing postProcessing_;
     Transmission transmission_;
     Shadows shadows_;
+    ParticleSystem particles_;
     PipelineHandle forwardOpaqueHandle_{NullPipeline};
     PipelineHandle forwardOpaqueDoubleSidedHandle_{NullPipeline};
     PipelineHandle forwardBlendHandle_{NullPipeline};

@@ -995,9 +995,11 @@ Resources::MappedBufferSet Resources::createMappedStorageBuffer(std::size_t size
 {
     MappedBufferSet result;
     // Storage buffers are shared across frames — create a single buffer,
-    // but fill both slots so callers can index by frame uniformly
+    // but fill both slots so callers can index by frame uniformly.
+    // eTransferDst lets callers clear/upload via vkCmdFillBuffer / copy.
     auto [buf, mem] = device_->createBuffer(
-        static_cast<vk::DeviceSize>(size), vk::BufferUsageFlagBits::eStorageBuffer,
+        static_cast<vk::DeviceSize>(size),
+        vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst,
         vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
     if (initialData != nullptr)
     {

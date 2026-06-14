@@ -108,4 +108,8 @@ inline constexpr uint32_t kBloomMipCount = 6;
 // 0 → bloom off (output bit-identical to pre-bloom). 0.04 is photographic.
 inline constexpr float kBloomStrength = 0.04f;
 
+// Soft particles: eye-space distance (metres) over which a particle fades out as
+// it approaches scene geometry, removing the hard clip edge at intersections.
+inline constexpr float kParticleSoftFadeRange = 0.5f;
+
 } // namespace fire_engine

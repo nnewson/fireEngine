@@ -14,6 +14,7 @@
 #include <fire_engine/graphics/vertex.hpp>
 #include <fire_engine/scene/mesh.hpp>
 #include <fire_engine/scene/node.hpp>
+#include <fire_engine/scene/particle_emitter.hpp>
 #include <fire_engine/scene/scene_graph_format.hpp>
 
 namespace fire_engine
@@ -35,7 +36,7 @@ FireEngine::~FireEngine()
 
 void FireEngine::run(size_t width, size_t height, std::string_view app_name,
                      std::string_view scene_path, std::string_view skybox_path, bool addFloor,
-                     RendererDebug debug)
+                     bool addParticles, RendererDebug debug)
 {
     window_ = std::make_unique<Window>(width, height, app_name);
 
@@ -45,6 +46,10 @@ void FireEngine::run(size_t width, size_t height, std::string_view app_name,
     if (addFloor)
     {
         addFloorPlane();
+    }
+    if (addParticles)
+    {
+        addParticleFountain();
     }
     mainLoop();
 }
@@ -88,6 +93,18 @@ void FireEngine::addFloorPlane()
     auto floorNode = std::make_unique<Node>("Floor");
     floorNode->component().emplace<Mesh>(std::move(floorObject));
     scene_.addNode(std::move(floorNode));
+}
+
+void FireEngine::addParticleFountain()
+{
+    // Demo GPU particle fountain (Roadmap Milestone B), gated behind the -p flag:
+    // a warm upward emitter just above the floor. Component defaults give the
+    // fountain look; only the position is set here. The renderer's ParticleSystem
+    // gathers and simulates it each frame.
+    auto fountainNode = std::make_unique<Node>("ParticleFountain");
+    fountainNode->component().emplace<ParticleEmitter>();
+    fountainNode->transform().position(Vec3{0.0f, 0.1f, 0.0f});
+    scene_.addNode(std::move(fountainNode));
 }
 
 void FireEngine::loadScene(std::string_view scene_path)
@@ -159,7 +176,8 @@ void FireEngine::mainLoop()
 
         scene_.applyPhysics(physics_);
 
-        renderer_->drawFrame(*window_, scene_, camera_->worldPosition(), camera_->worldTarget());
+        renderer_->drawFrame(*window_, scene_, camera_->worldPosition(), camera_->worldTarget(),
+                             dt);
     }
     renderer_->waitIdle();
 }

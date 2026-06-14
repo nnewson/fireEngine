@@ -234,4 +234,44 @@ struct PostProcessPushConstants
     float _pad2{0.0f};
 };
 
+// Per-emitter parameters consumed by the particle compute kernel. std140 layout:
+// four vec4s = 64 bytes, 16-aligned. Mirrors EmitterGpu in
+// shaders/particle_simulate.comp.
+struct ParticleEmitterGpu
+{
+    alignas(16) float posCone[4]{};      // xyz world position, w cone half-angle (rad)
+    alignas(16) float velLifetime[4]{};  // xyz base velocity, w lifetime (s)
+    alignas(16) float colourSize[4]{};   // rgb colour * intensity, w billboard half-size
+    alignas(16) float gravitySpawn[4]{}; // x gravity, y spawn budget (this frame), zw pad
+};
+
+// Per-frame particle UBO: camera matrices for billboard rendering, sim
+// parameters, and the active emitter array. Bound by both the compute (sim) and
+// graphics (render) particle passes. std140 layout — header is 16-aligned before
+// the emitter array.
+struct ParticleFrameUBO
+{
+    Mat4 view;
+    Mat4 proj;
+    alignas(16) float dt{0.0f};
+    uint32_t frameCounter{0};
+    uint32_t emitterCount{0};
+    uint32_t particlesPerEmitter{0};
+    ParticleEmitterGpu emitters[kMaxParticleEmitters]{};
+};
+
+// Fragment push constant for the particle soft-fade depth comparison.
+struct ParticleSoftPushConstants
+{
+    alignas(4) float nearPlane{0.0f};
+    float farPlane{0.0f};
+    float softRange{0.0f};
+    float _pad0{0.0f};
+};
+
+static_assert(sizeof(ParticleEmitterGpu) == 64, "ParticleEmitterGpu must be std140 4x vec4");
+static_assert(sizeof(ParticleFrameUBO) % 16 == 0, "ParticleFrameUBO must be std140 16-aligned");
+static_assert(offsetof(ParticleFrameUBO, emitters) == 144,
+              "emitter array must follow the 16-aligned header (2x mat4 + 16-byte scalars)");
+
 } // namespace fire_engine

@@ -157,6 +157,13 @@ public:
     // inverse-input-resolution.
     [[nodiscard]] static PipelineConfig bloomUpsampleConfig(vk::Format colourFormat);
 
+    // Factory for the GPU particle billboard pipeline. No vertex input
+    // (gl_VertexIndex builds the quad, gl_InstanceIndex reads the pool SSBO at
+    // binding 0; frame UBO at binding 1). Additive blend into the HDR target,
+    // depth test/write off (occlusion + soft fade are done in-shader against
+    // sampled scene depth — Stage 4).
+    [[nodiscard]] static PipelineConfig particleConfig(vk::Format colourFormat);
+
 private:
     void createDescriptorSetLayout(const std::vector<vk::DescriptorSetLayoutBinding>& bindings);
     void createGraphicsPipeline(const PipelineConfig& config);

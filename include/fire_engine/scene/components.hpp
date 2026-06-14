@@ -10,11 +10,12 @@
 #include <fire_engine/scene/empty.hpp>
 #include <fire_engine/scene/light.hpp>
 #include <fire_engine/scene/mesh.hpp>
+#include <fire_engine/scene/particle_emitter.hpp>
 
 namespace fire_engine
 {
 
-using Components = std::variant<Empty, Animator, Camera, Mesh, Light>;
+using Components = std::variant<Empty, Animator, Camera, Mesh, Light, ParticleEmitter>;
 
 [[nodiscard]] inline std::string_view componentName(const Components& component) noexcept
 {
@@ -41,6 +42,10 @@ using Components = std::variant<Empty, Animator, Camera, Mesh, Light>;
             else if constexpr (std::is_same_v<T, Light>)
             {
                 return "Light";
+            }
+            else if constexpr (std::is_same_v<T, ParticleEmitter>)
+            {
+                return "ParticleEmitter";
             }
         },
         component);

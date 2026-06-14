@@ -4,6 +4,7 @@
 #include <vector>
 
 #include <fire_engine/graphics/lighting.hpp>
+#include <fire_engine/graphics/particle.hpp>
 #include <fire_engine/input/input_state.hpp>
 #include <fire_engine/math/mat4.hpp>
 #include <fire_engine/physics/physics_world.hpp>
@@ -51,6 +52,12 @@ public:
     // composedWorld_ (populated by the most recent update() call). Cheap —
     // light counts are tiny compared to draw counts.
     [[nodiscard]] std::vector<Lighting> gatherLights() const;
+
+    // Walk the scene tree and resolve every ParticleEmitter component into a
+    // world-space EmitterState (translation + node-rotated velocity from the
+    // cached composedWorld_). Mirrors gatherLights; the renderer's ParticleSystem
+    // consumes the result each frame.
+    [[nodiscard]] std::vector<EmitterState> gatherEmitters() const;
 
     // True when at least one node in the tree carries a directional Light.
     // Used so FireEngine can avoid seeding its default Sun when a glTF asset

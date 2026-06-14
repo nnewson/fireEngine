@@ -26,7 +26,7 @@ public:
 
     void run(size_t width, size_t height, std::string_view app_name,
              std::string_view scene_path = "", std::string_view skybox_path = "",
-             bool addFloor = false, RendererDebug debug = {});
+             bool addFloor = false, bool addParticles = false, RendererDebug debug = {});
 
 private:
     std::unique_ptr<Window> window_;
@@ -44,6 +44,7 @@ private:
 
     void loadScene(std::string_view scene_path);
     void addFloorPlane();
+    void addParticleFountain();
     void addTestCube();
     void mainLoop();
 };

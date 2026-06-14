@@ -52,4 +52,10 @@ inline constexpr int kShadowSpotMatrixBase = 4;
 inline constexpr int kShadowPointMatrixBase = kShadowSpotMatrixBase + kMaxSpotShadowCasters;
 inline constexpr int kShadowTotalMatrixCount = kShadowPointMatrixBase + 6 * kMaxPointShadowCasters;
 
+// Particle system pool sizing. The GPU particle pool holds
+// kMaxParticleEmitters * kMaxParticlesPerEmitter particles; each active emitter
+// owns a contiguous slice (emitterIndex = particleIndex / kMaxParticlesPerEmitter).
+inline constexpr int kMaxParticleEmitters = 4;
+inline constexpr int kMaxParticlesPerEmitter = 4096;
+
 } // namespace fire_engine

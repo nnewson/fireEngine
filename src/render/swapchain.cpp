@@ -23,7 +23,9 @@ void Swapchain::createDepthResources(const Device& device)
         .arrayLayers = 1,
         .samples = vk::SampleCountFlagBits::e1,
         .tiling = vk::ImageTiling::eOptimal,
-        .usage = vk::ImageUsageFlagBits::eDepthStencilAttachment,
+        // eSampled so the particle pass can sample scene depth for soft-particle
+        // fade (read-only depth, no feedback loop — sampled, not attached).
+        .usage = vk::ImageUsageFlagBits::eDepthStencilAttachment | vk::ImageUsageFlagBits::eSampled,
         .sharingMode = vk::SharingMode::eExclusive,
         .initialLayout = vk::ImageLayout::eUndefined,
     };

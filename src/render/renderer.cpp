@@ -10,7 +10,6 @@
 #include <fire_engine/graphics/image.hpp>
 #include <fire_engine/math/constants.hpp>
 #include <fire_engine/math/view_basis.hpp>
-#include <fire_engine/render/compute_self_test.hpp>
 #include <fire_engine/render/cubemap_basis.hpp>
 #include <fire_engine/render/environment_precompute.hpp>
 #include <fire_engine/render/render_context.hpp>
@@ -129,15 +128,14 @@ Renderer::Renderer(const Window& window, std::string environmentPath, RendererDe
       postProcessing_(device_, swapchain_, resources_),
       transmission_(swapchain_, resources_, postProcessing_.offscreenColourTarget()),
       shadows_(device_, resources_),
+      particles_(device_, swapchain_, resources_, postProcessing_.offscreenColourTarget()),
       environmentPath_(std::move(environmentPath)),
       debug_(debug)
 {
-#ifndef NDEBUG
-    // Smoke-test the compute pipeline path (Roadmap Milestone A) once at startup.
-    runComputeSelfTest(device_);
-#endif
     swapchain_.createDepthResources(device_);
     transmission_.recreate(postProcessing_.offscreenColourTarget());
+    // Bind the now-created scene-depth image into the particle render set.
+    particles_.recreate(postProcessing_.offscreenColourTarget());
     forwardOpaqueHandle_ =
         resources_.registerPipeline(pipelineOpaque_.pipeline(), pipelineOpaque_.pipelineLayout());
     forwardOpaqueDoubleSidedHandle_ = resources_.registerPipeline(
@@ -610,7 +608,8 @@ void Renderer::recordPostProcessing(vk::CommandBuffer cmd, uint32_t imageIndex)
     postProcessing_.recordPostProcessPass(cmd, imageIndex, currentFrame_);
 }
 
-void Renderer::drawFrame(Window& display, SceneGraph& scene, Vec3 cameraPosition, Vec3 cameraTarget)
+void Renderer::drawFrame(Window& display, SceneGraph& scene, Vec3 cameraPosition, Vec3 cameraTarget,
+                         float dt)
 {
     auto imageIndex = acquireNextImage(display);
     if (!imageIndex)
@@ -625,15 +624,31 @@ void Renderer::drawFrame(Window& display, SceneGraph& scene, Vec3 cameraPosition
     updateFrameLighting(scene, cameraPosition, cameraTarget);
     DrawBuckets buckets = collectDrawCommands(cmd, scene, cameraPosition, cameraTarget);
 
+    // Particle simulation feed: gather emitters and the frame's view/projection
+    // (same construction as RenderContext::frameInfo).
+    const auto extent = swapchain_.extent();
+    const float aspect = static_cast<float>(extent.width) / static_cast<float>(extent.height);
+    const Mat4 view = Mat4::lookAt(cameraPosition, cameraTarget, {0.0f, 1.0f, 0.0f});
+    const Mat4 proj =
+        Mat4::perspective(kCameraFovRadians, aspect, kCameraNearPlane, kCameraFarPlane);
+    particles_.update(scene.gatherEmitters(), view, proj, dt, currentFrame_);
+
     recordShadowPass(cmd, buckets);
     recordForwardPass(cmd, buckets);
     recordTransmissionPass(cmd, buckets);
+    recordParticlePass(cmd);
     recordPostProcessing(cmd, *imageIndex);
 
     cmd.end();
     submitAndPresent(display, cmd, *imageIndex);
 
     currentFrame_ = (currentFrame_ + 1) % kMaxFramesInFlight;
+}
+
+void Renderer::recordParticlePass(vk::CommandBuffer cmd)
+{
+    particles_.recordSimulate(cmd, currentFrame_);
+    particles_.recordRender(cmd, currentFrame_);
 }
 
 std::optional<uint32_t> Renderer::acquireNextImage(Window& display)
@@ -829,6 +844,7 @@ void Renderer::recreateSwapchain(const Window& display)
     swapchain_.recreate(device_, display);
     postProcessing_.recreate();
     transmission_.recreate(postProcessing_.offscreenColourTarget());
+    particles_.recreate(postProcessing_.offscreenColourTarget());
     // Rewrite the forward-globals (set 1) descriptors so they reference the
     // sampler/view from the freshly recreated sceneColor target (and any
     // other recreated shared texture) instead of the destroyed ones.

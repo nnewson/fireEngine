@@ -16,6 +16,8 @@ TEST(ApplicationArgs, EmptyArgsUseDefaults)
     EXPECT_TRUE(args.skyboxPath.empty());
     EXPECT_EQ(args.debug.view, DebugView::None);
     EXPECT_FALSE(args.debug.noShadows);
+    EXPECT_FALSE(args.addFloor);
+    EXPECT_FALSE(args.addParticles);
 }
 
 TEST(ApplicationArgs, SingleSceneArgumentSetsScenePath)
@@ -86,6 +88,20 @@ TEST(ApplicationArgs, DebugNormalsFlagSetsToggle)
     EXPECT_EQ(args.debug.view, DebugView::Normals);
     EXPECT_TRUE(args.scenePath.empty());
     EXPECT_TRUE(args.skyboxPath.empty());
+}
+
+TEST(ApplicationArgs, ParticlesFlagSetsToggle)
+{
+    char program[] = "fireEngineApp";
+    char particles[] = "-p";
+    char scene[] = "RiggedSimple/RiggedSimple.gltf";
+    char* argv[] = {program, particles, scene};
+
+    const auto args = parseApplicationArgs(3, argv);
+
+    EXPECT_TRUE(args.addParticles);
+    EXPECT_FALSE(args.addFloor);
+    EXPECT_EQ(args.scenePath, "RiggedSimple/RiggedSimple.gltf");
 }
 
 TEST(ApplicationArgs, DebugNormalsFlagCoexistsWithSceneAndFloor)

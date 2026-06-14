@@ -1,4 +1,5 @@
 #include <fire_engine/scene/light.hpp>
+#include <fire_engine/scene/particle_emitter.hpp>
 #include <fire_engine/scene/scene_graph.hpp>
 
 namespace fire_engine
@@ -15,6 +16,18 @@ void gatherLightsRecursive(const Node& node, std::vector<Lighting>& out)
     for (const auto& child : node.children())
     {
         gatherLightsRecursive(*child, out);
+    }
+}
+
+void gatherEmittersRecursive(const Node& node, std::vector<EmitterState>& out)
+{
+    if (const auto* emitter = node.componentAs<ParticleEmitter>())
+    {
+        out.push_back(ParticleEmitter::toEmitterState(*emitter, node.composedWorld()));
+    }
+    for (const auto& child : node.children())
+    {
+        gatherEmittersRecursive(*child, out);
     }
 }
 
@@ -130,6 +143,16 @@ std::vector<Lighting> SceneGraph::gatherLights() const
     for (const auto& node : nodes_)
     {
         gatherLightsRecursive(*node, out);
+    }
+    return out;
+}
+
+std::vector<EmitterState> SceneGraph::gatherEmitters() const
+{
+    std::vector<EmitterState> out;
+    for (const auto& node : nodes_)
+    {
+        gatherEmittersRecursive(*node, out);
     }
     return out;
 }
