@@ -95,6 +95,11 @@ struct ApplicationArgs
             args.debug.taa = false;
             continue;
         }
+        if (arg == "--overlay")
+        {
+            args.debug.overlayVisible = true;
+            continue;
+        }
         if (positionalCount < 2)
         {
             positional[positionalCount++] = arg;

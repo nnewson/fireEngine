@@ -12,11 +12,14 @@
 #include <fire_engine/math/mat4.hpp>
 #include <fire_engine/math/vec3.hpp>
 #include <fire_engine/render/constants.hpp>
+#include <fire_engine/render/debug_overlay.hpp>
 #include <fire_engine/render/device.hpp>
 #include <fire_engine/render/frame.hpp>
+#include <fire_engine/render/gpu_profiler.hpp>
 #include <fire_engine/render/particle_system.hpp>
 #include <fire_engine/render/pipeline.hpp>
 #include <fire_engine/render/post_processing.hpp>
+#include <fire_engine/render/render_tunables.hpp>
 #include <fire_engine/render/resources.hpp>
 #include <fire_engine/render/shadows.hpp>
 #include <fire_engine/render/swapchain.hpp>
@@ -29,20 +32,8 @@ namespace fire_engine
 
 class SceneGraph;
 
-// Selects which debug-view branch the forward fragment shader runs. Mapped
-// 1:1 to LightUBO::environmentParams[2] (0..5) — keep the enum and shader
-// constants in lockstep.
-enum class DebugView : int
-{
-    None = 0,
-    Normals = 1,
-    NdotL = 2,
-    Shadow = 3,
-    ShadowDepth = 4,
-    // Visualises the TAA motion-vector attachment (abs screen-space velocity,
-    // scaled). Sanity check for Stage 2 before the resolve consumes it.
-    Velocity = 5,
-};
+// DebugView lives in render_tunables.hpp (included below) so the overlay can
+// reference it without pulling in the renderer.
 
 struct RendererDebug
 {
@@ -54,6 +45,9 @@ struct RendererDebug
     // the resolve pass are both skipped, reverting to the raw aliased image —
     // the A/B reference for confirming TAA is doing the work.
     bool taa{true};
+    // Start with the ImGui debug overlay visible (--overlay). Off by default so
+    // normal runs and screenshots are unaffected; toggled at runtime with F1.
+    bool overlayVisible{false};
 };
 
 class Renderer
@@ -65,8 +59,10 @@ public:
 
     Renderer(const Renderer&) = delete;
     Renderer& operator=(const Renderer&) = delete;
-    Renderer(Renderer&&) noexcept = default;
-    Renderer& operator=(Renderer&&) noexcept = default;
+    // Non-movable: owns the ImGui overlay (global state) and subsystems that hold
+    // back-references. The Renderer lives behind a unique_ptr and is never moved.
+    Renderer(Renderer&&) noexcept = delete;
+    Renderer& operator=(Renderer&&) noexcept = delete;
 
     void drawFrame(Window& display, SceneGraph& scene, Vec3 cameraPosition, Vec3 cameraTarget,
                    float dt);
@@ -114,6 +110,24 @@ public:
     [[nodiscard]] const Resources& resources() const noexcept
     {
         return resources_;
+    }
+
+    // Debug-overlay control surface for the main loop: toggle visibility (F1) and
+    // query whether the overlay is currently capturing input (so the camera
+    // doesn't move while the user drives a widget).
+    void toggleOverlay() noexcept
+    {
+        overlay_.toggle();
+    }
+
+    [[nodiscard]] bool overlayWantsMouse() const noexcept
+    {
+        return overlay_.wantsMouse();
+    }
+
+    [[nodiscard]] bool overlayWantsKeyboard() const noexcept
+    {
+        return overlay_.wantsKeyboard();
     }
 
 private:
@@ -171,6 +185,9 @@ private:
     [[nodiscard]] std::optional<uint32_t> acquireNextImage(Window& display);
     void beginForwardRendering(vk::CommandBuffer cmd);
     void endForwardRendering(vk::CommandBuffer cmd);
+    // Final ColorAttachmentOptimal → PresentSrcKHR transition, recorded after the
+    // overlay (post-process leaves the swap image in ColorAttachmentOptimal).
+    void transitionSwapchainToPresent(vk::CommandBuffer cmd, uint32_t imageIndex);
     void submitAndPresent(Window& display, vk::CommandBuffer cmd, uint32_t imageIndex);
     void recordSkybox(Vec3 cameraPosition, Vec3 cameraTarget,
                       std::vector<DrawCommand>& drawCommands);
@@ -188,6 +205,10 @@ private:
     Shadows shadows_;
     ParticleSystem particles_;
     Taa taa_;
+    GpuProfiler profiler_;
+    DebugOverlay overlay_;
+    FrameStats stats_{};
+    RenderTunables tunables_{};
     PipelineHandle forwardOpaqueHandle_{NullPipeline};
     PipelineHandle forwardOpaqueDoubleSidedHandle_{NullPipeline};
     PipelineHandle forwardBlendHandle_{NullPipeline};
@@ -220,7 +241,6 @@ private:
     Mat4 previousViewProj_{Mat4::identity()};
     uint32_t taaJitterIndex_{0};
     std::string environmentPath_;
-    RendererDebug debug_{};
 };
 
 } // namespace fire_engine

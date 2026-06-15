@@ -39,7 +39,8 @@ public:
     // Resolve the current frame: reproject + clamp + blend history, then blit the
     // result into the offscreen HDR target. currentFrame selects the ping-pong
     // parity (history slot written this frame == currentFrame).
-    void recordResolve(vk::CommandBuffer cmd, uint32_t currentFrame);
+    void recordResolve(vk::CommandBuffer cmd, uint32_t currentFrame, float historyBlend,
+                       float sharpen);
 
     // Recreate the velocity + history targets at the current swapchain extent and
     // rebind the resolve descriptors against the (possibly new) offscreen target.

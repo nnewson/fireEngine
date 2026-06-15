@@ -254,6 +254,9 @@ struct TaaResolvePushConstants
     alignas(8) float texelSize[2]{0.0f, 0.0f};
     // History weight in the resolve blend (kTaaHistoryBlend).
     alignas(4) float historyBlend{0.0f};
+    // Post-resolve unsharp amount (0 = off). Claws back the slight softness TAA
+    // trades for stability.
+    alignas(4) float sharpen{0.0f};
     // 0 on the first frame after a (re)create — the history slot holds no valid
     // data yet, so the resolve falls back to the current frame.
     alignas(4) int historyValid{0};

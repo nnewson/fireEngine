@@ -232,7 +232,7 @@ void PostProcessing::transitionOffscreenForSampling(vk::CommandBuffer cmd) const
 }
 
 void PostProcessing::recordPostProcessPass(vk::CommandBuffer cmd, uint32_t imageIndex,
-                                           uint32_t currentFrame) const
+                                           uint32_t currentFrame, float bloomStrength) const
 {
     auto extent = swapchain_->extent();
     vk::Rect2D renderArea{
@@ -267,7 +267,7 @@ void PostProcessing::recordPostProcessPass(vk::CommandBuffer cmd, uint32_t image
     cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, postProcessPipeline_.pipelineLayout(),
                            0, ppSet, {});
     PostProcessPushConstants ppc{};
-    ppc.kBloomStrength = kBloomStrength;
+    ppc.kBloomStrength = bloomStrength;
     cmd.pushConstants<PostProcessPushConstants>(postProcessPipeline_.pipelineLayout(),
                                                 vk::ShaderStageFlagBits::eFragment, 0, ppc);
     cmd.bindIndexBuffer(resources_->vulkanBuffer(postProcessIndexBuffer_), 0,
@@ -275,13 +275,10 @@ void PostProcessing::recordPostProcessPass(vk::CommandBuffer cmd, uint32_t image
     cmd.drawIndexed(3, 1, 0, 0, 0);
     cmd.endRendering();
 
-    // Transition to present layout. The render→present dependency is carried by
-    // the renderFinished semaphore signalled at submit, so dstStage is bottom.
-    imageBarrier(cmd, swapImage, vk::ImageAspectFlagBits::eColor, 0,
-                 vk::ImageLayout::eColorAttachmentOptimal, vk::ImageLayout::ePresentSrcKHR,
-                 vk::PipelineStageFlagBits2::eColorAttachmentOutput,
-                 vk::AccessFlagBits2::eColorAttachmentWrite,
-                 vk::PipelineStageFlagBits2::eBottomOfPipe, {});
+    // The swap image is left in ColorAttachmentOptimal so the debug overlay can
+    // draw into it (loadOp Load) before present. Renderer::transitionSwapchainToPresent
+    // performs the final ColorAttachmentOptimal → PresentSrcKHR transition once the
+    // overlay (if any) has recorded.
 }
 
 void PostProcessing::recreate()

@@ -31,8 +31,8 @@ public:
 
     void transitionOffscreenForSampling(vk::CommandBuffer cmd) const;
     void recordBloomPasses(vk::CommandBuffer cmd) const;
-    void recordPostProcessPass(vk::CommandBuffer cmd, uint32_t imageIndex,
-                               uint32_t currentFrame) const;
+    void recordPostProcessPass(vk::CommandBuffer cmd, uint32_t imageIndex, uint32_t currentFrame,
+                               float bloomStrength) const;
     void recreate();
 
 private:

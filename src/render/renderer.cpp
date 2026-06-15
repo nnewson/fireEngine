@@ -162,9 +162,16 @@ Renderer::Renderer(const Window& window, std::string environmentPath, RendererDe
       shadows_(device_, resources_),
       particles_(device_, swapchain_, resources_, postProcessing_.offscreenColourTarget()),
       taa_(device_, swapchain_, resources_, postProcessing_.offscreenColourTarget()),
-      environmentPath_(std::move(environmentPath)),
-      debug_(debug)
+      profiler_(device_),
+      overlay_(device_, swapchain_, window, debug.overlayVisible),
+      environmentPath_(std::move(environmentPath))
 {
+    // Seed the live tunables from the CLI debug flags so they carry over as the
+    // overlay's initial state; everything else defaults from constants.hpp.
+    tunables_.taaEnabled = debug.taa;
+    tunables_.debugView = debug.view;
+    tunables_.noShadows = debug.noShadows;
+
     swapchain_.createDepthResources(device_);
     transmission_.recreate(postProcessing_.offscreenColourTarget(), taa_.velocityTarget());
     // Bind the now-created scene-depth image into the particle render set.
@@ -266,6 +273,12 @@ void Renderer::updateLightData(Vec3 cameraPosition, Vec3 cameraTarget, float asp
     if (primaryDirectional != nullptr)
     {
         packAndAssign(*primaryDirectional);
+        // The primary directional is packed first (slot 0); the overlay's sun
+        // slider scales its intensity (colour.a) live.
+        if (slot > 0)
+        {
+            lightData.lights[0].colour[3] *= tunables_.directionalIntensityScale;
+        }
     }
     for (const auto& L : lights)
     {
@@ -425,8 +438,8 @@ void Renderer::writeIblAndDebugParams(LightUBO& out) const
                                    ? resources_.textureMipLevels(prefilteredCubemapHandle_)
                                    : 1u;
     out.iblParams[0] = static_cast<float>(mipLevels > 0 ? mipLevels - 1 : 0);
-    out.iblParams[1] = kDiffuseIblStrength;
-    out.iblParams[2] = kSpecularIblStrength;
+    out.iblParams[1] = tunables_.diffuseIbl;
+    out.iblParams[2] = tunables_.specularIbl;
     out.shadowParams[0] = kShadowMinBias;
     out.shadowParams[1] = kShadowSlopeBias;
     out.shadowParams[2] = kShadowFilterRadius;
@@ -435,8 +448,8 @@ void Renderer::writeIblAndDebugParams(LightUBO& out) const
     out.pointSpotShadowParams[1] = kPointSpotShadowSlopeBias;
     out.environmentParams[0] = kSkyboxIntensity;
     out.environmentParams[1] = kEnvironmentShadowStrength;
-    out.environmentParams[2] = static_cast<float>(debug_.view);
-    out.environmentParams[3] = debug_.noShadows ? 1.0f : 0.0f;
+    out.environmentParams[2] = static_cast<float>(tunables_.debugView);
+    out.environmentParams[3] = tunables_.noShadows ? 1.0f : 0.0f;
 }
 
 void Renderer::assignSelfShadowSlots(std::vector<DrawCommand>& drawCommands)
@@ -641,8 +654,12 @@ void Renderer::recordTransmissionPass(vk::CommandBuffer cmd, const DrawBuckets& 
 void Renderer::recordPostProcessing(vk::CommandBuffer cmd, uint32_t imageIndex)
 {
     postProcessing_.transitionOffscreenForSampling(cmd);
+    profiler_.begin(cmd, currentFrame_, ProfilePass::Bloom);
     postProcessing_.recordBloomPasses(cmd);
-    postProcessing_.recordPostProcessPass(cmd, imageIndex, currentFrame_);
+    profiler_.end(cmd, currentFrame_, ProfilePass::Bloom);
+    profiler_.begin(cmd, currentFrame_, ProfilePass::Post);
+    postProcessing_.recordPostProcessPass(cmd, imageIndex, currentFrame_, tunables_.bloomStrength);
+    profiler_.end(cmd, currentFrame_, ProfilePass::Post);
 }
 
 void Renderer::drawFrame(Window& display, SceneGraph& scene, Vec3 cameraPosition, Vec3 cameraTarget,
@@ -654,9 +671,21 @@ void Renderer::drawFrame(Window& display, SceneGraph& scene, Vec3 cameraPosition
         return;
     }
 
+    // Read back the GPU timings written a ring-cycle ago into this slot (the
+    // acquire fence guarantees that frame completed) and the wall-clock CPU time.
+    profiler_.resolve(currentFrame_, stats_);
+    stats_.cpuFrameMs = dt * 1000.0f;
+
+    // Start the ImGui frame before recording. GLFW events were already polled
+    // this frame (Input::update), so the overlay's input state is current.
+    overlay_.beginFrame();
+    overlay_.buildUi(stats_, tunables_);
+
     auto cmd = frame_.commandBuffer(currentFrame_);
     cmd.reset();
     cmd.begin(vk::CommandBufferBeginInfo{});
+    // Reset this frame's timestamp range before any pass writes into it.
+    profiler_.beginFrame(cmd, currentFrame_);
 
     // Per-frame camera matrices. The forward pass rasterises with jitteredProj_
     // (TAA sub-pixel jitter); currentViewProj_ is jitter-free so motion vectors
@@ -667,7 +696,7 @@ void Renderer::drawFrame(Window& display, SceneGraph& scene, Vec3 cameraPosition
     const Mat4 unjitteredProj =
         Mat4::perspective(kCameraFovRadians, aspect, kCameraNearPlane, kCameraFarPlane);
     jitteredProj_ = unjitteredProj;
-    if (debug_.taa)
+    if (tunables_.taaEnabled)
     {
         const auto [jx, jy] = taaJitterOffset(taaJitterIndex_, extent);
         jitteredProj_[0, 2] += jx;
@@ -679,20 +708,47 @@ void Renderer::drawFrame(Window& display, SceneGraph& scene, Vec3 cameraPosition
     updateFrameLighting(scene, cameraPosition, cameraTarget);
     DrawBuckets buckets = collectDrawCommands(cmd, scene, cameraPosition, cameraTarget);
 
-    // Particles render un-jittered (after TAA in Stage 3); feed them the plain proj.
-    particles_.update(scene.gatherEmitters(), view_, unjitteredProj, dt, currentFrame_);
+    // Particles render un-jittered (after TAA); feed them the plain proj. The
+    // overlay's emitter scales are applied to a local copy of the gather.
+    auto emitters = scene.gatherEmitters();
+    for (auto& e : emitters)
+    {
+        e.spawnRate *= tunables_.particleRateScale;
+        e.lifetime *= tunables_.particleLifetimeScale;
+        e.size *= tunables_.particleSizeScale;
+    }
+    particles_.update(emitters, view_, unjitteredProj, dt, currentFrame_);
 
+    profiler_.begin(cmd, currentFrame_, ProfilePass::Shadow);
     recordShadowPass(cmd, buckets);
+    profiler_.end(cmd, currentFrame_, ProfilePass::Shadow);
+
+    profiler_.begin(cmd, currentFrame_, ProfilePass::Forward);
     recordForwardPass(cmd, buckets);
+    profiler_.end(cmd, currentFrame_, ProfilePass::Forward);
+
+    profiler_.begin(cmd, currentFrame_, ProfilePass::Transmission);
     recordTransmissionPass(cmd, buckets);
+    profiler_.end(cmd, currentFrame_, ProfilePass::Transmission);
+
     // TAA resolve: reproject + accumulate history into the offscreen HDR target
     // before particles (which render un-jittered and stay out of the history).
-    if (debug_.taa)
+    if (tunables_.taaEnabled)
     {
-        taa_.recordResolve(cmd, currentFrame_);
+        profiler_.begin(cmd, currentFrame_, ProfilePass::Taa);
+        taa_.recordResolve(cmd, currentFrame_, tunables_.taaHistoryBlend, tunables_.taaSharpen);
+        profiler_.end(cmd, currentFrame_, ProfilePass::Taa);
     }
+
+    profiler_.begin(cmd, currentFrame_, ProfilePass::Particles);
     recordParticlePass(cmd);
+    profiler_.end(cmd, currentFrame_, ProfilePass::Particles);
+
     recordPostProcessing(cmd, *imageIndex);
+    // Post-process leaves the swap image in ColorAttachmentOptimal; the overlay
+    // draws over it, then we transition to present.
+    overlay_.record(cmd, *swapchain_.imageViews()[*imageIndex], swapchain_.extent());
+    transitionSwapchainToPresent(cmd, *imageIndex);
 
     cmd.end();
     submitAndPresent(display, cmd, *imageIndex);
@@ -827,6 +883,17 @@ void Renderer::endForwardRendering(vk::CommandBuffer cmd)
         vk::PipelineStageFlagBits2::eColorAttachmentOutput,
         vk::AccessFlagBits2::eColorAttachmentWrite, vk::PipelineStageFlagBits2::eFragmentShader,
         vk::AccessFlagBits2::eShaderRead);
+}
+
+void Renderer::transitionSwapchainToPresent(vk::CommandBuffer cmd, uint32_t imageIndex)
+{
+    // The render→present dependency is carried by the renderFinished semaphore
+    // signalled at submit, so dstStage is bottom-of-pipe with no access mask.
+    forwardImageBarrier(cmd, swapchain_.images()[imageIndex], vk::ImageAspectFlagBits::eColor,
+                        vk::ImageLayout::eColorAttachmentOptimal, vk::ImageLayout::ePresentSrcKHR,
+                        vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+                        vk::AccessFlagBits2::eColorAttachmentWrite,
+                        vk::PipelineStageFlagBits2::eBottomOfPipe, {});
 }
 
 void Renderer::submitAndPresent(Window& display, vk::CommandBuffer cmd, uint32_t imageIndex)

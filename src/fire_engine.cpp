@@ -156,13 +156,25 @@ void FireEngine::mainLoop()
     constexpr float maxFrameTime = 0.25f;
     double lastTime = System::getTime();
     float accumulator = 0.0f;
+    bool f1Down = false;
     while (!window_->shouldClose())
     {
         double now = System::getTime();
         float dt = std::min(static_cast<float>(now - lastTime), maxFrameTime);
         lastTime = now;
 
-        auto input_state = input_.update(*window_, dt);
+        // F1 toggles the debug overlay (edge-detected so a held key fires once).
+        const bool f1 = glfwGetKey(window_->handle(), GLFW_KEY_F1) == GLFW_PRESS;
+        if (f1 && !f1Down)
+        {
+            renderer_->toggleOverlay();
+        }
+        f1Down = f1;
+
+        // Suppress camera/keyboard movement while the overlay is capturing input
+        // so dragging a widget doesn't also fly the camera.
+        auto input_state = input_.update(*window_, dt, renderer_->overlayWantsMouse(),
+                                         renderer_->overlayWantsKeyboard());
         input_state.time(now);
         scene_.update(input_state);
         scene_.submitPhysics(physics_);

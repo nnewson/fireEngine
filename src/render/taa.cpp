@@ -79,7 +79,8 @@ void Taa::recreate(TextureHandle offscreenColour)
     historyWritten_.fill(false);
 }
 
-void Taa::recordResolve(vk::CommandBuffer cmd, uint32_t currentFrame)
+void Taa::recordResolve(vk::CommandBuffer cmd, uint32_t currentFrame, float historyBlend,
+                        float sharpen)
 {
     const auto extent = swapchain_->extent();
     const uint32_t cur = currentFrame % kMaxFramesInFlight;
@@ -124,7 +125,8 @@ void Taa::recordResolve(vk::CommandBuffer cmd, uint32_t currentFrame)
     TaaResolvePushConstants push{};
     push.texelSize[0] = 1.0f / static_cast<float>(extent.width);
     push.texelSize[1] = 1.0f / static_cast<float>(extent.height);
-    push.historyBlend = kTaaHistoryBlend;
+    push.historyBlend = historyBlend;
+    push.sharpen = sharpen;
     push.historyValid = historyWritten_[prev] ? 1 : 0;
     cmd.pushConstants<TaaResolvePushConstants>(resolvePipeline_.pipelineLayout(),
                                                vk::ShaderStageFlagBits::eFragment, 0, push);

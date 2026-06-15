@@ -22,6 +22,7 @@ I've no doubt these are all solved problems nowadays with the Unreal engine et a
 - **GPU particle system (compute-driven)** — `ParticleEmitter` is a scene component, gathered each frame like `Light` into a Vulkan-free `EmitterState`. A renderer-owned `ParticleSystem` simulates a pooled particle SSBO with a **compute shader** (spawn dead slots at the emitter up to a per-frame budget via an atomic spawn-claim; integrate the rest under gravity), then renders the pool as **instanced camera-facing billboards** (`cmd.draw(6, poolCount)`, per-instance data read from the SSBO by `gl_InstanceIndex`) blended **additively into the HDR target** so bloom catches the glow. **Soft particles**: the fragment shader fades against sampled scene depth so particles dissolve smoothly into geometry with no hard clip edge. Built on the compute-pipeline + synchronization2 buffer-barrier path
 - **HDR offscreen forward pass + bloom + ACES post-process** — forward writes into an R16G16B16A16 target. **Dual-filter bloom** (6-mip RGBA16F chain at half-screen res, 13-tap CoD downsample with Karis-average on the first pass to suppress fireflies, 9-tap tent upsample with additive blend) produces a low-pass HDR contribution. Post-process mixes the HDR target with bloom mip 0 (`bloomStrength = 0.04` default; `0` is bit-identical to a no-bloom path), then ACES tonemap + gamma 2.2 before presenting
 - **Temporal anti-aliasing (TAA)** — sub-pixel Halton(2,3) projection jitter plus velocity-buffer history accumulation anti-aliases geometry edges *and* specular/shading shimmer (unlike MSAA, which only covers geometry edges). The forward + transmission passes write a screen-space motion-vector attachment; the resolve reprojects the previous frame's history along it (`historyUV = uv − velocity`), neighbourhood-clamps to the current 3×3 to suppress ghosting/disocclusion, and blends. Motion vectors are jitter-free so the jitter cancels in accumulation. Per-node previous-world-matrix tracking feeds rigid + animated motion (skinned deformation is camera-motion-only in v1); particles render after the resolve, kept out of history. `--no-taa` reverts to the raw image, `--debug-velocity` visualises the buffer
+- **Debug + profiling overlay (Dear ImGui)** — a runtime overlay (Dear ImGui 1.92 on the Vulkan dynamic-rendering backend, drawn into the swapchain after post-process) toggled with **F1** (`--overlay` to start visible). Shows a **CPU frame-time/FPS plot** and **per-pass GPU timings** via a timestamp `VkQueryPool` (`GpuProfiler`, with graceful fallback when the device/queue doesn't support timestamps), plus a **live tunables panel** (`RenderTunables`) for TAA (history blend, sharpen, on/off), the debug-view dropdown + no-shadows, bloom/diffuse-IBL/specular-IBL/sun-intensity, and particle emitter rate/lifetime/size — all editable without a recompile. Camera input is suppressed while a widget is being driven
 - **Keyframe animation** with per-channel interpolation (LINEAR with SLERP for quaternions, STEP, CUBICSPLINE with in/out tangents) across rotation, translation, scale, and morph weight channels; looping playback; runtime animation selection via `AnimationState`
 - **Skeletal skinning** — GPU joint matrix blending, up to 64 joints per skin
 - **Morph target animation** — vertex POSITION + NORMAL + TANGENT deltas uploaded as a single packed SSBO, blended by weights in the vertex shader (up to 8 targets per mesh). Tangent morphs feed the TBN reconstruction so facial-rig normal mapping stays correct mid-blend
@@ -129,7 +130,9 @@ The transient pipelines are destroyed once the bake completes; only the resultin
    - **TAA resolve** — the forward/transmission passes also write a screen-space velocity (motion-vector) attachment; the resolve reprojects the previous frame's accumulated history along that buffer, neighbourhood-clamps it against the current 3×3 to kill ghosting, blends, and blits the result back into the HDR target. Sub-pixel projection jitter (Halton(2,3)) drives the accumulation; particles render afterwards with the un-jittered projection so they stay out of history. Skipped under `--no-taa`
    - **Bloom downsample chain** — 6 fullscreen-triangle passes. Pass 0 reads the HDR target with the Karis-average 13-tap kernel (firefly suppression), writing mip 0 of the bloom chain. Passes 1..5 read the previous bloom mip and write the next, plain CoD weights
    - **Bloom upsample chain** — 5 fullscreen-triangle passes back up the chain (mip 5 → mip 4 → … → mip 0). Each samples its source mip with a 9-tap tent kernel and **additively blends** onto the destination mip (preserved by `loadOp=eLoad`). The final write to mip 0 carries the summed contribution from every coarser mip
-   - **Post-process pass** — begin the swapchain-format pass, draw a fullscreen triangle that samples both the HDR target and bloom mip 0, mixes them by `bloomStrength`, and applies ACES + gamma 2.2
+   - **Post-process pass** — begin the swapchain-format pass, draw a fullscreen triangle that samples both the HDR target and bloom mip 0, mixes them by `bloomStrength`, and applies ACES + gamma 2.2. The swap image is left in colour-attachment layout (the present transition is deferred) so the overlay can draw over it
+   - **Debug overlay** — when the ImGui overlay has content, draw it into the swap image (dynamic rendering, loadOp Load); then `transitionSwapchainToPresent` performs the final colour-attachment → present transition
+   - Per-pass GPU timestamps wrap each of the above via `GpuProfiler`; results are read back a frame-cycle later for the overlay
 7. Renderer submits the command buffer and presents
 
 ### Rendering Pipeline
@@ -235,12 +238,23 @@ environment.
 
 ## Dependencies
 
-Managed via vcpkg:
+Managed via the vcpkg manifest (`vcpkg.json`):
 
 - `vulkan-headers` — Vulkan API headers
 - `fastgltf` — glTF 2.0 parser
 - `stb` — image loading (stb_image, incl. HDR)
+- `ktx` — KTX2 / Basis Universal textures
 - `gtest` — Google Test framework
+
+Installed classic-mode into the global vcpkg tree (the manifest build of these
+fails under the current gcc + macOS SDK combo; `CMAKE_PREFIX_PATH` is extended to
+the global tree so `find_package` still resolves them):
+
+- `imgui[vulkan-binding]` — debug overlay (ImGui core + Vulkan backend). The ImGui
+  **GLFW** platform backend is vendored under `third_party/imgui` and compiled against
+  system GLFW, because the vcpkg `glfw-binding` feature pulls vcpkg glfw3, which won't
+  build here. The vendored backend has a small documented patch (skips the Cocoa native
+  header that g++ can't parse).
 
 Also requires:
 

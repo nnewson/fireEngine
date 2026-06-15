@@ -3,7 +3,7 @@
 namespace fire_engine
 {
 
-InputState Input::update(Window& window, float deltaTime)
+InputState Input::update(Window& window, float deltaTime, bool suppressMouse, bool suppressKeyboard)
 {
     window.pollEvents();
 
@@ -14,33 +14,33 @@ InputState Input::update(Window& window, float deltaTime)
     // E/F world-space vertical movement on Y.
     Vec3 delta{};
 
-    if (keyboard_.pressed(Key::W))
+    if (!suppressKeyboard && keyboard_.pressed(Key::W))
     {
         delta.z(delta.z() + speed_ * deltaTime);
     }
-    if (keyboard_.pressed(Key::S))
+    if (!suppressKeyboard && keyboard_.pressed(Key::S))
     {
         delta.z(delta.z() - speed_ * deltaTime);
     }
-    if (keyboard_.pressed(Key::A))
+    if (!suppressKeyboard && keyboard_.pressed(Key::A))
     {
         delta.x(delta.x() + speed_ * deltaTime);
     }
-    if (keyboard_.pressed(Key::D))
+    if (!suppressKeyboard && keyboard_.pressed(Key::D))
     {
         delta.x(delta.x() - speed_ * deltaTime);
     }
-    if (keyboard_.pressed(Key::E))
+    if (!suppressKeyboard && keyboard_.pressed(Key::E))
     {
         delta.y(delta.y() + speed_ * deltaTime);
     }
-    if (keyboard_.pressed(Key::F))
+    if (!suppressKeyboard && keyboard_.pressed(Key::F))
     {
         delta.y(delta.y() - speed_ * deltaTime);
     }
 
     // Left mouse button drag = camera-relative movement (same as WASD)
-    if (mouse_.leftButton())
+    if (!suppressMouse && mouse_.leftButton())
     {
         delta.x(delta.x() + static_cast<float>(mouse_.deltaX()) * panSensitivity_);
         delta.z(delta.z() - static_cast<float>(mouse_.deltaY()) * panSensitivity_);
@@ -51,26 +51,27 @@ InputState Input::update(Window& window, float deltaTime)
 
     ControllerState controllerState;
     Vec3 controllerDelta{};
-    if (keyboard_.pressed(Key::Left))
+    if (!suppressKeyboard && keyboard_.pressed(Key::Left))
     {
         controllerDelta.x(controllerDelta.x() - deltaTime);
     }
-    if (keyboard_.pressed(Key::Right))
+    if (!suppressKeyboard && keyboard_.pressed(Key::Right))
     {
         controllerDelta.x(controllerDelta.x() + deltaTime);
     }
     controllerState.deltaPosition(controllerDelta);
 
     // Right mouse button drag = rotation (yaw/pitch)
-    if (mouse_.rightButton())
+    if (!suppressMouse && mouse_.rightButton())
     {
         cameraState.deltaYaw(static_cast<float>(mouse_.deltaX()) * sensitivity_);
         cameraState.deltaPitch(-static_cast<float>(mouse_.deltaY()) * sensitivity_);
     }
 
-    // Scroll wheel = zoom
+    // Scroll wheel = zoom. Always drained (so it doesn't accumulate while the
+    // overlay has the mouse), applied only when the camera owns the mouse.
     double scroll = window.consumeScrollDelta();
-    if (scroll != 0.0)
+    if (!suppressMouse && scroll != 0.0)
     {
         cameraState.deltaZoom(static_cast<float>(scroll) * zoomSpeed_);
     }
@@ -80,20 +81,20 @@ InputState Input::update(Window& window, float deltaTime)
     state.cameraState(cameraState);
     state.controllerState(controllerState);
 
-    if (keyboard_.pressed(Key::One))
+    if (!suppressKeyboard && keyboard_.pressed(Key::One))
     {
         state.animationState().activeAnimation(0);
     }
-    else if (keyboard_.pressed(Key::Two))
+    else if (!suppressKeyboard && keyboard_.pressed(Key::Two))
     {
         state.animationState().activeAnimation(1);
     }
-    else if (keyboard_.pressed(Key::Three))
+    else if (!suppressKeyboard && keyboard_.pressed(Key::Three))
     {
         state.animationState().activeAnimation(2);
     }
 
-    const bool variantKey = keyboard_.pressed(Key::V);
+    const bool variantKey = !suppressKeyboard && keyboard_.pressed(Key::V);
     if (variantKey && !previousVariantKey_)
     {
         state.variantState().cycleDelta(keyboard_.shift() ? -1 : 1);

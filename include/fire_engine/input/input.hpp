@@ -20,7 +20,11 @@ public:
     Input& operator=(Input&&) noexcept = default;
 
     // Non-const: draining the window's accumulated scroll delta mutates it.
-    [[nodiscard]] InputState update(Window& window, float deltaTime);
+    // suppressMouse / suppressKeyboard neutralise the respective input-driven
+    // deltas (camera pan/rotate/zoom, WASD/animation/variant) when the debug
+    // overlay is capturing that input, so widgets don't also fly the camera.
+    [[nodiscard]] InputState update(Window& window, float deltaTime, bool suppressMouse = false,
+                                    bool suppressKeyboard = false);
 
 private:
     Keyboard keyboard_;
