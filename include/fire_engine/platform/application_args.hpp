@@ -80,9 +80,19 @@ struct ApplicationArgs
             args.debug.view = DebugView::ShadowDepth;
             continue;
         }
+        if (arg == "--debug-velocity")
+        {
+            args.debug.view = DebugView::Velocity;
+            continue;
+        }
         if (arg == "--no-shadows")
         {
             args.debug.noShadows = true;
+            continue;
+        }
+        if (arg == "--no-taa")
+        {
+            args.debug.taa = false;
             continue;
         }
         if (positionalCount < 2)

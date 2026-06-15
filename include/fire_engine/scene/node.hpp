@@ -149,6 +149,14 @@ public:
         return composedWorld_;
     }
 
+    // The node's composed world matrix from the previous update/resolve. Used
+    // for motion vectors (TAA) and continuous-collision / constraint solving.
+    // Equals composedWorld() on the first frame (zero motion).
+    [[nodiscard]] const Mat4& previousComposedWorld() const noexcept
+    {
+        return previousComposedWorld_;
+    }
+
     Node& addChild(std::unique_ptr<Node> child);
 
     void update(const InputState& input_state, const Mat4& parentComposedWorld);
@@ -163,6 +171,8 @@ private:
     PhysicsBodyHandle physicsBodyHandle_;
     PhysicsColliderHandle physicsColliderHandle_;
     Mat4 composedWorld_{Mat4::identity()};
+    Mat4 previousComposedWorld_{Mat4::identity()};
+    bool hasComposedWorld_{false};
     Node* parent_{nullptr};
     std::vector<std::unique_ptr<Node>> children_;
 };

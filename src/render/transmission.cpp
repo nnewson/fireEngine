@@ -75,9 +75,10 @@ void Transmission::recordPass(vk::CommandBuffer cmd, std::span<const DrawCommand
     recordForwardTransmissionPass(cmd, transmissiveDraws, globalSet);
 }
 
-void Transmission::recreate(TextureHandle offscreenColourHandle)
+void Transmission::recreate(TextureHandle offscreenColourHandle, TextureHandle velocityHandle)
 {
     offscreenColourHandle_ = offscreenColourHandle;
+    velocityHandle_ = velocityHandle;
     rebuildSceneColorChain();
 }
 
@@ -271,14 +272,44 @@ void Transmission::recordForwardTransmissionPass(vk::CommandBuffer cmd,
         .extent = extent,
     };
 
-    // The HDR target was brought to ColorAttachmentOptimal by recordSceneColorCapture's
-    // closing hdrBack barrier; depth is still in DepthStencilAttachmentOptimal from
-    // the forward pass. Both are loaded (loadOp Load) and rendered on top.
-    vk::RenderingAttachmentInfo colour{
-        .imageView = resources_->vulkanImageView(offscreenColourHandle_),
-        .imageLayout = vk::ImageLayout::eColorAttachmentOptimal,
-        .loadOp = vk::AttachmentLoadOp::eLoad,
-        .storeOp = vk::AttachmentStoreOp::eStore,
+    // The forward pipelines write HDR colour + a velocity attachment (TAA). The
+    // HDR target was brought to ColorAttachmentOptimal by recordSceneColorCapture;
+    // the velocity target is ShaderReadOnly out of the forward pass — bring it
+    // back to a colour attachment so transmissive draws can write motion vectors.
+    vk::ImageMemoryBarrier2 velocityToAttach{
+        .srcStageMask = vk::PipelineStageFlagBits2::eFragmentShader,
+        .srcAccessMask = vk::AccessFlagBits2::eShaderRead,
+        .dstStageMask = vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+        .dstAccessMask = vk::AccessFlagBits2::eColorAttachmentWrite,
+        .oldLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
+        .newLayout = vk::ImageLayout::eColorAttachmentOptimal,
+        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .image = resources_->vulkanImage(velocityHandle_),
+        .subresourceRange = vk::ImageSubresourceRange{.aspectMask = vk::ImageAspectFlagBits::eColor,
+                                                      .baseMipLevel = 0,
+                                                      .levelCount = 1,
+                                                      .baseArrayLayer = 0,
+                                                      .layerCount = 1},
+    };
+    cmd.pipelineBarrier2(
+        vk::DependencyInfo{.imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &velocityToAttach});
+
+    // Depth is still DepthStencilAttachmentOptimal from the forward pass; HDR +
+    // velocity are loaded (loadOp Load) and rendered on top.
+    std::array<vk::RenderingAttachmentInfo, 2> colours{
+        vk::RenderingAttachmentInfo{
+            .imageView = resources_->vulkanImageView(offscreenColourHandle_),
+            .imageLayout = vk::ImageLayout::eColorAttachmentOptimal,
+            .loadOp = vk::AttachmentLoadOp::eLoad,
+            .storeOp = vk::AttachmentStoreOp::eStore,
+        },
+        vk::RenderingAttachmentInfo{
+            .imageView = resources_->vulkanImageView(velocityHandle_),
+            .imageLayout = vk::ImageLayout::eColorAttachmentOptimal,
+            .loadOp = vk::AttachmentLoadOp::eLoad,
+            .storeOp = vk::AttachmentStoreOp::eStore,
+        },
     };
     vk::RenderingAttachmentInfo depth{
         .imageView = swapchain_->depthView(),
@@ -286,7 +317,7 @@ void Transmission::recordForwardTransmissionPass(vk::CommandBuffer cmd,
         .loadOp = vk::AttachmentLoadOp::eLoad,
         .storeOp = vk::AttachmentStoreOp::eDontCare,
     };
-    cmd.beginRendering(makeRenderingInfo(renderArea, {&colour, 1}, &depth));
+    cmd.beginRendering(makeRenderingInfo(renderArea, colours, &depth));
     cmd.setViewport(0, makeFullViewport(extent));
     cmd.setScissor(0, renderArea);
     recordTransmissionDrawBucket(cmd, transmissiveDraws, *resources_, globalSet);
@@ -310,8 +341,26 @@ void Transmission::recordForwardTransmissionPass(vk::CommandBuffer cmd,
                                                       .baseArrayLayer = 0,
                                                       .layerCount = 1},
     };
-    cmd.pipelineBarrier2(
-        vk::DependencyInfo{.imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &toShaderRead});
+    vk::ImageMemoryBarrier2 velocityToShaderRead{
+        .srcStageMask = vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+        .srcAccessMask = vk::AccessFlagBits2::eColorAttachmentWrite,
+        .dstStageMask = vk::PipelineStageFlagBits2::eFragmentShader,
+        .dstAccessMask = vk::AccessFlagBits2::eShaderRead,
+        .oldLayout = vk::ImageLayout::eColorAttachmentOptimal,
+        .newLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
+        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .image = resources_->vulkanImage(velocityHandle_),
+        .subresourceRange = vk::ImageSubresourceRange{.aspectMask = vk::ImageAspectFlagBits::eColor,
+                                                      .baseMipLevel = 0,
+                                                      .levelCount = 1,
+                                                      .baseArrayLayer = 0,
+                                                      .layerCount = 1},
+    };
+    std::array<vk::ImageMemoryBarrier2, 2> barriers{toShaderRead, velocityToShaderRead};
+    cmd.pipelineBarrier2(vk::DependencyInfo{
+        .imageMemoryBarrierCount = static_cast<uint32_t>(barriers.size()),
+        .pImageMemoryBarriers = barriers.data()});
 }
 
 } // namespace fire_engine

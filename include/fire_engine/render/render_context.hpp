@@ -30,6 +30,13 @@ struct RenderContext
     uint32_t currentFrame;
     Vec3 cameraPosition;
     Vec3 cameraTarget;
+    // Per-frame camera matrices supplied by the Renderer. proj is the jittered
+    // projection (TAA, rasterisation only); currentViewProj/previousViewProj are
+    // jitter-free for motion vectors. Forwarded straight to FrameInfo.
+    Mat4 view{Mat4::identity()};
+    Mat4 proj{Mat4::identity()};
+    Mat4 currentViewProj{Mat4::identity()};
+    Mat4 previousViewProj{Mat4::identity()};
     std::vector<DrawCommand>* drawCommands{nullptr};
     AlphaPipelines pipelines{};
     PipelineHandle shadowPipeline{NullPipeline};

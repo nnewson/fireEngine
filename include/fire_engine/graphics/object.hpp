@@ -57,7 +57,8 @@ public:
     }
 
     [[nodiscard]]
-    std::vector<DrawCommand> render(const FrameInfo& frame, const Mat4& world);
+    std::vector<DrawCommand> render(const FrameInfo& frame, const Mat4& world,
+                                    const Mat4& previousWorld);
 
 private:
     struct GeometryBindings
@@ -91,8 +92,8 @@ private:
 
     // render() phases: write the per-frame UBOs (shared/skin/material/morph),
     // write the shadow UBO, then assemble forward + shadow draw commands.
-    void writeForwardUniforms(const FrameInfo& frame, const Mat4& world, bool hasSkin,
-                              const std::vector<Mat4>& jointMatrices);
+    void writeForwardUniforms(const FrameInfo& frame, const Mat4& world, const Mat4& previousWorld,
+                              bool hasSkin, const std::vector<Mat4>& jointMatrices);
     void writeShadowUniforms(const FrameInfo& frame, const Mat4& world, bool hasSkin);
     [[nodiscard]] std::vector<DrawCommand> buildDrawCommands(const FrameInfo& frame,
                                                              const Mat4& world, bool hasSkin,

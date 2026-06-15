@@ -117,9 +117,9 @@ bool Mesh::isSelectableVariantState(int state) const noexcept
     return object_.wouldChangeVariant(candidate);
 }
 
-Mat4 Mesh::render(const RenderContext& ctx, const Mat4& world)
+Mat4 Mesh::render(const RenderContext& ctx, const Mat4& world, const Mat4& previousWorld)
 {
-    auto commands = object_.render(ctx.frameInfo(), world);
+    auto commands = object_.render(ctx.frameInfo(), world, previousWorld);
     if (ctx.drawCommands != nullptr)
     {
         ctx.drawCommands->insert(ctx.drawCommands->end(), commands.begin(), commands.end());

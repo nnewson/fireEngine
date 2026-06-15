@@ -199,6 +199,10 @@ void Device::createLogicalDevice()
     // Point light shadow maps use samplerCubeArrayShadow over a cubemap-array
     // depth image. Requires the imageCubeArray feature.
     features.imageCubeArray = vk::True;
+    // The forward/transmission passes render colour + a TAA velocity attachment
+    // with different blend state per attachment (colour may alpha-blend; the
+    // velocity attachment never blends). Per-attachment blend needs this.
+    features.independentBlend = vk::True;
 
     // synchronization2: barriers/submits use the *2 APIs. dynamicRendering:
     // rendering without VkRenderPass/VkFramebuffer objects.

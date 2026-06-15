@@ -161,6 +161,19 @@ public:
     updatePostProcessDescriptors(const std::array<DescriptorSetHandle, kMaxFramesInFlight>& sets,
                                  TextureHandle hdrTarget, TextureHandle bloomChain);
 
+    // TAA resolve descriptors — one set per ping-pong parity. Set [p] reads the
+    // current scene colour + velocity and the *opposite* history slot
+    // (history[1 - p]) as the previous frame's accumulation.
+    [[nodiscard]] std::array<DescriptorSetHandle, kMaxFramesInFlight>
+    createTaaResolveDescriptors(vk::DescriptorSetLayout layout, TextureHandle currentColour,
+                                TextureHandle velocity,
+                                const std::array<TextureHandle, kMaxFramesInFlight>& history);
+
+    void
+    updateTaaResolveDescriptors(const std::array<DescriptorSetHandle, kMaxFramesInFlight>& sets,
+                                TextureHandle currentColour, TextureHandle velocity,
+                                const std::array<TextureHandle, kMaxFramesInFlight>& history);
+
     [[nodiscard]] vk::DescriptorSet vulkanDescriptorSet(DescriptorSetHandle handle) const noexcept;
 
 private:

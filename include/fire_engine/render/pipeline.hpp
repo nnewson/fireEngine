@@ -147,6 +147,12 @@ public:
     // test disabled, no culling, no vertex input.
     [[nodiscard]] static PipelineConfig postProcessConfig(vk::Format colourFormat);
 
+    // Factory producing the PipelineConfig for the TAA resolve pass. Fullscreen
+    // triangle (postprocess.vert), sampling current scene colour + velocity +
+    // previous-frame history, writing the resolved colour into a history target.
+    // No vertex input, no depth.
+    [[nodiscard]] static PipelineConfig taaResolveConfig(vk::Format colourFormat);
+
     // Bloom downsample: fullscreen triangle, samples one input mip, writes
     // the next coarser mip. Push constant carries inverse-input-resolution
     // and a first-pass flag (Karis-average to suppress firefly halos).

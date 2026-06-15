@@ -120,6 +120,33 @@ TEST(NodeUpdate, UpdatesTransform)
     EXPECT_FLOAT_EQ((n.transform().world()[2, 3]), 30.0f);
 }
 
+TEST(NodeMotion, FirstUpdatePreviousEqualsCurrent)
+{
+    Node n("Node");
+    n.transform().position({5.0f, 0.0f, 0.0f});
+
+    n.update(InputState{}, Mat4::identity());
+
+    // First frame: no prior world, so previous == current (zero motion vector).
+    EXPECT_FLOAT_EQ((n.previousComposedWorld()[0, 3]), 5.0f);
+    EXPECT_FLOAT_EQ((n.composedWorld()[0, 3]), 5.0f);
+}
+
+TEST(NodeMotion, PreviousComposedWorldLagsOneFrame)
+{
+    Node n("Node");
+
+    n.transform().position({1.0f, 0.0f, 0.0f});
+    n.update(InputState{}, Mat4::identity());
+
+    n.transform().position({4.0f, 0.0f, 0.0f});
+    n.update(InputState{}, Mat4::identity());
+
+    // Current is this frame's position; previous is last frame's.
+    EXPECT_FLOAT_EQ((n.composedWorld()[0, 3]), 4.0f);
+    EXPECT_FLOAT_EQ((n.previousComposedWorld()[0, 3]), 1.0f);
+}
+
 TEST(NodeUpdate, ControllableMovesTransformFromControllerState)
 {
     Node n("ControllableNode");

@@ -392,7 +392,8 @@ Bounds3 Object::computeShadowBounds(const std::vector<Mat4>& jointMatrices, bool
     return bounds;
 }
 
-std::vector<DrawCommand> Object::render(const FrameInfo& frame, const Mat4& world)
+std::vector<DrawCommand> Object::render(const FrameInfo& frame, const Mat4& world,
+                                        const Mat4& previousWorld)
 {
     const bool hasSkin = skin_ != nullptr && !skin_->empty();
 
@@ -400,14 +401,15 @@ std::vector<DrawCommand> Object::render(const FrameInfo& frame, const Mat4& worl
     const std::vector<Mat4>& jointMatrices =
         hasSkin ? skin_->cachedJointMatrices() : emptyJointMatrices;
 
-    writeForwardUniforms(frame, world, hasSkin, jointMatrices);
+    writeForwardUniforms(frame, world, previousWorld, hasSkin, jointMatrices);
     writeShadowUniforms(frame, world, hasSkin);
 
     const Bounds3 shadowBounds = computeShadowBounds(jointMatrices, hasSkin, world);
     return buildDrawCommands(frame, world, hasSkin, shadowBounds);
 }
 
-void Object::writeForwardUniforms(const FrameInfo& frame, const Mat4& world, bool hasSkin,
+void Object::writeForwardUniforms(const FrameInfo& frame, const Mat4& world,
+                                  const Mat4& previousWorld, bool hasSkin,
                                   const std::vector<Mat4>& jointMatrices)
 {
     // Shared per-object UBO. view/proj are computed once per frame and carried
@@ -421,6 +423,10 @@ void Object::writeForwardUniforms(const FrameInfo& frame, const Mat4& world, boo
     ubo.cameraPos[2] = frame.cameraPosition.z();
     ubo.cameraPos[3] = 0.0f;
     ubo.hasSkin = hasSkin ? 1 : 0;
+    // Motion-vector inputs (TAA): previous model + jitter-free view-projections.
+    ubo.previousModel = previousWorld;
+    ubo.currentViewProj = frame.currentViewProj;
+    ubo.previousViewProj = frame.previousViewProj;
     std::memcpy(uniformMapped_[frame.currentFrame], &ubo, sizeof(ubo));
 
     if (hasSkin)

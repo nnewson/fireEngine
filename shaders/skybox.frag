@@ -23,6 +23,9 @@ layout(binding = 2) uniform LightUBO {
 layout(location = 0) in vec2 fragUv;
 
 layout(location = 0) out vec4 outColor;
+// TAA velocity attachment. v1: the skybox writes zero motion (treated as
+// static); camera-rotation reprojection of the background is a follow-up.
+layout(location = 1) out vec2 outVelocity;
 
 void main() {
     vec2 ndc = fragUv * 2.0 - 1.0;
@@ -41,4 +44,5 @@ void main() {
 
     vec3 skyColor = texture(skyboxMap, dir).rgb * light.environmentParams.x;
     outColor = vec4(skyColor, 1.0);
+    outVelocity = vec2(0.0);
 }

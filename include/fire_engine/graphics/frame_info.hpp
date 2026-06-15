@@ -30,8 +30,12 @@ struct FrameInfo
     Vec3 cameraTarget;
     // Camera view and projection for the frame, computed once when the
     // FrameInfo is built (see RenderContext::frameInfo) rather than per object.
+    // proj is the jittered projection (TAA) — used for rasterisation only.
     Mat4 view{Mat4::identity()};
     Mat4 proj{Mat4::identity()};
+    // Jitter-free current/previous view-projection for motion vectors (TAA).
+    Mat4 currentViewProj{Mat4::identity()};
+    Mat4 previousViewProj{Mat4::identity()};
     AlphaPipelines pipelines{};
     PipelineHandle shadowPipeline{NullPipeline};
     // Light-space view-projection matrices for every shadow caster — cascades,

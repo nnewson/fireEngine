@@ -23,7 +23,7 @@ public:
 
     void recordPass(vk::CommandBuffer cmd, std::span<const DrawCommand> transmissiveDraws,
                     vk::DescriptorSet globalSet) const;
-    void recreate(TextureHandle offscreenColourHandle);
+    void recreate(TextureHandle offscreenColourHandle, TextureHandle velocityHandle);
 
 private:
     void rebuildSceneColorChain();
@@ -35,6 +35,7 @@ private:
     const Swapchain* swapchain_{nullptr};
     Resources* resources_{nullptr};
     TextureHandle offscreenColourHandle_{NullTexture};
+    TextureHandle velocityHandle_{NullTexture};
     TextureHandle sceneColorHandle_{NullTexture};
     uint32_t sceneColorMipLevels_{0};
 };

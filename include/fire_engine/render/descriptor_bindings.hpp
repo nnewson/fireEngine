@@ -94,6 +94,15 @@ enum class PostProcessBinding : std::uint32_t
     BloomInput = 1,
 };
 
+// TAA resolve pass (set 0): current scene colour, screen-space velocity, and
+// the previous frame's resolved history (the ping-pong slot being read).
+enum class TaaBinding : std::uint32_t
+{
+    CurrentColor = 0,
+    Velocity = 1,
+    History = 2,
+};
+
 // MaterialTextureSlot, materialTextureSlotCount and slotIndex() live in
 // graphics/material.hpp (the slots a material owns). This header keeps only the
 // render-layer concern: mapping each slot to its descriptor ForwardBinding.
@@ -143,6 +152,12 @@ constexpr std::uint32_t bindingIndex(SkyboxBinding binding) noexcept
 
 [[nodiscard]]
 constexpr std::uint32_t bindingIndex(PostProcessBinding binding) noexcept
+{
+    return static_cast<std::uint32_t>(binding);
+}
+
+[[nodiscard]]
+constexpr std::uint32_t bindingIndex(TaaBinding binding) noexcept
 {
     return static_cast<std::uint32_t>(binding);
 }

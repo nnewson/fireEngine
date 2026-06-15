@@ -53,6 +53,38 @@ void forwardImageBarrier(vk::CommandBuffer cmd, vk::Image image, vk::ImageAspect
         vk::DependencyInfo{.imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &b});
 }
 
+// Radical-inverse Halton sample in the given base. Used to build the
+// low-discrepancy sub-pixel jitter sequence for TAA.
+[[nodiscard]]
+float halton(uint32_t index, uint32_t base) noexcept
+{
+    float result = 0.0f;
+    float invBase = 1.0f / static_cast<float>(base);
+    float fraction = invBase;
+    while (index > 0)
+    {
+        result += static_cast<float>(index % base) * fraction;
+        index /= base;
+        fraction *= invBase;
+    }
+    return result;
+}
+
+// Sub-pixel jitter offset in clip space for sample `index` at `extent`, applied
+// to projection entries m[0,2]/m[1,2]. Halton(2,3) recentred to [-0.5, 0.5] and
+// scaled to ±kJitterPixelRadius pixels (k = 4 * radius maps the recentred sample
+// to a ±radius-pixel NDC offset). The sign is cosmetic — the velocity buffer is
+// jitter-free, so the jitter cancels in accumulation.
+[[nodiscard]]
+std::pair<float, float> taaJitterOffset(uint32_t index, vk::Extent2D extent) noexcept
+{
+    constexpr float kJitterPixelRadius = 0.5f;
+    constexpr float k = 4.0f * kJitterPixelRadius;
+    const float jx = (halton(index + 1, 2) - 0.5f) * k / static_cast<float>(extent.width);
+    const float jy = (halton(index + 1, 3) - 0.5f) * k / static_cast<float>(extent.height);
+    return {jx, jy};
+}
+
 [[nodiscard]]
 const Lighting* primaryDirectionalLight(std::span<const Lighting> lights) noexcept
 {
@@ -129,11 +161,12 @@ Renderer::Renderer(const Window& window, std::string environmentPath, RendererDe
       transmission_(swapchain_, resources_, postProcessing_.offscreenColourTarget()),
       shadows_(device_, resources_),
       particles_(device_, swapchain_, resources_, postProcessing_.offscreenColourTarget()),
+      taa_(device_, swapchain_, resources_, postProcessing_.offscreenColourTarget()),
       environmentPath_(std::move(environmentPath)),
       debug_(debug)
 {
     swapchain_.createDepthResources(device_);
-    transmission_.recreate(postProcessing_.offscreenColourTarget());
+    transmission_.recreate(postProcessing_.offscreenColourTarget(), taa_.velocityTarget());
     // Bind the now-created scene-depth image into the particle render set.
     particles_.recreate(postProcessing_.offscreenColourTarget());
     forwardOpaqueHandle_ =
@@ -573,6 +606,10 @@ Renderer::DrawBuckets Renderer::collectDrawCommands(vk::CommandBuffer cmd, Scene
                       currentFrame_,
                       cameraPosition,
                       cameraTarget,
+                      view_,
+                      jitteredProj_,
+                      currentViewProj_,
+                      previousViewProj_,
                       &drawCommands,
                       pipelines,
                       shadows_.pipelineHandle(),
@@ -621,27 +658,46 @@ void Renderer::drawFrame(Window& display, SceneGraph& scene, Vec3 cameraPosition
     cmd.reset();
     cmd.begin(vk::CommandBufferBeginInfo{});
 
+    // Per-frame camera matrices. The forward pass rasterises with jitteredProj_
+    // (TAA sub-pixel jitter); currentViewProj_ is jitter-free so motion vectors
+    // are independent of the jitter (it cancels in the resolve accumulation).
+    const auto extent = swapchain_.extent();
+    const float aspect = static_cast<float>(extent.width) / static_cast<float>(extent.height);
+    view_ = Mat4::lookAt(cameraPosition, cameraTarget, {0.0f, 1.0f, 0.0f});
+    const Mat4 unjitteredProj =
+        Mat4::perspective(kCameraFovRadians, aspect, kCameraNearPlane, kCameraFarPlane);
+    jitteredProj_ = unjitteredProj;
+    if (debug_.taa)
+    {
+        const auto [jx, jy] = taaJitterOffset(taaJitterIndex_, extent);
+        jitteredProj_[0, 2] += jx;
+        jitteredProj_[1, 2] += jy;
+        taaJitterIndex_ = (taaJitterIndex_ + 1) % kTaaJitterSamples;
+    }
+    currentViewProj_ = unjitteredProj * view_;
+
     updateFrameLighting(scene, cameraPosition, cameraTarget);
     DrawBuckets buckets = collectDrawCommands(cmd, scene, cameraPosition, cameraTarget);
 
-    // Particle simulation feed: gather emitters and the frame's view/projection
-    // (same construction as RenderContext::frameInfo).
-    const auto extent = swapchain_.extent();
-    const float aspect = static_cast<float>(extent.width) / static_cast<float>(extent.height);
-    const Mat4 view = Mat4::lookAt(cameraPosition, cameraTarget, {0.0f, 1.0f, 0.0f});
-    const Mat4 proj =
-        Mat4::perspective(kCameraFovRadians, aspect, kCameraNearPlane, kCameraFarPlane);
-    particles_.update(scene.gatherEmitters(), view, proj, dt, currentFrame_);
+    // Particles render un-jittered (after TAA in Stage 3); feed them the plain proj.
+    particles_.update(scene.gatherEmitters(), view_, unjitteredProj, dt, currentFrame_);
 
     recordShadowPass(cmd, buckets);
     recordForwardPass(cmd, buckets);
     recordTransmissionPass(cmd, buckets);
+    // TAA resolve: reproject + accumulate history into the offscreen HDR target
+    // before particles (which render un-jittered and stay out of the history).
+    if (debug_.taa)
+    {
+        taa_.recordResolve(cmd, currentFrame_);
+    }
     recordParticlePass(cmd);
     recordPostProcessing(cmd, *imageIndex);
 
     cmd.end();
     submitAndPresent(display, cmd, *imageIndex);
 
+    previousViewProj_ = currentViewProj_;
     currentFrame_ = (currentFrame_ + 1) % kMaxFramesInFlight;
 }
 
@@ -689,6 +745,7 @@ void Renderer::beginForwardRendering(vk::CommandBuffer cmd)
     };
 
     const vk::Image hdrImage = resources_.vulkanImage(postProcessing_.offscreenColourTarget());
+    const vk::Image velocityImage = resources_.vulkanImage(taa_.velocityTarget());
     const vk::Image depthImage = swapchain_.depthImage();
 
     // Dynamic rendering does no implicit attachment transitions. The HDR target
@@ -701,6 +758,12 @@ void Renderer::beginForwardRendering(vk::CommandBuffer cmd)
                         vk::PipelineStageFlagBits2::eFragmentShader, {},
                         vk::PipelineStageFlagBits2::eColorAttachmentOutput,
                         vk::AccessFlagBits2::eColorAttachmentWrite);
+    // Velocity target: also ShaderReadOnly between frames (TAA resolve samples it).
+    forwardImageBarrier(cmd, velocityImage, vk::ImageAspectFlagBits::eColor,
+                        vk::ImageLayout::eUndefined, vk::ImageLayout::eColorAttachmentOptimal,
+                        vk::PipelineStageFlagBits2::eFragmentShader, {},
+                        vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+                        vk::AccessFlagBits2::eColorAttachmentWrite);
     forwardImageBarrier(cmd, depthImage, vk::ImageAspectFlagBits::eDepth,
                         vk::ImageLayout::eUndefined,
                         vk::ImageLayout::eDepthStencilAttachmentOptimal,
@@ -710,14 +773,24 @@ void Renderer::beginForwardRendering(vk::CommandBuffer cmd)
 
     const vk::ClearValue colourClear{
         .color = vk::ClearColorValue{.float32 = {{0.02f, 0.02f, 0.02f, 1.0f}}}};
+    const vk::ClearValue velocityClear{.color = vk::ClearColorValue{.float32 = {{0.0f, 0.0f}}}};
     const vk::ClearValue depthClear{.depthStencil =
                                         vk::ClearDepthStencilValue{.depth = 1.0f, .stencil = 0}};
-    vk::RenderingAttachmentInfo colour{
-        .imageView = resources_.vulkanImageView(postProcessing_.offscreenColourTarget()),
-        .imageLayout = vk::ImageLayout::eColorAttachmentOptimal,
-        .loadOp = vk::AttachmentLoadOp::eClear,
-        .storeOp = vk::AttachmentStoreOp::eStore,
-        .clearValue = colourClear,
+    std::array<vk::RenderingAttachmentInfo, 2> colours{
+        vk::RenderingAttachmentInfo{
+            .imageView = resources_.vulkanImageView(postProcessing_.offscreenColourTarget()),
+            .imageLayout = vk::ImageLayout::eColorAttachmentOptimal,
+            .loadOp = vk::AttachmentLoadOp::eClear,
+            .storeOp = vk::AttachmentStoreOp::eStore,
+            .clearValue = colourClear,
+        },
+        vk::RenderingAttachmentInfo{
+            .imageView = resources_.vulkanImageView(taa_.velocityTarget()),
+            .imageLayout = vk::ImageLayout::eColorAttachmentOptimal,
+            .loadOp = vk::AttachmentLoadOp::eClear,
+            .storeOp = vk::AttachmentStoreOp::eStore,
+            .clearValue = velocityClear,
+        },
     };
     vk::RenderingAttachmentInfo depth{
         .imageView = swapchain_.depthView(),
@@ -726,7 +799,7 @@ void Renderer::beginForwardRendering(vk::CommandBuffer cmd)
         .storeOp = vk::AttachmentStoreOp::eStore,
         .clearValue = depthClear,
     };
-    cmd.beginRendering(makeRenderingInfo(renderArea, {&colour, 1}, &depth));
+    cmd.beginRendering(makeRenderingInfo(renderArea, colours, &depth));
 
     cmd.setViewport(0, makeFullViewport(extent));
     cmd.setScissor(0, renderArea);
@@ -745,6 +818,13 @@ void Renderer::endForwardRendering(vk::CommandBuffer cmd)
     forwardImageBarrier(
         cmd, hdrImage, vk::ImageAspectFlagBits::eColor, vk::ImageLayout::eColorAttachmentOptimal,
         vk::ImageLayout::eShaderReadOnlyOptimal, vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+        vk::AccessFlagBits2::eColorAttachmentWrite, vk::PipelineStageFlagBits2::eFragmentShader,
+        vk::AccessFlagBits2::eShaderRead);
+    const vk::Image velocityImage = resources_.vulkanImage(taa_.velocityTarget());
+    forwardImageBarrier(
+        cmd, velocityImage, vk::ImageAspectFlagBits::eColor,
+        vk::ImageLayout::eColorAttachmentOptimal, vk::ImageLayout::eShaderReadOnlyOptimal,
+        vk::PipelineStageFlagBits2::eColorAttachmentOutput,
         vk::AccessFlagBits2::eColorAttachmentWrite, vk::PipelineStageFlagBits2::eFragmentShader,
         vk::AccessFlagBits2::eShaderRead);
 }
@@ -843,8 +923,9 @@ void Renderer::recreateSwapchain(const Window& display)
 
     swapchain_.recreate(device_, display);
     postProcessing_.recreate();
-    transmission_.recreate(postProcessing_.offscreenColourTarget());
+    transmission_.recreate(postProcessing_.offscreenColourTarget(), taa_.velocityTarget());
     particles_.recreate(postProcessing_.offscreenColourTarget());
+    taa_.recreate(postProcessing_.offscreenColourTarget());
     // Rewrite the forward-globals (set 1) descriptors so they reference the
     // sampler/view from the freshly recreated sceneColor target (and any
     // other recreated shared texture) instead of the destroyed ones.

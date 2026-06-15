@@ -84,7 +84,7 @@ public:
     void update(const InputState& input_state, const Transform& transform);
 
     [[nodiscard]]
-    Mat4 render(const RenderContext& ctx, const Mat4& world);
+    Mat4 render(const RenderContext& ctx, const Mat4& world, const Mat4& previousWorld);
 
     void variantNames(std::vector<std::string> names) noexcept
     {

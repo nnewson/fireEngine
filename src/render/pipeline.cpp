@@ -101,8 +101,9 @@ PipelineConfig Pipeline::forwardConfig()
     };
     config.pushConstantRanges.emplace_back(vk::ShaderStageFlagBits::eFragment, 0,
                                            static_cast<uint32_t>(sizeof(ForwardPushConstants)));
-    // Forward target: HDR offscreen colour + shared D32 depth.
-    config.colourFormats = {vk::Format::eR16G16B16A16Sfloat};
+    // Forward target: HDR offscreen colour + RG16F motion vectors (TAA) + shared
+    // D32 depth. The velocity format must match Resources::createVelocityTarget.
+    config.colourFormats = {vk::Format::eR16G16B16A16Sfloat, vk::Format::eR16G16Sfloat};
     config.depthFormat = vk::Format::eD32Sfloat;
     return config;
 }
@@ -209,6 +210,29 @@ PipelineConfig Pipeline::postProcessConfig(vk::Format colourFormat)
     return config;
 }
 
+PipelineConfig Pipeline::taaResolveConfig(vk::Format colourFormat)
+{
+    PipelineConfig config;
+    config.vertShaderPath = "postprocess.vert.spv";
+    config.fragShaderPath = "taa.frag.spv";
+    config.bindings = {
+        {bindingIndex(TaaBinding::CurrentColor), vk::DescriptorType::eCombinedImageSampler, 1,
+         vk::ShaderStageFlagBits::eFragment},
+        {bindingIndex(TaaBinding::Velocity), vk::DescriptorType::eCombinedImageSampler, 1,
+         vk::ShaderStageFlagBits::eFragment},
+        {bindingIndex(TaaBinding::History), vk::DescriptorType::eCombinedImageSampler, 1,
+         vk::ShaderStageFlagBits::eFragment},
+    };
+    config.pushConstantRanges.emplace_back(vk::ShaderStageFlagBits::eFragment, 0,
+                                           static_cast<uint32_t>(sizeof(TaaResolvePushConstants)));
+    config.colourFormats = {colourFormat};
+    config.useVertexInput = false;
+    config.depthTestEnable = false;
+    config.depthWrite = false;
+    config.cullMode = vk::CullModeFlagBits::eNone;
+    return config;
+}
+
 PipelineConfig Pipeline::bloomDownsampleConfig(vk::Format colourFormat)
 {
     PipelineConfig config;
@@ -282,8 +306,8 @@ PipelineConfig Pipeline::skyboxConfig()
         {bindingIndex(SkyboxBinding::Light), vk::DescriptorType::eUniformBuffer, 1,
          vk::ShaderStageFlagBits::eFragment},
     };
-    // Shares the forward HDR colour + D32 depth target.
-    config.colourFormats = {vk::Format::eR16G16B16A16Sfloat};
+    // Shares the forward HDR colour + RG16F velocity + D32 depth target.
+    config.colourFormats = {vk::Format::eR16G16B16A16Sfloat, vk::Format::eR16G16Sfloat};
     config.depthFormat = vk::Format::eD32Sfloat;
     config.useVertexInput = false;
     config.depthWrite = false;
@@ -485,24 +509,44 @@ void Pipeline::createGraphicsPipeline(const PipelineConfig& config)
         config.writeColour ? vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG |
                                  vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA
                            : vk::ColorComponentFlags{};
-    vk::PipelineColorBlendAttachmentState colourBlendAtt{
-        .blendEnable = config.blendEnable,
-        .srcColorBlendFactor = config.srcColourBlend,
-        .dstColorBlendFactor = config.dstColourBlend,
-        .colorBlendOp = vk::BlendOp::eAdd,
-        .srcAlphaBlendFactor = config.srcAlphaBlend,
-        .dstAlphaBlendFactor = config.dstAlphaBlend,
-        .alphaBlendOp = vk::BlendOp::eAdd,
-        .colorWriteMask = writeMask,
-    };
+    // One blend state per colour attachment. Attachment 0 uses the config's
+    // blend (HDR colour); any additional attachments (e.g. the TAA velocity
+    // buffer) overwrite with no blend — motion vectors must not be alpha-mixed.
+    const vk::ColorComponentFlags allChannels =
+        vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG |
+        vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA;
+    std::vector<vk::PipelineColorBlendAttachmentState> blendAtts;
+    blendAtts.reserve(config.colourFormats.size());
+    for (std::size_t i = 0; i < config.colourFormats.size(); ++i)
+    {
+        if (i == 0)
+        {
+            blendAtts.push_back(vk::PipelineColorBlendAttachmentState{
+                .blendEnable = config.blendEnable,
+                .srcColorBlendFactor = config.srcColourBlend,
+                .dstColorBlendFactor = config.dstColourBlend,
+                .colorBlendOp = vk::BlendOp::eAdd,
+                .srcAlphaBlendFactor = config.srcAlphaBlend,
+                .dstAlphaBlendFactor = config.dstAlphaBlend,
+                .alphaBlendOp = vk::BlendOp::eAdd,
+                .colorWriteMask = writeMask,
+            });
+        }
+        else
+        {
+            blendAtts.push_back(vk::PipelineColorBlendAttachmentState{
+                .blendEnable = vk::False,
+                .colorWriteMask = allChannels,
+            });
+        }
+    }
 
     // Depth-only pipelines (no colour formats, e.g. shadow passes) carry no
     // blend attachment — the count must match colorAttachmentCount = 0.
-    const bool hasColour = !config.colourFormats.empty();
     vk::PipelineColorBlendStateCreateInfo colourBlend{
         .logicOpEnable = false,
-        .attachmentCount = hasColour ? 1u : 0u,
-        .pAttachments = hasColour ? &colourBlendAtt : nullptr,
+        .attachmentCount = static_cast<uint32_t>(blendAtts.size()),
+        .pAttachments = blendAtts.empty() ? nullptr : blendAtts.data(),
     };
 
     createPipelineLayout(config);

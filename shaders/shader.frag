@@ -145,8 +145,15 @@ layout(location = 3) in vec2 fragTexCoord;
 layout(location = 4) in mat3 fragTBN;
 layout(location = 7) in float fragViewDepth;
 layout(location = 8) in vec2 fragTexCoord1;
+// Jitter-free clip positions from the vertex stage for TAA motion vectors.
+layout(location = 9) in vec4 fragCurClip;
+layout(location = 10) in vec4 fragPrevClip;
 
 layout(location = 0) out vec4 outColor;
+// TAA motion vector: per-pixel screen-space (UV) motion since the previous
+// frame, used by the resolve to reproject history. Written before any early
+// return so every shaded fragment produces a defined velocity.
+layout(location = 1) out vec2 outVelocity;
 
 vec2 pickUv(int index)
 {
@@ -349,6 +356,20 @@ vec2 directionalShadowDepths(vec3 worldPos, vec3 normal, vec3 lightDir, int casc
 }
 
 void main() {
+    // Motion vector first — several debug/unlit paths below return early, and
+    // location 1 must be written on every path or the velocity is undefined.
+    // NDC delta * 0.5 converts clip-space [-1,1] motion to UV-space [0,1] motion.
+    vec2 curNdc = fragCurClip.xy / max(fragCurClip.w, 1e-6);
+    vec2 prevNdc = fragPrevClip.xy / max(fragPrevClip.w, 1e-6);
+    outVelocity = (curNdc - prevNdc) * 0.5;
+
+    // DebugView::Velocity (5) — visualise the motion vector. Scaled so the
+    // small per-frame UV motion is perceptible: R = |x|, G = |y|.
+    if (light.environmentParams.z > 4.5 && light.environmentParams.z < 5.5) {
+        outColor = vec4(abs(outVelocity) * 50.0, 0.0, 1.0);
+        return;
+    }
+
     vec3 N;
     if (material.textureFlags.z == 1) {
         vec2 uvNormal = applyUvTransform(pickUv(material.texCoordIndices.z),

@@ -112,4 +112,17 @@ inline constexpr float kBloomStrength = 0.04f;
 // it approaches scene geometry, removing the hard clip edge at intersections.
 inline constexpr float kParticleSoftFadeRange = 0.5f;
 
+// ---------------------------------------------------------------------------
+// Temporal anti-aliasing — sub-pixel jitter + velocity-reprojected history.
+// ---------------------------------------------------------------------------
+
+// Length of the Halton(2,3) jitter sequence cycled through the projection
+// matrix. 8 spreads samples well without the history needing to remember too
+// far back.
+inline constexpr uint32_t kTaaJitterSamples = 8;
+// History weight in the resolve blend: resolved = mix(current, history, this).
+// 0.9 = heavy accumulation (smooth, slightly softer); 0 = TAA off (pure
+// current frame).
+inline constexpr float kTaaHistoryBlend = 0.9f;
+
 } // namespace fire_engine

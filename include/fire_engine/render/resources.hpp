@@ -117,6 +117,11 @@ public:
     // texture (post-process input). Linear-filter sampler, ClampToEdge.
     [[nodiscard]] TextureHandle createOffscreenColourTarget(vk::Extent2D extent);
 
+    // Allocates an R16G16_SFLOAT screen-space motion-vector target (TAA),
+    // usable as a colour attachment and a sampled texture. Nearest-filter
+    // sampler so velocities aren't blended across silhouettes.
+    [[nodiscard]] TextureHandle createVelocityTarget(vk::Extent2D extent);
+
     // Multi-mip 2D HDR target used by the bloom downsample/upsample chain.
     // Per-mip 2D views are created for framebuffer attachment + shader input.
     [[nodiscard]] TextureHandle createBloomChain(uint32_t width, uint32_t height,

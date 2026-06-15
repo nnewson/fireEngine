@@ -57,6 +57,7 @@ add_library(fireengine SHARED
     src/render/resources.cpp
     src/render/shadows.cpp
     src/render/swapchain.cpp
+    src/render/taa.cpp
     src/render/transmission.cpp
     src/scene/animator.cpp
     src/scene/controllable.cpp
@@ -110,6 +111,7 @@ set(SHADER_SOURCES
     shaders/self_shadow_second.frag
     shaders/postprocess.vert
     shaders/postprocess.frag
+    shaders/taa.frag
     shaders/bloom_downsample.frag
     shaders/bloom_upsample.frag
     shaders/particle_simulate.comp

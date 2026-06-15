@@ -20,6 +20,7 @@
 #include <fire_engine/render/resources.hpp>
 #include <fire_engine/render/shadows.hpp>
 #include <fire_engine/render/swapchain.hpp>
+#include <fire_engine/render/taa.hpp>
 #include <fire_engine/render/transmission.hpp>
 #include <fire_engine/render/ubo.hpp>
 
@@ -29,7 +30,7 @@ namespace fire_engine
 class SceneGraph;
 
 // Selects which debug-view branch the forward fragment shader runs. Mapped
-// 1:1 to LightUBO::environmentParams[2] (0..4) — keep the enum and shader
+// 1:1 to LightUBO::environmentParams[2] (0..5) — keep the enum and shader
 // constants in lockstep.
 enum class DebugView : int
 {
@@ -38,6 +39,9 @@ enum class DebugView : int
     NdotL = 2,
     Shadow = 3,
     ShadowDepth = 4,
+    // Visualises the TAA motion-vector attachment (abs screen-space velocity,
+    // scaled). Sanity check for Stage 2 before the resolve consumes it.
+    Velocity = 5,
 };
 
 struct RendererDebug
@@ -46,6 +50,10 @@ struct RendererDebug
     // Disables every shadow-map visibility lookup (cascade, spot, point) in
     // the forward shader. Surfaces look fully lit by direct lighting.
     bool noShadows{false};
+    // Temporal anti-aliasing. When false (--no-taa) the projection jitter and
+    // the resolve pass are both skipped, reverting to the raw aliased image —
+    // the A/B reference for confirming TAA is doing the work.
+    bool taa{true};
 };
 
 class Renderer
@@ -179,6 +187,7 @@ private:
     Transmission transmission_;
     Shadows shadows_;
     ParticleSystem particles_;
+    Taa taa_;
     PipelineHandle forwardOpaqueHandle_{NullPipeline};
     PipelineHandle forwardOpaqueDoubleSidedHandle_{NullPipeline};
     PipelineHandle forwardBlendHandle_{NullPipeline};
@@ -202,6 +211,14 @@ private:
     std::array<PointShadowCaster, kMaxPointShadowCasters> pointCasters_{};
     std::vector<vk::Fence> imagesInFlight_{};
     uint32_t currentFrame_{0};
+    // Per-frame camera matrices (set at the top of drawFrame). view_ + jitteredProj_
+    // drive rasterisation; currentViewProj_/previousViewProj_ are jitter-free for
+    // TAA motion vectors. previousViewProj_ persists across frames.
+    Mat4 view_{Mat4::identity()};
+    Mat4 jitteredProj_{Mat4::identity()};
+    Mat4 currentViewProj_{Mat4::identity()};
+    Mat4 previousViewProj_{Mat4::identity()};
+    uint32_t taaJitterIndex_{0};
     std::string environmentPath_;
     RendererDebug debug_{};
 };

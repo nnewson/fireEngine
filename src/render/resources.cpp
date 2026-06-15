@@ -845,13 +845,15 @@ TextureHandle Resources::createOffscreenColourTarget(vk::Extent2D extent)
     TextureHandle handle;
     TextureEntry& entry = appendTextureEntry(handle, vk::Format::eR16G16B16A16Sfloat);
 
-    // KHR_materials_transmission F3 also requires TransferSrc on the HDR
-    // target so the sceneColor capture pass can blit from it.
+    // TransferSrc: KHR_materials_transmission F3 blits this into the sceneColor
+    // mip chain. TransferDst: the TAA resolve blits its history result back in
+    // here so bloom / post sample the anti-aliased image. Sampled: post-process
+    // and the TAA resolve read it. (TAA history targets reuse this same factory.)
     vk::ImageCreateInfo imgCi = makeImageCreateInfo(
         {}, vk::ImageType::e2D, entry.format,
         vk::Extent3D{.width = extent.width, .height = extent.height, .depth = 1}, 1, 1,
         vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled |
-            vk::ImageUsageFlagBits::eTransferSrc);
+            vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst);
     allocateImage(entry, imgCi);
 
     vk::ImageViewCreateInfo viewCi = makeImageViewCreateInfo(
@@ -861,6 +863,35 @@ TextureHandle Resources::createOffscreenColourTarget(vk::Extent2D extent)
 
     vk::SamplerCreateInfo samplerCi = makeSamplerCreateInfo(
         vk::Filter::eLinear, vk::Filter::eLinear, vk::SamplerMipmapMode::eNearest,
+        vk::SamplerAddressMode::eClampToEdge, vk::SamplerAddressMode::eClampToEdge,
+        vk::SamplerAddressMode::eClampToEdge, vk::False, 1.0f, vk::False, vk::CompareOp::eAlways,
+        0.0f, 1.0f, vk::BorderColor::eFloatOpaqueBlack);
+    entry.sampler = vk::raii::Sampler(device_->device(), samplerCi);
+
+    return handle;
+}
+
+TextureHandle Resources::createVelocityTarget(vk::Extent2D extent)
+{
+    TextureHandle handle;
+    // RG16F screen-space motion vectors (TAA). Must match the velocity colour
+    // format in Pipeline::forwardConfig / skyboxConfig.
+    TextureEntry& entry = appendTextureEntry(handle, vk::Format::eR16G16Sfloat);
+
+    vk::ImageCreateInfo imgCi = makeImageCreateInfo(
+        {}, vk::ImageType::e2D, entry.format,
+        vk::Extent3D{.width = extent.width, .height = extent.height, .depth = 1}, 1, 1,
+        vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled);
+    allocateImage(entry, imgCi);
+
+    vk::ImageViewCreateInfo viewCi = makeImageViewCreateInfo(
+        *entry.image, vk::ImageViewType::e2D, entry.format,
+        makeImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1));
+    entry.view = vk::raii::ImageView(device_->device(), viewCi);
+
+    // Nearest sampling — motion vectors must not be filtered across edges.
+    vk::SamplerCreateInfo samplerCi = makeSamplerCreateInfo(
+        vk::Filter::eNearest, vk::Filter::eNearest, vk::SamplerMipmapMode::eNearest,
         vk::SamplerAddressMode::eClampToEdge, vk::SamplerAddressMode::eClampToEdge,
         vk::SamplerAddressMode::eClampToEdge, vk::False, 1.0f, vk::False, vk::CompareOp::eAlways,
         0.0f, 1.0f, vk::BorderColor::eFloatOpaqueBlack);

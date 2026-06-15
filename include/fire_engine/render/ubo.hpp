@@ -11,13 +11,24 @@ struct UniformBufferObject
 {
     Mat4 model;
     Mat4 view;
-    Mat4 proj;
+    Mat4 proj; // jittered (sub-pixel) for TAA — used only for gl_Position.
     alignas(16) float cameraPos[4];
     alignas(4) int hasSkin{0};
     int _pad1{0};
     int _pad2{0};
     int _pad3{0};
+    // Motion-vector matrices (TAA). previousModel = the node's composed world
+    // from last frame; the two view-projections are jitter-free so velocity is
+    // the true screen motion, independent of the sub-pixel jitter above. Appended
+    // at the end so existing field offsets (and the shader block) are unchanged.
+    Mat4 previousModel{Mat4::identity()};
+    Mat4 currentViewProj{Mat4::identity()};
+    Mat4 previousViewProj{Mat4::identity()};
 };
+
+static_assert(offsetof(UniformBufferObject, previousModel) == 224,
+              "motion-vector matrices must follow the original UBO fields unchanged");
+static_assert(sizeof(UniformBufferObject) == 416, "UniformBufferObject std140 size");
 
 // KHR_texture_transform packed per material texture slot. `offsetScale.xy` is
 // the UV offset; `offsetScale.zw` is the UV scale (identity = 0,0,1,1).
@@ -232,6 +243,20 @@ struct PostProcessPushConstants
     float _pad0{0.0f};
     float _pad1{0.0f};
     float _pad2{0.0f};
+};
+
+// Fragment push constant for the TAA resolve. Mirrors the push block in
+// shaders/taa.frag.
+struct TaaResolvePushConstants
+{
+    // 1 / render-target resolution — steps the 3x3 neighbourhood clamp in
+    // texel units.
+    alignas(8) float texelSize[2]{0.0f, 0.0f};
+    // History weight in the resolve blend (kTaaHistoryBlend).
+    alignas(4) float historyBlend{0.0f};
+    // 0 on the first frame after a (re)create — the history slot holds no valid
+    // data yet, so the resolve falls back to the current frame.
+    alignas(4) int historyValid{0};
 };
 
 // Per-emitter parameters consumed by the particle compute kernel. std140 layout:

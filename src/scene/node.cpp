@@ -31,7 +31,14 @@ void Node::update(const InputState& input_state, const Mat4& parentComposedWorld
 
     // Composed world includes component effects (e.g. Animator's model matrix)
     Mat4 componentMatrix = componentModelMatrix(component_);
-    composedWorld_ = parentComposedWorld * transform_.local() * componentMatrix;
+    Mat4 newComposedWorld = parentComposedWorld * transform_.local() * componentMatrix;
+
+    // Carry last frame's world for motion vectors (TAA) and continuous
+    // collision / constraint solving. First frame: previous == current so the
+    // motion vector is zero rather than a jump from the identity default.
+    previousComposedWorld_ = hasComposedWorld_ ? composedWorld_ : newComposedWorld;
+    hasComposedWorld_ = true;
+    composedWorld_ = newComposedWorld;
 
     for (auto& child : children_)
     {
@@ -44,7 +51,11 @@ void Node::resolve(const Mat4& parentComposedWorld)
     transform_.update(parentComposedWorld);
 
     Mat4 componentMatrix = componentModelMatrix(component_);
-    composedWorld_ = parentComposedWorld * transform_.local() * componentMatrix;
+    Mat4 newComposedWorld = parentComposedWorld * transform_.local() * componentMatrix;
+
+    previousComposedWorld_ = hasComposedWorld_ ? composedWorld_ : newComposedWorld;
+    hasComposedWorld_ = true;
+    composedWorld_ = newComposedWorld;
 
     for (auto& child : children_)
     {
@@ -60,9 +71,15 @@ void Node::render(const RenderContext& ctx, const Mat4& parentWorld)
     // pass the world matrix down, handled here instead of each defining a
     // trivial render().
     Mat4 childWorld = visitComponent(
-        [&ctx, &world](auto& component) -> Mat4
+        [&ctx, &world, this](auto& component) -> Mat4
         {
-            if constexpr (requires { component.render(ctx, world); })
+            // Geometry components (Mesh) take the previous world too, for motion
+            // vectors (TAA). Others keep the 2-arg form; the rest are no-ops.
+            if constexpr (requires { component.render(ctx, world, previousComposedWorld_); })
+            {
+                return component.render(ctx, world, previousComposedWorld_);
+            }
+            else if constexpr (requires { component.render(ctx, world); })
             {
                 return component.render(ctx, world);
             }

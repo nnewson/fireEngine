@@ -644,6 +644,59 @@ void Descriptors::updatePostProcessDescriptors(
     }
 }
 
+std::array<DescriptorSetHandle, kMaxFramesInFlight> Descriptors::createTaaResolveDescriptors(
+    vk::DescriptorSetLayout layout, TextureHandle currentColour, TextureHandle velocity,
+    const std::array<TextureHandle, kMaxFramesInFlight>& history)
+{
+    std::array<vk::DescriptorPoolSize, 1> poolSizes = {{
+        {vk::DescriptorType::eCombinedImageSampler, kMaxFramesInFlight * 3},
+    }};
+    auto result = buildFrameSets(poolSizes, layout, {});
+    updateTaaResolveDescriptors(result, currentColour, velocity, history);
+    return result;
+}
+
+void Descriptors::updateTaaResolveDescriptors(
+    const std::array<DescriptorSetHandle, kMaxFramesInFlight>& sets, TextureHandle currentColour,
+    TextureHandle velocity, const std::array<TextureHandle, kMaxFramesInFlight>& history)
+{
+    for (int i = 0; i < kMaxFramesInFlight; ++i)
+    {
+        // Parity i writes history[i], so it reads the opposite slot as "previous".
+        const TextureHandle prevHistory = history[(kMaxFramesInFlight - 1) - i];
+
+        vk::DescriptorImageInfo colourInfo = makeDescriptorImageInfo(
+            resources_->vulkanSampler(currentColour), resources_->vulkanImageView(currentColour),
+            vk::ImageLayout::eShaderReadOnlyOptimal);
+        vk::DescriptorImageInfo velocityInfo = makeDescriptorImageInfo(
+            resources_->vulkanSampler(velocity), resources_->vulkanImageView(velocity),
+            vk::ImageLayout::eShaderReadOnlyOptimal);
+        vk::DescriptorImageInfo historyInfo = makeDescriptorImageInfo(
+            resources_->vulkanSampler(prevHistory), resources_->vulkanImageView(prevHistory),
+            vk::ImageLayout::eShaderReadOnlyOptimal);
+
+        const vk::DescriptorSet dst = descriptorSetTable_[static_cast<uint32_t>(sets[i])];
+        std::array<vk::WriteDescriptorSet, 3> writes = {{
+            vk::WriteDescriptorSet{.dstSet = dst,
+                                   .dstBinding = bindingIndex(TaaBinding::CurrentColor),
+                                   .descriptorCount = 1,
+                                   .descriptorType = vk::DescriptorType::eCombinedImageSampler,
+                                   .pImageInfo = &colourInfo},
+            vk::WriteDescriptorSet{.dstSet = dst,
+                                   .dstBinding = bindingIndex(TaaBinding::Velocity),
+                                   .descriptorCount = 1,
+                                   .descriptorType = vk::DescriptorType::eCombinedImageSampler,
+                                   .pImageInfo = &velocityInfo},
+            vk::WriteDescriptorSet{.dstSet = dst,
+                                   .dstBinding = bindingIndex(TaaBinding::History),
+                                   .descriptorCount = 1,
+                                   .descriptorType = vk::DescriptorType::eCombinedImageSampler,
+                                   .pImageInfo = &historyInfo},
+        }};
+        device_->device().updateDescriptorSets(writes, {});
+    }
+}
+
 vk::DescriptorSet Descriptors::vulkanDescriptorSet(DescriptorSetHandle handle) const noexcept
 {
     return descriptorSetTable_[static_cast<uint32_t>(handle)];

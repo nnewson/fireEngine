@@ -3,9 +3,16 @@
 layout(binding = 0) uniform UBO {
     mat4 model;
     mat4 view;
-    mat4 proj;
+    mat4 proj; // jittered (TAA) — rasterisation only
     vec4 cameraPos;
     int hasSkin;
+    int _pad1;
+    int _pad2;
+    int _pad3;
+    // Motion-vector matrices (TAA). The two view-projections are jitter-free.
+    mat4 previousModel;
+    mat4 currentViewProj;
+    mat4 previousViewProj;
 } ubo;
 
 layout(binding = 3) uniform SkinUBO {
@@ -45,6 +52,10 @@ layout(location = 4) out mat3 fragTBN;
 // uses this for cascade selection against light.cascadeSplits.
 layout(location = 7) out float fragViewDepth;
 layout(location = 8) out vec2 fragTexCoord1;
+// Jitter-free clip positions for TAA motion vectors. The fragment stage does
+// the perspective divide and writes the UV-space velocity.
+layout(location = 9) out vec4 fragCurClip;
+layout(location = 10) out vec4 fragPrevClip;
 
 void main() {
     vec3 pos = inPos;
@@ -87,6 +98,15 @@ void main() {
 
     vec4 worldPos = transform * vec4(pos, 1.0);
     gl_Position = ubo.proj * ubo.view * worldPos;
+
+    // TAA motion vectors. Skinned meshes have no previous joint data, so they
+    // fall back to camera-only velocity (previous == current world position);
+    // rigid/animated nodes use the node's previous world matrix. Both view-
+    // projections are jitter-free so the velocity is independent of the jitter.
+    vec4 prevWorldPos = (ubo.hasSkin == 1) ? worldPos : ubo.previousModel * vec4(pos, 1.0);
+    fragCurClip = ubo.currentViewProj * worldPos;
+    fragPrevClip = ubo.previousViewProj * prevWorldPos;
+
     fragColor = inColor;
     fragViewDepth = -(ubo.view * worldPos).z;
     fragTexCoord1 = inTexCoord1;
