@@ -2,8 +2,11 @@
 
 #include <algorithm>
 #include <type_traits>
+#include <variant>
 
 #include <fire_engine/math/constants.hpp>
+#include <fire_engine/math/mat4.hpp>
+#include <fire_engine/math/vec4.hpp>
 
 namespace fire_engine
 {
@@ -148,6 +151,79 @@ std::size_t PhysicsWorld::colliderCount() const noexcept
 {
     return static_cast<std::size_t>(
         std::ranges::count_if(colliders_, [](const ColliderEntry& entry) { return entry.active; }));
+}
+
+namespace
+{
+
+[[nodiscard]] Vec3 transformPoint(const Mat4& m, Vec3 p)
+{
+    const Vec4 r = m * Vec4{p.x(), p.y(), p.z(), 1.0f};
+    return {r.x(), r.y(), r.z()};
+}
+
+// Per-axis scale from the world matrix columns.
+[[nodiscard]] Vec3 matrixScale(const Mat4& m)
+{
+    return {Vec3{m[0, 0], m[1, 0], m[2, 0]}.magnitude(),
+            Vec3{m[0, 1], m[1, 1], m[2, 1]}.magnitude(),
+            Vec3{m[0, 2], m[1, 2], m[2, 2]}.magnitude()};
+}
+
+} // namespace
+
+std::vector<ClothCollider> PhysicsWorld::gatherColliders() const
+{
+    std::vector<ClothCollider> out;
+    out.reserve(colliders_.size());
+
+    for (const ColliderEntry& entry : colliders_)
+    {
+        if (!entry.active)
+        {
+            continue;
+        }
+        const BodyEntry* owner = findBody(entry.body);
+        if (owner == nullptr)
+        {
+            continue;
+        }
+
+        const Mat4 world = owner->transform.world();
+        const Quaternion rot = owner->transform.rotation();
+        const Vec3 s = matrixScale(world);
+        const float uniform = std::max({s.x(), s.y(), s.z()});
+
+        if (const auto* sphere = std::get_if<SphereShape>(&entry.shape))
+        {
+            out.push_back(makeSphereCollider(transformPoint(world, sphere->center),
+                                             sphere->radius * uniform));
+        }
+        else if (const auto* box = std::get_if<BoxShape>(&entry.shape))
+        {
+            out.push_back(
+                makeBoxCollider(transformPoint(world, box->center),
+                                Vec3{box->halfExtents.x() * s.x(), box->halfExtents.y() * s.y(),
+                                     box->halfExtents.z() * s.z()},
+                                rot));
+        }
+        else if (const auto* capsule = std::get_if<CapsuleShape>(&entry.shape))
+        {
+            const Vec3 c = capsule->center;
+            const Vec3 p0 = transformPoint(world, Vec3{c.x(), c.y() - capsule->halfHeight, c.z()});
+            const Vec3 p1 = transformPoint(world, Vec3{c.x(), c.y() + capsule->halfHeight, c.z()});
+            out.push_back(makeCapsuleCollider(p0, p1, capsule->radius * uniform));
+        }
+        else if (const auto* aabb = std::get_if<AabbShape>(&entry.shape))
+        {
+            const Vec3 he = aabb->bounds.extent() * 0.5f;
+            out.push_back(makeBoxCollider(transformPoint(world, aabb->bounds.center()),
+                                          Vec3{he.x() * s.x(), he.y() * s.y(), he.z() * s.z()},
+                                          rot));
+        }
+    }
+
+    return out;
 }
 
 const PhysicsBody* PhysicsWorld::body(PhysicsBodyHandle handle) const noexcept

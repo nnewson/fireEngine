@@ -4,10 +4,41 @@
 #include <vector>
 
 #include <fire_engine/graphics/vertex.hpp>
+#include <fire_engine/math/quaternion.hpp>
 #include <fire_engine/math/vec3.hpp>
 
 namespace fire_engine
 {
+
+enum class ClothColliderType : int32_t
+{
+    Plane = 0,
+    Sphere = 1,
+    Box = 2,
+    Capsule = 3,
+};
+
+// A world-space collision primitive the cloth solver projects particles out of.
+// Vulkan-free, but laid out to match the std140 element stride of the solver's
+// collider UBO (64 bytes), so an array of these uploads with a plain memcpy. The
+// a/b/c payload is interpreted per type — see the builders below.
+struct ClothCollider
+{
+    float a[4]{};
+    float b[4]{};
+    float c[4]{};
+    int32_t type{0};
+    int32_t pad[3]{};
+};
+
+// type 0: a = (normal.xyz, offset)            — half-space dot(p,n) >= offset
+[[nodiscard]] ClothCollider makePlaneCollider(Vec3 normal, float offset);
+// type 1: a = (center.xyz, radius)
+[[nodiscard]] ClothCollider makeSphereCollider(Vec3 center, float radius);
+// type 2: a = center, b = halfExtents, c = orientation quat (x,y,z,w)
+[[nodiscard]] ClothCollider makeBoxCollider(Vec3 center, Vec3 halfExtents, Quaternion orientation);
+// type 3: a = (p0.xyz, radius), b = (p1.xyz, _) — segment p0..p1
+[[nodiscard]] ClothCollider makeCapsuleCollider(Vec3 p0, Vec3 p1, float radius);
 
 // One simulated cloth particle. invMass == 0 pins the particle (immovable).
 struct ClothParticle
@@ -56,6 +87,7 @@ struct ClothGridParams
     float mass{1.0f};         // total cloth mass, distributed across particles
     float compliance{0.0f};   // XPBD compliance (0 = rigid)
     bool pinTopCorners{true}; // pin the two far-Z corners (a hanging banner)
+    Vec3 origin{};            // world-space placement (the cloth simulates in world space)
 };
 
 // Build a flat XZ-plane grid cloth in local space with structural + shear + bend

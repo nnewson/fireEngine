@@ -1,25 +1,48 @@
-#include <gtest/gtest.h>
+#include <catch2/catch_approx.hpp>
+#include <catch2/catch_test_macros.hpp>
 
 #include <cmath>
+#include <cstddef>
+#include <initializer_list>
+#include <vector>
 
 #include <fire_engine/animation/animation.hpp>
 #include <fire_engine/math/quaternion.hpp>
 #include <fire_engine/math/vec3.hpp>
+#include <support/test_traits.hpp>
 
 using fire_engine::Animation;
 using fire_engine::Mat4;
 using fire_engine::Vec3;
 
-TEST(Animation, DefaultConstructionHasNoKeyframes)
+namespace
 {
-    Animation anim;
-    EXPECT_TRUE(anim.rotationKeyframes().empty());
-    EXPECT_TRUE(anim.translationKeyframes().empty());
-    EXPECT_TRUE(anim.scaleKeyframes().empty());
-    EXPECT_FLOAT_EQ(anim.duration(), 0.0f);
+
+void expectWeightsNear(const std::vector<float>& weights, std::initializer_list<float> expected,
+                       float eps = 1e-5f)
+{
+    REQUIRE(weights.size() == expected.size());
+
+    auto expectedIt = expected.begin();
+    for (std::size_t i = 0; i < weights.size(); ++i)
+    {
+        CAPTURE(i);
+        CHECK(weights[i] == Catch::Approx(*(expectedIt + i)).margin(eps));
+    }
 }
 
-TEST(Animation, SetKeyframesAndDuration)
+} // namespace
+
+TEST_CASE("Animation.DefaultConstructionHasNoKeyframes", "[Animation]")
+{
+    Animation anim;
+    CHECK(anim.rotationKeyframes().empty());
+    CHECK(anim.translationKeyframes().empty());
+    CHECK(anim.scaleKeyframes().empty());
+    CHECK(anim.duration() == Catch::Approx(0.0f).margin(1e-5f));
+}
+
+TEST_CASE("Animation.SetKeyframesAndDuration", "[Animation]")
 {
     Animation anim;
     std::vector<Animation::RotationKeyframe> kf = {
@@ -28,11 +51,11 @@ TEST(Animation, SetKeyframesAndDuration)
         {2.0f, 0.0f, 1.0f, 0.0f, 0.0f},
     };
     anim.rotationKeyframes(kf);
-    EXPECT_EQ(anim.rotationKeyframes().size(), 3u);
-    EXPECT_FLOAT_EQ(anim.duration(), 2.0f);
+    CHECK(anim.rotationKeyframes().size() == 3u);
+    CHECK(anim.duration() == Catch::Approx(2.0f).margin(1e-5f));
 }
 
-TEST(Animation, SampleEmptyReturnsIdentity)
+TEST_CASE("Animation.SampleEmptyReturnsIdentity", "[Animation]")
 {
     Animation anim;
     Mat4 result = anim.sample(0.5f);
@@ -41,12 +64,12 @@ TEST(Animation, SampleEmptyReturnsIdentity)
     {
         for (int c = 0; c < 4; ++c)
         {
-            EXPECT_FLOAT_EQ((result[r, c]), (identity[r, c]));
+            CHECK((result[r, c]) == Catch::Approx((identity[r, c])).margin(1e-5f));
         }
     }
 }
 
-TEST(Animation, SampleSingleKeyframeReturnsConstant)
+TEST_CASE("Animation.SampleSingleKeyframeReturnsConstant", "[Animation]")
 {
     Animation anim;
     // Identity quaternion
@@ -58,12 +81,12 @@ TEST(Animation, SampleSingleKeyframeReturnsConstant)
     {
         for (int c = 0; c < 4; ++c)
         {
-            EXPECT_NEAR((result[r, c]), (identity[r, c]), 1e-5f);
+            CHECK((result[r, c]) == Catch::Approx((identity[r, c])).margin(1e-5f));
         }
     }
 }
 
-TEST(Animation, SampleAtExactKeyframeTime)
+TEST_CASE("Animation.SampleAtExactKeyframeTime", "[Animation]")
 {
     Animation anim;
     // Keyframe at t=0: identity quaternion (no rotation)
@@ -77,21 +100,21 @@ TEST(Animation, SampleAtExactKeyframeTime)
 
     // Sample at t=0 should be identity
     Mat4 atZero = anim.sample(0.0f);
-    EXPECT_NEAR((atZero[0, 0]), 1.0f, 1e-5f);
-    EXPECT_NEAR((atZero[1, 1]), 1.0f, 1e-5f);
-    EXPECT_NEAR((atZero[2, 2]), 1.0f, 1e-5f);
+    CHECK((atZero[0, 0]) == Catch::Approx(1.0f).margin(1e-5f));
+    CHECK((atZero[1, 1]) == Catch::Approx(1.0f).margin(1e-5f));
+    CHECK((atZero[2, 2]) == Catch::Approx(1.0f).margin(1e-5f));
 
     // Sample near end should approach 90-degree Y rotation
     // For 90 deg Y rotation: m[0,0]=0, m[0,2]=1, m[2,0]=-1, m[2,2]=0
     Mat4 atEnd = anim.sample(1.999f);
-    EXPECT_NEAR((atEnd[0, 0]), 0.0f, 2e-2f);
-    EXPECT_NEAR((atEnd[0, 2]), 1.0f, 2e-2f);
-    EXPECT_NEAR((atEnd[2, 0]), -1.0f, 2e-2f);
-    EXPECT_NEAR((atEnd[2, 2]), 0.0f, 2e-2f);
-    EXPECT_NEAR((atEnd[1, 1]), 1.0f, 2e-2f);
+    CHECK((atEnd[0, 0]) == Catch::Approx(0.0f).margin(2e-2f));
+    CHECK((atEnd[0, 2]) == Catch::Approx(1.0f).margin(2e-2f));
+    CHECK((atEnd[2, 0]) == Catch::Approx(-1.0f).margin(2e-2f));
+    CHECK((atEnd[2, 2]) == Catch::Approx(0.0f).margin(2e-2f));
+    CHECK((atEnd[1, 1]) == Catch::Approx(1.0f).margin(2e-2f));
 }
 
-TEST(Animation, SampleInterpolatesBetweenKeyframes)
+TEST_CASE("Animation.SampleInterpolatesBetweenKeyframes", "[Animation]")
 {
     Animation anim;
     float s45 = std::sin(static_cast<float>(M_PI) / 4.0f);
@@ -106,13 +129,13 @@ TEST(Animation, SampleInterpolatesBetweenKeyframes)
     // cos(45) ~= 0.7071
     float cos45 = std::cos(static_cast<float>(M_PI) / 4.0f);
     float sin45 = std::sin(static_cast<float>(M_PI) / 4.0f);
-    EXPECT_NEAR((mid[0, 0]), cos45, 1e-4f);
-    EXPECT_NEAR((mid[0, 2]), sin45, 1e-4f);
-    EXPECT_NEAR((mid[2, 0]), -sin45, 1e-4f);
-    EXPECT_NEAR((mid[2, 2]), cos45, 1e-4f);
+    CHECK((mid[0, 0]) == Catch::Approx(cos45).margin(1e-4f));
+    CHECK((mid[0, 2]) == Catch::Approx(sin45).margin(1e-4f));
+    CHECK((mid[2, 0]) == Catch::Approx(-sin45).margin(1e-4f));
+    CHECK((mid[2, 2]) == Catch::Approx(cos45).margin(1e-4f));
 }
 
-TEST(Animation, SampleLoops)
+TEST_CASE("Animation.SampleLoops", "[Animation]")
 {
     Animation anim;
     anim.rotationKeyframes({
@@ -127,45 +150,43 @@ TEST(Animation, SampleLoops)
     {
         for (int c = 0; c < 4; ++c)
         {
-            EXPECT_NEAR((atZero[r, c]), (atLoop[r, c]), 1e-4f);
+            CHECK((atZero[r, c]) == Catch::Approx((atLoop[r, c])).margin(1e-4f));
         }
     }
 }
 
-TEST(Animation, SampleAndDurationAreNoexcept)
+TEST_CASE("Animation.SampleAndDurationAreNoexcept", "[Animation]")
 {
-    Animation anim;
-    EXPECT_TRUE(noexcept(anim.sample(0.0f)));
-    EXPECT_TRUE(noexcept(anim.duration()));
+    static_assert(test_traits::has_nothrow_animation_sampling<Animation>);
 }
 
 // ==========================================================================
 // Translation sampling
 // ==========================================================================
 
-TEST(Animation, EmptyTranslationSamplesToZeroOffset)
+TEST_CASE("Animation.EmptyTranslationSamplesToZeroOffset", "[Animation]")
 {
     Animation anim;
     // Give it a single rotation keyframe so sample() doesn't short-circuit to identity
     anim.rotationKeyframes({{0.0f, 0.0f, 0.0f, 0.0f, 1.0f}});
     Mat4 m = anim.sample(0.5f);
     // Translation column should be zero
-    EXPECT_NEAR((m[0, 3]), 0.0f, 1e-5f);
-    EXPECT_NEAR((m[1, 3]), 0.0f, 1e-5f);
-    EXPECT_NEAR((m[2, 3]), 0.0f, 1e-5f);
+    CHECK((m[0, 3]) == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK((m[1, 3]) == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK((m[2, 3]) == Catch::Approx(0.0f).margin(1e-5f));
 }
 
-TEST(Animation, SingleTranslationKeyframeIsConstant)
+TEST_CASE("Animation.SingleTranslationKeyframeIsConstant", "[Animation]")
 {
     Animation anim;
     anim.translationKeyframes({{0.0f, Vec3{1.0f, 2.0f, 3.0f}}});
     Mat4 m = anim.sample(42.0f);
-    EXPECT_NEAR((m[0, 3]), 1.0f, 1e-5f);
-    EXPECT_NEAR((m[1, 3]), 2.0f, 1e-5f);
-    EXPECT_NEAR((m[2, 3]), 3.0f, 1e-5f);
+    CHECK((m[0, 3]) == Catch::Approx(1.0f).margin(1e-5f));
+    CHECK((m[1, 3]) == Catch::Approx(2.0f).margin(1e-5f));
+    CHECK((m[2, 3]) == Catch::Approx(3.0f).margin(1e-5f));
 }
 
-TEST(Animation, TranslationInterpolatesLinearly)
+TEST_CASE("Animation.TranslationInterpolatesLinearly", "[Animation]")
 {
     Animation anim;
     anim.translationKeyframes({
@@ -173,16 +194,16 @@ TEST(Animation, TranslationInterpolatesLinearly)
         {2.0f, Vec3{2.0f, 4.0f, 6.0f}},
     });
     Mat4 m = anim.sample(1.0f);
-    EXPECT_NEAR((m[0, 3]), 1.0f, 1e-5f);
-    EXPECT_NEAR((m[1, 3]), 2.0f, 1e-5f);
-    EXPECT_NEAR((m[2, 3]), 3.0f, 1e-5f);
+    CHECK((m[0, 3]) == Catch::Approx(1.0f).margin(1e-5f));
+    CHECK((m[1, 3]) == Catch::Approx(2.0f).margin(1e-5f));
+    CHECK((m[2, 3]) == Catch::Approx(3.0f).margin(1e-5f));
 }
 
 // ==========================================================================
 // Duration = max across channels
 // ==========================================================================
 
-TEST(Animation, DurationIsMaxAcrossChannels)
+TEST_CASE("Animation.DurationIsMaxAcrossChannels", "[Animation]")
 {
     Animation anim;
     anim.rotationKeyframes({
@@ -193,14 +214,14 @@ TEST(Animation, DurationIsMaxAcrossChannels)
         {0.0f, Vec3{}},
         {2.0f, Vec3{1.0f, 0.0f, 0.0f}},
     });
-    EXPECT_FLOAT_EQ(anim.duration(), 2.0f);
+    CHECK(anim.duration() == Catch::Approx(2.0f).margin(1e-5f));
 }
 
 // ==========================================================================
 // Composite T * R
 // ==========================================================================
 
-TEST(Animation, CompositeTranslationAndRotationMidpoint)
+TEST_CASE("Animation.CompositeTranslationAndRotationMidpoint", "[Animation]")
 {
     Animation anim;
 
@@ -222,23 +243,23 @@ TEST(Animation, CompositeTranslationAndRotationMidpoint)
     Mat4 m = anim.sample(1.0f);
 
     // Rotation part (upper-left 3x3) should match 45° Y rotation
-    EXPECT_NEAR((m[0, 0]), c45, 1e-4f);
-    EXPECT_NEAR((m[0, 2]), s45, 1e-4f);
-    EXPECT_NEAR((m[2, 0]), -s45, 1e-4f);
-    EXPECT_NEAR((m[2, 2]), c45, 1e-4f);
-    EXPECT_NEAR((m[1, 1]), 1.0f, 1e-4f);
+    CHECK((m[0, 0]) == Catch::Approx(c45).margin(1e-4f));
+    CHECK((m[0, 2]) == Catch::Approx(s45).margin(1e-4f));
+    CHECK((m[2, 0]) == Catch::Approx(-s45).margin(1e-4f));
+    CHECK((m[2, 2]) == Catch::Approx(c45).margin(1e-4f));
+    CHECK((m[1, 1]) == Catch::Approx(1.0f).margin(1e-4f));
 
     // Translation column should be (1, 0, 0) — T * R leaves translation in last column
-    EXPECT_NEAR((m[0, 3]), 1.0f, 1e-4f);
-    EXPECT_NEAR((m[1, 3]), 0.0f, 1e-4f);
-    EXPECT_NEAR((m[2, 3]), 0.0f, 1e-4f);
+    CHECK((m[0, 3]) == Catch::Approx(1.0f).margin(1e-4f));
+    CHECK((m[1, 3]) == Catch::Approx(0.0f).margin(1e-4f));
+    CHECK((m[2, 3]) == Catch::Approx(0.0f).margin(1e-4f));
 }
 
 // ==========================================================================
 // Channels with different durations clamp independently
 // ==========================================================================
 
-TEST(Animation, ExplicitDurationOverridesComputedMax)
+TEST_CASE("Animation.ExplicitDurationOverridesComputedMax", "[Animation]")
 {
     Animation anim;
     anim.rotationKeyframes({
@@ -248,10 +269,10 @@ TEST(Animation, ExplicitDurationOverridesComputedMax)
     // Computed max would be 1.0f — force it to 5.0f so this animation loops in
     // lockstep with a sibling that runs longer.
     anim.duration(5.0f);
-    EXPECT_FLOAT_EQ(anim.duration(), 5.0f);
+    CHECK(anim.duration() == Catch::Approx(5.0f).margin(1e-5f));
 }
 
-TEST(Animation, SampleLoopsOnExplicitDurationAndClampsShortChannel)
+TEST_CASE("Animation.SampleLoopsOnExplicitDurationAndClampsShortChannel", "[Animation]")
 {
     Animation anim;
     // Rotation ends at t=1.0 — 0° to 90° about Y.
@@ -267,18 +288,18 @@ TEST(Animation, SampleLoopsOnExplicitDurationAndClampsShortChannel)
     // At t=1.5 (past rotation's last key, still within shared duration), rotation
     // must clamp to last key (90° Y), NOT loop early.
     Mat4 m = anim.sample(1.5f);
-    EXPECT_NEAR((m[0, 0]), 0.0f, 1e-4f);
-    EXPECT_NEAR((m[0, 2]), 1.0f, 1e-4f);
-    EXPECT_NEAR((m[2, 0]), -1.0f, 1e-4f);
-    EXPECT_NEAR((m[2, 2]), 0.0f, 1e-4f);
+    CHECK((m[0, 0]) == Catch::Approx(0.0f).margin(1e-4f));
+    CHECK((m[0, 2]) == Catch::Approx(1.0f).margin(1e-4f));
+    CHECK((m[2, 0]) == Catch::Approx(-1.0f).margin(1e-4f));
+    CHECK((m[2, 2]) == Catch::Approx(0.0f).margin(1e-4f));
 
     // At t=2.5 we wrap to 0.5 on the shared duration — half of rotation → 45° Y.
     Mat4 wrapped = anim.sample(2.5f);
-    EXPECT_NEAR((wrapped[0, 0]), c45, 1e-4f);
-    EXPECT_NEAR((wrapped[0, 2]), s45, 1e-4f);
+    CHECK((wrapped[0, 0]) == Catch::Approx(c45).margin(1e-4f));
+    CHECK((wrapped[0, 2]) == Catch::Approx(s45).margin(1e-4f));
 }
 
-TEST(Animation, RotationClampsToFirstKeyframeWhenSampledBeforeItsStart)
+TEST_CASE("Animation.RotationClampsToFirstKeyframeWhenSampledBeforeItsStart", "[Animation]")
 {
     Animation anim;
     // Rotation channel starts at t=1.0 with identity, goes to 90° about Y at t=2.0 —
@@ -299,14 +320,14 @@ TEST(Animation, RotationClampsToFirstKeyframeWhenSampledBeforeItsStart)
     // to the first keyframe (identity), NOT extrapolate backwards via slerp.
     Mat4 m = anim.sample(0.5f);
 
-    EXPECT_NEAR((m[0, 0]), 1.0f, 1e-5f);
-    EXPECT_NEAR((m[1, 1]), 1.0f, 1e-5f);
-    EXPECT_NEAR((m[2, 2]), 1.0f, 1e-5f);
-    EXPECT_NEAR((m[0, 2]), 0.0f, 1e-5f);
-    EXPECT_NEAR((m[2, 0]), 0.0f, 1e-5f);
+    CHECK((m[0, 0]) == Catch::Approx(1.0f).margin(1e-5f));
+    CHECK((m[1, 1]) == Catch::Approx(1.0f).margin(1e-5f));
+    CHECK((m[2, 2]) == Catch::Approx(1.0f).margin(1e-5f));
+    CHECK((m[0, 2]) == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK((m[2, 0]) == Catch::Approx(0.0f).margin(1e-5f));
 }
 
-TEST(Animation, ShorterChannelClampsWhileLongerInterpolates)
+TEST_CASE("Animation.ShorterChannelClampsWhileLongerInterpolates", "[Animation]")
 {
     Animation anim;
 
@@ -329,59 +350,59 @@ TEST(Animation, ShorterChannelClampsWhileLongerInterpolates)
 
     // Rotation should clamp to its last keyframe: 90° about Y
     // For 90°: m[0,0]=0, m[0,2]=1, m[2,0]=-1, m[2,2]=0
-    EXPECT_NEAR((m[0, 0]), 0.0f, 1e-4f);
-    EXPECT_NEAR((m[0, 2]), 1.0f, 1e-4f);
-    EXPECT_NEAR((m[2, 0]), -1.0f, 1e-4f);
-    EXPECT_NEAR((m[2, 2]), 0.0f, 1e-4f);
+    CHECK((m[0, 0]) == Catch::Approx(0.0f).margin(1e-4f));
+    CHECK((m[0, 2]) == Catch::Approx(1.0f).margin(1e-4f));
+    CHECK((m[2, 0]) == Catch::Approx(-1.0f).margin(1e-4f));
+    CHECK((m[2, 2]) == Catch::Approx(0.0f).margin(1e-4f));
 
     // Translation should be 75% of the way to (2,0,0) = (1.5, 0, 0)
-    EXPECT_NEAR((m[0, 3]), 1.5f, 1e-4f);
-    EXPECT_NEAR((m[1, 3]), 0.0f, 1e-4f);
-    EXPECT_NEAR((m[2, 3]), 0.0f, 1e-4f);
+    CHECK((m[0, 3]) == Catch::Approx(1.5f).margin(1e-4f));
+    CHECK((m[1, 3]) == Catch::Approx(0.0f).margin(1e-4f));
+    CHECK((m[2, 3]) == Catch::Approx(0.0f).margin(1e-4f));
 }
 
 // ==========================================================================
 // Scale keyframes
 // ==========================================================================
 
-TEST(Animation, DefaultConstructionHasNoScaleKeyframes)
+TEST_CASE("Animation.DefaultConstructionHasNoScaleKeyframes", "[Animation]")
 {
     Animation anim;
-    EXPECT_TRUE(anim.scaleKeyframes().empty());
+    CHECK(anim.scaleKeyframes().empty());
 }
 
-TEST(Animation, SetScaleKeyframes)
+TEST_CASE("Animation.SetScaleKeyframes", "[Animation]")
 {
     Animation anim;
     anim.scaleKeyframes({
         {0.0f, Vec3{1.0f, 1.0f, 1.0f}},
         {1.0f, Vec3{2.0f, 2.0f, 2.0f}},
     });
-    EXPECT_EQ(anim.scaleKeyframes().size(), 2u);
+    CHECK(anim.scaleKeyframes().size() == 2u);
 }
 
-TEST(Animation, ScaleOnlyDuration)
+TEST_CASE("Animation.ScaleOnlyDuration", "[Animation]")
 {
     Animation anim;
     anim.scaleKeyframes({
         {0.0f, Vec3{1.0f, 1.0f, 1.0f}},
         {3.0f, Vec3{2.0f, 2.0f, 2.0f}},
     });
-    EXPECT_FLOAT_EQ(anim.duration(), 3.0f);
+    CHECK(anim.duration() == Catch::Approx(3.0f).margin(1e-5f));
 }
 
-TEST(Animation, ScaleOnlySingleKeyframe)
+TEST_CASE("Animation.ScaleOnlySingleKeyframe", "[Animation]")
 {
     Animation anim;
     anim.scaleKeyframes({{0.0f, Vec3{3.0f, 4.0f, 5.0f}}});
 
     Mat4 m = anim.sample(0.0f);
-    EXPECT_NEAR((m[0, 0]), 3.0f, 1e-5f);
-    EXPECT_NEAR((m[1, 1]), 4.0f, 1e-5f);
-    EXPECT_NEAR((m[2, 2]), 5.0f, 1e-5f);
+    CHECK((m[0, 0]) == Catch::Approx(3.0f).margin(1e-5f));
+    CHECK((m[1, 1]) == Catch::Approx(4.0f).margin(1e-5f));
+    CHECK((m[2, 2]) == Catch::Approx(5.0f).margin(1e-5f));
 }
 
-TEST(Animation, ScaleInterpolationMidpoint)
+TEST_CASE("Animation.ScaleInterpolationMidpoint", "[Animation]")
 {
     Animation anim;
     anim.scaleKeyframes({
@@ -390,12 +411,12 @@ TEST(Animation, ScaleInterpolationMidpoint)
     });
 
     Mat4 m = anim.sample(1.0f);
-    EXPECT_NEAR((m[0, 0]), 2.0f, 1e-4f);
-    EXPECT_NEAR((m[1, 1]), 3.0f, 1e-4f);
-    EXPECT_NEAR((m[2, 2]), 4.0f, 1e-4f);
+    CHECK((m[0, 0]) == Catch::Approx(2.0f).margin(1e-4f));
+    CHECK((m[1, 1]) == Catch::Approx(3.0f).margin(1e-4f));
+    CHECK((m[2, 2]) == Catch::Approx(4.0f).margin(1e-4f));
 }
 
-TEST(Animation, ScaleAtEndpoint)
+TEST_CASE("Animation.ScaleAtEndpoint", "[Animation]")
 {
     Animation anim;
     anim.scaleKeyframes({
@@ -405,26 +426,26 @@ TEST(Animation, ScaleAtEndpoint)
 
     // At t=0.999 (just before loop wraps), should be nearly at the end values
     Mat4 m = anim.sample(0.999f);
-    EXPECT_NEAR((m[0, 0]), 2.0f, 0.01f);
-    EXPECT_NEAR((m[1, 1]), 3.0f, 0.01f);
-    EXPECT_NEAR((m[2, 2]), 4.0f, 0.01f);
+    CHECK((m[0, 0]) == Catch::Approx(2.0f).margin(0.01f));
+    CHECK((m[1, 1]) == Catch::Approx(3.0f).margin(0.01f));
+    CHECK((m[2, 2]) == Catch::Approx(4.0f).margin(0.01f));
 }
 
-TEST(Animation, NoScaleKeyframesDefaultsToIdentityScale)
+TEST_CASE("Animation.NoScaleKeyframesDefaultsToIdentityScale", "[Animation]")
 {
     Animation anim;
     anim.translationKeyframes({{0.0f, Vec3{5.0f, 0.0f, 0.0f}}});
 
     Mat4 m = anim.sample(0.0f);
     // Scale diagonal should be 1.0 (identity scale)
-    EXPECT_NEAR((m[0, 0]), 1.0f, 1e-5f);
-    EXPECT_NEAR((m[1, 1]), 1.0f, 1e-5f);
-    EXPECT_NEAR((m[2, 2]), 1.0f, 1e-5f);
+    CHECK((m[0, 0]) == Catch::Approx(1.0f).margin(1e-5f));
+    CHECK((m[1, 1]) == Catch::Approx(1.0f).margin(1e-5f));
+    CHECK((m[2, 2]) == Catch::Approx(1.0f).margin(1e-5f));
     // Translation still applied
-    EXPECT_NEAR((m[0, 3]), 5.0f, 1e-5f);
+    CHECK((m[0, 3]) == Catch::Approx(5.0f).margin(1e-5f));
 }
 
-TEST(Animation, CombinedTranslationAndScale)
+TEST_CASE("Animation.CombinedTranslationAndScale", "[Animation]")
 {
     Animation anim;
     anim.translationKeyframes({{0.0f, Vec3{10.0f, 0.0f, 0.0f}}});
@@ -432,13 +453,13 @@ TEST(Animation, CombinedTranslationAndScale)
 
     Mat4 m = anim.sample(0.0f);
     // T * R * S: translation in column 3, scale on diagonal
-    EXPECT_NEAR((m[0, 3]), 10.0f, 1e-5f);
-    EXPECT_NEAR((m[0, 0]), 2.0f, 1e-5f);
-    EXPECT_NEAR((m[1, 1]), 2.0f, 1e-5f);
-    EXPECT_NEAR((m[2, 2]), 2.0f, 1e-5f);
+    CHECK((m[0, 3]) == Catch::Approx(10.0f).margin(1e-5f));
+    CHECK((m[0, 0]) == Catch::Approx(2.0f).margin(1e-5f));
+    CHECK((m[1, 1]) == Catch::Approx(2.0f).margin(1e-5f));
+    CHECK((m[2, 2]) == Catch::Approx(2.0f).margin(1e-5f));
 }
 
-TEST(Animation, ScaleDurationExtendsOverallDuration)
+TEST_CASE("Animation.ScaleDurationExtendsOverallDuration", "[Animation]")
 {
     Animation anim;
     anim.rotationKeyframes({
@@ -449,20 +470,20 @@ TEST(Animation, ScaleDurationExtendsOverallDuration)
         {0.0f, Vec3{1.0f, 1.0f, 1.0f}},
         {5.0f, Vec3{2.0f, 2.0f, 2.0f}},
     });
-    EXPECT_FLOAT_EQ(anim.duration(), 5.0f);
+    CHECK(anim.duration() == Catch::Approx(5.0f).margin(1e-5f));
 }
 
 // ---------------------------------------------------------------------------
 // WeightKeyframe tests
 // ---------------------------------------------------------------------------
 
-TEST(WeightKeyframe, DefaultConstructionHasNoWeightKeyframes)
+TEST_CASE("WeightKeyframe.DefaultConstructionHasNoWeightKeyframes", "[WeightKeyframe]")
 {
     Animation anim;
-    EXPECT_TRUE(anim.weightKeyframes().empty());
+    CHECK(anim.weightKeyframes().empty());
 }
 
-TEST(WeightKeyframe, SetWeightKeyframes)
+TEST_CASE("WeightKeyframe.SetWeightKeyframes", "[WeightKeyframe]")
 {
     Animation anim;
     std::vector<Animation::WeightKeyframe> kf = {
@@ -471,20 +492,20 @@ TEST(WeightKeyframe, SetWeightKeyframes)
         {2.0f, {0.0f, 1.0f}},
     };
     anim.weightKeyframes(kf);
-    EXPECT_EQ(anim.weightKeyframes().size(), 3u);
+    CHECK(anim.weightKeyframes().size() == 3u);
 }
 
-TEST(WeightKeyframe, WeightKeyframesContributeToDuration)
+TEST_CASE("WeightKeyframe.WeightKeyframesContributeToDuration", "[WeightKeyframe]")
 {
     Animation anim;
     anim.weightKeyframes({
         {0.0f, {0.0f}},
         {3.0f, {1.0f}},
     });
-    EXPECT_FLOAT_EQ(anim.duration(), 3.0f);
+    CHECK(anim.duration() == Catch::Approx(3.0f).margin(1e-5f));
 }
 
-TEST(WeightKeyframe, DurationUsesMaxOfAllChannels)
+TEST_CASE("WeightKeyframe.DurationUsesMaxOfAllChannels", "[WeightKeyframe]")
 {
     Animation anim;
     anim.weightKeyframes({
@@ -495,37 +516,34 @@ TEST(WeightKeyframe, DurationUsesMaxOfAllChannels)
         {0.0f, 0.0f, 0.0f, 0.0f, 1.0f},
         {5.0f, 0.0f, 1.0f, 0.0f, 0.0f},
     });
-    EXPECT_FLOAT_EQ(anim.duration(), 5.0f);
+    CHECK(anim.duration() == Catch::Approx(5.0f).margin(1e-5f));
 }
 
-TEST(SampleWeights, EmptyKeyframesReturnsZeros)
+TEST_CASE("SampleWeights.EmptyKeyframesReturnsZeros", "[SampleWeights]")
 {
     Animation anim;
     auto w = anim.sampleWeights(0.5f, 2);
-    EXPECT_EQ(w.size(), 2u);
-    EXPECT_FLOAT_EQ(w[0], 0.0f);
-    EXPECT_FLOAT_EQ(w[1], 0.0f);
+    expectWeightsNear(w, {0.0f, 0.0f});
 }
 
-TEST(SampleWeights, ZeroTargetsReturnsEmpty)
+TEST_CASE("SampleWeights.ZeroTargetsReturnsEmpty", "[SampleWeights]")
 {
     Animation anim;
     anim.weightKeyframes({{0.0f, {1.0f}}});
     auto w = anim.sampleWeights(0.0f, 0);
-    EXPECT_TRUE(w.empty());
+    CHECK(w.empty());
 }
 
-TEST(SampleWeights, SingleKeyframeReturnsConstant)
+TEST_CASE("SampleWeights.SingleKeyframeReturnsConstant", "[SampleWeights]")
 {
     Animation anim;
     anim.weightKeyframes({{0.0f, {0.7f, 0.3f}}});
     anim.duration(1.0f);
     auto w = anim.sampleWeights(0.5f, 2);
-    EXPECT_FLOAT_EQ(w[0], 0.7f);
-    EXPECT_FLOAT_EQ(w[1], 0.3f);
+    expectWeightsNear(w, {0.7f, 0.3f});
 }
 
-TEST(SampleWeights, InterpolatesBetweenKeyframes)
+TEST_CASE("SampleWeights.InterpolatesBetweenKeyframes", "[SampleWeights]")
 {
     Animation anim;
     anim.weightKeyframes({
@@ -535,11 +553,10 @@ TEST(SampleWeights, InterpolatesBetweenKeyframes)
     anim.duration(2.0f);
 
     auto w = anim.sampleWeights(1.0f, 2);
-    EXPECT_NEAR(w[0], 0.5f, 1e-5f);
-    EXPECT_NEAR(w[1], 0.5f, 1e-5f);
+    expectWeightsNear(w, {0.5f, 0.5f});
 }
 
-TEST(SampleWeights, InterpolatesAtQuarter)
+TEST_CASE("SampleWeights.InterpolatesAtQuarter", "[SampleWeights]")
 {
     Animation anim;
     anim.weightKeyframes({
@@ -549,10 +566,10 @@ TEST(SampleWeights, InterpolatesAtQuarter)
     anim.duration(4.0f);
 
     auto w = anim.sampleWeights(1.0f, 1);
-    EXPECT_NEAR(w[0], 0.25f, 1e-5f);
+    expectWeightsNear(w, {0.25f});
 }
 
-TEST(SampleWeights, ClampsAtExactKeyframe)
+TEST_CASE("SampleWeights.ClampsAtExactKeyframe", "[SampleWeights]")
 {
     Animation anim;
     anim.weightKeyframes({
@@ -563,24 +580,20 @@ TEST(SampleWeights, ClampsAtExactKeyframe)
     anim.duration(2.0f);
 
     auto w = anim.sampleWeights(1.0f, 2);
-    EXPECT_NEAR(w[0], 0.8f, 1e-5f);
-    EXPECT_NEAR(w[1], 0.2f, 1e-5f);
+    expectWeightsNear(w, {0.8f, 0.2f});
 }
 
-TEST(SampleWeights, PadsExtraTargetsWithZero)
+TEST_CASE("SampleWeights.PadsExtraTargetsWithZero", "[SampleWeights]")
 {
     Animation anim;
     anim.weightKeyframes({{0.0f, {0.5f}}});
     anim.duration(1.0f);
     // Request 3 targets but keyframes only have 1 weight
     auto w = anim.sampleWeights(0.0f, 3);
-    EXPECT_EQ(w.size(), 3u);
-    EXPECT_FLOAT_EQ(w[0], 0.5f);
-    EXPECT_FLOAT_EQ(w[1], 0.0f);
-    EXPECT_FLOAT_EQ(w[2], 0.0f);
+    expectWeightsNear(w, {0.5f, 0.0f, 0.0f});
 }
 
-TEST(SampleWeights, LoopsAnimation)
+TEST_CASE("SampleWeights.LoopsAnimation", "[SampleWeights]")
 {
     Animation anim;
     anim.weightKeyframes({
@@ -591,14 +604,55 @@ TEST(SampleWeights, LoopsAnimation)
 
     // t=3.0 loops to t=1.0 -> midpoint
     auto w = anim.sampleWeights(3.0f, 1);
-    EXPECT_NEAR(w[0], 0.5f, 1e-5f);
+    expectWeightsNear(w, {0.5f});
+}
+
+TEST_CASE("SampleWeights.NegativeTimeLoops", "[SampleWeights]")
+{
+    Animation anim;
+    anim.weightKeyframes({
+        {0.0f, {0.0f}},
+        {2.0f, {1.0f}},
+    });
+    anim.duration(2.0f);
+
+    // t=-1.0 loops to t=1.0 -> midpoint.
+    auto w = anim.sampleWeights(-1.0f, 1);
+    expectWeightsNear(w, {0.5f});
+}
+
+TEST_CASE("SampleWeights.ExplicitDurationWraps", "[SampleWeights]")
+{
+    Animation anim;
+    anim.weightKeyframes({
+        {0.0f, {0.0f}},
+        {1.0f, {1.0f}},
+    });
+    anim.duration(4.0f);
+
+    // t=5.5 loops to t=1.5 on the explicit duration, then clamps after the last key.
+    auto w = anim.sampleWeights(5.5f, 1);
+    expectWeightsNear(w, {1.0f});
+}
+
+TEST_CASE("SampleWeights.InterpolatedMissingTargetsPadWithZero", "[SampleWeights]")
+{
+    Animation anim;
+    anim.weightKeyframes({
+        {0.0f, {0.0f}},
+        {2.0f, {1.0f, 0.5f}},
+    });
+    anim.duration(2.0f);
+
+    auto w = anim.sampleWeights(1.0f, 3);
+    expectWeightsNear(w, {0.5f, 0.25f, 0.0f});
 }
 
 // ==========================================================================
 // Step interpolation
 // ==========================================================================
 
-TEST(Animation, StepTranslationHoldsPreviousKey)
+TEST_CASE("Animation.StepTranslationHoldsPreviousKey", "[Animation]")
 {
     Animation anim;
     anim.translationKeyframes({
@@ -610,10 +664,10 @@ TEST(Animation, StepTranslationHoldsPreviousKey)
 
     Mat4 mid = anim.sample(0.5f);
     // Step at alpha > 0 holds left key (0,0,0) -> translation column stays zero.
-    EXPECT_NEAR((mid[0, 3]), 0.0f, 1e-5f);
+    CHECK((mid[0, 3]) == Catch::Approx(0.0f).margin(1e-5f));
 }
 
-TEST(Animation, StepScaleHoldsPreviousKey)
+TEST_CASE("Animation.StepScaleHoldsPreviousKey", "[Animation]")
 {
     Animation anim;
     anim.scaleKeyframes({
@@ -624,10 +678,10 @@ TEST(Animation, StepScaleHoldsPreviousKey)
     anim.duration(1.0f);
 
     Mat4 mid = anim.sample(0.5f);
-    EXPECT_NEAR((mid[0, 0]), 1.0f, 1e-5f);
+    CHECK((mid[0, 0]) == Catch::Approx(1.0f).margin(1e-5f));
 }
 
-TEST(Animation, StepRotationHoldsPreviousKey)
+TEST_CASE("Animation.StepRotationHoldsPreviousKey", "[Animation]")
 {
     Animation anim;
     float s45 = std::sin(static_cast<float>(M_PI) / 4.0f);
@@ -641,12 +695,12 @@ TEST(Animation, StepRotationHoldsPreviousKey)
 
     Mat4 mid = anim.sample(0.5f);
     // Step held identity rotation -> upper-left 3x3 is identity.
-    EXPECT_NEAR((mid[0, 0]), 1.0f, 1e-5f);
-    EXPECT_NEAR((mid[2, 2]), 1.0f, 1e-5f);
-    EXPECT_NEAR((mid[0, 2]), 0.0f, 1e-5f);
+    CHECK((mid[0, 0]) == Catch::Approx(1.0f).margin(1e-5f));
+    CHECK((mid[2, 2]) == Catch::Approx(1.0f).margin(1e-5f));
+    CHECK((mid[0, 2]) == Catch::Approx(0.0f).margin(1e-5f));
 }
 
-TEST(SampleWeights, StepHoldsPreviousKey)
+TEST_CASE("SampleWeights.StepHoldsPreviousKey", "[SampleWeights]")
 {
     Animation anim;
     anim.weightKeyframes({
@@ -657,14 +711,14 @@ TEST(SampleWeights, StepHoldsPreviousKey)
     anim.duration(1.0f);
 
     auto w = anim.sampleWeights(0.5f, 1);
-    EXPECT_NEAR(w[0], 0.0f, 1e-5f);
+    expectWeightsNear(w, {0.0f});
 }
 
 // ==========================================================================
 // CubicSpline interpolation
 // ==========================================================================
 
-TEST(Animation, CubicSplineTranslationMatchesHermiteAtMidpoint)
+TEST_CASE("Animation.CubicSplineTranslationMatchesHermiteAtMidpoint", "[Animation]")
 {
     Animation anim;
     anim.translationKeyframes({
@@ -678,10 +732,10 @@ TEST(Animation, CubicSplineTranslationMatchesHermiteAtMidpoint)
     anim.duration(1.0f);
 
     Mat4 mid = anim.sample(0.5f);
-    EXPECT_NEAR((mid[0, 3]), 1.0f, 1e-5f);
+    CHECK((mid[0, 3]) == Catch::Approx(1.0f).margin(1e-5f));
 }
 
-TEST(Animation, CubicSplineTranslationMatchesEndpoints)
+TEST_CASE("Animation.CubicSplineTranslationMatchesEndpoints", "[Animation]")
 {
     Animation anim;
     anim.translationKeyframes({
@@ -696,11 +750,11 @@ TEST(Animation, CubicSplineTranslationMatchesEndpoints)
 
     Mat4 start = anim.sample(0.0f);
     Mat4 end = anim.sample(1.0f);
-    EXPECT_NEAR((start[0, 3]), 0.0f, 1e-5f);
-    EXPECT_NEAR((end[0, 3]), 2.0f, 1e-5f);
+    CHECK((start[0, 3]) == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK((end[0, 3]) == Catch::Approx(2.0f).margin(1e-5f));
 }
 
-TEST(Animation, CubicSplineScaleMatchesHermiteAtMidpoint)
+TEST_CASE("Animation.CubicSplineScaleMatchesHermiteAtMidpoint", "[Animation]")
 {
     Animation anim;
     anim.scaleKeyframes({
@@ -714,12 +768,12 @@ TEST(Animation, CubicSplineScaleMatchesHermiteAtMidpoint)
     anim.duration(1.0f);
 
     Mat4 mid = anim.sample(0.5f);
-    EXPECT_NEAR((mid[0, 0]), 2.0f, 1e-5f);
-    EXPECT_NEAR((mid[1, 1]), 2.0f, 1e-5f);
-    EXPECT_NEAR((mid[2, 2]), 2.0f, 1e-5f);
+    CHECK((mid[0, 0]) == Catch::Approx(2.0f).margin(1e-5f));
+    CHECK((mid[1, 1]) == Catch::Approx(2.0f).margin(1e-5f));
+    CHECK((mid[2, 2]) == Catch::Approx(2.0f).margin(1e-5f));
 }
 
-TEST(Animation, CubicSplineScaleMatchesEndpoints)
+TEST_CASE("Animation.CubicSplineScaleMatchesEndpoints", "[Animation]")
 {
     Animation anim;
     anim.scaleKeyframes({
@@ -733,11 +787,11 @@ TEST(Animation, CubicSplineScaleMatchesEndpoints)
 
     Mat4 start = anim.sample(0.0f);
     Mat4 end = anim.sample(1.0f);
-    EXPECT_NEAR((start[0, 0]), 1.0f, 1e-5f);
-    EXPECT_NEAR((end[0, 0]), 3.0f, 1e-5f);
+    CHECK((start[0, 0]) == Catch::Approx(1.0f).margin(1e-5f));
+    CHECK((end[0, 0]) == Catch::Approx(3.0f).margin(1e-5f));
 }
 
-TEST(Animation, CubicSplineRotationProducesUnitQuaternion)
+TEST_CASE("Animation.CubicSplineRotationProducesUnitQuaternion", "[Animation]")
 {
     Animation anim;
     float s45 = std::sin(static_cast<float>(M_PI) / 4.0f);
@@ -758,14 +812,14 @@ TEST(Animation, CubicSplineRotationProducesUnitQuaternion)
     Mat4 mid = anim.sample(0.5f);
     float col0Len = std::sqrt((mid[0, 0]) * (mid[0, 0]) + (mid[1, 0]) * (mid[1, 0]) +
                               (mid[2, 0]) * (mid[2, 0]));
-    EXPECT_NEAR(col0Len, 1.0f, 1e-4f);
+    CHECK(col0Len == Catch::Approx(1.0f).margin(1e-4f));
 }
 
 // ==========================================================================
 // CubicSpline weight interpolation
 // ==========================================================================
 
-TEST(SampleWeights, CubicSplineMatchesHermiteAtMidpoint)
+TEST_CASE("SampleWeights.CubicSplineMatchesHermiteAtMidpoint", "[SampleWeights]")
 {
     Animation anim;
     anim.weightKeyframes({
@@ -778,10 +832,10 @@ TEST(SampleWeights, CubicSplineMatchesHermiteAtMidpoint)
     anim.duration(1.0f);
 
     auto w = anim.sampleWeights(0.5f, 1);
-    EXPECT_NEAR(w[0], 1.0f, 1e-5f);
+    expectWeightsNear(w, {1.0f});
 }
 
-TEST(SampleWeights, CubicSplineMatchesEndpoints)
+TEST_CASE("SampleWeights.CubicSplineMatchesEndpoints", "[SampleWeights]")
 {
     Animation anim;
     anim.weightKeyframes({
@@ -794,15 +848,15 @@ TEST(SampleWeights, CubicSplineMatchesEndpoints)
 
     auto w0 = anim.sampleWeights(0.0f, 1);
     auto w1 = anim.sampleWeights(1.0f, 1);
-    EXPECT_NEAR(w0[0], 0.0f, 1e-5f);
-    EXPECT_NEAR(w1[0], 2.0f, 1e-5f);
+    expectWeightsNear(w0, {0.0f});
+    expectWeightsNear(w1, {2.0f});
 }
 
 // ==========================================================================
 // Mixed interpolation modes on the same Animation
 // ==========================================================================
 
-TEST(Animation, MixedStepRotationWithLinearTranslation)
+TEST_CASE("Animation.MixedStepRotationWithLinearTranslation", "[Animation]")
 {
     Animation anim;
     float s45 = std::sin(static_cast<float>(M_PI) / 4.0f);
@@ -823,20 +877,20 @@ TEST(Animation, MixedStepRotationWithLinearTranslation)
     Mat4 mid = anim.sample(0.5f);
 
     // Rotation: Step holds identity at midpoint
-    EXPECT_NEAR((mid[0, 0]), 1.0f, 1e-5f);
-    EXPECT_NEAR((mid[2, 2]), 1.0f, 1e-5f);
-    EXPECT_NEAR((mid[0, 2]), 0.0f, 1e-5f);
+    CHECK((mid[0, 0]) == Catch::Approx(1.0f).margin(1e-5f));
+    CHECK((mid[2, 2]) == Catch::Approx(1.0f).margin(1e-5f));
+    CHECK((mid[0, 2]) == Catch::Approx(0.0f).margin(1e-5f));
 
     // Translation: Linear interpolates to (2, 0, 0)
-    EXPECT_NEAR((mid[0, 3]), 2.0f, 1e-5f);
-    EXPECT_NEAR((mid[1, 3]), 0.0f, 1e-5f);
+    CHECK((mid[0, 3]) == Catch::Approx(2.0f).margin(1e-5f));
+    CHECK((mid[1, 3]) == Catch::Approx(0.0f).margin(1e-5f));
 }
 
-TEST(Animation, PerChannelInterpolationDefaultsToLinear)
+TEST_CASE("Animation.PerChannelInterpolationDefaultsToLinear", "[Animation]")
 {
     Animation anim;
-    EXPECT_EQ(anim.rotationInterpolation(), Animation::Interpolation::Linear);
-    EXPECT_EQ(anim.translationInterpolation(), Animation::Interpolation::Linear);
-    EXPECT_EQ(anim.scaleInterpolation(), Animation::Interpolation::Linear);
-    EXPECT_EQ(anim.weightInterpolation(), Animation::Interpolation::Linear);
+    CHECK(anim.rotationInterpolation() == Animation::Interpolation::Linear);
+    CHECK(anim.translationInterpolation() == Animation::Interpolation::Linear);
+    CHECK(anim.scaleInterpolation() == Animation::Interpolation::Linear);
+    CHECK(anim.weightInterpolation() == Animation::Interpolation::Linear);
 }

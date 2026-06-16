@@ -1,4 +1,5 @@
-#include <gtest/gtest.h>
+#include <catch2/catch_approx.hpp>
+#include <catch2/catch_test_macros.hpp>
 
 #include <fire_engine/collision/aabb.hpp>
 
@@ -6,42 +7,42 @@ using fire_engine::AABB;
 using fire_engine::Axis;
 using fire_engine::Vec3;
 
-TEST(AABB, DefaultIsZero)
+TEST_CASE("AABB.DefaultIsZero", "[AABB]")
 {
     AABB box{};
-    EXPECT_EQ(box.min, Vec3{});
-    EXPECT_EQ(box.max, Vec3{});
+    CHECK(box.min == Vec3{});
+    CHECK(box.max == Vec3{});
 }
 
-TEST(AABB, AxisMinReturnsMinComponent)
+TEST_CASE("AABB.AxisMinReturnsMinComponent", "[AABB]")
 {
     AABB box{Vec3{1.0f, 2.0f, 3.0f}, Vec3{4.0f, 5.0f, 6.0f}};
-    EXPECT_FLOAT_EQ(box.axisMin(Axis::X), 1.0f);
-    EXPECT_FLOAT_EQ(box.axisMin(Axis::Y), 2.0f);
-    EXPECT_FLOAT_EQ(box.axisMin(Axis::Z), 3.0f);
+    CHECK(box.axisMin(Axis::X) == Catch::Approx(1.0f).margin(1e-5f));
+    CHECK(box.axisMin(Axis::Y) == Catch::Approx(2.0f).margin(1e-5f));
+    CHECK(box.axisMin(Axis::Z) == Catch::Approx(3.0f).margin(1e-5f));
 }
 
-TEST(AABB, AxisMaxReturnsMaxComponent)
+TEST_CASE("AABB.AxisMaxReturnsMaxComponent", "[AABB]")
 {
     AABB box{Vec3{1.0f, 2.0f, 3.0f}, Vec3{4.0f, 5.0f, 6.0f}};
-    EXPECT_FLOAT_EQ(box.axisMax(Axis::X), 4.0f);
-    EXPECT_FLOAT_EQ(box.axisMax(Axis::Y), 5.0f);
-    EXPECT_FLOAT_EQ(box.axisMax(Axis::Z), 6.0f);
+    CHECK(box.axisMax(Axis::X) == Catch::Approx(4.0f).margin(1e-5f));
+    CHECK(box.axisMax(Axis::Y) == Catch::Approx(5.0f).margin(1e-5f));
+    CHECK(box.axisMax(Axis::Z) == Catch::Approx(6.0f).margin(1e-5f));
 }
 
-TEST(AABB, CenterIsMidpoint)
+TEST_CASE("AABB.CenterIsMidpoint", "[AABB]")
 {
     AABB box{Vec3{-2.0f, 0.0f, 4.0f}, Vec3{2.0f, 4.0f, 8.0f}};
-    EXPECT_EQ(box.center(), Vec3(0.0f, 2.0f, 6.0f));
+    CHECK(box.center() == Vec3(0.0f, 2.0f, 6.0f));
 }
 
-TEST(AABB, ExtentIsMaxMinusMin)
+TEST_CASE("AABB.ExtentIsMaxMinusMin", "[AABB]")
 {
     AABB box{Vec3{1.0f, 2.0f, 3.0f}, Vec3{5.0f, 8.0f, 11.0f}};
-    EXPECT_EQ(box.extent(), Vec3(4.0f, 6.0f, 8.0f));
+    CHECK(box.extent() == Vec3(4.0f, 6.0f, 8.0f));
 }
 
-TEST(AABB, AxisHelpersAreConstexpr)
+TEST_CASE("AABB.AxisHelpersAreConstexpr", "[AABB]")
 {
     constexpr AABB box{Vec3{1.0f, 2.0f, 3.0f}, Vec3{4.0f, 5.0f, 6.0f}};
     static_assert(box.axisMin(Axis::X) == 1.0f);

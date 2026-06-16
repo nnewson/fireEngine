@@ -1,4 +1,5 @@
-#include <gtest/gtest.h>
+#include <catch2/catch_approx.hpp>
+#include <catch2/catch_test_macros.hpp>
 
 #include <cmath>
 
@@ -11,39 +12,39 @@ using namespace fire_engine;
 
 using Slot = MaterialTextureSlot;
 
-TEST(Material, DefaultConstructionUsesPbrDefaults)
+TEST_CASE("Material.DefaultConstructionUsesPbrDefaults", "[Material]")
 {
     Material mat;
 
-    EXPECT_TRUE(mat.name().empty());
-    EXPECT_FALSE(mat.texture(Slot::BaseColour).has());
-    EXPECT_FALSE(mat.texture(Slot::Emissive).has());
-    EXPECT_FALSE(mat.texture(Slot::Normal).has());
-    EXPECT_FALSE(mat.texture(Slot::MetallicRoughness).has());
-    EXPECT_FALSE(mat.texture(Slot::Occlusion).has());
+    CHECK(mat.name().empty());
+    CHECK_FALSE(mat.texture(Slot::BaseColour).has());
+    CHECK_FALSE(mat.texture(Slot::Emissive).has());
+    CHECK_FALSE(mat.texture(Slot::Normal).has());
+    CHECK_FALSE(mat.texture(Slot::MetallicRoughness).has());
+    CHECK_FALSE(mat.texture(Slot::Occlusion).has());
 
-    EXPECT_FLOAT_EQ(mat.baseColor().r(), 0.0f);
-    EXPECT_FLOAT_EQ(mat.baseColor().g(), 0.0f);
-    EXPECT_FLOAT_EQ(mat.baseColor().b(), 0.0f);
-    EXPECT_FLOAT_EQ(mat.emissive().r(), 0.0f);
-    EXPECT_FLOAT_EQ(mat.roughness(), 0.0f);
-    EXPECT_FLOAT_EQ(mat.metallic(), 0.0f);
-    EXPECT_FLOAT_EQ(mat.alpha(), 1.0f);
-    EXPECT_FLOAT_EQ(mat.normalScale(), 1.0f);
-    EXPECT_EQ(mat.alphaMode(), AlphaMode::Opaque);
-    EXPECT_FLOAT_EQ(mat.alphaCutoff(), 0.5f);
-    EXPECT_FALSE(mat.doubleSided());
+    CHECK(mat.baseColor().r() == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(mat.baseColor().g() == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(mat.baseColor().b() == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(mat.emissive().r() == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(mat.roughness() == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(mat.metallic() == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(mat.alpha() == Catch::Approx(1.0f).margin(1e-5f));
+    CHECK(mat.normalScale() == Catch::Approx(1.0f).margin(1e-5f));
+    CHECK(mat.alphaMode() == AlphaMode::Opaque);
+    CHECK(mat.alphaCutoff() == Catch::Approx(0.5f).margin(1e-5f));
+    CHECK_FALSE(mat.doubleSided());
 }
 
-TEST(Material, DefaultExtensionBlocksAreAbsent)
+TEST_CASE("Material.DefaultExtensionBlocksAreAbsent", "[Material]")
 {
     Material mat;
-    EXPECT_FALSE(mat.transmission().has_value());
-    EXPECT_FALSE(mat.clearcoat().has_value());
-    EXPECT_FALSE(mat.volume().has_value());
+    CHECK_FALSE(mat.transmission().has_value());
+    CHECK_FALSE(mat.clearcoat().has_value());
+    CHECK_FALSE(mat.volume().has_value());
 }
 
-TEST(Material, SetAndGetCorePbrFields)
+TEST_CASE("Material.SetAndGetCorePbrFields", "[Material]")
 {
     Material mat;
 
@@ -58,23 +59,23 @@ TEST(Material, SetAndGetCorePbrFields)
     mat.alphaCutoff(0.2f);
     mat.doubleSided(true);
 
-    EXPECT_EQ(mat.name(), "helmet");
-    EXPECT_FLOAT_EQ(mat.baseColor().r(), 0.8f);
-    EXPECT_FLOAT_EQ(mat.baseColor().g(), 0.6f);
-    EXPECT_FLOAT_EQ(mat.baseColor().b(), 0.4f);
-    EXPECT_FLOAT_EQ(mat.emissive().r(), 0.1f);
-    EXPECT_FLOAT_EQ(mat.emissive().g(), 0.2f);
-    EXPECT_FLOAT_EQ(mat.emissive().b(), 0.3f);
-    EXPECT_FLOAT_EQ(mat.roughness(), 0.75f);
-    EXPECT_FLOAT_EQ(mat.metallic(), 0.5f);
-    EXPECT_FLOAT_EQ(mat.alpha(), 0.25f);
-    EXPECT_FLOAT_EQ(mat.normalScale(), 0.9f);
-    EXPECT_EQ(mat.alphaMode(), AlphaMode::Blend);
-    EXPECT_FLOAT_EQ(mat.alphaCutoff(), 0.2f);
-    EXPECT_TRUE(mat.doubleSided());
+    CHECK(mat.name() == "helmet");
+    CHECK(mat.baseColor().r() == Catch::Approx(0.8f).margin(1e-5f));
+    CHECK(mat.baseColor().g() == Catch::Approx(0.6f).margin(1e-5f));
+    CHECK(mat.baseColor().b() == Catch::Approx(0.4f).margin(1e-5f));
+    CHECK(mat.emissive().r() == Catch::Approx(0.1f).margin(1e-5f));
+    CHECK(mat.emissive().g() == Catch::Approx(0.2f).margin(1e-5f));
+    CHECK(mat.emissive().b() == Catch::Approx(0.3f).margin(1e-5f));
+    CHECK(mat.roughness() == Catch::Approx(0.75f).margin(1e-5f));
+    CHECK(mat.metallic() == Catch::Approx(0.5f).margin(1e-5f));
+    CHECK(mat.alpha() == Catch::Approx(0.25f).margin(1e-5f));
+    CHECK(mat.normalScale() == Catch::Approx(0.9f).margin(1e-5f));
+    CHECK(mat.alphaMode() == AlphaMode::Blend);
+    CHECK(mat.alphaCutoff() == Catch::Approx(0.2f).margin(1e-5f));
+    CHECK(mat.doubleSided());
 }
 
-TEST(Material, TextureSlotPointersRoundTrip)
+TEST_CASE("Material.TextureSlotPointersRoundTrip", "[Material]")
 {
     Material mat;
     Texture base;
@@ -91,28 +92,28 @@ TEST(Material, TextureSlotPointersRoundTrip)
     mat.texture(Slot::Occlusion).texture = &occlusion;
     mat.texture(Slot::Transmission).texture = &transmission;
 
-    EXPECT_TRUE(mat.texture(Slot::BaseColour).has());
-    EXPECT_TRUE(mat.texture(Slot::Emissive).has());
-    EXPECT_TRUE(mat.texture(Slot::Normal).has());
-    EXPECT_TRUE(mat.texture(Slot::MetallicRoughness).has());
-    EXPECT_TRUE(mat.texture(Slot::Occlusion).has());
-    EXPECT_TRUE(mat.texture(Slot::Transmission).has());
-    EXPECT_EQ(mat.texture(Slot::BaseColour).texture, &base);
+    CHECK(mat.texture(Slot::BaseColour).has());
+    CHECK(mat.texture(Slot::Emissive).has());
+    CHECK(mat.texture(Slot::Normal).has());
+    CHECK(mat.texture(Slot::MetallicRoughness).has());
+    CHECK(mat.texture(Slot::Occlusion).has());
+    CHECK(mat.texture(Slot::Transmission).has());
+    CHECK(mat.texture(Slot::BaseColour).texture == &base);
 }
 
-TEST(Material, TextureSlotTexCoordAndTransformRoundTrip)
+TEST_CASE("Material.TextureSlotTexCoordAndTransformRoundTrip", "[Material]")
 {
     Material mat;
     mat.texture(Slot::Normal).texCoord = 1;
     mat.texture(Slot::Normal).transform = UvTransform{0.5f, 0.25f, 2.0f, 3.0f, 0.4f};
 
-    EXPECT_EQ(mat.texture(Slot::Normal).texCoord, 1);
-    EXPECT_FLOAT_EQ(mat.texture(Slot::Normal).transform.offsetX, 0.5f);
-    EXPECT_FLOAT_EQ(mat.texture(Slot::Normal).transform.scaleY, 3.0f);
-    EXPECT_FLOAT_EQ(mat.texture(Slot::Normal).transform.rotation, 0.4f);
+    CHECK(mat.texture(Slot::Normal).texCoord == 1);
+    CHECK(mat.texture(Slot::Normal).transform.offsetX == Catch::Approx(0.5f).margin(1e-5f));
+    CHECK(mat.texture(Slot::Normal).transform.scaleY == Catch::Approx(3.0f).margin(1e-5f));
+    CHECK(mat.texture(Slot::Normal).transform.rotation == Catch::Approx(0.4f).margin(1e-5f));
 }
 
-TEST(MaterialBinding, ToMaterialUboPacksCoreFields)
+TEST_CASE("MaterialBinding.ToMaterialUboPacksCoreFields", "[MaterialBinding]")
 {
     Material mat;
     mat.baseColor({0.8f, 0.6f, 0.4f});
@@ -127,69 +128,69 @@ TEST(MaterialBinding, ToMaterialUboPacksCoreFields)
 
     const MaterialUBO ubo = toMaterialUBO(mat);
 
-    EXPECT_FLOAT_EQ(ubo.diffuseAlpha[0], 0.8f);
-    EXPECT_FLOAT_EQ(ubo.diffuseAlpha[3], 0.25f);
-    EXPECT_FLOAT_EQ(ubo.emissiveRoughness[2], 0.3f);
-    EXPECT_FLOAT_EQ(ubo.emissiveRoughness[3], 0.75f);
-    EXPECT_FLOAT_EQ(ubo.materialParams[0], 0.5f);
-    EXPECT_FLOAT_EQ(ubo.materialParams[1], 0.9f);
-    EXPECT_FLOAT_EQ(ubo.materialParams[2], 0.2f);
-    EXPECT_FLOAT_EQ(ubo.materialParams[3], 0.7f);
+    CHECK(ubo.diffuseAlpha[0] == Catch::Approx(0.8f).margin(1e-5f));
+    CHECK(ubo.diffuseAlpha[3] == Catch::Approx(0.25f).margin(1e-5f));
+    CHECK(ubo.emissiveRoughness[2] == Catch::Approx(0.3f).margin(1e-5f));
+    CHECK(ubo.emissiveRoughness[3] == Catch::Approx(0.75f).margin(1e-5f));
+    CHECK(ubo.materialParams[0] == Catch::Approx(0.5f).margin(1e-5f));
+    CHECK(ubo.materialParams[1] == Catch::Approx(0.9f).margin(1e-5f));
+    CHECK(ubo.materialParams[2] == Catch::Approx(0.2f).margin(1e-5f));
+    CHECK(ubo.materialParams[3] == Catch::Approx(0.7f).margin(1e-5f));
 }
 
-TEST(MaterialBinding, ToMaterialUboUsesExtensionDefaultsWhenAbsent)
+TEST_CASE("MaterialBinding.ToMaterialUboUsesExtensionDefaultsWhenAbsent", "[MaterialBinding]")
 {
     // Absent optional blocks must pack the same defaults the old always-present
     // members produced: transmission factor 0 / ior 1.5, clearcoat 0, etc.
     const MaterialUBO ubo = toMaterialUBO(Material{});
-    EXPECT_FLOAT_EQ(ubo.transmissionParams[0], 0.0f);
-    EXPECT_FLOAT_EQ(ubo.transmissionParams[3], 1.5f);
-    EXPECT_FLOAT_EQ(ubo.clearcoatParams[0], 0.0f);
-    EXPECT_FLOAT_EQ(ubo.clearcoatParams[2], 1.0f);
-    EXPECT_FLOAT_EQ(ubo.volumeParams[0], 0.0f);
+    CHECK(ubo.transmissionParams[0] == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(ubo.transmissionParams[3] == Catch::Approx(1.5f).margin(1e-5f));
+    CHECK(ubo.clearcoatParams[0] == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(ubo.clearcoatParams[2] == Catch::Approx(1.0f).margin(1e-5f));
+    CHECK(ubo.volumeParams[0] == Catch::Approx(0.0f).margin(1e-5f));
 }
 
-TEST(MaterialBinding, MissingTextureHandlesPackAsNull)
+TEST_CASE("MaterialBinding.MissingTextureHandlesPackAsNull", "[MaterialBinding]")
 {
     const auto handles = materialTextureHandles(Material{});
 
     for (TextureHandle handle : handles)
     {
-        EXPECT_EQ(handle, NullTexture);
+        CHECK(handle == NullTexture);
     }
 }
 
-TEST(Material, TransmissionBlockRoundTrip)
+TEST_CASE("Material.TransmissionBlockRoundTrip", "[Material]")
 {
     Material mat;
-    EXPECT_FALSE(mat.transmission().has_value());
+    CHECK_FALSE(mat.transmission().has_value());
 
     mat.transmission(TransmissionParams{0.65f, 1.33f});
-    ASSERT_TRUE(mat.transmission().has_value());
-    EXPECT_FLOAT_EQ(mat.transmission()->factor, 0.65f);
-    EXPECT_FLOAT_EQ(mat.transmission()->ior, 1.33f);
+    REQUIRE(mat.transmission().has_value());
+    CHECK(mat.transmission()->factor == Catch::Approx(0.65f).margin(1e-5f));
+    CHECK(mat.transmission()->ior == Catch::Approx(1.33f).margin(1e-5f));
 }
 
-TEST(Material, TransmissionDefaultsMatchSpec)
+TEST_CASE("Material.TransmissionDefaultsMatchSpec", "[Material]")
 {
     // Spec defaults when the optional is unset: factor 0, ior 1.5.
     const TransmissionParams defaults = Material{}.transmission().value_or(TransmissionParams{});
-    EXPECT_FLOAT_EQ(defaults.factor, 0.0f);
-    EXPECT_FLOAT_EQ(defaults.ior, 1.5f);
+    CHECK(defaults.factor == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(defaults.ior == Catch::Approx(1.5f).margin(1e-5f));
 }
 
-TEST(Material, TransmissionTextureSlotRoundTrip)
+TEST_CASE("Material.TransmissionTextureSlotRoundTrip", "[Material]")
 {
     Material mat;
-    EXPECT_EQ(mat.texture(Slot::Transmission).texCoord, 0);
+    CHECK(mat.texture(Slot::Transmission).texCoord == 0);
     mat.texture(Slot::Transmission).texCoord = 1;
     mat.texture(Slot::Transmission).transform = UvTransform{0.5f, 0.25f, 2.0f, 3.0f, 0.4f};
-    EXPECT_EQ(mat.texture(Slot::Transmission).texCoord, 1);
-    EXPECT_FLOAT_EQ(mat.texture(Slot::Transmission).transform.offsetX, 0.5f);
-    EXPECT_FLOAT_EQ(mat.texture(Slot::Transmission).transform.rotation, 0.4f);
+    CHECK(mat.texture(Slot::Transmission).texCoord == 1);
+    CHECK(mat.texture(Slot::Transmission).transform.offsetX == Catch::Approx(0.5f).margin(1e-5f));
+    CHECK(mat.texture(Slot::Transmission).transform.rotation == Catch::Approx(0.4f).margin(1e-5f));
 }
 
-TEST(Material, MoveConstructionPreservesCoreFields)
+TEST_CASE("Material.MoveConstructionPreservesCoreFields", "[Material]")
 {
     Material original;
     original.name("moved");
@@ -203,38 +204,38 @@ TEST(Material, MoveConstructionPreservesCoreFields)
 
     Material moved(std::move(original));
 
-    EXPECT_EQ(moved.name(), "moved");
-    EXPECT_FLOAT_EQ(moved.baseColor().r(), 0.2f);
-    EXPECT_FLOAT_EQ(moved.emissive().r(), 0.7f);
-    EXPECT_FLOAT_EQ(moved.roughness(), 0.8f);
-    EXPECT_FLOAT_EQ(moved.metallic(), 0.9f);
-    EXPECT_FLOAT_EQ(moved.alpha(), 0.3f);
-    EXPECT_FLOAT_EQ(moved.normalScale(), 0.6f);
-    ASSERT_TRUE(moved.clearcoat().has_value());
-    EXPECT_FLOAT_EQ(moved.clearcoat()->factor, 0.8f);
+    CHECK(moved.name() == "moved");
+    CHECK(moved.baseColor().r() == Catch::Approx(0.2f).margin(1e-5f));
+    CHECK(moved.emissive().r() == Catch::Approx(0.7f).margin(1e-5f));
+    CHECK(moved.roughness() == Catch::Approx(0.8f).margin(1e-5f));
+    CHECK(moved.metallic() == Catch::Approx(0.9f).margin(1e-5f));
+    CHECK(moved.alpha() == Catch::Approx(0.3f).margin(1e-5f));
+    CHECK(moved.normalScale() == Catch::Approx(0.6f).margin(1e-5f));
+    REQUIRE(moved.clearcoat().has_value());
+    CHECK(moved.clearcoat()->factor == Catch::Approx(0.8f).margin(1e-5f));
 }
 
-TEST(Material, ClearcoatBlockRoundTrips)
+TEST_CASE("Material.ClearcoatBlockRoundTrips", "[Material]")
 {
     Material mat;
-    EXPECT_FALSE(mat.clearcoat().has_value());
+    CHECK_FALSE(mat.clearcoat().has_value());
 
     mat.clearcoat(ClearcoatParams{0.8f, 0.25f, 0.6f});
-    ASSERT_TRUE(mat.clearcoat().has_value());
-    EXPECT_FLOAT_EQ(mat.clearcoat()->factor, 0.8f);
-    EXPECT_FLOAT_EQ(mat.clearcoat()->roughness, 0.25f);
-    EXPECT_FLOAT_EQ(mat.clearcoat()->normalScale, 0.6f);
+    REQUIRE(mat.clearcoat().has_value());
+    CHECK(mat.clearcoat()->factor == Catch::Approx(0.8f).margin(1e-5f));
+    CHECK(mat.clearcoat()->roughness == Catch::Approx(0.25f).margin(1e-5f));
+    CHECK(mat.clearcoat()->normalScale == Catch::Approx(0.6f).margin(1e-5f));
 }
 
-TEST(Material, ClearcoatDefaultsMatchSpec)
+TEST_CASE("Material.ClearcoatDefaultsMatchSpec", "[Material]")
 {
     const ClearcoatParams defaults = Material{}.clearcoat().value_or(ClearcoatParams{});
-    EXPECT_FLOAT_EQ(defaults.factor, 0.0f);
-    EXPECT_FLOAT_EQ(defaults.roughness, 0.0f);
-    EXPECT_FLOAT_EQ(defaults.normalScale, 1.0f);
+    CHECK(defaults.factor == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(defaults.roughness == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(defaults.normalScale == Catch::Approx(1.0f).margin(1e-5f));
 }
 
-TEST(Material, ClearcoatTextureSlotsRoundTrip)
+TEST_CASE("Material.ClearcoatTextureSlotsRoundTrip", "[Material]")
 {
     Material mat;
     Texture tFactor;
@@ -246,39 +247,40 @@ TEST(Material, ClearcoatTextureSlotsRoundTrip)
     mat.texture(Slot::Clearcoat).texCoord = 1;
     mat.texture(Slot::ClearcoatNormal).transform = UvTransform{0.5f, 0.6f, 1.5f, 2.5f, 1.5f};
 
-    EXPECT_TRUE(mat.texture(Slot::Clearcoat).has());
-    EXPECT_TRUE(mat.texture(Slot::ClearcoatRoughness).has());
-    EXPECT_TRUE(mat.texture(Slot::ClearcoatNormal).has());
-    EXPECT_EQ(mat.texture(Slot::Clearcoat).texCoord, 1);
-    EXPECT_FLOAT_EQ(mat.texture(Slot::ClearcoatNormal).transform.rotation, 1.5f);
+    CHECK(mat.texture(Slot::Clearcoat).has());
+    CHECK(mat.texture(Slot::ClearcoatRoughness).has());
+    CHECK(mat.texture(Slot::ClearcoatNormal).has());
+    CHECK(mat.texture(Slot::Clearcoat).texCoord == 1);
+    CHECK(mat.texture(Slot::ClearcoatNormal).transform.rotation ==
+          Catch::Approx(1.5f).margin(1e-5f));
 }
 
-TEST(Material, VolumeBlockRoundTrips)
+TEST_CASE("Material.VolumeBlockRoundTrips", "[Material]")
 {
     Material mat;
-    EXPECT_FALSE(mat.volume().has_value());
+    CHECK_FALSE(mat.volume().has_value());
 
     mat.volume(VolumeParams{0.7f, Colour3(0.2f, 0.6f, 0.4f), 2.5f});
-    ASSERT_TRUE(mat.volume().has_value());
-    EXPECT_FLOAT_EQ(mat.volume()->thicknessFactor, 0.7f);
-    EXPECT_EQ(mat.volume()->attenuationColor, Colour3(0.2f, 0.6f, 0.4f));
-    EXPECT_FLOAT_EQ(mat.volume()->attenuationDistance, 2.5f);
+    REQUIRE(mat.volume().has_value());
+    CHECK(mat.volume()->thicknessFactor == Catch::Approx(0.7f).margin(1e-5f));
+    CHECK(mat.volume()->attenuationColor == Colour3(0.2f, 0.6f, 0.4f));
+    CHECK(mat.volume()->attenuationDistance == Catch::Approx(2.5f).margin(1e-5f));
 }
 
-TEST(Material, VolumeDefaultsMatchSpec)
+TEST_CASE("Material.VolumeDefaultsMatchSpec", "[Material]")
 {
     const VolumeParams defaults = Material{}.volume().value_or(VolumeParams{});
-    EXPECT_FLOAT_EQ(defaults.thicknessFactor, 0.0f);
-    EXPECT_EQ(defaults.attenuationColor, Colour3(1.0f, 1.0f, 1.0f));
-    EXPECT_TRUE(std::isinf(defaults.attenuationDistance));
+    CHECK(defaults.thicknessFactor == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(defaults.attenuationColor == Colour3(1.0f, 1.0f, 1.0f));
+    CHECK(std::isinf(defaults.attenuationDistance));
 }
 
-TEST(Material, ThicknessTextureSlotRoundTrip)
+TEST_CASE("Material.ThicknessTextureSlotRoundTrip", "[Material]")
 {
     Material mat;
     Texture t;
     mat.texture(Slot::Thickness).texture = &t;
     mat.texture(Slot::Thickness).texCoord = 1;
-    EXPECT_TRUE(mat.texture(Slot::Thickness).has());
-    EXPECT_EQ(mat.texture(Slot::Thickness).texCoord, 1);
+    CHECK(mat.texture(Slot::Thickness).has());
+    CHECK(mat.texture(Slot::Thickness).texCoord == 1);
 }

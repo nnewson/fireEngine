@@ -9,6 +9,7 @@
 
 #include <fire_engine/collision/narrow_phase.hpp>
 #include <fire_engine/collision/sweep_and_prune_broad_phase.hpp>
+#include <fire_engine/graphics/cloth.hpp>
 #include <fire_engine/physics/collider_shape.hpp>
 #include <fire_engine/physics/contact.hpp>
 #include <fire_engine/physics/physics_body.hpp>
@@ -52,6 +53,12 @@ public:
 
     [[nodiscard]]
     std::size_t colliderCount() const noexcept;
+
+    // World-space collision primitives for the cloth/soft-body solver — each
+    // active collider's shape composed with its body transform. Vulkan-free
+    // output (mirrors the gatherLights / gatherEmitters pattern).
+    [[nodiscard]]
+    std::vector<ClothCollider> gatherColliders() const;
 
     [[nodiscard]]
     const PhysicsBody* body(PhysicsBodyHandle handle) const noexcept;

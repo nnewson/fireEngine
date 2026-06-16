@@ -4,7 +4,8 @@
 
 #include <fire_engine/animation/animation.hpp>
 
-#include <gtest/gtest.h>
+#include <catch2/catch_approx.hpp>
+#include <catch2/catch_test_macros.hpp>
 
 using fire_engine::Animation;
 using fire_engine::Animator;
@@ -16,19 +17,19 @@ using fire_engine::Transform;
 // Default Construction
 // ==========================================================================
 
-TEST(Animator, DefaultConstructionHasNullAnimation)
+TEST_CASE("Animator.DefaultConstructionHasNullAnimation", "[Animator]")
 {
     Animator a;
-    EXPECT_EQ(a.animation(), nullptr);
-    EXPECT_EQ(a.animationCount(), 0);
-    EXPECT_EQ(a.activeAnimation(), 0);
+    CHECK(a.animation() == nullptr);
+    CHECK(a.animationCount() == 0);
+    CHECK(a.activeAnimation() == 0);
 }
 
 // ==========================================================================
 // Animation Sampling via Update
 // ==========================================================================
 
-TEST(Animator, UpdateWithNoAnimationsProducesIdentity)
+TEST_CASE("Animator.UpdateWithNoAnimationsProducesIdentity", "[Animator]")
 {
     Animator a;
     InputState state;
@@ -43,12 +44,12 @@ TEST(Animator, UpdateWithNoAnimationsProducesIdentity)
     {
         for (int c = 0; c < 4; ++c)
         {
-            EXPECT_NEAR((result[r, c]), (world[r, c]), 1e-5f);
+            CHECK((result[r, c]) == Catch::Approx((world[r, c])).margin(1e-5f));
         }
     }
 }
 
-TEST(Animator, UpdateWithNoKeyframesProducesIdentity)
+TEST_CASE("Animator.UpdateWithNoKeyframesProducesIdentity", "[Animator]")
 {
     Animator a;
     Animation anim;
@@ -66,12 +67,12 @@ TEST(Animator, UpdateWithNoKeyframesProducesIdentity)
     {
         for (int c = 0; c < 4; ++c)
         {
-            EXPECT_NEAR((result[r, c]), (world[r, c]), 1e-5f);
+            CHECK((result[r, c]) == Catch::Approx((world[r, c])).margin(1e-5f));
         }
     }
 }
 
-TEST(Animator, UpdateSamplesAnimationAtElapsedTime)
+TEST_CASE("Animator.UpdateSamplesAnimationAtElapsedTime", "[Animator]")
 {
     Animator a;
     Animation anim;
@@ -100,13 +101,13 @@ TEST(Animator, UpdateSamplesAnimationAtElapsedTime)
 
     float cos45 = std::cos(static_cast<float>(M_PI) / 4.0f);
     float sin45 = std::sin(static_cast<float>(M_PI) / 4.0f);
-    EXPECT_NEAR((result[0, 0]), cos45, 1e-4f);
-    EXPECT_NEAR((result[0, 2]), sin45, 1e-4f);
-    EXPECT_NEAR((result[2, 0]), -sin45, 1e-4f);
-    EXPECT_NEAR((result[2, 2]), cos45, 1e-4f);
+    CHECK((result[0, 0]) == Catch::Approx(cos45).margin(1e-4f));
+    CHECK((result[0, 2]) == Catch::Approx(sin45).margin(1e-4f));
+    CHECK((result[2, 0]) == Catch::Approx(-sin45).margin(1e-4f));
+    CHECK((result[2, 2]) == Catch::Approx(cos45).margin(1e-4f));
 }
 
-TEST(Animator, RenderAppliesWorldMatrix)
+TEST_CASE("Animator.RenderAppliesWorldMatrix", "[Animator]")
 {
     Animator a;
     Animation anim;
@@ -127,48 +128,48 @@ TEST(Animator, RenderAppliesWorldMatrix)
     Mat4 result = a.render(world);
 
     // With identity animation, result should equal world
-    EXPECT_NEAR((result[0, 0]), 2.0f, 1e-5f);
-    EXPECT_NEAR((result[1, 1]), 2.0f, 1e-5f);
-    EXPECT_NEAR((result[2, 2]), 2.0f, 1e-5f);
+    CHECK((result[0, 0]) == Catch::Approx(2.0f).margin(1e-5f));
+    CHECK((result[1, 1]) == Catch::Approx(2.0f).margin(1e-5f));
+    CHECK((result[2, 2]) == Catch::Approx(2.0f).margin(1e-5f));
 }
 
 // ==========================================================================
 // Multi-Animation Support
 // ==========================================================================
 
-TEST(Animator, AddAnimationIncreasesCount)
+TEST_CASE("Animator.AddAnimationIncreasesCount", "[Animator]")
 {
     Animator a;
     Animation anim1, anim2, anim3;
     a.addAnimation(&anim1);
-    EXPECT_EQ(a.animationCount(), 1);
+    CHECK(a.animationCount() == 1);
     a.addAnimation(&anim2);
-    EXPECT_EQ(a.animationCount(), 2);
+    CHECK(a.animationCount() == 2);
     a.addAnimation(&anim3);
-    EXPECT_EQ(a.animationCount(), 3);
+    CHECK(a.animationCount() == 3);
 }
 
-TEST(Animator, AnimationReturnsActiveAnimation)
+TEST_CASE("Animator.AnimationReturnsActiveAnimation", "[Animator]")
 {
     Animator a;
     Animation anim1, anim2;
     a.addAnimation(&anim1);
     a.addAnimation(&anim2);
 
-    EXPECT_EQ(a.animation(), &anim1);
+    CHECK(a.animation() == &anim1);
     a.activeAnimation(1);
-    EXPECT_EQ(a.animation(), &anim2);
+    CHECK(a.animation() == &anim2);
 }
 
-TEST(Animator, ActiveAnimationDefaultsToZero)
+TEST_CASE("Animator.ActiveAnimationDefaultsToZero", "[Animator]")
 {
     Animator a;
     Animation anim;
     a.addAnimation(&anim);
-    EXPECT_EQ(a.activeAnimation(), 0);
+    CHECK(a.activeAnimation() == 0);
 }
 
-TEST(Animator, ActiveAnimationIgnoresOutOfRangeIndex)
+TEST_CASE("Animator.ActiveAnimationIgnoresOutOfRangeIndex", "[Animator]")
 {
     Animator a;
     Animation anim1, anim2;
@@ -176,11 +177,11 @@ TEST(Animator, ActiveAnimationIgnoresOutOfRangeIndex)
     a.addAnimation(&anim2);
 
     a.activeAnimation(5);
-    EXPECT_EQ(a.activeAnimation(), 0);
-    EXPECT_EQ(a.animation(), &anim1);
+    CHECK(a.activeAnimation() == 0);
+    CHECK(a.animation() == &anim1);
 }
 
-TEST(Animator, SwitchingAnimationResetsTimer)
+TEST_CASE("Animator.SwitchingAnimationResetsTimer", "[Animator]")
 {
     Animator a;
     Animation anim1;
@@ -217,16 +218,16 @@ TEST(Animator, SwitchingAnimationResetsTimer)
     Mat4 result = a.render(Mat4::identity());
 
     // At t=0.5 into anim2, Y translation should be ~10.0
-    EXPECT_NEAR((result[1, 3]), 10.0f, 1e-4f);
+    CHECK((result[1, 3]) == Catch::Approx(10.0f).margin(1e-4f));
     // X translation should be 0 (anim2 doesn't translate X)
-    EXPECT_NEAR((result[0, 3]), 0.0f, 1e-4f);
+    CHECK((result[0, 3]) == Catch::Approx(0.0f).margin(1e-4f));
 }
 
 // ==========================================================================
 // InputState-Driven Animation Switching
 // ==========================================================================
 
-TEST(Animator, InputStateSwitchesAnimation)
+TEST_CASE("Animator.InputStateSwitchesAnimation", "[Animator]")
 {
     Animator a;
     Animation anim1;
@@ -254,7 +255,7 @@ TEST(Animator, InputStateSwitchesAnimation)
     state.animationState().activeAnimation(1);
     a.update(state, transform);
 
-    EXPECT_EQ(a.activeAnimation(), 1);
+    CHECK(a.activeAnimation() == 1);
 
     // Advance time and sample
     state.time(1.5);
@@ -265,11 +266,11 @@ TEST(Animator, InputStateSwitchesAnimation)
     Mat4 result = a.render(Mat4::identity());
 
     // At t=0.5 into anim2, Y translation should be ~10.0
-    EXPECT_NEAR((result[1, 3]), 10.0f, 1e-4f);
-    EXPECT_NEAR((result[0, 3]), 0.0f, 1e-4f);
+    CHECK((result[1, 3]) == Catch::Approx(10.0f).margin(1e-4f));
+    CHECK((result[0, 3]) == Catch::Approx(0.0f).margin(1e-4f));
 }
 
-TEST(Animator, InputStateUsesStableAnimationIds)
+TEST_CASE("Animator.InputStateUsesStableAnimationIds", "[Animator]")
 {
     Animator a;
 
@@ -298,11 +299,11 @@ TEST(Animator, InputStateUsesStableAnimationIds)
     state.animationState().activeAnimation(20);
     a.update(state, transform);
 
-    EXPECT_EQ(a.activeAnimation(), 20u);
-    EXPECT_EQ(a.animation(), &anim20);
+    CHECK(a.activeAnimation() == 20u);
+    CHECK(a.animation() == &anim20);
 }
 
-TEST(Animator, InputStateOutOfRangeIndexIsIgnored)
+TEST_CASE("Animator.InputStateOutOfRangeIndexIsIgnored", "[Animator]")
 {
     Animator a;
     Animation anim1, anim2;
@@ -319,10 +320,10 @@ TEST(Animator, InputStateOutOfRangeIndexIsIgnored)
     state.animationState().activeAnimation(99);
     a.update(state, transform);
 
-    EXPECT_EQ(a.activeAnimation(), 0);
+    CHECK(a.activeAnimation() == 0);
 }
 
-TEST(Animator, InputStateNoSelectionContinuesPlayback)
+TEST_CASE("Animator.InputStateNoSelectionContinuesPlayback", "[Animator]")
 {
     Animator a;
     Animation anim;
@@ -344,7 +345,7 @@ TEST(Animator, InputStateNoSelectionContinuesPlayback)
     Mat4 result = a.render(Mat4::identity());
 
     // At t=1.0, X translation should be ~10.0
-    EXPECT_NEAR((result[0, 3]), 10.0f, 1e-4f);
+    CHECK((result[0, 3]) == Catch::Approx(10.0f).margin(1e-4f));
 
     // Continue with no animation selection — should not reset
     InputState state2;
@@ -353,10 +354,10 @@ TEST(Animator, InputStateNoSelectionContinuesPlayback)
     result = a.render(Mat4::identity());
 
     // At t=1.5, X translation should be ~15.0
-    EXPECT_NEAR((result[0, 3]), 15.0f, 1e-4f);
+    CHECK((result[0, 3]) == Catch::Approx(15.0f).margin(1e-4f));
 }
 
-TEST(Animator, InputStateSameIndexDoesNotResetTimer)
+TEST_CASE("Animator.InputStateSameIndexDoesNotResetTimer", "[Animator]")
 {
     Animator a;
     Animation anim;
@@ -383,5 +384,5 @@ TEST(Animator, InputStateSameIndexDoesNotResetTimer)
     Mat4 result = a.render(Mat4::identity());
 
     // At t=1.5 elapsed, X translation should be ~15.0 (not reset to 0)
-    EXPECT_NEAR((result[0, 3]), 15.0f, 1e-4f);
+    CHECK((result[0, 3]) == Catch::Approx(15.0f).margin(1e-4f));
 }

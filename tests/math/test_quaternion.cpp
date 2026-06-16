@@ -2,7 +2,8 @@
 
 #include <cmath>
 
-#include <gtest/gtest.h>
+#include <catch2/catch_approx.hpp>
+#include <catch2/catch_test_macros.hpp>
 
 #include <fire_engine/math/constants.hpp>
 #include <fire_engine/math/mat4.hpp>
@@ -21,10 +22,10 @@ static constexpr float kEps = 1e-5f;
 static void expectNear(const Quaternion& q, float ex, float ey, float ez, float ew,
                        float eps = kEps)
 {
-    EXPECT_NEAR(q.x(), ex, eps);
-    EXPECT_NEAR(q.y(), ey, eps);
-    EXPECT_NEAR(q.z(), ez, eps);
-    EXPECT_NEAR(q.w(), ew, eps);
+    CHECK(q.x() == Catch::Approx(ex).margin(eps));
+    CHECK(q.y() == Catch::Approx(ey).margin(eps));
+    CHECK(q.z() == Catch::Approx(ez).margin(eps));
+    CHECK(q.w() == Catch::Approx(ew).margin(eps));
 }
 
 // Build a quaternion representing a rotation of `angle` radians about an axis.
@@ -39,25 +40,25 @@ static Quaternion axisAngle(float ax, float ay, float az, float angle)
 // Construction / accessors
 // ==========================================================================
 
-TEST(QuaternionConstruction, DefaultIsIdentity)
+TEST_CASE("QuaternionConstruction.DefaultIsIdentity", "[QuaternionConstruction]")
 {
     Quaternion q{};
     expectNear(q, 0.0f, 0.0f, 0.0f, 1.0f);
 }
 
-TEST(QuaternionConstruction, ExplicitValues)
+TEST_CASE("QuaternionConstruction.ExplicitValues", "[QuaternionConstruction]")
 {
     Quaternion q{0.1f, 0.2f, 0.3f, 0.4f};
     expectNear(q, 0.1f, 0.2f, 0.3f, 0.4f);
 }
 
-TEST(QuaternionConstruction, IdentityFactory)
+TEST_CASE("QuaternionConstruction.IdentityFactory", "[QuaternionConstruction]")
 {
     Quaternion q = Quaternion::identity();
     expectNear(q, 0.0f, 0.0f, 0.0f, 1.0f);
 }
 
-TEST(QuaternionAccessors, Setters)
+TEST_CASE("QuaternionAccessors.Setters", "[QuaternionAccessors]")
 {
     Quaternion q;
     q.x(1.5f);
@@ -71,39 +72,39 @@ TEST(QuaternionAccessors, Setters)
 // Equality / unary minus
 // ==========================================================================
 
-TEST(QuaternionEquality, SameValuesAreEqual)
+TEST_CASE("QuaternionEquality.SameValuesAreEqual", "[QuaternionEquality]")
 {
     Quaternion a{1.0f, 2.0f, 3.0f, 4.0f};
     Quaternion b{1.0f, 2.0f, 3.0f, 4.0f};
-    EXPECT_TRUE(a == b);
+    CHECK(a == b);
 }
 
-TEST(QuaternionEquality, DifferentValuesNotEqual)
+TEST_CASE("QuaternionEquality.DifferentValuesNotEqual", "[QuaternionEquality]")
 {
     Quaternion a{1.0f, 2.0f, 3.0f, 4.0f};
     Quaternion b{1.0f, 2.0f, 3.0f, 4.1f};
-    EXPECT_FALSE(a == b);
+    CHECK_FALSE(a == b);
 }
 
-TEST(QuaternionEquality, BitwiseEqualMatchesOperator)
+TEST_CASE("QuaternionEquality.BitwiseEqualMatchesOperator", "[QuaternionEquality]")
 {
     Quaternion a{0.1f, 0.2f, 0.3f, 0.4f};
     Quaternion b{0.1f, 0.2f, 0.3f, 0.4f};
     Quaternion c{0.1f, 0.2f, 0.3f, 0.5f};
-    EXPECT_TRUE(a.bitwiseEqual(b));
-    EXPECT_FALSE(a.bitwiseEqual(c));
+    CHECK(a.bitwiseEqual(b));
+    CHECK_FALSE(a.bitwiseEqual(c));
 }
 
-TEST(QuaternionEquality, ApproxEqualWithinTolerance)
+TEST_CASE("QuaternionEquality.ApproxEqualWithinTolerance", "[QuaternionEquality]")
 {
     Quaternion a{0.1f, 0.2f, 0.3f, 0.4f};
     Quaternion b{0.1f + 1e-7f, 0.2f, 0.3f, 0.4f - 1e-7f};
-    EXPECT_FALSE(a == b);
-    EXPECT_TRUE(a.approxEqual(b, 1e-6f));
-    EXPECT_FALSE(a.approxEqual(b, 1e-9f));
+    CHECK_FALSE(a == b);
+    CHECK(a.approxEqual(b, 1e-6f));
+    CHECK_FALSE(a.approxEqual(b, 1e-9f));
 }
 
-TEST(QuaternionUnaryMinus, NegatesAllComponents)
+TEST_CASE("QuaternionUnaryMinus.NegatesAllComponents", "[QuaternionUnaryMinus]")
 {
     Quaternion q{0.1f, -0.2f, 0.3f, -0.4f};
     Quaternion n = -q;
@@ -114,65 +115,65 @@ TEST(QuaternionUnaryMinus, NegatesAllComponents)
 // Dot product
 // ==========================================================================
 
-TEST(QuaternionDotProduct, IdentityWithItselfIsOne)
+TEST_CASE("QuaternionDotProduct.IdentityWithItselfIsOne", "[QuaternionDotProduct]")
 {
     Quaternion id = Quaternion::identity();
-    EXPECT_NEAR(Quaternion::dotProduct(id, id), 1.0f, kEps);
+    CHECK(Quaternion::dotProduct(id, id) == Catch::Approx(1.0f).margin(kEps));
 }
 
-TEST(QuaternionDotProduct, HandComputed)
+TEST_CASE("QuaternionDotProduct.HandComputed", "[QuaternionDotProduct]")
 {
     Quaternion a{1.0f, 2.0f, 3.0f, 4.0f};
     Quaternion b{5.0f, 6.0f, 7.0f, 8.0f};
     // 1*5 + 2*6 + 3*7 + 4*8 = 5 + 12 + 21 + 32 = 70
-    EXPECT_NEAR(Quaternion::dotProduct(a, b), 70.0f, kEps);
-    EXPECT_NEAR(a.dotProduct(b), 70.0f, kEps);
+    CHECK(Quaternion::dotProduct(a, b) == Catch::Approx(70.0f).margin(kEps));
+    CHECK(a.dotProduct(b) == Catch::Approx(70.0f).margin(kEps));
 }
 
 // ==========================================================================
 // Magnitude / normalise
 // ==========================================================================
 
-TEST(QuaternionMagnitude, UnitQuaternionIsOne)
+TEST_CASE("QuaternionMagnitude.UnitQuaternionIsOne", "[QuaternionMagnitude]")
 {
     Quaternion id = Quaternion::identity();
-    EXPECT_NEAR(id.magnitudeSquared(), 1.0f, kEps);
-    EXPECT_NEAR(id.magnitude(), 1.0f, kEps);
+    CHECK(id.magnitudeSquared() == Catch::Approx(1.0f).margin(kEps));
+    CHECK(id.magnitude() == Catch::Approx(1.0f).margin(kEps));
 }
 
-TEST(QuaternionMagnitude, NonUnit)
+TEST_CASE("QuaternionMagnitude.NonUnit", "[QuaternionMagnitude]")
 {
     Quaternion q{2.0f, 0.0f, 0.0f, 0.0f};
-    EXPECT_NEAR(q.magnitudeSquared(), 4.0f, kEps);
-    EXPECT_NEAR(q.magnitude(), 2.0f, kEps);
+    CHECK(q.magnitudeSquared() == Catch::Approx(4.0f).margin(kEps));
+    CHECK(q.magnitude() == Catch::Approx(2.0f).margin(kEps));
 }
 
-TEST(QuaternionNormalise, StaticProducesUnitLength)
+TEST_CASE("QuaternionNormalise.StaticProducesUnitLength", "[QuaternionNormalise]")
 {
     Quaternion q{1.0f, 2.0f, 3.0f, 4.0f};
     Quaternion n = Quaternion::normalise(q);
-    EXPECT_NEAR(n.magnitude(), 1.0f, kEps);
+    CHECK(n.magnitude() == Catch::Approx(1.0f).margin(kEps));
 }
 
-TEST(QuaternionNormalise, InstanceProducesUnitLength)
+TEST_CASE("QuaternionNormalise.InstanceProducesUnitLength", "[QuaternionNormalise]")
 {
     Quaternion q{1.0f, 2.0f, 3.0f, 4.0f};
     q.normalise();
-    EXPECT_NEAR(q.magnitude(), 1.0f, kEps);
+    CHECK(q.magnitude() == Catch::Approx(1.0f).margin(kEps));
 }
 
 // ==========================================================================
 // SLERP
 // ==========================================================================
 
-TEST(QuaternionSlerp, IdenticalInputs)
+TEST_CASE("QuaternionSlerp.IdenticalInputs", "[QuaternionSlerp]")
 {
     Quaternion q = axisAngle(0.0f, 1.0f, 0.0f, fire_engine::pi * 0.25f);
     Quaternion result = Quaternion::slerp(q, q, 0.5f);
     expectNear(result, q.x(), q.y(), q.z(), q.w());
 }
 
-TEST(QuaternionSlerp, EndpointsAtT0AndT1)
+TEST_CASE("QuaternionSlerp.EndpointsAtT0AndT1", "[QuaternionSlerp]")
 {
     Quaternion a = Quaternion::identity();
     Quaternion b = axisAngle(0.0f, 1.0f, 0.0f, fire_engine::pi * 0.5f);
@@ -184,7 +185,7 @@ TEST(QuaternionSlerp, EndpointsAtT0AndT1)
     expectNear(r1, b.x(), b.y(), b.z(), b.w());
 }
 
-TEST(QuaternionSlerp, MidpointOf90DegYIs45DegY)
+TEST_CASE("QuaternionSlerp.MidpointOf90DegYIs45DegY", "[QuaternionSlerp]")
 {
     Quaternion a = Quaternion::identity();
     Quaternion b = axisAngle(0.0f, 1.0f, 0.0f, fire_engine::pi * 0.5f);
@@ -194,7 +195,7 @@ TEST(QuaternionSlerp, MidpointOf90DegYIs45DegY)
     expectNear(mid, expected.x(), expected.y(), expected.z(), expected.w());
 }
 
-TEST(QuaternionSlerp, ShortPathCorrection)
+TEST_CASE("QuaternionSlerp.ShortPathCorrection", "[QuaternionSlerp]")
 {
     // slerp(q, -q, 0.5) should produce something parallel to q (up to sign)
     Quaternion q = axisAngle(0.0f, 0.0f, 1.0f, fire_engine::pi * 0.3f);
@@ -203,20 +204,20 @@ TEST(QuaternionSlerp, ShortPathCorrection)
     expectNear(result, q.x(), q.y(), q.z(), q.w());
 }
 
-TEST(QuaternionSlerp, NlerpFallbackUnitMagnitude)
+TEST_CASE("QuaternionSlerp.NlerpFallbackUnitMagnitude", "[QuaternionSlerp]")
 {
     // Two nearly-identical quaternions (dot > 0.9995)
     Quaternion a = Quaternion::identity();
     Quaternion b{0.001f, 0.0f, 0.0f, 0.9999995f};
     Quaternion result = Quaternion::slerp(a, b, 0.5f);
-    EXPECT_NEAR(result.magnitude(), 1.0f, kEps);
+    CHECK(result.magnitude() == Catch::Approx(1.0f).margin(kEps));
 }
 
 // ==========================================================================
 // toMat4
 // ==========================================================================
 
-TEST(QuaternionToMat4, IdentityIsIdentityMatrix)
+TEST_CASE("QuaternionToMat4.IdentityIsIdentityMatrix", "[QuaternionToMat4]")
 {
     Mat4 m = Quaternion::identity().toMat4();
     Mat4 id = Mat4::identity();
@@ -224,12 +225,12 @@ TEST(QuaternionToMat4, IdentityIsIdentityMatrix)
     {
         for (int r = 0; r < 4; ++r)
         {
-            EXPECT_NEAR((m[r, c]), (id[r, c]), kEps);
+            CHECK((m[r, c]) == Catch::Approx((id[r, c])).margin(kEps));
         }
     }
 }
 
-TEST(QuaternionToMat4, NinetyDegreeYRotation)
+TEST_CASE("QuaternionToMat4.NinetyDegreeYRotation", "[QuaternionToMat4]")
 {
     Quaternion q = axisAngle(0.0f, 1.0f, 0.0f, fire_engine::pi * 0.5f);
     Mat4 m = q.toMat4();
@@ -239,79 +240,79 @@ TEST(QuaternionToMat4, NinetyDegreeYRotation)
     //  [  0  1  0  0 ]
     //  [ -1  0  0  0 ]
     //  [  0  0  0  1 ]
-    EXPECT_NEAR((m[0, 0]), 0.0f, kEps);
-    EXPECT_NEAR((m[1, 0]), 0.0f, kEps);
-    EXPECT_NEAR((m[2, 0]), -1.0f, kEps);
+    CHECK((m[0, 0]) == Catch::Approx(0.0f).margin(kEps));
+    CHECK((m[1, 0]) == Catch::Approx(0.0f).margin(kEps));
+    CHECK((m[2, 0]) == Catch::Approx(-1.0f).margin(kEps));
 
-    EXPECT_NEAR((m[0, 1]), 0.0f, kEps);
-    EXPECT_NEAR((m[1, 1]), 1.0f, kEps);
-    EXPECT_NEAR((m[2, 1]), 0.0f, kEps);
+    CHECK((m[0, 1]) == Catch::Approx(0.0f).margin(kEps));
+    CHECK((m[1, 1]) == Catch::Approx(1.0f).margin(kEps));
+    CHECK((m[2, 1]) == Catch::Approx(0.0f).margin(kEps));
 
-    EXPECT_NEAR((m[0, 2]), 1.0f, kEps);
-    EXPECT_NEAR((m[1, 2]), 0.0f, kEps);
-    EXPECT_NEAR((m[2, 2]), 0.0f, kEps);
+    CHECK((m[0, 2]) == Catch::Approx(1.0f).margin(kEps));
+    CHECK((m[1, 2]) == Catch::Approx(0.0f).margin(kEps));
+    CHECK((m[2, 2]) == Catch::Approx(0.0f).margin(kEps));
 
     // Fourth row/column is identity-like
-    EXPECT_NEAR((m[3, 0]), 0.0f, kEps);
-    EXPECT_NEAR((m[3, 1]), 0.0f, kEps);
-    EXPECT_NEAR((m[3, 2]), 0.0f, kEps);
-    EXPECT_NEAR((m[0, 3]), 0.0f, kEps);
-    EXPECT_NEAR((m[1, 3]), 0.0f, kEps);
-    EXPECT_NEAR((m[2, 3]), 0.0f, kEps);
-    EXPECT_NEAR((m[3, 3]), 1.0f, kEps);
+    CHECK((m[3, 0]) == Catch::Approx(0.0f).margin(kEps));
+    CHECK((m[3, 1]) == Catch::Approx(0.0f).margin(kEps));
+    CHECK((m[3, 2]) == Catch::Approx(0.0f).margin(kEps));
+    CHECK((m[0, 3]) == Catch::Approx(0.0f).margin(kEps));
+    CHECK((m[1, 3]) == Catch::Approx(0.0f).margin(kEps));
+    CHECK((m[2, 3]) == Catch::Approx(0.0f).margin(kEps));
+    CHECK((m[3, 3]) == Catch::Approx(1.0f).margin(kEps));
 }
 
 // ==========================================================================
 // toEulerXYZ — extrinsic XYZ Euler extraction
 // ==========================================================================
 
-TEST(QuaternionToEulerXYZ, IdentityReturnsZero)
+TEST_CASE("QuaternionToEulerXYZ.IdentityReturnsZero", "[QuaternionToEulerXYZ]")
 {
     Vec3 e = Quaternion::identity().toEulerXYZ();
-    EXPECT_NEAR(e.x(), 0.0f, kEps);
-    EXPECT_NEAR(e.y(), 0.0f, kEps);
-    EXPECT_NEAR(e.z(), 0.0f, kEps);
+    CHECK(e.x() == Catch::Approx(0.0f).margin(kEps));
+    CHECK(e.y() == Catch::Approx(0.0f).margin(kEps));
+    CHECK(e.z() == Catch::Approx(0.0f).margin(kEps));
 }
 
-TEST(QuaternionToEulerXYZ, PureXAxisRotation)
+TEST_CASE("QuaternionToEulerXYZ.PureXAxisRotation", "[QuaternionToEulerXYZ]")
 {
     float angle = fire_engine::pi / 3.0f;
     Quaternion q = axisAngle(1.0f, 0.0f, 0.0f, angle);
     Vec3 e = q.toEulerXYZ();
-    EXPECT_NEAR(e.x(), angle, kEps);
-    EXPECT_NEAR(e.y(), 0.0f, kEps);
-    EXPECT_NEAR(e.z(), 0.0f, kEps);
+    CHECK(e.x() == Catch::Approx(angle).margin(kEps));
+    CHECK(e.y() == Catch::Approx(0.0f).margin(kEps));
+    CHECK(e.z() == Catch::Approx(0.0f).margin(kEps));
 }
 
-TEST(QuaternionToEulerXYZ, PureYAxisRotation)
+TEST_CASE("QuaternionToEulerXYZ.PureYAxisRotation", "[QuaternionToEulerXYZ]")
 {
     float angle = fire_engine::pi / 4.0f;
     Quaternion q = axisAngle(0.0f, 1.0f, 0.0f, angle);
     Vec3 e = q.toEulerXYZ();
-    EXPECT_NEAR(e.x(), 0.0f, kEps);
-    EXPECT_NEAR(e.y(), angle, kEps);
-    EXPECT_NEAR(e.z(), 0.0f, kEps);
+    CHECK(e.x() == Catch::Approx(0.0f).margin(kEps));
+    CHECK(e.y() == Catch::Approx(angle).margin(kEps));
+    CHECK(e.z() == Catch::Approx(0.0f).margin(kEps));
 }
 
-TEST(QuaternionToEulerXYZ, PureZAxisRotation)
+TEST_CASE("QuaternionToEulerXYZ.PureZAxisRotation", "[QuaternionToEulerXYZ]")
 {
     float angle = fire_engine::pi / 6.0f;
     Quaternion q = axisAngle(0.0f, 0.0f, 1.0f, angle);
     Vec3 e = q.toEulerXYZ();
-    EXPECT_NEAR(e.x(), 0.0f, kEps);
-    EXPECT_NEAR(e.y(), 0.0f, kEps);
-    EXPECT_NEAR(e.z(), angle, kEps);
+    CHECK(e.x() == Catch::Approx(0.0f).margin(kEps));
+    CHECK(e.y() == Catch::Approx(0.0f).margin(kEps));
+    CHECK(e.z() == Catch::Approx(angle).margin(kEps));
 }
 
-TEST(QuaternionToEulerXYZ, DecalBlendRotationExtractsXAxis)
+TEST_CASE("QuaternionToEulerXYZ.DecalBlendRotationExtractsXAxis", "[QuaternionToEulerXYZ]")
 {
     // AlphaBlendModeTest DecalBlend: qx=-0.47186, qy=0, qz=0, qw=0.88167
     Quaternion q{-0.47185850f, 0.0f, 0.0f, 0.88167441f};
     Vec3 e = q.toEulerXYZ();
     // Should be a pure X rotation of ~-56.3 degrees.
-    EXPECT_NEAR(e.x(), -0.98279f, 1e-4f);
-    EXPECT_NEAR(e.y(), 0.0f, kEps);
-    EXPECT_NEAR(e.z(), 0.0f, kEps);
+    CHECK(e.x() == Catch::Approx(-0.98279f).margin(1e-4f));
+    CHECK(e.y() == Catch::Approx(0.0f).margin(kEps));
+    CHECK(e.z() == Catch::Approx(0.0f).margin(kEps));
 }
 
 // ==========================================================================
@@ -329,14 +330,14 @@ Vec3 rotated(const Quaternion& q, Vec3 v)
 }
 } // namespace
 
-TEST(QuaternionFromVectors, ParallelInputsReturnIdentity)
+TEST_CASE("QuaternionFromVectors.ParallelInputsReturnIdentity", "[QuaternionFromVectors]")
 {
     Vec3 v = Vec3::normalise(Vec3{0.3f, 0.7f, -0.2f});
     Quaternion q = Quaternion::fromVectors(v, v);
     expectNear(q, 0.0f, 0.0f, 0.0f, 1.0f);
 }
 
-TEST(QuaternionFromVectors, AntiparallelInputsRotate180)
+TEST_CASE("QuaternionFromVectors.AntiparallelInputsRotate180", "[QuaternionFromVectors]")
 {
     Vec3 from{0.0f, 0.0f, -1.0f};
     Vec3 to{0.0f, 0.0f, 1.0f};
@@ -344,31 +345,31 @@ TEST(QuaternionFromVectors, AntiparallelInputsRotate180)
 
     // 180° rotation about an axis orthogonal to `from`, so w == 0 and the
     // axis lies in the X/Y plane.
-    EXPECT_NEAR(q.w(), 0.0f, kEps);
-    EXPECT_NEAR(q.z(), 0.0f, kEps);
+    CHECK(q.w() == Catch::Approx(0.0f).margin(kEps));
+    CHECK(q.z() == Catch::Approx(0.0f).margin(kEps));
     // Rotating `from` should still land on `to`.
     Vec3 rot = rotated(q, from);
-    EXPECT_NEAR(rot.x(), to.x(), kEps);
-    EXPECT_NEAR(rot.y(), to.y(), kEps);
-    EXPECT_NEAR(rot.z(), to.z(), kEps);
+    CHECK(rot.x() == Catch::Approx(to.x()).margin(kEps));
+    CHECK(rot.y() == Catch::Approx(to.y()).margin(kEps));
+    CHECK(rot.z() == Catch::Approx(to.z()).margin(kEps));
 }
 
-TEST(QuaternionFromVectors, ArbitraryPairRotatesFromOntoTo)
+TEST_CASE("QuaternionFromVectors.ArbitraryPairRotatesFromOntoTo", "[QuaternionFromVectors]")
 {
     Vec3 from = Vec3::normalise(Vec3{0.0f, 0.0f, -1.0f});
     Vec3 to = Vec3::normalise(Vec3{1.0f, -1.0f, 1.0f});
     Quaternion q = Quaternion::fromVectors(from, to);
 
     Vec3 rot = rotated(q, from);
-    EXPECT_NEAR(rot.x(), to.x(), kEps);
-    EXPECT_NEAR(rot.y(), to.y(), kEps);
-    EXPECT_NEAR(rot.z(), to.z(), kEps);
+    CHECK(rot.x() == Catch::Approx(to.x()).margin(kEps));
+    CHECK(rot.y() == Catch::Approx(to.y()).margin(kEps));
+    CHECK(rot.z() == Catch::Approx(to.z()).margin(kEps));
 }
 
-TEST(QuaternionFromVectors, ResultIsUnitMagnitude)
+TEST_CASE("QuaternionFromVectors.ResultIsUnitMagnitude", "[QuaternionFromVectors]")
 {
     Vec3 from = Vec3::normalise(Vec3{0.0f, 0.0f, -1.0f});
     Vec3 to = Vec3::normalise(Vec3{1.0f, -1.0f, 1.0f});
     Quaternion q = Quaternion::fromVectors(from, to);
-    EXPECT_NEAR(q.magnitude(), 1.0f, kEps);
+    CHECK(q.magnitude() == Catch::Approx(1.0f).margin(kEps));
 }

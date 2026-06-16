@@ -2,7 +2,8 @@
 
 #include <fire_engine/graphics/sampler_settings.hpp>
 
-#include <gtest/gtest.h>
+#include <catch2/catch_approx.hpp>
+#include <catch2/catch_test_macros.hpp>
 
 using fire_engine::FilterMode;
 using fire_engine::SamplerSettings;
@@ -12,35 +13,35 @@ using fire_engine::WrapMode;
 // SamplerSettings defaults
 // ==========================================================================
 
-TEST(SamplerSettings, DefaultsToRepeatAndLinear)
+TEST_CASE("SamplerSettings.DefaultsToRepeatAndLinear", "[SamplerSettings]")
 {
     SamplerSettings s;
-    EXPECT_EQ(s.wrapS, WrapMode::Repeat);
-    EXPECT_EQ(s.wrapT, WrapMode::Repeat);
-    EXPECT_EQ(s.magFilter, FilterMode::Linear);
-    EXPECT_EQ(s.minFilter, FilterMode::Linear);
+    CHECK(s.wrapS == WrapMode::Repeat);
+    CHECK(s.wrapT == WrapMode::Repeat);
+    CHECK(s.magFilter == FilterMode::Linear);
+    CHECK(s.minFilter == FilterMode::Linear);
 }
 
-TEST(SamplerSettings, EqualityOperator)
+TEST_CASE("SamplerSettings.EqualityOperator", "[SamplerSettings]")
 {
     SamplerSettings a;
     SamplerSettings b;
-    EXPECT_EQ(a, b);
+    CHECK(a == b);
 
     b.wrapS = WrapMode::ClampToEdge;
-    EXPECT_NE(a, b);
+    CHECK(a != b);
 }
 
-TEST(SamplerSettings, AllWrapModesDistinct)
+TEST_CASE("SamplerSettings.AllWrapModesDistinct", "[SamplerSettings]")
 {
-    EXPECT_NE(WrapMode::Repeat, WrapMode::MirroredRepeat);
-    EXPECT_NE(WrapMode::Repeat, WrapMode::ClampToEdge);
-    EXPECT_NE(WrapMode::MirroredRepeat, WrapMode::ClampToEdge);
+    CHECK(WrapMode::Repeat != WrapMode::MirroredRepeat);
+    CHECK(WrapMode::Repeat != WrapMode::ClampToEdge);
+    CHECK(WrapMode::MirroredRepeat != WrapMode::ClampToEdge);
 }
 
-TEST(SamplerSettings, AllFilterModesDistinct)
+TEST_CASE("SamplerSettings.AllFilterModesDistinct", "[SamplerSettings]")
 {
-    EXPECT_NE(FilterMode::Nearest, FilterMode::Linear);
+    CHECK(FilterMode::Nearest != FilterMode::Linear);
 }
 
 // ==========================================================================
@@ -73,39 +74,39 @@ static FilterMode toFilterMode(fastgltf::Filter f)
     }
 }
 
-TEST(SamplerMapping, WrapRepeat)
+TEST_CASE("SamplerMapping.WrapRepeat", "[SamplerMapping]")
 {
-    EXPECT_EQ(toWrapMode(fastgltf::Wrap::Repeat), WrapMode::Repeat);
+    CHECK(toWrapMode(fastgltf::Wrap::Repeat) == WrapMode::Repeat);
 }
 
-TEST(SamplerMapping, WrapMirroredRepeat)
+TEST_CASE("SamplerMapping.WrapMirroredRepeat", "[SamplerMapping]")
 {
-    EXPECT_EQ(toWrapMode(fastgltf::Wrap::MirroredRepeat), WrapMode::MirroredRepeat);
+    CHECK(toWrapMode(fastgltf::Wrap::MirroredRepeat) == WrapMode::MirroredRepeat);
 }
 
-TEST(SamplerMapping, WrapClampToEdge)
+TEST_CASE("SamplerMapping.WrapClampToEdge", "[SamplerMapping]")
 {
-    EXPECT_EQ(toWrapMode(fastgltf::Wrap::ClampToEdge), WrapMode::ClampToEdge);
+    CHECK(toWrapMode(fastgltf::Wrap::ClampToEdge) == WrapMode::ClampToEdge);
 }
 
-TEST(SamplerMapping, FilterNearest)
+TEST_CASE("SamplerMapping.FilterNearest", "[SamplerMapping]")
 {
-    EXPECT_EQ(toFilterMode(fastgltf::Filter::Nearest), FilterMode::Nearest);
+    CHECK(toFilterMode(fastgltf::Filter::Nearest) == FilterMode::Nearest);
 }
 
-TEST(SamplerMapping, FilterLinear)
+TEST_CASE("SamplerMapping.FilterLinear", "[SamplerMapping]")
 {
-    EXPECT_EQ(toFilterMode(fastgltf::Filter::Linear), FilterMode::Linear);
+    CHECK(toFilterMode(fastgltf::Filter::Linear) == FilterMode::Linear);
 }
 
-TEST(SamplerMapping, FilterNearestMipMapVariants)
+TEST_CASE("SamplerMapping.FilterNearestMipMapVariants", "[SamplerMapping]")
 {
-    EXPECT_EQ(toFilterMode(fastgltf::Filter::NearestMipMapNearest), FilterMode::Nearest);
-    EXPECT_EQ(toFilterMode(fastgltf::Filter::NearestMipMapLinear), FilterMode::Nearest);
+    CHECK(toFilterMode(fastgltf::Filter::NearestMipMapNearest) == FilterMode::Nearest);
+    CHECK(toFilterMode(fastgltf::Filter::NearestMipMapLinear) == FilterMode::Nearest);
 }
 
-TEST(SamplerMapping, FilterLinearMipMapVariants)
+TEST_CASE("SamplerMapping.FilterLinearMipMapVariants", "[SamplerMapping]")
 {
-    EXPECT_EQ(toFilterMode(fastgltf::Filter::LinearMipMapNearest), FilterMode::Linear);
-    EXPECT_EQ(toFilterMode(fastgltf::Filter::LinearMipMapLinear), FilterMode::Linear);
+    CHECK(toFilterMode(fastgltf::Filter::LinearMipMapNearest) == FilterMode::Linear);
+    CHECK(toFilterMode(fastgltf::Filter::LinearMipMapLinear) == FilterMode::Linear);
 }

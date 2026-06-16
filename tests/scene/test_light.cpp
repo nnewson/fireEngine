@@ -1,4 +1,5 @@
-#include <gtest/gtest.h>
+#include <catch2/catch_approx.hpp>
+#include <catch2/catch_test_macros.hpp>
 
 #include <cmath>
 #include <vector>
@@ -21,151 +22,151 @@ using fire_engine::Mat4;
 using fire_engine::RenderContext;
 using fire_engine::Vec3;
 
-TEST(Light, DefaultsAreDirectionalWhiteUnit)
+TEST_CASE("Light.DefaultsAreDirectionalWhiteUnit", "[Light]")
 {
     Light l;
-    EXPECT_EQ(l.type(), Light::Type::Directional);
-    EXPECT_EQ(l.colour(), Colour3(1.0f, 1.0f, 1.0f));
-    EXPECT_FLOAT_EQ(l.intensity(), 1.0f);
-    EXPECT_FLOAT_EQ(l.range(), 0.0f);
+    CHECK(l.type() == Light::Type::Directional);
+    CHECK(l.colour() == Colour3(1.0f, 1.0f, 1.0f));
+    CHECK(l.intensity() == Catch::Approx(1.0f).margin(1e-5f));
+    CHECK(l.range() == Catch::Approx(0.0f).margin(1e-5f));
 }
 
-TEST(Light, TypeRoundTrip)
+TEST_CASE("Light.TypeRoundTrip", "[Light]")
 {
     Light l;
     l.type(Light::Type::Point);
-    EXPECT_EQ(l.type(), Light::Type::Point);
+    CHECK(l.type() == Light::Type::Point);
     l.type(Light::Type::Spot);
-    EXPECT_EQ(l.type(), Light::Type::Spot);
+    CHECK(l.type() == Light::Type::Spot);
     l.type(Light::Type::Directional);
-    EXPECT_EQ(l.type(), Light::Type::Directional);
+    CHECK(l.type() == Light::Type::Directional);
 }
 
-TEST(Light, ColourRoundTrip)
+TEST_CASE("Light.ColourRoundTrip", "[Light]")
 {
     Light l;
     l.colour(Colour3(0.2f, 0.5f, 0.8f));
-    EXPECT_EQ(l.colour(), Colour3(0.2f, 0.5f, 0.8f));
+    CHECK(l.colour() == Colour3(0.2f, 0.5f, 0.8f));
 }
 
-TEST(Light, IntensityRoundTrip)
+TEST_CASE("Light.IntensityRoundTrip", "[Light]")
 {
     Light l;
     l.intensity(12.5f);
-    EXPECT_FLOAT_EQ(l.intensity(), 12.5f);
+    CHECK(l.intensity() == Catch::Approx(12.5f).margin(1e-5f));
 }
 
-TEST(Light, RangeRoundTrip)
+TEST_CASE("Light.RangeRoundTrip", "[Light]")
 {
     Light l;
     l.range(7.5f);
-    EXPECT_FLOAT_EQ(l.range(), 7.5f);
+    CHECK(l.range() == Catch::Approx(7.5f).margin(1e-5f));
 }
 
-TEST(Light, ConeAnglesDefaultMatchKhrPunctualSensible)
+TEST_CASE("Light.ConeAnglesDefaultMatchKhrPunctualSensible", "[Light]")
 {
     Light l;
-    EXPECT_FLOAT_EQ(l.innerConeRad(), fire_engine::pi / 8.0f);
-    EXPECT_FLOAT_EQ(l.outerConeRad(), fire_engine::pi / 4.0f);
+    CHECK(l.innerConeRad() == Catch::Approx(fire_engine::pi / 8.0f).margin(1e-5f));
+    CHECK(l.outerConeRad() == Catch::Approx(fire_engine::pi / 4.0f).margin(1e-5f));
 }
 
-TEST(Light, OuterConeStaysGreaterOrEqualToInnerWhenInnerIncreases)
+TEST_CASE("Light.OuterConeStaysGreaterOrEqualToInnerWhenInnerIncreases", "[Light]")
 {
     Light l;
     l.outerConeRad(fire_engine::pi / 6.0f);
     l.innerConeRad(fire_engine::pi / 3.0f);
-    EXPECT_FLOAT_EQ(l.innerConeRad(), fire_engine::pi / 3.0f);
-    EXPECT_FLOAT_EQ(l.outerConeRad(), fire_engine::pi / 3.0f);
+    CHECK(l.innerConeRad() == Catch::Approx(fire_engine::pi / 3.0f).margin(1e-5f));
+    CHECK(l.outerConeRad() == Catch::Approx(fire_engine::pi / 3.0f).margin(1e-5f));
 }
 
-TEST(Light, InnerConeStaysLessOrEqualToOuterWhenOuterDecreases)
+TEST_CASE("Light.InnerConeStaysLessOrEqualToOuterWhenOuterDecreases", "[Light]")
 {
     Light l;
     l.innerConeRad(fire_engine::pi / 3.0f);
     l.outerConeRad(fire_engine::pi / 6.0f);
-    EXPECT_FLOAT_EQ(l.innerConeRad(), fire_engine::pi / 6.0f);
-    EXPECT_FLOAT_EQ(l.outerConeRad(), fire_engine::pi / 6.0f);
+    CHECK(l.innerConeRad() == Catch::Approx(fire_engine::pi / 6.0f).margin(1e-5f));
+    CHECK(l.outerConeRad() == Catch::Approx(fire_engine::pi / 6.0f).margin(1e-5f));
 }
 
-TEST(Components, LightVariantNameIsLight)
+TEST_CASE("Components.LightVariantNameIsLight", "[Components]")
 {
     Components c = Light{};
-    EXPECT_EQ(componentName(c), "Light");
+    CHECK(componentName(c) == "Light");
 }
 
 // ---------------------------------------------------------------------------
 // E2: gather pass — Light::toLighting resolves world-space data
 // ---------------------------------------------------------------------------
 
-TEST(LightGather, IdentityWorldDirectionalForwardIsNegativeZ)
+TEST_CASE("LightGather.IdentityWorldDirectionalForwardIsNegativeZ", "[LightGather]")
 {
     Light l;
     l.type(Light::Type::Directional);
     auto inst = Light::toLighting(l, Mat4::identity());
-    EXPECT_EQ(inst.type, 0);
-    EXPECT_FLOAT_EQ(inst.worldPosition.x(), 0.0f);
-    EXPECT_FLOAT_EQ(inst.worldPosition.y(), 0.0f);
-    EXPECT_FLOAT_EQ(inst.worldPosition.z(), 0.0f);
-    EXPECT_FLOAT_EQ(inst.worldDirection.x(), 0.0f);
-    EXPECT_FLOAT_EQ(inst.worldDirection.y(), 0.0f);
-    EXPECT_FLOAT_EQ(inst.worldDirection.z(), -1.0f);
+    CHECK(inst.type == 0);
+    CHECK(inst.worldPosition.x() == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(inst.worldPosition.y() == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(inst.worldPosition.z() == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(inst.worldDirection.x() == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(inst.worldDirection.y() == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(inst.worldDirection.z() == Catch::Approx(-1.0f).margin(1e-5f));
 }
 
-TEST(LightGather, TranslatedPointKeepsForwardSetsPosition)
+TEST_CASE("LightGather.TranslatedPointKeepsForwardSetsPosition", "[LightGather]")
 {
     Light l;
     l.type(Light::Type::Point);
     l.range(8.0f);
     auto world = Mat4::translate(Vec3{3.0f, 4.0f, 5.0f});
     auto inst = Light::toLighting(l, world);
-    EXPECT_EQ(inst.type, 1);
-    EXPECT_FLOAT_EQ(inst.worldPosition.x(), 3.0f);
-    EXPECT_FLOAT_EQ(inst.worldPosition.y(), 4.0f);
-    EXPECT_FLOAT_EQ(inst.worldPosition.z(), 5.0f);
-    EXPECT_FLOAT_EQ(inst.range, 8.0f);
+    CHECK(inst.type == 1);
+    CHECK(inst.worldPosition.x() == Catch::Approx(3.0f).margin(1e-5f));
+    CHECK(inst.worldPosition.y() == Catch::Approx(4.0f).margin(1e-5f));
+    CHECK(inst.worldPosition.z() == Catch::Approx(5.0f).margin(1e-5f));
+    CHECK(inst.range == Catch::Approx(8.0f).margin(1e-5f));
 }
 
-TEST(LightGather, RotatedNodeRotatesForward)
+TEST_CASE("LightGather.RotatedNodeRotatesForward", "[LightGather]")
 {
     // Yaw 90° → forward rotates from -Z to -X (matches glTF camera convention).
     Light l;
     l.type(Light::Type::Spot);
     auto world = Mat4::rotateY(fire_engine::pi * 0.5f);
     auto inst = Light::toLighting(l, world);
-    EXPECT_EQ(inst.type, 2);
-    EXPECT_NEAR(inst.worldDirection.x(), -1.0f, 1e-5f);
-    EXPECT_NEAR(inst.worldDirection.y(), 0.0f, 1e-5f);
-    EXPECT_NEAR(inst.worldDirection.z(), 0.0f, 1e-5f);
+    CHECK(inst.type == 2);
+    CHECK(inst.worldDirection.x() == Catch::Approx(-1.0f).margin(1e-5f));
+    CHECK(inst.worldDirection.y() == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(inst.worldDirection.z() == Catch::Approx(0.0f).margin(1e-5f));
 }
 
-TEST(LightGather, ConeAnglesPackAsCosines)
+TEST_CASE("LightGather.ConeAnglesPackAsCosines", "[LightGather]")
 {
     Light l;
     l.type(Light::Type::Spot);
     l.outerConeRad(fire_engine::pi / 3.0f);
     l.innerConeRad(fire_engine::pi / 6.0f);
     auto inst = Light::toLighting(l, Mat4::identity());
-    EXPECT_NEAR(inst.innerConeCos, std::cos(fire_engine::pi / 6.0f), 1e-6f);
-    EXPECT_NEAR(inst.outerConeCos, std::cos(fire_engine::pi / 3.0f), 1e-6f);
+    CHECK(inst.innerConeCos == Catch::Approx(std::cos(fire_engine::pi / 6.0f)).margin(1e-6f));
+    CHECK(inst.outerConeCos == Catch::Approx(std::cos(fire_engine::pi / 3.0f)).margin(1e-6f));
 }
 
-TEST(LightGather, ColourAndIntensityRoundTrip)
+TEST_CASE("LightGather.ColourAndIntensityRoundTrip", "[LightGather]")
 {
     Light l;
     l.colour(Colour3(0.2f, 0.4f, 0.6f));
     l.intensity(7.5f);
     auto inst = Light::toLighting(l, Mat4::identity());
-    EXPECT_EQ(inst.colour, Colour3(0.2f, 0.4f, 0.6f));
-    EXPECT_FLOAT_EQ(inst.intensity, 7.5f);
+    CHECK(inst.colour == Colour3(0.2f, 0.4f, 0.6f));
+    CHECK(inst.intensity == Catch::Approx(7.5f).margin(1e-5f));
 }
 
-TEST(LightGather, ScaledNodeStillEmitsUnitForward)
+TEST_CASE("LightGather.ScaledNodeStillEmitsUnitForward", "[LightGather]")
 {
     Light l;
     auto world = Mat4::scale(Vec3{4.0f, 4.0f, 4.0f});
     auto inst = Light::toLighting(l, world);
-    EXPECT_NEAR(inst.worldDirection.magnitude(), 1.0f, 1e-5f);
-    EXPECT_NEAR(inst.worldDirection.z(), -1.0f, 1e-5f);
+    CHECK(inst.worldDirection.magnitude() == Catch::Approx(1.0f).margin(1e-5f));
+    CHECK(inst.worldDirection.z() == Catch::Approx(-1.0f).margin(1e-5f));
 }
 
 // ---------------------------------------------------------------------------
@@ -181,14 +182,14 @@ using fire_engine::InputState;
 using fire_engine::Node;
 using fire_engine::SceneGraph;
 
-TEST(GatherLights, EmptySceneReturnsNoLights)
+TEST_CASE("GatherLights.EmptySceneReturnsNoLights", "[GatherLights]")
 {
     SceneGraph scene;
     auto lights = scene.gatherLights();
-    EXPECT_TRUE(lights.empty());
+    CHECK(lights.empty());
 }
 
-TEST(GatherLights, SingleDirectionalAtRoot)
+TEST_CASE("GatherLights.SingleDirectionalAtRoot", "[GatherLights]")
 {
     SceneGraph scene;
     auto node = std::make_unique<Node>("Sun");
@@ -199,12 +200,12 @@ TEST(GatherLights, SingleDirectionalAtRoot)
     scene.update(input);
 
     auto lights = scene.gatherLights();
-    ASSERT_EQ(lights.size(), 1u);
-    EXPECT_EQ(lights[0].type, 0);
-    EXPECT_FLOAT_EQ(lights[0].intensity, 2.5f);
+    REQUIRE(lights.size() == 1u);
+    CHECK(lights[0].type == 0);
+    CHECK(lights[0].intensity == Catch::Approx(2.5f).margin(1e-5f));
 }
 
-TEST(GatherLights, NestedLightUsesComposedWorldPosition)
+TEST_CASE("GatherLights.NestedLightUsesComposedWorldPosition", "[GatherLights]")
 {
     SceneGraph scene;
     auto root = std::make_unique<Node>("Root");
@@ -221,15 +222,15 @@ TEST(GatherLights, NestedLightUsesComposedWorldPosition)
     scene.update(input);
 
     auto lights = scene.gatherLights();
-    ASSERT_EQ(lights.size(), 1u);
-    EXPECT_EQ(lights[0].type, 1);
-    EXPECT_FLOAT_EQ(lights[0].worldPosition.x(), 2.0f);
-    EXPECT_FLOAT_EQ(lights[0].worldPosition.y(), 3.0f);
-    EXPECT_FLOAT_EQ(lights[0].worldPosition.z(), 0.0f);
-    EXPECT_FLOAT_EQ(lights[0].range, 5.0f);
+    REQUIRE(lights.size() == 1u);
+    CHECK(lights[0].type == 1);
+    CHECK(lights[0].worldPosition.x() == Catch::Approx(2.0f).margin(1e-5f));
+    CHECK(lights[0].worldPosition.y() == Catch::Approx(3.0f).margin(1e-5f));
+    CHECK(lights[0].worldPosition.z() == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(lights[0].range == Catch::Approx(5.0f).margin(1e-5f));
 }
 
-TEST(GatherLights, MultipleLightsPreserveTraversalOrder)
+TEST_CASE("GatherLights.MultipleLightsPreserveTraversalOrder", "[GatherLights]")
 {
     SceneGraph scene;
     auto a = std::make_unique<Node>("A");
@@ -245,13 +246,13 @@ TEST(GatherLights, MultipleLightsPreserveTraversalOrder)
     scene.update(input);
 
     auto lights = scene.gatherLights();
-    ASSERT_EQ(lights.size(), 2u);
-    EXPECT_FLOAT_EQ(lights[0].intensity, 1.0f);
-    EXPECT_FLOAT_EQ(lights[1].intensity, 2.0f);
-    EXPECT_EQ(lights[1].type, 2);
+    REQUIRE(lights.size() == 2u);
+    CHECK(lights[0].intensity == Catch::Approx(1.0f).margin(1e-5f));
+    CHECK(lights[1].intensity == Catch::Approx(2.0f).margin(1e-5f));
+    CHECK(lights[1].type == 2);
 }
 
-TEST(GatherLights, NonLightNodesAreSkipped)
+TEST_CASE("GatherLights.NonLightNodesAreSkipped", "[GatherLights]")
 {
     SceneGraph scene;
     auto a = std::make_unique<Node>("Empty"); // default Empty component
@@ -264,7 +265,7 @@ TEST(GatherLights, NonLightNodesAreSkipped)
     scene.update(input);
 
     auto lights = scene.gatherLights();
-    EXPECT_EQ(lights.size(), 1u);
+    REQUIRE(lights.size() == 1u);
 }
 
 // ---------------------------------------------------------------------------
@@ -272,32 +273,32 @@ TEST(GatherLights, NonLightNodesAreSkipped)
 // the default Sun when KHR_lights_punctual already authored a directional.
 // ---------------------------------------------------------------------------
 
-TEST(HasDirectionalLight, EmptySceneReturnsFalse)
+TEST_CASE("HasDirectionalLight.EmptySceneReturnsFalse", "[HasDirectionalLight]")
 {
     SceneGraph scene;
-    EXPECT_FALSE(scene.hasDirectionalLight());
+    CHECK_FALSE(scene.hasDirectionalLight());
 }
 
-TEST(HasDirectionalLight, SceneWithOnlyPointLightReturnsFalse)
+TEST_CASE("HasDirectionalLight.SceneWithOnlyPointLightReturnsFalse", "[HasDirectionalLight]")
 {
     SceneGraph scene;
     auto node = std::make_unique<Node>("Lamp");
     auto& l = node->component().emplace<Light>();
     l.type(Light::Type::Point);
     scene.addNode(std::move(node));
-    EXPECT_FALSE(scene.hasDirectionalLight());
+    CHECK_FALSE(scene.hasDirectionalLight());
 }
 
-TEST(HasDirectionalLight, SceneWithDirectionalReturnsTrue)
+TEST_CASE("HasDirectionalLight.SceneWithDirectionalReturnsTrue", "[HasDirectionalLight]")
 {
     SceneGraph scene;
     auto node = std::make_unique<Node>("Sun");
     node->component().emplace<Light>(); // default type = Directional
     scene.addNode(std::move(node));
-    EXPECT_TRUE(scene.hasDirectionalLight());
+    CHECK(scene.hasDirectionalLight());
 }
 
-TEST(HasDirectionalLight, FindsDirectionalNestedAsChild)
+TEST_CASE("HasDirectionalLight.FindsDirectionalNestedAsChild", "[HasDirectionalLight]")
 {
     SceneGraph scene;
     auto root = std::make_unique<Node>("Root");
@@ -305,5 +306,5 @@ TEST(HasDirectionalLight, FindsDirectionalNestedAsChild)
     child->component().emplace<Light>();
     root->addChild(std::move(child));
     scene.addNode(std::move(root));
-    EXPECT_TRUE(scene.hasDirectionalLight());
+    CHECK(scene.hasDirectionalLight());
 }

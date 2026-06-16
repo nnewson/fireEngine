@@ -2,7 +2,8 @@
 
 #include <format>
 
-#include <gtest/gtest.h>
+#include <catch2/catch_approx.hpp>
+#include <catch2/catch_test_macros.hpp>
 
 using fire_engine::Node;
 using fire_engine::SceneGraph;
@@ -12,36 +13,36 @@ using fire_engine::Transform;
 // Transform Formatter
 // ==========================================================================
 
-TEST(TransformFormatter, DefaultTransform)
+TEST_CASE("TransformFormatter.DefaultTransform", "[TransformFormatter]")
 {
     Transform t;
     auto result = std::format("{}", t);
-    EXPECT_EQ(result, "pos(0.00, 0.00, 0.00) rot(0.00, 0.00, 0.00, 1.00) scale(1.00, 1.00, 1.00)");
+    CHECK(result == "pos(0.00, 0.00, 0.00) rot(0.00, 0.00, 0.00, 1.00) scale(1.00, 1.00, 1.00)");
 }
 
-TEST(TransformFormatter, CustomValues)
+TEST_CASE("TransformFormatter.CustomValues", "[TransformFormatter]")
 {
     Transform t;
     t.position({1.0f, 2.0f, 3.0f});
     t.rotation(fire_engine::Quaternion{0.5f, 1.0f, 1.5f, 2.0f});
     t.scale({2.0f, 2.0f, 2.0f});
     auto result = std::format("{}", t);
-    EXPECT_EQ(result, "pos(1.00, 2.00, 3.00) rot(0.50, 1.00, 1.50, 2.00) scale(2.00, 2.00, 2.00)");
+    CHECK(result == "pos(1.00, 2.00, 3.00) rot(0.50, 1.00, 1.50, 2.00) scale(2.00, 2.00, 2.00)");
 }
 
 // ==========================================================================
 // Node Formatter
 // ==========================================================================
 
-TEST(NodeFormatter, SingleNode)
+TEST_CASE("NodeFormatter.SingleNode", "[NodeFormatter]")
 {
     Node node("TestNode");
     auto result = std::format("{}", node);
-    EXPECT_EQ(result, "TestNode [Empty] pos(0.00, 0.00, 0.00) rot(0.00, 0.00, 0.00, 1.00) "
-                      "scale(1.00, 1.00, 1.00)");
+    CHECK(result == "TestNode [Empty] pos(0.00, 0.00, 0.00) rot(0.00, 0.00, 0.00, 1.00) "
+                    "scale(1.00, 1.00, 1.00)");
 }
 
-TEST(NodeFormatter, NodeWithChildren)
+TEST_CASE("NodeFormatter.NodeWithChildren", "[NodeFormatter]")
 {
     Node parent("Parent");
     auto child = std::make_unique<Node>("Child");
@@ -52,10 +53,10 @@ TEST(NodeFormatter, NodeWithChildren)
                            "scale(1.00, 1.00, 1.00)\n"
                            "  Child [Empty] pos(0.00, 0.00, 0.00) rot(0.00, 0.00, 0.00, 1.00) "
                            "scale(1.00, 1.00, 1.00)";
-    EXPECT_EQ(result, expected);
+    CHECK(result == expected);
 }
 
-TEST(NodeFormatter, NestedChildren)
+TEST_CASE("NodeFormatter.NestedChildren", "[NodeFormatter]")
 {
     Node root("Root");
     auto child = std::make_unique<Node>("Child");
@@ -70,21 +71,21 @@ TEST(NodeFormatter, NestedChildren)
         "1.00)\n"
         "    Grandchild [Empty] pos(0.00, 0.00, 0.00) rot(0.00, 0.00, 0.00, 1.00) "
         "scale(1.00, 1.00, 1.00)";
-    EXPECT_EQ(result, expected);
+    CHECK(result == expected);
 }
 
 // ==========================================================================
 // SceneGraph Formatter
 // ==========================================================================
 
-TEST(SceneGraphFormatter, EmptyGraph)
+TEST_CASE("SceneGraphFormatter.EmptyGraph", "[SceneGraphFormatter]")
 {
     SceneGraph scene;
     auto result = std::format("{}", scene);
-    EXPECT_EQ(result, "SceneGraph:");
+    CHECK(result == "SceneGraph:");
 }
 
-TEST(SceneGraphFormatter, SingleRootNode)
+TEST_CASE("SceneGraphFormatter.SingleRootNode", "[SceneGraphFormatter]")
 {
     SceneGraph scene;
     scene.addNode(std::make_unique<Node>("Root"));
@@ -93,10 +94,10 @@ TEST(SceneGraphFormatter, SingleRootNode)
     std::string expected =
         "SceneGraph:\n"
         "  Root [Empty] pos(0.00, 0.00, 0.00) rot(0.00, 0.00, 0.00, 1.00) scale(1.00, 1.00, 1.00)";
-    EXPECT_EQ(result, expected);
+    CHECK(result == expected);
 }
 
-TEST(SceneGraphFormatter, MultipleRootsWithChildren)
+TEST_CASE("SceneGraphFormatter.MultipleRootsWithChildren", "[SceneGraphFormatter]")
 {
     SceneGraph scene;
 
@@ -114,5 +115,5 @@ TEST(SceneGraphFormatter, MultipleRootsWithChildren)
         "    Child1 [Empty] pos(0.00, 0.00, 0.00) rot(0.00, 0.00, 0.00, 1.00) scale(1.00, 1.00, "
         "1.00)\n"
         "  Root2 [Empty] pos(0.00, 0.00, 0.00) rot(0.00, 0.00, 0.00, 1.00) scale(1.00, 1.00, 1.00)";
-    EXPECT_EQ(result, expected);
+    CHECK(result == expected);
 }

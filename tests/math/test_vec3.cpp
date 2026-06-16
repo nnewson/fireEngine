@@ -3,7 +3,10 @@
 #include <cmath>
 #include <limits>
 
-#include <gtest/gtest.h>
+#include <support/test_traits.hpp>
+
+#include <catch2/catch_approx.hpp>
+#include <catch2/catch_test_macros.hpp>
 
 using fire_engine::Vec3;
 
@@ -13,28 +16,28 @@ static constexpr float kEps = 1e-6f;
 
 static void expectNear(const Vec3& v, float ex, float ey, float ez, float eps = kEps)
 {
-    EXPECT_NEAR(v.x(), ex, eps);
-    EXPECT_NEAR(v.y(), ey, eps);
-    EXPECT_NEAR(v.z(), ez, eps);
+    CHECK(v.x() == Catch::Approx(ex).margin(eps));
+    CHECK(v.y() == Catch::Approx(ey).margin(eps));
+    CHECK(v.z() == Catch::Approx(ez).margin(eps));
 }
 
 // ==========================================================================
 // Construction
 // ==========================================================================
 
-TEST(Vec3Construction, DefaultIsZero)
+TEST_CASE("Vec3Construction.DefaultIsZero", "[Vec3Construction]")
 {
     Vec3 v{};
     expectNear(v, 0.0f, 0.0f, 0.0f);
 }
 
-TEST(Vec3Construction, ExplicitValues)
+TEST_CASE("Vec3Construction.ExplicitValues", "[Vec3Construction]")
 {
     Vec3 v{1.0f, 2.0f, 3.0f};
     expectNear(v, 1.0f, 2.0f, 3.0f);
 }
 
-TEST(Vec3Construction, PartialArgs)
+TEST_CASE("Vec3Construction.PartialArgs", "[Vec3Construction]")
 {
     Vec3 vx{5.0f};
     expectNear(vx, 5.0f, 0.0f, 0.0f);
@@ -43,20 +46,20 @@ TEST(Vec3Construction, PartialArgs)
     expectNear(vxy, 5.0f, 6.0f, 0.0f);
 }
 
-TEST(Vec3Construction, NegativeValues)
+TEST_CASE("Vec3Construction.NegativeValues", "[Vec3Construction]")
 {
     Vec3 v{-1.0f, -2.0f, -3.0f};
     expectNear(v, -1.0f, -2.0f, -3.0f);
 }
 
-TEST(Vec3Construction, CopyConstruct)
+TEST_CASE("Vec3Construction.CopyConstruct", "[Vec3Construction]")
 {
     Vec3 a{1.0f, 2.0f, 3.0f};
     Vec3 b{a};
     expectNear(b, 1.0f, 2.0f, 3.0f);
 }
 
-TEST(Vec3Construction, MoveConstruct)
+TEST_CASE("Vec3Construction.MoveConstruct", "[Vec3Construction]")
 {
     Vec3 a{1.0f, 2.0f, 3.0f};
     Vec3 b{std::move(a)};
@@ -67,15 +70,15 @@ TEST(Vec3Construction, MoveConstruct)
 // Getters / Setters
 // ==========================================================================
 
-TEST(Vec3Accessors, GettersReturnCorrectValues)
+TEST_CASE("Vec3Accessors.GettersReturnCorrectValues", "[Vec3Accessors]")
 {
     Vec3 v{4.0f, 5.0f, 6.0f};
-    EXPECT_FLOAT_EQ(v.x(), 4.0f);
-    EXPECT_FLOAT_EQ(v.y(), 5.0f);
-    EXPECT_FLOAT_EQ(v.z(), 6.0f);
+    CHECK(v.x() == Catch::Approx(4.0f).margin(1e-5f));
+    CHECK(v.y() == Catch::Approx(5.0f).margin(1e-5f));
+    CHECK(v.z() == Catch::Approx(6.0f).margin(1e-5f));
 }
 
-TEST(Vec3Accessors, SettersModifyValues)
+TEST_CASE("Vec3Accessors.SettersModifyValues", "[Vec3Accessors]")
 {
     Vec3 v{};
     v.x(10.0f);
@@ -84,7 +87,7 @@ TEST(Vec3Accessors, SettersModifyValues)
     expectNear(v, 10.0f, 20.0f, 30.0f);
 }
 
-TEST(Vec3Accessors, SettersOverwritePreviousValues)
+TEST_CASE("Vec3Accessors.SettersOverwritePreviousValues", "[Vec3Accessors]")
 {
     Vec3 v{1.0f, 2.0f, 3.0f};
     v.x(-1.0f);
@@ -95,78 +98,78 @@ TEST(Vec3Accessors, SettersOverwritePreviousValues)
 // Equality
 // ==========================================================================
 
-TEST(Vec3Equality, EqualVectors)
+TEST_CASE("Vec3Equality.EqualVectors", "[Vec3Equality]")
 {
     Vec3 a{1.0f, 2.0f, 3.0f};
     Vec3 b{1.0f, 2.0f, 3.0f};
-    EXPECT_TRUE(a == b);
+    CHECK(a == b);
 }
 
-TEST(Vec3Equality, DifferentX)
+TEST_CASE("Vec3Equality.DifferentX", "[Vec3Equality]")
 {
     Vec3 a{1.0f, 2.0f, 3.0f};
     Vec3 b{9.0f, 2.0f, 3.0f};
-    EXPECT_FALSE(a == b);
+    CHECK_FALSE(a == b);
 }
 
-TEST(Vec3Equality, DifferentY)
+TEST_CASE("Vec3Equality.DifferentY", "[Vec3Equality]")
 {
     Vec3 a{1.0f, 2.0f, 3.0f};
     Vec3 b{1.0f, 9.0f, 3.0f};
-    EXPECT_FALSE(a == b);
+    CHECK_FALSE(a == b);
 }
 
-TEST(Vec3Equality, DifferentZ)
+TEST_CASE("Vec3Equality.DifferentZ", "[Vec3Equality]")
 {
     Vec3 a{1.0f, 2.0f, 3.0f};
     Vec3 b{1.0f, 2.0f, 9.0f};
-    EXPECT_FALSE(a == b);
+    CHECK_FALSE(a == b);
 }
 
-TEST(Vec3Equality, ZeroVectors)
+TEST_CASE("Vec3Equality.ZeroVectors", "[Vec3Equality]")
 {
     Vec3 a{};
     Vec3 b{};
-    EXPECT_TRUE(a == b);
+    CHECK(a == b);
 }
 
-TEST(Vec3Equality, NegativeZeroEqualsPositiveZero)
+TEST_CASE("Vec3Equality.NegativeZeroEqualsPositiveZero", "[Vec3Equality]")
 {
     Vec3 a{0.0f, 0.0f, 0.0f};
     Vec3 b{-0.0f, -0.0f, -0.0f};
-    EXPECT_TRUE(a == b);
+    CHECK(a == b);
 }
 
-TEST(Vec3Equality, BitwiseEqualMatchesOperator)
+TEST_CASE("Vec3Equality.BitwiseEqualMatchesOperator", "[Vec3Equality]")
 {
     Vec3 a{1.0f, 2.0f, 3.0f};
     Vec3 b{1.0f, 2.0f, 3.0f};
     Vec3 c{1.0f, 2.0f, 3.5f};
-    EXPECT_TRUE(a.bitwiseEqual(b));
-    EXPECT_FALSE(a.bitwiseEqual(c));
+    CHECK(a.bitwiseEqual(b));
+    CHECK_FALSE(a.bitwiseEqual(c));
 }
 
-TEST(Vec3Equality, ApproxEqualWithinTolerance)
+TEST_CASE("Vec3Equality.ApproxEqualWithinTolerance", "[Vec3Equality]")
 {
     Vec3 a{1.0f, 2.0f, 3.0f};
     Vec3 b{1.0f + 1e-7f, 2.0f - 1e-7f, 3.0f};
-    EXPECT_FALSE(a == b);
-    EXPECT_TRUE(a.approxEqual(b, 1e-6f));
-    EXPECT_FALSE(a.approxEqual(b, 1e-9f));
+    CHECK_FALSE(a == b);
+    CHECK(a.approxEqual(b, 1e-6f));
+    CHECK_FALSE(a.approxEqual(b, 1e-9f));
 }
 
-TEST(Vec3Equality, ApproxEqualDefaultEpsilon)
+TEST_CASE("Vec3Equality.ApproxEqualDefaultEpsilon", "[Vec3Equality]")
 {
     Vec3 a{1.0f, 2.0f, 3.0f};
     Vec3 b{1.0f, 2.0f, 3.0f};
-    EXPECT_TRUE(a.approxEqual(b));
+    CHECK(a.approxEqual(b));
 }
 
 // ==========================================================================
 // Addition
 // ==========================================================================
 
-TEST(Vec3Addition, BasicAdd)
+TEST_CASE("Vec3Addition.BasicAdd", "[Vec3Addition]")
 {
     Vec3 a{1.0f, 2.0f, 3.0f};
     Vec3 b{4.0f, 5.0f, 6.0f};
@@ -174,7 +177,7 @@ TEST(Vec3Addition, BasicAdd)
     expectNear(c, 5.0f, 7.0f, 9.0f);
 }
 
-TEST(Vec3Addition, AddZero)
+TEST_CASE("Vec3Addition.AddZero", "[Vec3Addition]")
 {
     Vec3 a{1.0f, 2.0f, 3.0f};
     Vec3 zero{};
@@ -182,7 +185,7 @@ TEST(Vec3Addition, AddZero)
     expectNear(c, 1.0f, 2.0f, 3.0f);
 }
 
-TEST(Vec3Addition, AddNegative)
+TEST_CASE("Vec3Addition.AddNegative", "[Vec3Addition]")
 {
     Vec3 a{1.0f, 2.0f, 3.0f};
     Vec3 b{-1.0f, -2.0f, -3.0f};
@@ -190,7 +193,7 @@ TEST(Vec3Addition, AddNegative)
     expectNear(c, 0.0f, 0.0f, 0.0f);
 }
 
-TEST(Vec3Addition, DoesNotMutateOperands)
+TEST_CASE("Vec3Addition.DoesNotMutateOperands", "[Vec3Addition]")
 {
     Vec3 a{1.0f, 2.0f, 3.0f};
     Vec3 b{4.0f, 5.0f, 6.0f};
@@ -199,21 +202,21 @@ TEST(Vec3Addition, DoesNotMutateOperands)
     expectNear(b, 4.0f, 5.0f, 6.0f);
 }
 
-TEST(Vec3Addition, PlusEqualsBasic)
+TEST_CASE("Vec3Addition.PlusEqualsBasic", "[Vec3Addition]")
 {
     Vec3 a{1.0f, 2.0f, 3.0f};
     a += {10.0f, 20.0f, 30.0f};
     expectNear(a, 11.0f, 22.0f, 33.0f);
 }
 
-TEST(Vec3Addition, PlusEqualsReturnsSelf)
+TEST_CASE("Vec3Addition.PlusEqualsReturnsSelf", "[Vec3Addition]")
 {
     Vec3 a{1.0f, 2.0f, 3.0f};
     Vec3& ref = (a += {1.0f, 1.0f, 1.0f});
-    EXPECT_EQ(&ref, &a);
+    CHECK(&ref == &a);
 }
 
-TEST(Vec3Addition, PlusEqualsSelfAdd)
+TEST_CASE("Vec3Addition.PlusEqualsSelfAdd", "[Vec3Addition]")
 {
     Vec3 a{1.0f, 2.0f, 3.0f};
     a += a;
@@ -224,7 +227,7 @@ TEST(Vec3Addition, PlusEqualsSelfAdd)
 // Subtraction
 // ==========================================================================
 
-TEST(Vec3Subtraction, BasicSubtract)
+TEST_CASE("Vec3Subtraction.BasicSubtract", "[Vec3Subtraction]")
 {
     Vec3 a{5.0f, 7.0f, 9.0f};
     Vec3 b{1.0f, 2.0f, 3.0f};
@@ -232,21 +235,21 @@ TEST(Vec3Subtraction, BasicSubtract)
     expectNear(c, 4.0f, 5.0f, 6.0f);
 }
 
-TEST(Vec3Subtraction, SubtractZero)
+TEST_CASE("Vec3Subtraction.SubtractZero", "[Vec3Subtraction]")
 {
     Vec3 a{1.0f, 2.0f, 3.0f};
     Vec3 c = a - Vec3{0.0f, 0.0f, 0.0f};
     expectNear(c, 1.0f, 2.0f, 3.0f);
 }
 
-TEST(Vec3Subtraction, SubtractSelfIsZero)
+TEST_CASE("Vec3Subtraction.SubtractSelfIsZero", "[Vec3Subtraction]")
 {
     Vec3 a{1.0f, 2.0f, 3.0f};
     Vec3 c = a - a;
     expectNear(c, 0.0f, 0.0f, 0.0f);
 }
 
-TEST(Vec3Subtraction, DoesNotMutateOperands)
+TEST_CASE("Vec3Subtraction.DoesNotMutateOperands", "[Vec3Subtraction]")
 {
     Vec3 a{5.0f, 6.0f, 7.0f};
     Vec3 b{1.0f, 2.0f, 3.0f};
@@ -255,21 +258,21 @@ TEST(Vec3Subtraction, DoesNotMutateOperands)
     expectNear(b, 1.0f, 2.0f, 3.0f);
 }
 
-TEST(Vec3Subtraction, MinusEqualsBasic)
+TEST_CASE("Vec3Subtraction.MinusEqualsBasic", "[Vec3Subtraction]")
 {
     Vec3 a{10.0f, 20.0f, 30.0f};
     a -= {1.0f, 2.0f, 3.0f};
     expectNear(a, 9.0f, 18.0f, 27.0f);
 }
 
-TEST(Vec3Subtraction, MinusEqualsReturnsSelf)
+TEST_CASE("Vec3Subtraction.MinusEqualsReturnsSelf", "[Vec3Subtraction]")
 {
     Vec3 a{1.0f, 2.0f, 3.0f};
     Vec3& ref = (a -= {1.0f, 1.0f, 1.0f});
-    EXPECT_EQ(&ref, &a);
+    CHECK(&ref == &a);
 }
 
-TEST(Vec3Subtraction, MinusEqualsSelfSubtract)
+TEST_CASE("Vec3Subtraction.MinusEqualsSelfSubtract", "[Vec3Subtraction]")
 {
     Vec3 a{5.0f, 6.0f, 7.0f};
     a -= a;
@@ -280,63 +283,63 @@ TEST(Vec3Subtraction, MinusEqualsSelfSubtract)
 // Scalar Multiply
 // ==========================================================================
 
-TEST(Vec3ScalarMultiply, BasicMultiply)
+TEST_CASE("Vec3ScalarMultiply.BasicMultiply", "[Vec3ScalarMultiply]")
 {
     Vec3 v{1.0f, 2.0f, 3.0f};
     Vec3 r = v * 2.0f;
     expectNear(r, 2.0f, 4.0f, 6.0f);
 }
 
-TEST(Vec3ScalarMultiply, MultiplyByZero)
+TEST_CASE("Vec3ScalarMultiply.MultiplyByZero", "[Vec3ScalarMultiply]")
 {
     Vec3 v{1.0f, 2.0f, 3.0f};
     Vec3 r = v * 0.0f;
     expectNear(r, 0.0f, 0.0f, 0.0f);
 }
 
-TEST(Vec3ScalarMultiply, MultiplyByOne)
+TEST_CASE("Vec3ScalarMultiply.MultiplyByOne", "[Vec3ScalarMultiply]")
 {
     Vec3 v{1.0f, 2.0f, 3.0f};
     Vec3 r = v * 1.0f;
     expectNear(r, 1.0f, 2.0f, 3.0f);
 }
 
-TEST(Vec3ScalarMultiply, MultiplyByNegative)
+TEST_CASE("Vec3ScalarMultiply.MultiplyByNegative", "[Vec3ScalarMultiply]")
 {
     Vec3 v{1.0f, 2.0f, 3.0f};
     Vec3 r = v * -1.0f;
     expectNear(r, -1.0f, -2.0f, -3.0f);
 }
 
-TEST(Vec3ScalarMultiply, MultiplyByFraction)
+TEST_CASE("Vec3ScalarMultiply.MultiplyByFraction", "[Vec3ScalarMultiply]")
 {
     Vec3 v{4.0f, 6.0f, 8.0f};
     Vec3 r = v * 0.5f;
     expectNear(r, 2.0f, 3.0f, 4.0f);
 }
 
-TEST(Vec3ScalarMultiply, DoesNotMutateOperand)
+TEST_CASE("Vec3ScalarMultiply.DoesNotMutateOperand", "[Vec3ScalarMultiply]")
 {
     Vec3 v{1.0f, 2.0f, 3.0f};
     [[maybe_unused]] Vec3 r = v * 5.0f;
     expectNear(v, 1.0f, 2.0f, 3.0f);
 }
 
-TEST(Vec3ScalarMultiply, MultiplyEqualsBasic)
+TEST_CASE("Vec3ScalarMultiply.MultiplyEqualsBasic", "[Vec3ScalarMultiply]")
 {
     Vec3 v{1.0f, 2.0f, 3.0f};
     v *= 3.0f;
     expectNear(v, 3.0f, 6.0f, 9.0f);
 }
 
-TEST(Vec3ScalarMultiply, MultiplyEqualsReturnsSelf)
+TEST_CASE("Vec3ScalarMultiply.MultiplyEqualsReturnsSelf", "[Vec3ScalarMultiply]")
 {
     Vec3 v{1.0f, 2.0f, 3.0f};
     Vec3& ref = (v *= 2.0f);
-    EXPECT_EQ(&ref, &v);
+    CHECK(&ref == &v);
 }
 
-TEST(Vec3ScalarMultiply, ZeroVector)
+TEST_CASE("Vec3ScalarMultiply.ZeroVector", "[Vec3ScalarMultiply]")
 {
     Vec3 v{};
     Vec3 r = v * 100.0f;
@@ -347,65 +350,65 @@ TEST(Vec3ScalarMultiply, ZeroVector)
 // Scalar Divide
 // ==========================================================================
 
-TEST(Vec3ScalarDivide, BasicDivide)
+TEST_CASE("Vec3ScalarDivide.BasicDivide", "[Vec3ScalarDivide]")
 {
     Vec3 v{4.0f, 6.0f, 8.0f};
     Vec3 r = v / 2.0f;
     expectNear(r, 2.0f, 3.0f, 4.0f);
 }
 
-TEST(Vec3ScalarDivide, DivideByOne)
+TEST_CASE("Vec3ScalarDivide.DivideByOne", "[Vec3ScalarDivide]")
 {
     Vec3 v{1.0f, 2.0f, 3.0f};
     Vec3 r = v / 1.0f;
     expectNear(r, 1.0f, 2.0f, 3.0f);
 }
 
-TEST(Vec3ScalarDivide, DivideByNegative)
+TEST_CASE("Vec3ScalarDivide.DivideByNegative", "[Vec3ScalarDivide]")
 {
     Vec3 v{2.0f, 4.0f, 6.0f};
     Vec3 r = v / -2.0f;
     expectNear(r, -1.0f, -2.0f, -3.0f);
 }
 
-TEST(Vec3ScalarDivide, DivideByFraction)
+TEST_CASE("Vec3ScalarDivide.DivideByFraction", "[Vec3ScalarDivide]")
 {
     Vec3 v{1.0f, 2.0f, 3.0f};
     Vec3 r = v / 0.5f;
     expectNear(r, 2.0f, 4.0f, 6.0f);
 }
 
-TEST(Vec3ScalarDivide, DoesNotMutateOperand)
+TEST_CASE("Vec3ScalarDivide.DoesNotMutateOperand", "[Vec3ScalarDivide]")
 {
     Vec3 v{4.0f, 6.0f, 8.0f};
     [[maybe_unused]] Vec3 r = v / 2.0f;
     expectNear(v, 4.0f, 6.0f, 8.0f);
 }
 
-TEST(Vec3ScalarDivide, DivideEqualsBasic)
+TEST_CASE("Vec3ScalarDivide.DivideEqualsBasic", "[Vec3ScalarDivide]")
 {
     Vec3 v{9.0f, 6.0f, 3.0f};
     v /= 3.0f;
     expectNear(v, 3.0f, 2.0f, 1.0f);
 }
 
-TEST(Vec3ScalarDivide, DivideEqualsReturnsSelf)
+TEST_CASE("Vec3ScalarDivide.DivideEqualsReturnsSelf", "[Vec3ScalarDivide]")
 {
     Vec3 v{1.0f, 2.0f, 3.0f};
     Vec3& ref = (v /= 2.0f);
-    EXPECT_EQ(&ref, &v);
+    CHECK(&ref == &v);
 }
 
-TEST(Vec3ScalarDivide, DivideByZeroProducesInfinity)
+TEST_CASE("Vec3ScalarDivide.DivideByZeroProducesInfinity", "[Vec3ScalarDivide]")
 {
     Vec3 v{1.0f, 2.0f, 3.0f};
     Vec3 r = v / 0.0f;
-    EXPECT_TRUE(std::isinf(r.x()));
-    EXPECT_TRUE(std::isinf(r.y()));
-    EXPECT_TRUE(std::isinf(r.z()));
+    CHECK(std::isinf(r.x()));
+    CHECK(std::isinf(r.y()));
+    CHECK(std::isinf(r.z()));
 }
 
-TEST(Vec3ScalarDivide, ZeroVectorDivide)
+TEST_CASE("Vec3ScalarDivide.ZeroVectorDivide", "[Vec3ScalarDivide]")
 {
     Vec3 v{};
     Vec3 r = v / 5.0f;
@@ -416,139 +419,139 @@ TEST(Vec3ScalarDivide, ZeroVectorDivide)
 // Dot Product
 // ==========================================================================
 
-TEST(Vec3DotProduct, OrthogonalVectorsAreZero)
+TEST_CASE("Vec3DotProduct.OrthogonalVectorsAreZero", "[Vec3DotProduct]")
 {
     Vec3 x{1.0f, 0.0f, 0.0f};
     Vec3 y{0.0f, 1.0f, 0.0f};
-    EXPECT_NEAR(Vec3::dotProduct(x, y), 0.0f, kEps);
+    CHECK(Vec3::dotProduct(x, y) == Catch::Approx(0.0f).margin(kEps));
 }
 
-TEST(Vec3DotProduct, ParallelUnitVectors)
+TEST_CASE("Vec3DotProduct.ParallelUnitVectors", "[Vec3DotProduct]")
 {
     Vec3 a{1.0f, 0.0f, 0.0f};
-    EXPECT_NEAR(Vec3::dotProduct(a, a), 1.0f, kEps);
+    CHECK(Vec3::dotProduct(a, a) == Catch::Approx(1.0f).margin(kEps));
 }
 
-TEST(Vec3DotProduct, AntiParallelUnitVectors)
+TEST_CASE("Vec3DotProduct.AntiParallelUnitVectors", "[Vec3DotProduct]")
 {
     Vec3 a{1.0f, 0.0f, 0.0f};
     Vec3 b{-1.0f, 0.0f, 0.0f};
-    EXPECT_NEAR(Vec3::dotProduct(a, b), -1.0f, kEps);
+    CHECK(Vec3::dotProduct(a, b) == Catch::Approx(-1.0f).margin(kEps));
 }
 
-TEST(Vec3DotProduct, GeneralCase)
+TEST_CASE("Vec3DotProduct.GeneralCase", "[Vec3DotProduct]")
 {
     Vec3 a{1.0f, 2.0f, 3.0f};
     Vec3 b{4.0f, 5.0f, 6.0f};
     // 1*4 + 2*5 + 3*6 = 32
-    EXPECT_NEAR(Vec3::dotProduct(a, b), 32.0f, kEps);
+    CHECK(Vec3::dotProduct(a, b) == Catch::Approx(32.0f).margin(kEps));
 }
 
-TEST(Vec3DotProduct, Commutative)
+TEST_CASE("Vec3DotProduct.Commutative", "[Vec3DotProduct]")
 {
     Vec3 a{1.0f, 2.0f, 3.0f};
     Vec3 b{4.0f, 5.0f, 6.0f};
-    EXPECT_FLOAT_EQ(Vec3::dotProduct(a, b), Vec3::dotProduct(b, a));
+    CHECK(Vec3::dotProduct(a, b) == Catch::Approx(Vec3::dotProduct(b, a)).margin(1e-5f));
 }
 
-TEST(Vec3DotProduct, ZeroVector)
+TEST_CASE("Vec3DotProduct.ZeroVector", "[Vec3DotProduct]")
 {
     Vec3 a{1.0f, 2.0f, 3.0f};
     Vec3 zero{};
-    EXPECT_NEAR(Vec3::dotProduct(a, zero), 0.0f, kEps);
+    CHECK(Vec3::dotProduct(a, zero) == Catch::Approx(0.0f).margin(kEps));
 }
 
-TEST(Vec3DotProduct, InstanceMethodMatchesStatic)
+TEST_CASE("Vec3DotProduct.InstanceMethodMatchesStatic", "[Vec3DotProduct]")
 {
     Vec3 a{1.0f, 2.0f, 3.0f};
     Vec3 b{4.0f, 5.0f, 6.0f};
-    EXPECT_FLOAT_EQ(Vec3::dotProduct(a, b), a.dotProduct(b));
+    CHECK(Vec3::dotProduct(a, b) == Catch::Approx(a.dotProduct(b)).margin(1e-5f));
 }
 
-TEST(Vec3DotProduct, SelfDotIsMagnitudeSquared)
+TEST_CASE("Vec3DotProduct.SelfDotIsMagnitudeSquared", "[Vec3DotProduct]")
 {
     Vec3 v{3.0f, 4.0f, 0.0f};
-    EXPECT_NEAR(v.dotProduct(v), v.magnitudeSquared(), kEps);
+    CHECK(v.dotProduct(v) == Catch::Approx(v.magnitudeSquared()).margin(kEps));
 }
 
 // ==========================================================================
 // Magnitude / MagnitudeSquared
 // ==========================================================================
 
-TEST(Vec3Magnitude, UnitX)
+TEST_CASE("Vec3Magnitude.UnitX", "[Vec3Magnitude]")
 {
     Vec3 v{1.0f, 0.0f, 0.0f};
-    EXPECT_NEAR(v.magnitude(), 1.0f, kEps);
+    CHECK(v.magnitude() == Catch::Approx(1.0f).margin(kEps));
 }
 
-TEST(Vec3Magnitude, ThreeFourFive)
+TEST_CASE("Vec3Magnitude.ThreeFourFive", "[Vec3Magnitude]")
 {
     Vec3 v{3.0f, 4.0f, 0.0f};
-    EXPECT_NEAR(v.magnitude(), 5.0f, kEps);
+    CHECK(v.magnitude() == Catch::Approx(5.0f).margin(kEps));
 }
 
-TEST(Vec3Magnitude, ZeroVector)
+TEST_CASE("Vec3Magnitude.ZeroVector", "[Vec3Magnitude]")
 {
     Vec3 v{};
-    EXPECT_NEAR(v.magnitude(), 0.0f, kEps);
+    CHECK(v.magnitude() == Catch::Approx(0.0f).margin(kEps));
 }
 
-TEST(Vec3Magnitude, NegativeComponents)
+TEST_CASE("Vec3Magnitude.NegativeComponents", "[Vec3Magnitude]")
 {
     Vec3 v{-3.0f, -4.0f, 0.0f};
-    EXPECT_NEAR(v.magnitude(), 5.0f, kEps);
+    CHECK(v.magnitude() == Catch::Approx(5.0f).margin(kEps));
 }
 
-TEST(Vec3Magnitude, AllComponentsEqual)
+TEST_CASE("Vec3Magnitude.AllComponentsEqual", "[Vec3Magnitude]")
 {
     Vec3 v{1.0f, 1.0f, 1.0f};
-    EXPECT_NEAR(v.magnitude(), std::sqrt(3.0f), kEps);
+    CHECK(v.magnitude() == Catch::Approx(std::sqrt(3.0f)).margin(kEps));
 }
 
-TEST(Vec3Magnitude, DoesNotMutate)
+TEST_CASE("Vec3Magnitude.DoesNotMutate", "[Vec3Magnitude]")
 {
     Vec3 v{3.0f, 4.0f, 0.0f};
     [[maybe_unused]] float m = v.magnitude();
     expectNear(v, 3.0f, 4.0f, 0.0f);
 }
 
-TEST(Vec3MagnitudeSquared, BasicCase)
+TEST_CASE("Vec3MagnitudeSquared.BasicCase", "[Vec3MagnitudeSquared]")
 {
     Vec3 v{3.0f, 4.0f, 0.0f};
-    EXPECT_NEAR(v.magnitudeSquared(), 25.0f, kEps);
+    CHECK(v.magnitudeSquared() == Catch::Approx(25.0f).margin(kEps));
 }
 
-TEST(Vec3MagnitudeSquared, ZeroVector)
+TEST_CASE("Vec3MagnitudeSquared.ZeroVector", "[Vec3MagnitudeSquared]")
 {
     Vec3 v{};
-    EXPECT_NEAR(v.magnitudeSquared(), 0.0f, kEps);
+    CHECK(v.magnitudeSquared() == Catch::Approx(0.0f).margin(kEps));
 }
 
-TEST(Vec3MagnitudeSquared, UnitVector)
+TEST_CASE("Vec3MagnitudeSquared.UnitVector", "[Vec3MagnitudeSquared]")
 {
     Vec3 v{0.0f, 1.0f, 0.0f};
-    EXPECT_NEAR(v.magnitudeSquared(), 1.0f, kEps);
+    CHECK(v.magnitudeSquared() == Catch::Approx(1.0f).margin(kEps));
 }
 
-TEST(Vec3MagnitudeSquared, ConsistentWithMagnitude)
+TEST_CASE("Vec3MagnitudeSquared.ConsistentWithMagnitude", "[Vec3MagnitudeSquared]")
 {
     Vec3 v{1.0f, 2.0f, 3.0f};
     float mag = v.magnitude();
-    EXPECT_NEAR(v.magnitudeSquared(), mag * mag, kEps);
+    CHECK(v.magnitudeSquared() == Catch::Approx(mag * mag).margin(kEps));
 }
 
-TEST(Vec3MagnitudeSquared, NegativeComponents)
+TEST_CASE("Vec3MagnitudeSquared.NegativeComponents", "[Vec3MagnitudeSquared]")
 {
     Vec3 v{-2.0f, -3.0f, -4.0f};
     // 4 + 9 + 16 = 29
-    EXPECT_NEAR(v.magnitudeSquared(), 29.0f, kEps);
+    CHECK(v.magnitudeSquared() == Catch::Approx(29.0f).margin(kEps));
 }
 
 // ==========================================================================
 // Cross Product
 // ==========================================================================
 
-TEST(Vec3CrossProduct, OrthogonalAxes_XcrossY)
+TEST_CASE("Vec3CrossProduct.OrthogonalAxes_XcrossY", "[Vec3CrossProduct]")
 {
     Vec3 x{1.0f, 0.0f, 0.0f};
     Vec3 y{0.0f, 1.0f, 0.0f};
@@ -556,7 +559,7 @@ TEST(Vec3CrossProduct, OrthogonalAxes_XcrossY)
     expectNear(c, 0.0f, 0.0f, 1.0f);
 }
 
-TEST(Vec3CrossProduct, OrthogonalAxes_YcrossZ)
+TEST_CASE("Vec3CrossProduct.OrthogonalAxes_YcrossZ", "[Vec3CrossProduct]")
 {
     Vec3 y{0.0f, 1.0f, 0.0f};
     Vec3 z{0.0f, 0.0f, 1.0f};
@@ -564,7 +567,7 @@ TEST(Vec3CrossProduct, OrthogonalAxes_YcrossZ)
     expectNear(c, 1.0f, 0.0f, 0.0f);
 }
 
-TEST(Vec3CrossProduct, OrthogonalAxes_ZcrossX)
+TEST_CASE("Vec3CrossProduct.OrthogonalAxes_ZcrossX", "[Vec3CrossProduct]")
 {
     Vec3 z{0.0f, 0.0f, 1.0f};
     Vec3 x{1.0f, 0.0f, 0.0f};
@@ -572,7 +575,7 @@ TEST(Vec3CrossProduct, OrthogonalAxes_ZcrossX)
     expectNear(c, 0.0f, 1.0f, 0.0f);
 }
 
-TEST(Vec3CrossProduct, AntiCommutative)
+TEST_CASE("Vec3CrossProduct.AntiCommutative", "[Vec3CrossProduct]")
 {
     Vec3 a{1.0f, 2.0f, 3.0f};
     Vec3 b{4.0f, 5.0f, 6.0f};
@@ -581,7 +584,7 @@ TEST(Vec3CrossProduct, AntiCommutative)
     expectNear(ab, -ba.x(), -ba.y(), -ba.z());
 }
 
-TEST(Vec3CrossProduct, ParallelVectorsGiveZero)
+TEST_CASE("Vec3CrossProduct.ParallelVectorsGiveZero", "[Vec3CrossProduct]")
 {
     Vec3 a{2.0f, 4.0f, 6.0f};
     Vec3 b{1.0f, 2.0f, 3.0f};
@@ -589,14 +592,14 @@ TEST(Vec3CrossProduct, ParallelVectorsGiveZero)
     expectNear(c, 0.0f, 0.0f, 0.0f);
 }
 
-TEST(Vec3CrossProduct, SelfCrossIsZero)
+TEST_CASE("Vec3CrossProduct.SelfCrossIsZero", "[Vec3CrossProduct]")
 {
     Vec3 a{3.0f, 7.0f, 11.0f};
     Vec3 c = Vec3::crossProduct(a, a);
     expectNear(c, 0.0f, 0.0f, 0.0f);
 }
 
-TEST(Vec3CrossProduct, ZeroVectorCross)
+TEST_CASE("Vec3CrossProduct.ZeroVectorCross", "[Vec3CrossProduct]")
 {
     Vec3 zero{};
     Vec3 a{1.0f, 2.0f, 3.0f};
@@ -604,16 +607,16 @@ TEST(Vec3CrossProduct, ZeroVectorCross)
     expectNear(c, 0.0f, 0.0f, 0.0f);
 }
 
-TEST(Vec3CrossProduct, InstanceMethodMatchesStatic)
+TEST_CASE("Vec3CrossProduct.InstanceMethodMatchesStatic", "[Vec3CrossProduct]")
 {
     Vec3 a{1.0f, 2.0f, 3.0f};
     Vec3 b{4.0f, 5.0f, 6.0f};
     Vec3 stat = Vec3::crossProduct(a, b);
     Vec3 inst = a.crossProduct(b);
-    EXPECT_TRUE(stat == inst);
+    CHECK(stat == inst);
 }
 
-TEST(Vec3CrossProduct, ResultIsPerpendicularToInputs)
+TEST_CASE("Vec3CrossProduct.ResultIsPerpendicularToInputs", "[Vec3CrossProduct]")
 {
     Vec3 a{1.0f, 0.0f, 0.0f};
     Vec3 b{1.0f, 1.0f, 0.0f};
@@ -621,100 +624,100 @@ TEST(Vec3CrossProduct, ResultIsPerpendicularToInputs)
     // dot(a,c) should be 0
     float dotAC = a.x() * c.x() + a.y() * c.y() + a.z() * c.z();
     float dotBC = b.x() * c.x() + b.y() * c.y() + b.z() * c.z();
-    EXPECT_NEAR(dotAC, 0.0f, kEps);
-    EXPECT_NEAR(dotBC, 0.0f, kEps);
+    CHECK(dotAC == Catch::Approx(0.0f).margin(kEps));
+    CHECK(dotBC == Catch::Approx(0.0f).margin(kEps));
 }
 
 // ==========================================================================
 // Normalise
 // ==========================================================================
 
-TEST(Vec3Normalise, UnitXUnchanged)
+TEST_CASE("Vec3Normalise.UnitXUnchanged", "[Vec3Normalise]")
 {
     Vec3 v{1.0f, 0.0f, 0.0f};
     Vec3 n = Vec3::normalise(v);
     expectNear(n, 1.0f, 0.0f, 0.0f);
 }
 
-TEST(Vec3Normalise, UnitYUnchanged)
+TEST_CASE("Vec3Normalise.UnitYUnchanged", "[Vec3Normalise]")
 {
     Vec3 v{0.0f, 1.0f, 0.0f};
     Vec3 n = Vec3::normalise(v);
     expectNear(n, 0.0f, 1.0f, 0.0f);
 }
 
-TEST(Vec3Normalise, ArbitraryVector)
+TEST_CASE("Vec3Normalise.ArbitraryVector", "[Vec3Normalise]")
 {
     Vec3 v{3.0f, 4.0f, 0.0f};
     Vec3 n = Vec3::normalise(v);
     expectNear(n, 0.6f, 0.8f, 0.0f);
 }
 
-TEST(Vec3Normalise, ResultHasUnitLength)
+TEST_CASE("Vec3Normalise.ResultHasUnitLength", "[Vec3Normalise]")
 {
     Vec3 v{1.0f, 2.0f, 3.0f};
     Vec3 n = Vec3::normalise(v);
     float len = std::sqrt(n.x() * n.x() + n.y() * n.y() + n.z() * n.z());
-    EXPECT_NEAR(len, 1.0f, kEps);
+    CHECK(len == Catch::Approx(1.0f).margin(kEps));
 }
 
-TEST(Vec3Normalise, NegativeVector)
+TEST_CASE("Vec3Normalise.NegativeVector", "[Vec3Normalise]")
 {
     Vec3 v{-3.0f, -4.0f, 0.0f};
     Vec3 n = Vec3::normalise(v);
     expectNear(n, -0.6f, -0.8f, 0.0f);
 }
 
-TEST(Vec3Normalise, ZeroVectorReturnsZero)
+TEST_CASE("Vec3Normalise.ZeroVectorReturnsZero", "[Vec3Normalise]")
 {
     Vec3 v{};
     Vec3 n = Vec3::normalise(v);
     expectNear(n, 0.0f, 0.0f, 0.0f);
 }
 
-TEST(Vec3Normalise, NearZeroVectorReturnsZero)
+TEST_CASE("Vec3Normalise.NearZeroVectorReturnsZero", "[Vec3Normalise]")
 {
     Vec3 v{1e-9f, 1e-9f, 1e-9f};
     Vec3 n = Vec3::normalise(v);
     expectNear(n, 0.0f, 0.0f, 0.0f);
 }
 
-TEST(Vec3Normalise, VeryLargeVector)
+TEST_CASE("Vec3Normalise.VeryLargeVector", "[Vec3Normalise]")
 {
     Vec3 v{1e18f, 0.0f, 0.0f};
     Vec3 n = Vec3::normalise(v);
     expectNear(n, 1.0f, 0.0f, 0.0f);
 }
 
-TEST(Vec3Normalise, StaticDoesNotMutateInput)
+TEST_CASE("Vec3Normalise.StaticDoesNotMutateInput", "[Vec3Normalise]")
 {
     Vec3 v{3.0f, 4.0f, 0.0f};
     [[maybe_unused]] Vec3 n = Vec3::normalise(v);
     expectNear(v, 3.0f, 4.0f, 0.0f);
 }
 
-TEST(Vec3Normalise, InstanceMethodMutatesSelf)
+TEST_CASE("Vec3Normalise.InstanceMethodMutatesSelf", "[Vec3Normalise]")
 {
     Vec3 v{3.0f, 4.0f, 0.0f};
     v.normalise();
     expectNear(v, 0.6f, 0.8f, 0.0f);
 }
 
-TEST(Vec3Normalise, InstanceMethodReturnsNormalisedValue)
+TEST_CASE("Vec3Normalise.InstanceMethodReturnsNormalisedValue", "[Vec3Normalise]")
 {
     Vec3 v{0.0f, 0.0f, 5.0f};
     Vec3 result = v.normalise();
     expectNear(result, 0.0f, 0.0f, 1.0f);
 }
 
-TEST(Vec3Normalise, NormaliseAlreadyUnitVector)
+TEST_CASE("Vec3Normalise.NormaliseAlreadyUnitVector", "[Vec3Normalise]")
 {
     Vec3 v{0.0f, 0.0f, 1.0f};
     Vec3 n = Vec3::normalise(v);
     expectNear(n, 0.0f, 0.0f, 1.0f);
 }
 
-TEST(Vec3Normalise, Diagonal)
+TEST_CASE("Vec3Normalise.Diagonal", "[Vec3Normalise]")
 {
     Vec3 v{1.0f, 1.0f, 1.0f};
     Vec3 n = Vec3::normalise(v);
@@ -726,61 +729,40 @@ TEST(Vec3Normalise, Diagonal)
 // Noexcept guarantees
 // ==========================================================================
 
-TEST(Vec3Noexcept, AllOperationsAreNoexcept)
+TEST_CASE("Vec3Noexcept.AllOperationsAreNoexcept", "[Vec3Noexcept]")
 {
-    Vec3 a{1.0f, 2.0f, 3.0f};
-    Vec3 b{4.0f, 5.0f, 6.0f};
-
-    static_assert(noexcept(Vec3{}));
-    static_assert(noexcept(Vec3{1.0f, 2.0f, 3.0f}));
-    static_assert(noexcept(a.x()));
-    static_assert(noexcept(a.y()));
-    static_assert(noexcept(a.z()));
-    static_assert(noexcept(a.x(1.0f)));
-    static_assert(noexcept(a.y(1.0f)));
-    static_assert(noexcept(a.z(1.0f)));
-    static_assert(noexcept(a + b));
-    static_assert(noexcept(a - b));
-    static_assert(noexcept(a += b));
-    static_assert(noexcept(a -= b));
-    static_assert(noexcept(a * 2.0f));
-    static_assert(noexcept(a *= 2.0f));
-    static_assert(noexcept(a / 2.0f));
-    static_assert(noexcept(a /= 2.0f));
-    static_assert(noexcept(a == b));
-    static_assert(noexcept(Vec3::dotProduct(a, b)));
-    static_assert(noexcept(a.dotProduct(b)));
-    static_assert(noexcept(Vec3::crossProduct(a, b)));
-    static_assert(noexcept(a.crossProduct(b)));
-    static_assert(noexcept(a.magnitude()));
-    static_assert(noexcept(a.magnitudeSquared()));
-    static_assert(noexcept(Vec3::normalise(a)));
-    static_assert(noexcept(a.normalise()));
+    static_assert(std::is_nothrow_default_constructible_v<Vec3>);
+    static_assert(test_traits::nothrow_constructible_from_v<Vec3, float, float, float>);
+    static_assert(test_traits::has_nothrow_vec3_accessors<Vec3>);
+    static_assert(test_traits::has_nothrow_vec_arithmetic<Vec3>);
+    static_assert(test_traits::has_nothrow_vec_common_math<Vec3>);
+    static_assert(test_traits::has_nothrow_vec3_cross_product<Vec3>);
+    static_assert(test_traits::has_nothrow_equality<Vec3>);
 }
 
 // ==========================================================================
 // Edge cases with special float values
 // ==========================================================================
 
-TEST(Vec3EdgeCases, InfinityComponents)
+TEST_CASE("Vec3EdgeCases.InfinityComponents", "[Vec3EdgeCases]")
 {
     float inf = std::numeric_limits<float>::infinity();
     Vec3 v{inf, -inf, 0.0f};
-    EXPECT_EQ(v.x(), inf);
-    EXPECT_EQ(v.y(), -inf);
-    EXPECT_EQ(v.z(), 0.0f);
+    CHECK(v.x() == inf);
+    CHECK(v.y() == -inf);
+    CHECK(v.z() == 0.0f);
 }
 
-TEST(Vec3EdgeCases, NaNEquality)
+TEST_CASE("Vec3EdgeCases.NaNEquality", "[Vec3EdgeCases]")
 {
     float nan = std::numeric_limits<float>::quiet_NaN();
     Vec3 a{nan, 0.0f, 0.0f};
     Vec3 b{nan, 0.0f, 0.0f};
     // NaN != NaN per IEEE 754
-    EXPECT_FALSE(a == b);
+    CHECK_FALSE(a == b);
 }
 
-TEST(Vec3EdgeCases, NormaliseInfinityVector)
+TEST_CASE("Vec3EdgeCases.NormaliseInfinityVector", "[Vec3EdgeCases]")
 {
     float inf = std::numeric_limits<float>::infinity();
     Vec3 v{inf, 0.0f, 0.0f};
@@ -789,22 +771,22 @@ TEST(Vec3EdgeCases, NormaliseInfinityVector)
     (void)n;
 }
 
-TEST(Vec3EdgeCases, CrossProductLargeValues)
+TEST_CASE("Vec3EdgeCases.CrossProductLargeValues", "[Vec3EdgeCases]")
 {
     Vec3 a{1e10f, 0.0f, 0.0f};
     Vec3 b{0.0f, 1e10f, 0.0f};
     Vec3 c = Vec3::crossProduct(a, b);
     // Should point in z direction
-    EXPECT_GT(c.z(), 0.0f);
-    EXPECT_NEAR(c.x(), 0.0f, kEps);
-    EXPECT_NEAR(c.y(), 0.0f, kEps);
+    CHECK(c.z() > 0.0f);
+    CHECK(c.x() == Catch::Approx(0.0f).margin(kEps));
+    CHECK(c.y() == Catch::Approx(0.0f).margin(kEps));
 }
 
 // ==========================================================================
 // Compound expression correctness
 // ==========================================================================
 
-TEST(Vec3Compound, ChainedAddition)
+TEST_CASE("Vec3Compound.ChainedAddition", "[Vec3Compound]")
 {
     Vec3 a{1.0f, 0.0f, 0.0f};
     Vec3 b{0.0f, 1.0f, 0.0f};
@@ -813,7 +795,7 @@ TEST(Vec3Compound, ChainedAddition)
     expectNear(result, 1.0f, 1.0f, 1.0f);
 }
 
-TEST(Vec3Compound, SubtractThenAdd)
+TEST_CASE("Vec3Compound.SubtractThenAdd", "[Vec3Compound]")
 {
     Vec3 a{5.0f, 5.0f, 5.0f};
     Vec3 b{3.0f, 2.0f, 1.0f};
@@ -822,7 +804,7 @@ TEST(Vec3Compound, SubtractThenAdd)
     expectNear(result, 3.0f, 4.0f, 5.0f);
 }
 
-TEST(Vec3Compound, PlusEqualsChained)
+TEST_CASE("Vec3Compound.PlusEqualsChained", "[Vec3Compound]")
 {
     Vec3 a{1.0f, 1.0f, 1.0f};
     (a += {1.0f, 0.0f, 0.0f}) += {0.0f, 1.0f, 0.0f};

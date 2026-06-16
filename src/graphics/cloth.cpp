@@ -5,6 +5,59 @@
 namespace fire_engine
 {
 
+ClothCollider makePlaneCollider(Vec3 normal, float offset)
+{
+    ClothCollider c;
+    c.type = static_cast<int32_t>(ClothColliderType::Plane);
+    c.a[0] = normal.x();
+    c.a[1] = normal.y();
+    c.a[2] = normal.z();
+    c.a[3] = offset;
+    return c;
+}
+
+ClothCollider makeSphereCollider(Vec3 center, float radius)
+{
+    ClothCollider c;
+    c.type = static_cast<int32_t>(ClothColliderType::Sphere);
+    c.a[0] = center.x();
+    c.a[1] = center.y();
+    c.a[2] = center.z();
+    c.a[3] = radius;
+    return c;
+}
+
+ClothCollider makeBoxCollider(Vec3 center, Vec3 halfExtents, Quaternion orientation)
+{
+    ClothCollider c;
+    c.type = static_cast<int32_t>(ClothColliderType::Box);
+    c.a[0] = center.x();
+    c.a[1] = center.y();
+    c.a[2] = center.z();
+    c.b[0] = halfExtents.x();
+    c.b[1] = halfExtents.y();
+    c.b[2] = halfExtents.z();
+    c.c[0] = orientation.x();
+    c.c[1] = orientation.y();
+    c.c[2] = orientation.z();
+    c.c[3] = orientation.w();
+    return c;
+}
+
+ClothCollider makeCapsuleCollider(Vec3 p0, Vec3 p1, float radius)
+{
+    ClothCollider c;
+    c.type = static_cast<int32_t>(ClothColliderType::Capsule);
+    c.a[0] = p0.x();
+    c.a[1] = p0.y();
+    c.a[2] = p0.z();
+    c.a[3] = radius;
+    c.b[0] = p1.x();
+    c.b[1] = p1.y();
+    c.b[2] = p1.z();
+    return c;
+}
+
 namespace
 {
 
@@ -89,8 +142,9 @@ ClothMesh makeGridCloth(const ClothGridParams& params)
     {
         for (uint32_t i = 0; i < nx; ++i)
         {
-            const Vec3 pos{originX + static_cast<float>(i) * spacing, 0.0f,
-                           originZ + static_cast<float>(j) * spacing};
+            const Vec3 pos{originX + static_cast<float>(i) * spacing + params.origin.x(),
+                           params.origin.y(),
+                           originZ + static_cast<float>(j) * spacing + params.origin.z()};
             mesh.particles.push_back(ClothParticle{.position = pos, .invMass = invMass});
 
             const Vec2 uv{static_cast<float>(i) / static_cast<float>(nx - 1),

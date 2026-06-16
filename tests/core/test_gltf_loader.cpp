@@ -21,7 +21,8 @@
 #include <fire_engine/scene/node.hpp>
 #include <fire_engine/scene/transform.hpp>
 
-#include <gtest/gtest.h>
+#include <catch2/catch_approx.hpp>
+#include <catch2/catch_test_macros.hpp>
 
 using fire_engine::AlphaMode;
 using fire_engine::ClearcoatParams;
@@ -116,7 +117,7 @@ static fastgltf::Asset parseRealGltfAsset(const std::filesystem::path& gltfPath)
 
     fastgltf::Parser parser(enabledExtensions);
     auto dataResult = fastgltf::GltfDataBuffer::FromPath(gltfPath);
-    EXPECT_EQ(dataResult.error(), fastgltf::Error::None);
+    CHECK(dataResult.error() == fastgltf::Error::None);
     if (dataResult.error() != fastgltf::Error::None)
     {
         return fastgltf::Asset{};
@@ -125,7 +126,7 @@ static fastgltf::Asset parseRealGltfAsset(const std::filesystem::path& gltfPath)
     auto result = parser.loadGltf(dataResult.get(), gltfPath.parent_path(),
                                   fastgltf::Options::LoadExternalBuffers |
                                       fastgltf::Options::LoadExternalImages);
-    EXPECT_EQ(result.error(), fastgltf::Error::None);
+    CHECK(result.error() == fastgltf::Error::None);
     if (result.error() != fastgltf::Error::None)
     {
         return fastgltf::Asset{};
@@ -212,7 +213,7 @@ static bool nodeExtrasControllableFromJson(std::string_view json)
     simdjson::padded_string padded{std::string{json}};
     auto doc = parser.parse(padded);
     simdjson::dom::object extras;
-    EXPECT_EQ(doc.get_object().get(extras), simdjson::SUCCESS);
+    CHECK(doc.get_object().get(extras) == simdjson::SUCCESS);
     return GltfLoader::nodeExtrasControllable(&extras);
 }
 
@@ -222,7 +223,7 @@ static std::optional<GltfLoader::PhysicsConfig> nodeExtrasPhysicsFromJson(std::s
     simdjson::padded_string padded{std::string{json}};
     auto doc = parser.parse(padded);
     simdjson::dom::object extras;
-    EXPECT_EQ(doc.get_object().get(extras), simdjson::SUCCESS);
+    CHECK(doc.get_object().get(extras) == simdjson::SUCCESS);
     return GltfLoader::nodeExtrasPhysics(&extras);
 }
 
@@ -244,7 +245,7 @@ static void applyMatrix(const fastgltf::math::fmat4x4& mat, Node& node)
 // Matrix decomposition via applyMatrix (mirrors GltfLoader::applyTRS)
 // ==========================================================================
 
-TEST(MatrixDecomposition, IdentityMatrixGivesDefaultTransform)
+TEST_CASE("MatrixDecomposition.IdentityMatrixGivesDefaultTransform", "[MatrixDecomposition]")
 {
     fastgltf::math::fmat4x4 mat{};
     mat.col(0) = {1, 0, 0, 0};
@@ -255,15 +256,15 @@ TEST(MatrixDecomposition, IdentityMatrixGivesDefaultTransform)
     Node node("test");
     applyMatrix(mat, node);
 
-    EXPECT_NEAR(node.transform().position().x(), 0.0f, 1e-5f);
-    EXPECT_NEAR(node.transform().position().y(), 0.0f, 1e-5f);
-    EXPECT_NEAR(node.transform().position().z(), 0.0f, 1e-5f);
-    EXPECT_NEAR(node.transform().scale().x(), 1.0f, 1e-5f);
-    EXPECT_NEAR(node.transform().scale().y(), 1.0f, 1e-5f);
-    EXPECT_NEAR(node.transform().scale().z(), 1.0f, 1e-5f);
+    CHECK(node.transform().position().x() == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(node.transform().position().y() == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(node.transform().position().z() == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(node.transform().scale().x() == Catch::Approx(1.0f).margin(1e-5f));
+    CHECK(node.transform().scale().y() == Catch::Approx(1.0f).margin(1e-5f));
+    CHECK(node.transform().scale().z() == Catch::Approx(1.0f).margin(1e-5f));
 }
 
-TEST(MatrixDecomposition, PureTranslation)
+TEST_CASE("MatrixDecomposition.PureTranslation", "[MatrixDecomposition]")
 {
     fastgltf::math::fmat4x4 mat{};
     mat.col(0) = {1, 0, 0, 0};
@@ -274,15 +275,15 @@ TEST(MatrixDecomposition, PureTranslation)
     Node node("test");
     applyMatrix(mat, node);
 
-    EXPECT_NEAR(node.transform().position().x(), 5.0f, 1e-5f);
-    EXPECT_NEAR(node.transform().position().y(), 10.0f, 1e-5f);
-    EXPECT_NEAR(node.transform().position().z(), 15.0f, 1e-5f);
-    EXPECT_NEAR(node.transform().scale().x(), 1.0f, 1e-5f);
-    EXPECT_NEAR(node.transform().scale().y(), 1.0f, 1e-5f);
-    EXPECT_NEAR(node.transform().scale().z(), 1.0f, 1e-5f);
+    CHECK(node.transform().position().x() == Catch::Approx(5.0f).margin(1e-5f));
+    CHECK(node.transform().position().y() == Catch::Approx(10.0f).margin(1e-5f));
+    CHECK(node.transform().position().z() == Catch::Approx(15.0f).margin(1e-5f));
+    CHECK(node.transform().scale().x() == Catch::Approx(1.0f).margin(1e-5f));
+    CHECK(node.transform().scale().y() == Catch::Approx(1.0f).margin(1e-5f));
+    CHECK(node.transform().scale().z() == Catch::Approx(1.0f).margin(1e-5f));
 }
 
-TEST(MatrixDecomposition, PureScale)
+TEST_CASE("MatrixDecomposition.PureScale", "[MatrixDecomposition]")
 {
     fastgltf::math::fmat4x4 mat{};
     mat.col(0) = {2, 0, 0, 0};
@@ -293,15 +294,15 @@ TEST(MatrixDecomposition, PureScale)
     Node node("test");
     applyMatrix(mat, node);
 
-    EXPECT_NEAR(node.transform().position().x(), 0.0f, 1e-5f);
-    EXPECT_NEAR(node.transform().position().y(), 0.0f, 1e-5f);
-    EXPECT_NEAR(node.transform().position().z(), 0.0f, 1e-5f);
-    EXPECT_NEAR(node.transform().scale().x(), 2.0f, 1e-5f);
-    EXPECT_NEAR(node.transform().scale().y(), 3.0f, 1e-5f);
-    EXPECT_NEAR(node.transform().scale().z(), 4.0f, 1e-5f);
+    CHECK(node.transform().position().x() == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(node.transform().position().y() == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(node.transform().position().z() == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(node.transform().scale().x() == Catch::Approx(2.0f).margin(1e-5f));
+    CHECK(node.transform().scale().y() == Catch::Approx(3.0f).margin(1e-5f));
+    CHECK(node.transform().scale().z() == Catch::Approx(4.0f).margin(1e-5f));
 }
 
-TEST(MatrixDecomposition, TranslationAndScale)
+TEST_CASE("MatrixDecomposition.TranslationAndScale", "[MatrixDecomposition]")
 {
     fastgltf::math::fmat4x4 mat{};
     mat.col(0) = {2, 0, 0, 0};
@@ -312,15 +313,15 @@ TEST(MatrixDecomposition, TranslationAndScale)
     Node node("test");
     applyMatrix(mat, node);
 
-    EXPECT_NEAR(node.transform().position().x(), 1.0f, 1e-5f);
-    EXPECT_NEAR(node.transform().position().y(), 2.0f, 1e-5f);
-    EXPECT_NEAR(node.transform().position().z(), 3.0f, 1e-5f);
-    EXPECT_NEAR(node.transform().scale().x(), 2.0f, 1e-5f);
-    EXPECT_NEAR(node.transform().scale().y(), 3.0f, 1e-5f);
-    EXPECT_NEAR(node.transform().scale().z(), 4.0f, 1e-5f);
+    CHECK(node.transform().position().x() == Catch::Approx(1.0f).margin(1e-5f));
+    CHECK(node.transform().position().y() == Catch::Approx(2.0f).margin(1e-5f));
+    CHECK(node.transform().position().z() == Catch::Approx(3.0f).margin(1e-5f));
+    CHECK(node.transform().scale().x() == Catch::Approx(2.0f).margin(1e-5f));
+    CHECK(node.transform().scale().y() == Catch::Approx(3.0f).margin(1e-5f));
+    CHECK(node.transform().scale().z() == Catch::Approx(4.0f).margin(1e-5f));
 }
 
-TEST(MatrixDecomposition, ZUpRotationMatrix)
+TEST_CASE("MatrixDecomposition.ZUpRotationMatrix", "[MatrixDecomposition]")
 {
     // From RiggedSimple.gltf Node 0 "Z_UP":
     // [1,0,0,0, 0,0,-1,0, 0,1,0,0, 0,0,0,1] (column-major)
@@ -333,20 +334,19 @@ TEST(MatrixDecomposition, ZUpRotationMatrix)
     Node node("Z_UP");
     applyMatrix(mat, node);
 
-    EXPECT_NEAR(node.transform().position().x(), 0.0f, 1e-5f);
-    EXPECT_NEAR(node.transform().position().y(), 0.0f, 1e-5f);
-    EXPECT_NEAR(node.transform().position().z(), 0.0f, 1e-5f);
-    EXPECT_NEAR(node.transform().scale().x(), 1.0f, 1e-4f);
-    EXPECT_NEAR(node.transform().scale().y(), 1.0f, 1e-4f);
-    EXPECT_NEAR(node.transform().scale().z(), 1.0f, 1e-4f);
+    CHECK(node.transform().position().x() == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(node.transform().position().y() == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(node.transform().position().z() == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(node.transform().scale().x() == Catch::Approx(1.0f).margin(1e-4f));
+    CHECK(node.transform().scale().y() == Catch::Approx(1.0f).margin(1e-4f));
+    CHECK(node.transform().scale().z() == Catch::Approx(1.0f).margin(1e-4f));
 
     // Rotation should be non-identity (this is a 90° rotation around X)
     auto rot = node.transform().rotation();
-    EXPECT_TRUE(std::abs(rot.x()) > 0.01f || std::abs(rot.y()) > 0.01f ||
-                std::abs(rot.z()) > 0.01f);
+    CHECK((std::abs(rot.x()) > 0.01f || std::abs(rot.y()) > 0.01f || std::abs(rot.z()) > 0.01f));
 }
 
-TEST(MatrixDecomposition, ArmatureRotationMatrix)
+TEST_CASE("MatrixDecomposition.ArmatureRotationMatrix", "[MatrixDecomposition]")
 {
     // From RiggedSimple.gltf Node 1 "Armature":
     // [-4.37e-08,-1,0,0, 1,-4.37e-08,0,0, 0,0,1,0, 0,0,0,1]
@@ -360,15 +360,15 @@ TEST(MatrixDecomposition, ArmatureRotationMatrix)
     Node node("Armature");
     applyMatrix(mat, node);
 
-    EXPECT_NEAR(node.transform().position().x(), 0.0f, 1e-5f);
-    EXPECT_NEAR(node.transform().position().y(), 0.0f, 1e-5f);
-    EXPECT_NEAR(node.transform().position().z(), 0.0f, 1e-5f);
-    EXPECT_NEAR(node.transform().scale().x(), 1.0f, 1e-4f);
-    EXPECT_NEAR(node.transform().scale().y(), 1.0f, 1e-4f);
-    EXPECT_NEAR(node.transform().scale().z(), 1.0f, 1e-4f);
+    CHECK(node.transform().position().x() == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(node.transform().position().y() == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(node.transform().position().z() == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(node.transform().scale().x() == Catch::Approx(1.0f).margin(1e-4f));
+    CHECK(node.transform().scale().y() == Catch::Approx(1.0f).margin(1e-4f));
+    CHECK(node.transform().scale().z() == Catch::Approx(1.0f).margin(1e-4f));
 }
 
-TEST(MatrixDecomposition, BoneTranslationMatrix)
+TEST_CASE("MatrixDecomposition.BoneTranslationMatrix", "[MatrixDecomposition]")
 {
     // From RiggedSimple.gltf Node 3 "Bone":
     // [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,-1.36e-07,-4.18,1]
@@ -381,19 +381,20 @@ TEST(MatrixDecomposition, BoneTranslationMatrix)
     Node node("Bone");
     applyMatrix(mat, node);
 
-    EXPECT_NEAR(node.transform().position().x(), 0.0f, 1e-5f);
-    EXPECT_NEAR(node.transform().position().y(), -1.3597299641787688e-07f, 1e-10f);
-    EXPECT_NEAR(node.transform().position().z(), -4.1803297996521f, 1e-3f);
-    EXPECT_NEAR(node.transform().scale().x(), 1.0f, 1e-5f);
-    EXPECT_NEAR(node.transform().scale().y(), 1.0f, 1e-5f);
-    EXPECT_NEAR(node.transform().scale().z(), 1.0f, 1e-5f);
+    CHECK(node.transform().position().x() == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(node.transform().position().y() ==
+          Catch::Approx(-1.3597299641787688e-07f).margin(1e-10f));
+    CHECK(node.transform().position().z() == Catch::Approx(-4.1803297996521f).margin(1e-3f));
+    CHECK(node.transform().scale().x() == Catch::Approx(1.0f).margin(1e-5f));
+    CHECK(node.transform().scale().y() == Catch::Approx(1.0f).margin(1e-5f));
+    CHECK(node.transform().scale().z() == Catch::Approx(1.0f).margin(1e-5f));
 }
 
 // ==========================================================================
 // Verify Transform::update produces correct world matrix after decomposition
 // ==========================================================================
 
-TEST(MatrixDecomposition, UpdateProducesCorrectWorldTranslation)
+TEST_CASE("MatrixDecomposition.UpdateProducesCorrectWorldTranslation", "[MatrixDecomposition]")
 {
     fastgltf::math::fmat4x4 mat{};
     mat.col(0) = {1, 0, 0, 0};
@@ -405,9 +406,9 @@ TEST(MatrixDecomposition, UpdateProducesCorrectWorldTranslation)
     applyMatrix(mat, node);
     node.transform().update(Mat4::identity());
 
-    EXPECT_NEAR((node.transform().world()[0, 3]), 3.0f, 1e-5f);
-    EXPECT_NEAR((node.transform().world()[1, 3]), 7.0f, 1e-5f);
-    EXPECT_NEAR((node.transform().world()[2, 3]), 11.0f, 1e-5f);
+    CHECK((node.transform().world()[0, 3]) == Catch::Approx(3.0f).margin(1e-5f));
+    CHECK((node.transform().world()[1, 3]) == Catch::Approx(7.0f).margin(1e-5f));
+    CHECK((node.transform().world()[2, 3]) == Catch::Approx(11.0f).margin(1e-5f));
 }
 
 // ==========================================================================
@@ -416,7 +417,7 @@ TEST(MatrixDecomposition, UpdateProducesCorrectWorldTranslation)
 // source asset without passing through an intermediate Euler representation.
 // ==========================================================================
 
-TEST(TRSRotation, DecalBlendQuaternionRoundTrip)
+TEST_CASE("TRSRotation.DecalBlendQuaternionRoundTrip", "[TRSRotation]")
 {
     // AlphaBlendModeTest DecalBlend/DecalOpaque: pure X-axis rotation of ~-56°.
     // Applying the quaternion directly must land the rotation on the X axis,
@@ -434,192 +435,222 @@ TEST(TRSRotation, DecalBlendQuaternionRoundTrip)
     // exercises the stored-quaternion contract without needing access to the
     // private static.
     auto* trs = std::get_if<fastgltf::TRS>(&gltf.transform);
-    ASSERT_NE(trs, nullptr);
+    REQUIRE(trs != nullptr);
     node.transform().position({trs->translation.x(), trs->translation.y(), trs->translation.z()});
     node.transform().rotation(
         {trs->rotation.x(), trs->rotation.y(), trs->rotation.z(), trs->rotation.w()});
     node.transform().scale({trs->scale.x(), trs->scale.y(), trs->scale.z()});
 
     auto rot = node.transform().rotation();
-    EXPECT_FLOAT_EQ(rot.x(), -0.47185850143432617f);
-    EXPECT_FLOAT_EQ(rot.y(), 0.0f);
-    EXPECT_FLOAT_EQ(rot.z(), 0.0f);
-    EXPECT_FLOAT_EQ(rot.w(), 0.88167440891265869f);
+    CHECK(rot.x() == Catch::Approx(-0.47185850143432617f).margin(1e-5f));
+    CHECK(rot.y() == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(rot.z() == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(rot.w() == Catch::Approx(0.88167440891265869f).margin(1e-5f));
 
     // Extrinsic-XYZ Euler extraction must place the rotation on the X axis.
     auto e = rot.toEulerXYZ();
-    EXPECT_NEAR(e.x(), -0.98279f, 1e-4f);
-    EXPECT_NEAR(e.y(), 0.0f, 1e-5f);
-    EXPECT_NEAR(e.z(), 0.0f, 1e-5f);
+    CHECK(e.x() == Catch::Approx(-0.98279f).margin(1e-4f));
+    CHECK(e.y() == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(e.z() == Catch::Approx(0.0f).margin(1e-5f));
 }
 
-TEST(GltfFixture, MinimalTriangleFixtureParses)
+TEST_CASE("GltfFixture.MinimalTriangleFixtureParses", "[GltfFixture]")
 {
     auto gltfPath = std::filesystem::path("test_assets/minimal_triangle.gltf");
 
     fastgltf::Parser parser;
     auto dataResult = fastgltf::GltfDataBuffer::FromPath(gltfPath);
-    ASSERT_EQ(dataResult.error(), fastgltf::Error::None);
+    REQUIRE(dataResult.error() == fastgltf::Error::None);
 
     auto result =
         parser.loadGltf(dataResult.get(), gltfPath.parent_path(), fastgltf::Options::None);
-    ASSERT_EQ(result.error(), fastgltf::Error::None);
+    REQUIRE(result.error() == fastgltf::Error::None);
 
     const auto& asset = result.get();
-    ASSERT_EQ(asset.scenes.size(), 1u);
-    ASSERT_EQ(asset.nodes.size(), 1u);
-    ASSERT_EQ(asset.meshes.size(), 1u);
-    ASSERT_EQ(asset.meshes[0].primitives.size(), 1u);
-    EXPECT_TRUE(asset.meshes[0].primitives[0].indicesAccessor.has_value() == false);
-    EXPECT_EQ(asset.meshes[0].primitives[0].findAttribute("POSITION")->accessorIndex, 0u);
-    ASSERT_EQ(asset.accessors.size(), 1u);
-    EXPECT_EQ(asset.accessors[0].count, 3u);
+    REQUIRE(asset.scenes.size() == 1u);
+    REQUIRE(asset.nodes.size() == 1u);
+    REQUIRE(asset.meshes.size() == 1u);
+    REQUIRE(asset.meshes[0].primitives.size() == 1u);
+    const auto& primitive = asset.meshes[0].primitives[0];
+    CHECK(primitive.indicesAccessor.has_value() == false);
+    const auto position = primitive.findAttribute("POSITION");
+    REQUIRE(position != primitive.attributes.end());
+    CHECK(position->accessorIndex == 0u);
+    REQUIRE(asset.accessors.size() == 1u);
+    CHECK(asset.accessors[0].count == 3u);
 }
 
-TEST(GltfNodeExtras, ControllableTrueIsEnabled)
+TEST_CASE("GltfNodeExtras.ControllableTrueIsEnabled", "[GltfNodeExtras]")
 {
-    EXPECT_TRUE(nodeExtrasControllableFromJson(R"({"Controllable":true})"));
+    CHECK(nodeExtrasControllableFromJson(R"({"Controllable":true})"));
 }
 
-TEST(GltfNodeExtras, ControllableFalseIsIgnored)
+TEST_CASE("GltfNodeExtras.ControllableFalseIsIgnored", "[GltfNodeExtras]")
 {
-    EXPECT_FALSE(nodeExtrasControllableFromJson(R"({"Controllable":false})"));
+    CHECK_FALSE(nodeExtrasControllableFromJson(R"({"Controllable":false})"));
 }
 
-TEST(GltfNodeExtras, MissingControllableIsIgnored)
+TEST_CASE("GltfNodeExtras.MissingControllableIsIgnored", "[GltfNodeExtras]")
 {
-    EXPECT_FALSE(nodeExtrasControllableFromJson(R"({"Physics":{"Layer":1}})"));
+    CHECK_FALSE(nodeExtrasControllableFromJson(R"({"Physics":{"Layer":1}})"));
 }
 
-TEST(GltfNodeExtras, NonBooleanControllableIsIgnored)
+TEST_CASE("GltfNodeExtras.NonBooleanControllableIsIgnored", "[GltfNodeExtras]")
 {
-    EXPECT_FALSE(nodeExtrasControllableFromJson(R"({"Controllable":"true"})"));
+    CHECK_FALSE(nodeExtrasControllableFromJson(R"({"Controllable":"true"})"));
 }
 
-TEST(GltfNodeExtras, MissingPhysicsIsIgnored)
+TEST_CASE("GltfNodeExtras.MissingPhysicsIsIgnored", "[GltfNodeExtras]")
 {
     auto config = nodeExtrasPhysicsFromJson(R"({"Controllable":true})");
-    EXPECT_FALSE(config.has_value());
+    CHECK_FALSE(config.has_value());
 }
 
-TEST(GltfNodeExtras, PhysicsRigidBodyFieldsAreParsed)
+TEST_CASE("GltfNodeExtras.PhysicsRigidBodyFieldsAreParsed", "[GltfNodeExtras]")
 {
     auto config = nodeExtrasPhysicsFromJson(
         R"({"Physics":{"BodyType":"Dynamic","Layer":1,"Mask":10,"Velocity":[1.0,0.5,-2.0],"Mass":2.5,"Restitution":0.25,"Friction":0.75,"GravityScale":0.0}})");
 
-    ASSERT_TRUE(config.has_value());
-    EXPECT_EQ(config->bodyType, PhysicsBodyType::Dynamic);
-    EXPECT_EQ(config->layer, 1u);
-    EXPECT_EQ(config->mask, 10u);
-    EXPECT_EQ(config->velocity, Vec3(1.0f, 0.5f, -2.0f));
-    EXPECT_FLOAT_EQ(config->mass, 2.5f);
-    EXPECT_FLOAT_EQ(config->restitution, 0.25f);
-    EXPECT_FLOAT_EQ(config->friction, 0.75f);
-    EXPECT_FLOAT_EQ(config->gravityScale, 0.0f);
+    REQUIRE(config.has_value());
+    CHECK(config->bodyType == PhysicsBodyType::Dynamic);
+    CHECK(config->layer == 1u);
+    CHECK(config->mask == 10u);
+    CHECK(config->velocity == Vec3(1.0f, 0.5f, -2.0f));
+    CHECK(config->mass == Catch::Approx(2.5f).margin(1e-5f));
+    CHECK(config->restitution == Catch::Approx(0.25f).margin(1e-5f));
+    CHECK(config->friction == Catch::Approx(0.75f).margin(1e-5f));
+    CHECK(config->gravityScale == Catch::Approx(0.0f).margin(1e-5f));
 }
 
-TEST(GltfNodeExtras, PhysicsShapeFieldsAreParsed)
+TEST_CASE("GltfNodeExtras.PhysicsShapeFieldsAreParsed", "[GltfNodeExtras]")
 {
     auto config = nodeExtrasPhysicsFromJson(
         R"({"Physics":{"Shape":"Sphere","Radius":3.0,"Center":[1,2,3]}})");
 
-    ASSERT_TRUE(config.has_value());
-    ASSERT_TRUE(config->shape.has_value());
-    ASSERT_TRUE(std::holds_alternative<SphereShape>(config->shape.value()));
+    REQUIRE(config.has_value());
+    REQUIRE(config->shape.has_value());
+    REQUIRE(std::holds_alternative<SphereShape>(config->shape.value()));
     const auto shape = std::get<SphereShape>(config->shape.value());
-    EXPECT_FLOAT_EQ(shape.radius, 3.0f);
-    EXPECT_EQ(shape.center, Vec3(1.0f, 2.0f, 3.0f));
+    CHECK(shape.radius == Catch::Approx(3.0f).margin(1e-5f));
+    CHECK(shape.center == Vec3(1.0f, 2.0f, 3.0f));
 }
 
-TEST(GltfNodeExtras, InvalidPhysicsObjectThrows)
+TEST_CASE("GltfNodeExtras.InvalidPhysicsObjectThrows", "[GltfNodeExtras]")
 {
-    EXPECT_THROW(nodeExtrasPhysicsFromJson(R"({"Physics":true})"), std::runtime_error);
+    CHECK_THROWS_AS(nodeExtrasPhysicsFromJson(R"({"Physics":true})"), std::runtime_error);
 }
 
-TEST(GltfNodeExtras, InvalidPhysicsBodyTypeThrows)
+TEST_CASE("GltfNodeExtras.InvalidPhysicsBodyTypeThrows", "[GltfNodeExtras]")
 {
-    EXPECT_THROW(nodeExtrasPhysicsFromJson(R"({"Physics":{"BodyType":"Actor"}})"),
-                 std::runtime_error);
+    CHECK_THROWS_AS(nodeExtrasPhysicsFromJson(R"({"Physics":{"BodyType":"Actor"}})"),
+                    std::runtime_error);
 }
 
-TEST(GltfNodeExtras, OutOfRangePhysicsMaskThrows)
+TEST_CASE("GltfNodeExtras.OutOfRangePhysicsMaskThrows", "[GltfNodeExtras]")
 {
-    EXPECT_THROW(nodeExtrasPhysicsFromJson(R"({"Physics":{"Mask":4294967296}})"),
-                 std::runtime_error);
+    CHECK_THROWS_AS(nodeExtrasPhysicsFromJson(R"({"Physics":{"Mask":4294967296}})"),
+                    std::runtime_error);
 }
 
-TEST(GltfNodeExtras, VelocityWithWrongCountThrows)
+TEST_CASE("GltfNodeExtras.VelocityWithWrongCountThrows", "[GltfNodeExtras]")
 {
-    EXPECT_THROW(nodeExtrasPhysicsFromJson(R"({"Physics":{"Velocity":[1.0,0.0]}})"),
-                 std::runtime_error);
-    EXPECT_THROW(nodeExtrasPhysicsFromJson(R"({"Physics":{"Velocity":[1.0,0.0,0.0,0.0]}})"),
-                 std::runtime_error);
+    CHECK_THROWS_AS(nodeExtrasPhysicsFromJson(R"({"Physics":{"Velocity":[1.0,0.0]}})"),
+                    std::runtime_error);
+    CHECK_THROWS_AS(nodeExtrasPhysicsFromJson(R"({"Physics":{"Velocity":[1.0,0.0,0.0,0.0]}})"),
+                    std::runtime_error);
 }
 
-TEST(GltfNodeExtras, NonNumericVelocityThrows)
+TEST_CASE("GltfNodeExtras.NonNumericVelocityThrows", "[GltfNodeExtras]")
 {
-    EXPECT_THROW(nodeExtrasPhysicsFromJson(R"({"Physics":{"Velocity":[1.0,"0",0.0]}})"),
-                 std::runtime_error);
+    CHECK_THROWS_AS(nodeExtrasPhysicsFromJson(R"({"Physics":{"Velocity":[1.0,"0",0.0]}})"),
+                    std::runtime_error);
 }
 
-TEST(GltfMeshBounds, UsesPositionAccessorMinMax)
+TEST_CASE("GltfMeshBounds.UsesPositionAccessorMinMax", "[GltfMeshBounds]")
 {
     auto gltfPath = std::filesystem::path("test_assets/minimal_triangle.gltf");
 
     fastgltf::Parser parser;
     auto dataResult = fastgltf::GltfDataBuffer::FromPath(gltfPath);
-    ASSERT_EQ(dataResult.error(), fastgltf::Error::None);
+    REQUIRE(dataResult.error() == fastgltf::Error::None);
 
     auto result =
         parser.loadGltf(dataResult.get(), gltfPath.parent_path(), fastgltf::Options::None);
-    ASSERT_EQ(result.error(), fastgltf::Error::None);
+    REQUIRE(result.error() == fastgltf::Error::None);
 
     const auto& asset = result.get();
+    REQUIRE(asset.meshes.size() == 1u);
     auto bounds = GltfLoader::meshBounds(asset, asset.meshes[0]);
-    ASSERT_TRUE(bounds.has_value());
-    EXPECT_EQ(bounds->min, Vec3(0.0f, 0.0f, 0.0f));
-    EXPECT_EQ(bounds->max, Vec3(1.0f, 1.0f, 0.0f));
+    REQUIRE(bounds.has_value());
+    CHECK(bounds->min == Vec3(0.0f, 0.0f, 0.0f));
+    CHECK(bounds->max == Vec3(1.0f, 1.0f, 0.0f));
 }
 
-TEST(GltfMeshBounds, FallsBackToScanningPositionsWhenAccessorBoundsAreAbsent)
+TEST_CASE("GltfMeshBounds.FallsBackToScanningPositionsWhenAccessorBoundsAreAbsent",
+          "[GltfMeshBounds]")
 {
     auto gltfPath = std::filesystem::path("test_assets/minimal_triangle.gltf");
 
     fastgltf::Parser parser;
     auto dataResult = fastgltf::GltfDataBuffer::FromPath(gltfPath);
-    ASSERT_EQ(dataResult.error(), fastgltf::Error::None);
+    REQUIRE(dataResult.error() == fastgltf::Error::None);
 
     auto result = parser.loadGltf(dataResult.get(), gltfPath.parent_path(),
                                   fastgltf::Options::LoadExternalBuffers);
-    ASSERT_EQ(result.error(), fastgltf::Error::None);
+    REQUIRE(result.error() == fastgltf::Error::None);
 
     auto& asset = result.get();
+    REQUIRE(asset.accessors.size() == 1u);
+    REQUIRE(asset.meshes.size() == 1u);
     asset.accessors[0].min.reset();
     asset.accessors[0].max.reset();
 
     auto bounds = GltfLoader::meshBounds(asset, asset.meshes[0]);
-    ASSERT_TRUE(bounds.has_value());
-    EXPECT_EQ(bounds->min, Vec3(0.0f, 0.0f, 0.0f));
-    EXPECT_EQ(bounds->max, Vec3(1.0f, 1.0f, 0.0f));
+    REQUIRE(bounds.has_value());
+    CHECK(bounds->min == Vec3(0.0f, 0.0f, 0.0f));
+    CHECK(bounds->max == Vec3(1.0f, 1.0f, 0.0f));
 }
 
-TEST(GltfMeshBounds, UnsupportedPrimitiveDoesNotCreateBounds)
+TEST_CASE("GltfMeshBounds.UnsupportedPrimitiveDoesNotCreateBounds", "[GltfMeshBounds]")
 {
     auto gltfPath = std::filesystem::path("test_assets/minimal_triangle.gltf");
 
     fastgltf::Parser parser;
     auto dataResult = fastgltf::GltfDataBuffer::FromPath(gltfPath);
-    ASSERT_EQ(dataResult.error(), fastgltf::Error::None);
+    REQUIRE(dataResult.error() == fastgltf::Error::None);
 
     auto result =
         parser.loadGltf(dataResult.get(), gltfPath.parent_path(), fastgltf::Options::None);
-    ASSERT_EQ(result.error(), fastgltf::Error::None);
+    REQUIRE(result.error() == fastgltf::Error::None);
 
     auto& asset = result.get();
+    REQUIRE(asset.meshes.size() == 1u);
+    REQUIRE(asset.meshes[0].primitives.size() == 1u);
     asset.meshes[0].primitives[0].type = fastgltf::PrimitiveType::Lines;
 
     auto bounds = GltfLoader::meshBounds(asset, asset.meshes[0]);
-    EXPECT_FALSE(bounds.has_value());
+    CHECK_FALSE(bounds.has_value());
+}
+
+TEST_CASE("GltfMeshBounds.MissingPositionAttributeDoesNotCreateBounds", "[GltfMeshBounds]")
+{
+    auto gltfPath = std::filesystem::path("test_assets/minimal_triangle.gltf");
+
+    fastgltf::Parser parser;
+    auto dataResult = fastgltf::GltfDataBuffer::FromPath(gltfPath);
+    REQUIRE(dataResult.error() == fastgltf::Error::None);
+
+    auto result =
+        parser.loadGltf(dataResult.get(), gltfPath.parent_path(), fastgltf::Options::None);
+    REQUIRE(result.error() == fastgltf::Error::None);
+
+    auto& asset = result.get();
+    REQUIRE(asset.meshes.size() == 1u);
+    REQUIRE(asset.meshes[0].primitives.size() == 1u);
+    asset.meshes[0].primitives[0].attributes.clear();
+
+    auto bounds = GltfLoader::meshBounds(asset, asset.meshes[0]);
+    CHECK_FALSE(bounds.has_value());
 }
 
 // ==========================================================================
@@ -628,7 +659,7 @@ TEST(GltfMeshBounds, UnsupportedPrimitiveDoesNotCreateBounds)
 // we don't need a GPU-backed Resources to exercise it.
 // ==========================================================================
 
-TEST(GenerateSmoothNormals, SingleTriangleProducesFaceNormal)
+TEST_CASE("GenerateSmoothNormals.SingleTriangleProducesFaceNormal", "[GenerateSmoothNormals]")
 {
     // Triangle in XY plane, CCW when viewed from +Z. Face normal is +Z.
     std::vector<Vec3> positions{
@@ -639,16 +670,16 @@ TEST(GenerateSmoothNormals, SingleTriangleProducesFaceNormal)
     std::vector<uint32_t> indices{0, 1, 2};
 
     const auto normals = GltfLoader::generateSmoothNormals(positions, indices);
-    ASSERT_EQ(normals.size(), 3u);
+    REQUIRE(normals.size() == 3u);
     for (const auto& n : normals)
     {
-        EXPECT_NEAR(n.x(), 0.0f, 1e-5f);
-        EXPECT_NEAR(n.y(), 0.0f, 1e-5f);
-        EXPECT_NEAR(n.z(), 1.0f, 1e-5f);
+        CHECK(n.x() == Catch::Approx(0.0f).margin(1e-5f));
+        CHECK(n.y() == Catch::Approx(0.0f).margin(1e-5f));
+        CHECK(n.z() == Catch::Approx(1.0f).margin(1e-5f));
     }
 }
 
-TEST(GenerateSmoothNormals, SharedVertexAreaWeightedAverage)
+TEST_CASE("GenerateSmoothNormals.SharedVertexAreaWeightedAverage", "[GenerateSmoothNormals]")
 {
     // Two triangles sharing vertex 0 at the origin. Both normals are +Z, so
     // the shared vertex's accumulated normal is also +Z, unit length.
@@ -664,14 +695,13 @@ TEST(GenerateSmoothNormals, SharedVertexAreaWeightedAverage)
     };
 
     const auto normals = GltfLoader::generateSmoothNormals(positions, indices);
-    ASSERT_EQ(normals.size(), 4u);
-    EXPECT_NEAR(normals[0].z(), 1.0f, 1e-5f);
-    EXPECT_NEAR(std::sqrt(normals[0].x() * normals[0].x() + normals[0].y() * normals[0].y() +
-                          normals[0].z() * normals[0].z()),
-                1.0f, 1e-5f);
+    REQUIRE(normals.size() == 4u);
+    CHECK(normals[0].z() == Catch::Approx(1.0f).margin(1e-5f));
+    CHECK(std::sqrt(normals[0].x() * normals[0].x() + normals[0].y() * normals[0].y() +
+                    normals[0].z() * normals[0].z()) == Catch::Approx(1.0f).margin(1e-5f));
 }
 
-TEST(GenerateSmoothNormals, UnreferencedVertexFallsBackToUp)
+TEST_CASE("GenerateSmoothNormals.UnreferencedVertexFallsBackToUp", "[GenerateSmoothNormals]")
 {
     // Three real triangle verts plus a stray fourth that no triangle uses.
     // The stray's accumulated normal is zero; the function must not divide
@@ -685,13 +715,13 @@ TEST(GenerateSmoothNormals, UnreferencedVertexFallsBackToUp)
     std::vector<uint32_t> indices{0, 1, 2};
 
     const auto normals = GltfLoader::generateSmoothNormals(positions, indices);
-    ASSERT_EQ(normals.size(), 4u);
-    EXPECT_NEAR(normals[3].x(), 0.0f, 1e-5f);
-    EXPECT_NEAR(normals[3].y(), 1.0f, 1e-5f);
-    EXPECT_NEAR(normals[3].z(), 0.0f, 1e-5f);
+    REQUIRE(normals.size() == 4u);
+    CHECK(normals[3].x() == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(normals[3].y() == Catch::Approx(1.0f).margin(1e-5f));
+    CHECK(normals[3].z() == Catch::Approx(0.0f).margin(1e-5f));
 }
 
-TEST(GenerateSmoothNormals, OutOfRangeIndicesAreSkipped)
+TEST_CASE("GenerateSmoothNormals.OutOfRangeIndicesAreSkipped", "[GenerateSmoothNormals]")
 {
     // Malformed mesh: an index references a vertex that doesn't exist.
     // Function must skip the bad triangle without UB or crash; remaining
@@ -707,10 +737,10 @@ TEST(GenerateSmoothNormals, OutOfRangeIndicesAreSkipped)
     };
 
     const auto normals = GltfLoader::generateSmoothNormals(positions, indices);
-    ASSERT_EQ(normals.size(), 3u);
+    REQUIRE(normals.size() == 3u);
     for (const auto& n : normals)
     {
-        EXPECT_NEAR(n.z(), 1.0f, 1e-5f);
+        CHECK(n.z() == Catch::Approx(1.0f).margin(1e-5f));
     }
 }
 
@@ -719,18 +749,18 @@ TEST(GenerateSmoothNormals, OutOfRangeIndicesAreSkipped)
 // engine's Material verbatim so the renderer can route to the right pipeline.
 // ==========================================================================
 
-TEST(MaterialAlphaFields, OpaqueIsDefault)
+TEST_CASE("MaterialAlphaFields.OpaqueIsDefault", "[MaterialAlphaFields]")
 {
     fastgltf::Material gltfMat{};
     Material material;
     applyAlphaFields(gltfMat, material);
-    EXPECT_EQ(material.alphaMode(), AlphaMode::Opaque);
-    EXPECT_FALSE(material.doubleSided());
+    CHECK(material.alphaMode() == AlphaMode::Opaque);
+    CHECK_FALSE(material.doubleSided());
     // fastgltf default alphaCutoff is 0.5f per the glTF spec.
-    EXPECT_FLOAT_EQ(material.alphaCutoff(), 0.5f);
+    CHECK(material.alphaCutoff() == Catch::Approx(0.5f).margin(1e-5f));
 }
 
-TEST(MaterialAlphaFields, MaskWithCustomCutoff)
+TEST_CASE("MaterialAlphaFields.MaskWithCustomCutoff", "[MaterialAlphaFields]")
 {
     fastgltf::Material gltfMat{};
     gltfMat.alphaMode = fastgltf::AlphaMode::Mask;
@@ -738,20 +768,20 @@ TEST(MaterialAlphaFields, MaskWithCustomCutoff)
     gltfMat.doubleSided = true;
     Material material;
     applyAlphaFields(gltfMat, material);
-    EXPECT_EQ(material.alphaMode(), AlphaMode::Mask);
-    EXPECT_FLOAT_EQ(material.alphaCutoff(), 0.25f);
-    EXPECT_TRUE(material.doubleSided());
+    CHECK(material.alphaMode() == AlphaMode::Mask);
+    CHECK(material.alphaCutoff() == Catch::Approx(0.25f).margin(1e-5f));
+    CHECK(material.doubleSided());
 }
 
-TEST(MaterialAlphaFields, BlendMapsThrough)
+TEST_CASE("MaterialAlphaFields.BlendMapsThrough", "[MaterialAlphaFields]")
 {
     fastgltf::Material gltfMat{};
     gltfMat.alphaMode = fastgltf::AlphaMode::Blend;
     gltfMat.doubleSided = true;
     Material material;
     applyAlphaFields(gltfMat, material);
-    EXPECT_EQ(material.alphaMode(), AlphaMode::Blend);
-    EXPECT_TRUE(material.doubleSided());
+    CHECK(material.alphaMode() == AlphaMode::Blend);
+    CHECK(material.doubleSided());
 }
 
 // ==========================================================================
@@ -759,28 +789,29 @@ TEST(MaterialAlphaFields, BlendMapsThrough)
 // trip through GltfLoader::loadMaterial onto Material::occlusionStrength().
 // ==========================================================================
 
-TEST(MaterialOcclusionStrength, DefaultsToOne)
+TEST_CASE("MaterialOcclusionStrength.DefaultsToOne", "[MaterialOcclusionStrength]")
 {
     Material material;
-    EXPECT_FLOAT_EQ(material.occlusionStrength(), 1.0f);
+    CHECK(material.occlusionStrength() == Catch::Approx(1.0f).margin(1e-5f));
 }
 
-TEST(MaterialOcclusionStrength, AbsentTextureLeavesStrengthUnchanged)
+TEST_CASE("MaterialOcclusionStrength.AbsentTextureLeavesStrengthUnchanged",
+          "[MaterialOcclusionStrength]")
 {
     fastgltf::Material gltfMat{};
     Material material;
     material.occlusionStrength(0.42f);
     applyOcclusionStrength(gltfMat, material);
-    EXPECT_FLOAT_EQ(material.occlusionStrength(), 0.42f);
+    CHECK(material.occlusionStrength() == Catch::Approx(0.42f).margin(1e-5f));
 }
 
-TEST(MaterialOcclusionStrength, ExplicitStrengthRoundTrips)
+TEST_CASE("MaterialOcclusionStrength.ExplicitStrengthRoundTrips", "[MaterialOcclusionStrength]")
 {
     fastgltf::Material gltfMat{};
     gltfMat.occlusionTexture.emplace().strength = 0.5f;
     Material material;
     applyOcclusionStrength(gltfMat, material);
-    EXPECT_FLOAT_EQ(material.occlusionStrength(), 0.5f);
+    CHECK(material.occlusionStrength() == Catch::Approx(0.5f).margin(1e-5f));
 }
 
 // ==========================================================================
@@ -789,40 +820,40 @@ TEST(MaterialOcclusionStrength, ExplicitStrengthRoundTrips)
 // chain at the authored magnitude.
 // ==========================================================================
 
-TEST(EmissiveStrength, DefaultStrengthIsIdentity)
+TEST_CASE("EmissiveStrength.DefaultStrengthIsIdentity", "[EmissiveStrength]")
 {
     fastgltf::Material gltfMat{};
     gltfMat.emissiveFactor = {0.5f, 0.25f, 0.125f};
     // emissiveStrength defaults to 1.0 per the extension spec.
     Material material;
     applyEmissiveStrength(gltfMat, material);
-    EXPECT_FLOAT_EQ(material.emissive().r(), 0.5f);
-    EXPECT_FLOAT_EQ(material.emissive().g(), 0.25f);
-    EXPECT_FLOAT_EQ(material.emissive().b(), 0.125f);
+    CHECK(material.emissive().r() == Catch::Approx(0.5f).margin(1e-5f));
+    CHECK(material.emissive().g() == Catch::Approx(0.25f).margin(1e-5f));
+    CHECK(material.emissive().b() == Catch::Approx(0.125f).margin(1e-5f));
 }
 
-TEST(EmissiveStrength, ExplicitStrengthScalesEmissiveFactor)
+TEST_CASE("EmissiveStrength.ExplicitStrengthScalesEmissiveFactor", "[EmissiveStrength]")
 {
     fastgltf::Material gltfMat{};
     gltfMat.emissiveFactor = {1.0f, 0.5f, 0.25f};
     gltfMat.emissiveStrength = 4.0f;
     Material material;
     applyEmissiveStrength(gltfMat, material);
-    EXPECT_FLOAT_EQ(material.emissive().r(), 4.0f);
-    EXPECT_FLOAT_EQ(material.emissive().g(), 2.0f);
-    EXPECT_FLOAT_EQ(material.emissive().b(), 1.0f);
+    CHECK(material.emissive().r() == Catch::Approx(4.0f).margin(1e-5f));
+    CHECK(material.emissive().g() == Catch::Approx(2.0f).margin(1e-5f));
+    CHECK(material.emissive().b() == Catch::Approx(1.0f).margin(1e-5f));
 }
 
-TEST(EmissiveStrength, ZeroStrengthZeroesEmission)
+TEST_CASE("EmissiveStrength.ZeroStrengthZeroesEmission", "[EmissiveStrength]")
 {
     fastgltf::Material gltfMat{};
     gltfMat.emissiveFactor = {1.0f, 1.0f, 1.0f};
     gltfMat.emissiveStrength = 0.0f;
     Material material;
     applyEmissiveStrength(gltfMat, material);
-    EXPECT_FLOAT_EQ(material.emissive().r(), 0.0f);
-    EXPECT_FLOAT_EQ(material.emissive().g(), 0.0f);
-    EXPECT_FLOAT_EQ(material.emissive().b(), 0.0f);
+    CHECK(material.emissive().r() == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(material.emissive().g() == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(material.emissive().b() == Catch::Approx(0.0f).margin(1e-5f));
 }
 
 // ==========================================================================
@@ -831,103 +862,122 @@ TEST(EmissiveStrength, ZeroStrengthZeroesEmission)
 // full asset.
 // ==========================================================================
 
-TEST(EnsureSupportedExtensions, EmptyVectorAccepts)
+TEST_CASE("EnsureSupportedExtensions.EmptyVectorAccepts", "[EnsureSupportedExtensions]")
 {
     std::vector<std::string_view> required;
-    EXPECT_NO_THROW(GltfLoader::ensureSupportedExtensions(required));
+    CHECK_NOTHROW(GltfLoader::ensureSupportedExtensions(required));
 }
 
-TEST(EnsureSupportedExtensions, SupportedExtensionAccepts)
+TEST_CASE("EnsureSupportedExtensions.SupportedExtensionAccepts", "[EnsureSupportedExtensions]")
 {
     std::vector<std::string_view> required{"KHR_materials_emissive_strength"};
-    EXPECT_NO_THROW(GltfLoader::ensureSupportedExtensions(required));
+    CHECK_NOTHROW(GltfLoader::ensureSupportedExtensions(required));
 }
 
-TEST(EnsureSupportedExtensions, KtxBasisuAccepts)
+TEST_CASE("EnsureSupportedExtensions.KtxBasisuAccepts", "[EnsureSupportedExtensions]")
 {
     std::vector<std::string_view> required{"KHR_texture_basisu"};
-    EXPECT_NO_THROW(GltfLoader::ensureSupportedExtensions(required));
+    CHECK_NOTHROW(GltfLoader::ensureSupportedExtensions(required));
 }
 
-TEST(EnsureSupportedExtensions, MaterialsVariantsAccepts)
+TEST_CASE("EnsureSupportedExtensions.MaterialsVariantsAccepts", "[EnsureSupportedExtensions]")
 {
     std::vector<std::string_view> required{"KHR_materials_variants"};
-    EXPECT_NO_THROW(GltfLoader::ensureSupportedExtensions(required));
+    CHECK_NOTHROW(GltfLoader::ensureSupportedExtensions(required));
 }
 
-TEST(EnsureSupportedExtensions, UnsupportedExtensionThrows)
+TEST_CASE("EnsureSupportedExtensions.UnsupportedExtensionThrows", "[EnsureSupportedExtensions]")
 {
     std::vector<std::string_view> required{"KHR_draco_mesh_compression"};
     try
     {
         GltfLoader::ensureSupportedExtensions(required);
-        FAIL() << "expected ensureSupportedExtensions to throw";
+        FAIL("expected ensureSupportedExtensions to throw");
     }
     catch (const std::runtime_error& e)
     {
-        EXPECT_NE(std::string(e.what()).find("KHR_draco_mesh_compression"), std::string::npos);
+        CHECK(std::string(e.what()).find("KHR_draco_mesh_compression") != std::string::npos);
     }
 }
 
-TEST(EnsureSupportedExtensions, MixedThrowsListingOnlyUnsupported)
+TEST_CASE("EnsureSupportedExtensions.MixedThrowsListingOnlyUnsupported",
+          "[EnsureSupportedExtensions]")
 {
     std::vector<std::string_view> required{"KHR_materials_emissive_strength",
                                            "KHR_mesh_quantization", "KHR_materials_variants"};
     try
     {
         GltfLoader::ensureSupportedExtensions(required);
-        FAIL() << "expected ensureSupportedExtensions to throw";
+        FAIL("expected ensureSupportedExtensions to throw");
     }
     catch (const std::runtime_error& e)
     {
         const std::string what(e.what());
-        EXPECT_NE(what.find("KHR_mesh_quantization"), std::string::npos);
+        CHECK(what.find("KHR_mesh_quantization") != std::string::npos);
         // Supported extensions must not be listed in the unsupported message.
-        EXPECT_EQ(what.find("KHR_materials_variants"), std::string::npos);
-        EXPECT_EQ(what.find("KHR_materials_emissive_strength"), std::string::npos);
+        CHECK(what.find("KHR_materials_variants") == std::string::npos);
+        CHECK(what.find("KHR_materials_emissive_strength") == std::string::npos);
     }
 }
 
-TEST(EnsureSupportedExtensions, StainedGlassLampKtxAndVariantsExtensionsNowAccept)
+TEST_CASE("EnsureSupportedExtensions.ErrorListsEveryUnsupportedExtension",
+          "[EnsureSupportedExtensions]")
 {
-    ASSERT_TRUE(std::filesystem::exists("StainedGlassLampKTX/StainedGlassLamp.gltf"));
+    std::vector<std::string_view> required{"KHR_mesh_quantization", "KHR_draco_mesh_compression"};
+    try
+    {
+        GltfLoader::ensureSupportedExtensions(required);
+        FAIL("expected ensureSupportedExtensions to throw");
+    }
+    catch (const std::runtime_error& e)
+    {
+        const std::string what(e.what());
+        CHECK(what.find("KHR_mesh_quantization") != std::string::npos);
+        CHECK(what.find("KHR_draco_mesh_compression") != std::string::npos);
+    }
+}
+
+TEST_CASE("EnsureSupportedExtensions.StainedGlassLampKtxAndVariantsExtensionsNowAccept",
+          "[EnsureSupportedExtensions]")
+{
+    REQUIRE(std::filesystem::exists("StainedGlassLampKTX/StainedGlassLamp.gltf"));
 
     std::ifstream file("StainedGlassLampKTX/StainedGlassLamp.gltf");
-    ASSERT_TRUE(file.is_open());
+    REQUIRE(file.is_open());
     const std::string json((std::istreambuf_iterator<char>(file)),
                            std::istreambuf_iterator<char>());
 
     simdjson::dom::parser parser;
     simdjson::dom::element doc;
-    ASSERT_EQ(parser.parse(json).get(doc), simdjson::SUCCESS);
+    REQUIRE(parser.parse(json).get(doc) == simdjson::SUCCESS);
 
     std::vector<std::string_view> required;
     std::vector<std::string_view> used;
     simdjson::dom::array requiredExtensions;
-    ASSERT_EQ(doc["extensionsRequired"].get(requiredExtensions), simdjson::SUCCESS);
+    REQUIRE(doc["extensionsRequired"].get(requiredExtensions) == simdjson::SUCCESS);
     for (const auto extValue : requiredExtensions)
     {
         std::string_view ext;
-        ASSERT_EQ(extValue.get(ext), simdjson::SUCCESS);
+        REQUIRE(extValue.get(ext) == simdjson::SUCCESS);
         required.emplace_back(ext);
     }
 
     simdjson::dom::array usedExtensions;
-    ASSERT_EQ(doc["extensionsUsed"].get(usedExtensions), simdjson::SUCCESS);
+    REQUIRE(doc["extensionsUsed"].get(usedExtensions) == simdjson::SUCCESS);
     for (const auto extValue : usedExtensions)
     {
         std::string_view ext;
-        ASSERT_EQ(extValue.get(ext), simdjson::SUCCESS);
+        REQUIRE(extValue.get(ext) == simdjson::SUCCESS);
         used.emplace_back(ext);
     }
 
     bool hasBasisuTexture = false;
     simdjson::dom::array textures;
-    ASSERT_EQ(doc["textures"].get(textures), simdjson::SUCCESS);
+    REQUIRE(doc["textures"].get(textures) == simdjson::SUCCESS);
     for (const auto textureValue : textures)
     {
         simdjson::dom::object textureObject;
-        ASSERT_EQ(textureValue.get(textureObject), simdjson::SUCCESS);
+        REQUIRE(textureValue.get(textureObject) == simdjson::SUCCESS);
 
         simdjson::dom::element extensionsElement;
         if (textureObject["extensions"].get(extensionsElement) != simdjson::SUCCESS)
@@ -942,58 +992,60 @@ TEST(EnsureSupportedExtensions, StainedGlassLampKtxAndVariantsExtensionsNowAccep
             break;
         }
     }
-    ASSERT_TRUE(hasBasisuTexture);
-    ASSERT_NE(std::find(required.begin(), required.end(), std::string_view{"KHR_texture_basisu"}),
-              required.end());
-    ASSERT_NE(std::find(used.begin(), used.end(), std::string_view{"KHR_materials_variants"}),
-              used.end());
+    REQUIRE(hasBasisuTexture);
+    REQUIRE(std::find(required.begin(), required.end(), std::string_view{"KHR_texture_basisu"}) !=
+            required.end());
+    REQUIRE(std::find(used.begin(), used.end(), std::string_view{"KHR_materials_variants"}) !=
+            used.end());
 
-    EXPECT_NO_THROW(GltfLoader::ensureSupportedExtensions(required));
+    CHECK_NOTHROW(GltfLoader::ensureSupportedExtensions(required));
 }
 
-TEST(ParseAssetKtxBasisu, StainedGlassLampTexturesUseBasisuSources)
+TEST_CASE("ParseAssetKtxBasisu.StainedGlassLampTexturesUseBasisuSources", "[ParseAssetKtxBasisu]")
 {
     const auto asset =
         parseRealGltfAsset(std::filesystem::path("StainedGlassLampKTX") / "StainedGlassLamp.gltf");
 
-    ASSERT_FALSE(asset.textures.empty());
+    REQUIRE_FALSE(asset.textures.empty());
     for (const auto& texture : asset.textures)
     {
-        EXPECT_TRUE(texture.basisuImageIndex.has_value());
-        EXPECT_FALSE(texture.imageIndex.has_value());
+        CHECK(texture.basisuImageIndex.has_value());
+        CHECK_FALSE(texture.imageIndex.has_value());
     }
 }
 
-TEST(ParseAssetKtxBasisu, StainedGlassLampMaterialsReferenceBasisuTextures)
+TEST_CASE("ParseAssetKtxBasisu.StainedGlassLampMaterialsReferenceBasisuTextures",
+          "[ParseAssetKtxBasisu]")
 {
     const auto asset =
         parseRealGltfAsset(std::filesystem::path("StainedGlassLampKTX") / "StainedGlassLamp.gltf");
 
-    ASSERT_FALSE(asset.materials.empty());
+    REQUIRE_FALSE(asset.materials.empty());
     bool sawReferencedTexture = false;
     for (const auto& material : asset.materials)
     {
         for (const std::size_t textureIndex : referencedTextureIndices(material))
         {
-            ASSERT_LT(textureIndex, asset.textures.size());
-            EXPECT_TRUE(asset.textures[textureIndex].basisuImageIndex.has_value());
-            EXPECT_FALSE(asset.textures[textureIndex].imageIndex.has_value());
+            REQUIRE(textureIndex < asset.textures.size());
+            CHECK(asset.textures[textureIndex].basisuImageIndex.has_value());
+            CHECK_FALSE(asset.textures[textureIndex].imageIndex.has_value());
             sawReferencedTexture = true;
         }
     }
-    EXPECT_TRUE(sawReferencedTexture);
+    CHECK(sawReferencedTexture);
 }
 
-TEST(ParseAssetImageSources, TextureSettingsTestUsesLegacyImageIndices)
+TEST_CASE("ParseAssetImageSources.TextureSettingsTestUsesLegacyImageIndices",
+          "[ParseAssetImageSources]")
 {
     const auto asset = parseRealGltfAsset(std::filesystem::path("TextureSettingsTest") /
                                           "TextureSettingsTest.gltf");
 
-    ASSERT_FALSE(asset.textures.empty());
+    REQUIRE_FALSE(asset.textures.empty());
     for (const auto& texture : asset.textures)
     {
-        EXPECT_TRUE(texture.imageIndex.has_value());
-        EXPECT_FALSE(texture.basisuImageIndex.has_value());
+        CHECK(texture.imageIndex.has_value());
+        CHECK_FALSE(texture.basisuImageIndex.has_value());
     }
 }
 
@@ -1002,19 +1054,19 @@ TEST(ParseAssetImageSources, TextureSettingsTestUsesLegacyImageIndices)
 // else gets skipped (with a warning at load time).
 // ==========================================================================
 
-TEST(SupportedPrimitiveType, TrianglesIsSupported)
+TEST_CASE("SupportedPrimitiveType.TrianglesIsSupported", "[SupportedPrimitiveType]")
 {
-    EXPECT_TRUE(GltfLoader::isSupportedPrimitiveType(fastgltf::PrimitiveType::Triangles));
+    CHECK(GltfLoader::isSupportedPrimitiveType(fastgltf::PrimitiveType::Triangles));
 }
 
-TEST(SupportedPrimitiveType, AllOtherModesAreSkipped)
+TEST_CASE("SupportedPrimitiveType.AllOtherModesAreSkipped", "[SupportedPrimitiveType]")
 {
-    EXPECT_FALSE(GltfLoader::isSupportedPrimitiveType(fastgltf::PrimitiveType::Points));
-    EXPECT_FALSE(GltfLoader::isSupportedPrimitiveType(fastgltf::PrimitiveType::Lines));
-    EXPECT_FALSE(GltfLoader::isSupportedPrimitiveType(fastgltf::PrimitiveType::LineLoop));
-    EXPECT_FALSE(GltfLoader::isSupportedPrimitiveType(fastgltf::PrimitiveType::LineStrip));
-    EXPECT_FALSE(GltfLoader::isSupportedPrimitiveType(fastgltf::PrimitiveType::TriangleStrip));
-    EXPECT_FALSE(GltfLoader::isSupportedPrimitiveType(fastgltf::PrimitiveType::TriangleFan));
+    CHECK_FALSE(GltfLoader::isSupportedPrimitiveType(fastgltf::PrimitiveType::Points));
+    CHECK_FALSE(GltfLoader::isSupportedPrimitiveType(fastgltf::PrimitiveType::Lines));
+    CHECK_FALSE(GltfLoader::isSupportedPrimitiveType(fastgltf::PrimitiveType::LineLoop));
+    CHECK_FALSE(GltfLoader::isSupportedPrimitiveType(fastgltf::PrimitiveType::LineStrip));
+    CHECK_FALSE(GltfLoader::isSupportedPrimitiveType(fastgltf::PrimitiveType::TriangleStrip));
+    CHECK_FALSE(GltfLoader::isSupportedPrimitiveType(fastgltf::PrimitiveType::TriangleFan));
 }
 
 // ==========================================================================
@@ -1023,19 +1075,19 @@ TEST(SupportedPrimitiveType, AllOtherModesAreSkipped)
 // vertex stream.
 // ==========================================================================
 
-TEST(MaterialTexCoordIndices, AbsentTexturesLeaveDefaultsZero)
+TEST_CASE("MaterialTexCoordIndices.AbsentTexturesLeaveDefaultsZero", "[MaterialTexCoordIndices]")
 {
     fastgltf::Material gltfMat{};
     Material material;
     applyTexCoordIndices(gltfMat, material);
-    EXPECT_EQ(material.texture(MaterialTextureSlot::BaseColour).texCoord, 0);
-    EXPECT_EQ(material.texture(MaterialTextureSlot::Emissive).texCoord, 0);
-    EXPECT_EQ(material.texture(MaterialTextureSlot::Normal).texCoord, 0);
-    EXPECT_EQ(material.texture(MaterialTextureSlot::MetallicRoughness).texCoord, 0);
-    EXPECT_EQ(material.texture(MaterialTextureSlot::Occlusion).texCoord, 0);
+    CHECK(material.texture(MaterialTextureSlot::BaseColour).texCoord == 0);
+    CHECK(material.texture(MaterialTextureSlot::Emissive).texCoord == 0);
+    CHECK(material.texture(MaterialTextureSlot::Normal).texCoord == 0);
+    CHECK(material.texture(MaterialTextureSlot::MetallicRoughness).texCoord == 0);
+    CHECK(material.texture(MaterialTextureSlot::Occlusion).texCoord == 0);
 }
 
-TEST(MaterialTexCoordIndices, ExplicitTexCoordOnesRoundTrip)
+TEST_CASE("MaterialTexCoordIndices.ExplicitTexCoordOnesRoundTrip", "[MaterialTexCoordIndices]")
 {
     fastgltf::Material gltfMat{};
     gltfMat.pbrData.baseColorTexture.emplace().texCoordIndex = 1;
@@ -1045,14 +1097,14 @@ TEST(MaterialTexCoordIndices, ExplicitTexCoordOnesRoundTrip)
     gltfMat.occlusionTexture.emplace().texCoordIndex = 1;
     Material material;
     applyTexCoordIndices(gltfMat, material);
-    EXPECT_EQ(material.texture(MaterialTextureSlot::BaseColour).texCoord, 1);
-    EXPECT_EQ(material.texture(MaterialTextureSlot::Emissive).texCoord, 1);
-    EXPECT_EQ(material.texture(MaterialTextureSlot::Normal).texCoord, 1);
-    EXPECT_EQ(material.texture(MaterialTextureSlot::MetallicRoughness).texCoord, 1);
-    EXPECT_EQ(material.texture(MaterialTextureSlot::Occlusion).texCoord, 1);
+    CHECK(material.texture(MaterialTextureSlot::BaseColour).texCoord == 1);
+    CHECK(material.texture(MaterialTextureSlot::Emissive).texCoord == 1);
+    CHECK(material.texture(MaterialTextureSlot::Normal).texCoord == 1);
+    CHECK(material.texture(MaterialTextureSlot::MetallicRoughness).texCoord == 1);
+    CHECK(material.texture(MaterialTextureSlot::Occlusion).texCoord == 1);
 }
 
-TEST(MaterialTexCoordIndices, MixedSlotsRoundTrip)
+TEST_CASE("MaterialTexCoordIndices.MixedSlotsRoundTrip", "[MaterialTexCoordIndices]")
 {
     // Common real-world layout: occlusion baked onto its own UV set.
     fastgltf::Material gltfMat{};
@@ -1060,8 +1112,8 @@ TEST(MaterialTexCoordIndices, MixedSlotsRoundTrip)
     gltfMat.occlusionTexture.emplace().texCoordIndex = 1;
     Material material;
     applyTexCoordIndices(gltfMat, material);
-    EXPECT_EQ(material.texture(MaterialTextureSlot::BaseColour).texCoord, 0);
-    EXPECT_EQ(material.texture(MaterialTextureSlot::Occlusion).texCoord, 1);
+    CHECK(material.texture(MaterialTextureSlot::BaseColour).texCoord == 0);
+    CHECK(material.texture(MaterialTextureSlot::Occlusion).texCoord == 1);
 }
 
 // ==========================================================================
@@ -1070,26 +1122,26 @@ TEST(MaterialTexCoordIndices, MixedSlotsRoundTrip)
 // UvTransform. Absent → identity.
 // ==========================================================================
 
-TEST(UvTransformDefault, FieldsAreIdentity)
+TEST_CASE("UvTransformDefault.FieldsAreIdentity", "[UvTransformDefault]")
 {
     fire_engine::UvTransform t;
-    EXPECT_FLOAT_EQ(t.offsetX, 0.0f);
-    EXPECT_FLOAT_EQ(t.offsetY, 0.0f);
-    EXPECT_FLOAT_EQ(t.scaleX, 1.0f);
-    EXPECT_FLOAT_EQ(t.scaleY, 1.0f);
-    EXPECT_FLOAT_EQ(t.rotation, 0.0f);
+    CHECK(t.offsetX == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(t.offsetY == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(t.scaleX == Catch::Approx(1.0f).margin(1e-5f));
+    CHECK(t.scaleY == Catch::Approx(1.0f).margin(1e-5f));
+    CHECK(t.rotation == Catch::Approx(0.0f).margin(1e-5f));
 }
 
-TEST(UvTransformLoader, AbsentExtensionGivesIdentity)
+TEST_CASE("UvTransformLoader.AbsentExtensionGivesIdentity", "[UvTransformLoader]")
 {
     fastgltf::TextureInfo info{};
     auto t = readUvTransform(info);
-    EXPECT_FLOAT_EQ(t.offsetX, 0.0f);
-    EXPECT_FLOAT_EQ(t.scaleX, 1.0f);
-    EXPECT_FLOAT_EQ(t.rotation, 0.0f);
+    CHECK(t.offsetX == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(t.scaleX == Catch::Approx(1.0f).margin(1e-5f));
+    CHECK(t.rotation == Catch::Approx(0.0f).margin(1e-5f));
 }
 
-TEST(UvTransformLoader, ExplicitTransformRoundTrips)
+TEST_CASE("UvTransformLoader.ExplicitTransformRoundTrips", "[UvTransformLoader]")
 {
     fastgltf::TextureInfo info{};
     info.transform = std::make_unique<fastgltf::TextureTransform>();
@@ -1097,11 +1149,11 @@ TEST(UvTransformLoader, ExplicitTransformRoundTrips)
     info.transform->uvScale = {2.0f, 3.0f};
     info.transform->rotation = 1.5f;
     auto t = readUvTransform(info);
-    EXPECT_FLOAT_EQ(t.offsetX, 0.25f);
-    EXPECT_FLOAT_EQ(t.offsetY, 0.5f);
-    EXPECT_FLOAT_EQ(t.scaleX, 2.0f);
-    EXPECT_FLOAT_EQ(t.scaleY, 3.0f);
-    EXPECT_FLOAT_EQ(t.rotation, 1.5f);
+    CHECK(t.offsetX == Catch::Approx(0.25f).margin(1e-5f));
+    CHECK(t.offsetY == Catch::Approx(0.5f).margin(1e-5f));
+    CHECK(t.scaleX == Catch::Approx(2.0f).margin(1e-5f));
+    CHECK(t.scaleY == Catch::Approx(3.0f).margin(1e-5f));
+    CHECK(t.rotation == Catch::Approx(1.5f).margin(1e-5f));
 }
 
 // ==========================================================================
@@ -1109,27 +1161,27 @@ TEST(UvTransformLoader, ExplicitTransformRoundTrips)
 // Default false; renderer's lighting path is the same as before.
 // ==========================================================================
 
-TEST(MaterialUnlit, DefaultIsLit)
+TEST_CASE("MaterialUnlit.DefaultIsLit", "[MaterialUnlit]")
 {
     Material material;
-    EXPECT_FALSE(material.unlit());
+    CHECK_FALSE(material.unlit());
 }
 
-TEST(MaterialUnlit, GltfFlagPropagates)
+TEST_CASE("MaterialUnlit.GltfFlagPropagates", "[MaterialUnlit]")
 {
     fastgltf::Material gltfMat{};
     gltfMat.unlit = true;
     Material material;
     material.unlit(gltfMat.unlit);
-    EXPECT_TRUE(material.unlit());
+    CHECK(material.unlit());
 }
 
-TEST(MaterialUnlit, AbsentFlagLeavesLit)
+TEST_CASE("MaterialUnlit.AbsentFlagLeavesLit", "[MaterialUnlit]")
 {
     fastgltf::Material gltfMat{};
     Material material;
     material.unlit(gltfMat.unlit);
-    EXPECT_FALSE(material.unlit());
+    CHECK_FALSE(material.unlit());
 }
 
 // ==========================================================================
@@ -1148,43 +1200,43 @@ static fire_engine::Colour3 extractVertexColour(const std::vector<fastgltf::math
     return {1.0f, 1.0f, 1.0f};
 }
 
-TEST(VertexColourExtraction, DefaultsToWhiteWhenAbsent)
+TEST_CASE("VertexColourExtraction.DefaultsToWhiteWhenAbsent", "[VertexColourExtraction]")
 {
     std::vector<fastgltf::math::fvec4> colors;
     auto c = extractVertexColour(colors, 0);
-    EXPECT_FLOAT_EQ(c.r(), 1.0f);
-    EXPECT_FLOAT_EQ(c.g(), 1.0f);
-    EXPECT_FLOAT_EQ(c.b(), 1.0f);
+    CHECK(c.r() == Catch::Approx(1.0f).margin(1e-5f));
+    CHECK(c.g() == Catch::Approx(1.0f).margin(1e-5f));
+    CHECK(c.b() == Catch::Approx(1.0f).margin(1e-5f));
 }
 
-TEST(VertexColourExtraction, UsesProvidedColour)
+TEST_CASE("VertexColourExtraction.UsesProvidedColour", "[VertexColourExtraction]")
 {
     std::vector<fastgltf::math::fvec4> colors;
     colors.push_back(fastgltf::math::fvec4{0.2f, 0.4f, 0.6f, 1.0f});
     auto c = extractVertexColour(colors, 0);
-    EXPECT_FLOAT_EQ(c.r(), 0.2f);
-    EXPECT_FLOAT_EQ(c.g(), 0.4f);
-    EXPECT_FLOAT_EQ(c.b(), 0.6f);
+    CHECK(c.r() == Catch::Approx(0.2f).margin(1e-5f));
+    CHECK(c.g() == Catch::Approx(0.4f).margin(1e-5f));
+    CHECK(c.b() == Catch::Approx(0.6f).margin(1e-5f));
 }
 
-TEST(VertexColourExtraction, IndexOutOfRangeFallsBackToWhite)
+TEST_CASE("VertexColourExtraction.IndexOutOfRangeFallsBackToWhite", "[VertexColourExtraction]")
 {
     std::vector<fastgltf::math::fvec4> colors;
     colors.push_back(fastgltf::math::fvec4{1.0f, 0.0f, 0.0f, 1.0f});
     auto c = extractVertexColour(colors, 5);
-    EXPECT_FLOAT_EQ(c.r(), 1.0f);
-    EXPECT_FLOAT_EQ(c.g(), 1.0f);
-    EXPECT_FLOAT_EQ(c.b(), 1.0f);
+    CHECK(c.r() == Catch::Approx(1.0f).margin(1e-5f));
+    CHECK(c.g() == Catch::Approx(1.0f).margin(1e-5f));
+    CHECK(c.b() == Catch::Approx(1.0f).margin(1e-5f));
 }
 
-TEST(VertexColourExtraction, IgnoresAlphaChannel)
+TEST_CASE("VertexColourExtraction.IgnoresAlphaChannel", "[VertexColourExtraction]")
 {
     std::vector<fastgltf::math::fvec4> colors;
     colors.push_back(fastgltf::math::fvec4{0.1f, 0.2f, 0.3f, 0.5f});
     auto c = extractVertexColour(colors, 0);
-    EXPECT_FLOAT_EQ(c.r(), 0.1f);
-    EXPECT_FLOAT_EQ(c.g(), 0.2f);
-    EXPECT_FLOAT_EQ(c.b(), 0.3f);
+    CHECK(c.r() == Catch::Approx(0.1f).margin(1e-5f));
+    CHECK(c.g() == Catch::Approx(0.2f).margin(1e-5f));
+    CHECK(c.b() == Catch::Approx(0.3f).margin(1e-5f));
 }
 
 // ---------------------------------------------------------------------------
@@ -1203,23 +1255,24 @@ static void applyIor(const fastgltf::Material& gltfMat, Material& material)
     }
 }
 
-TEST(LoadMaterialIor, DefaultIsFifteen)
+TEST_CASE("LoadMaterialIor.DefaultIsFifteen", "[LoadMaterialIor]")
 {
     fastgltf::Material gltfMat;
     Material material;
     applyIor(gltfMat, material);
-    EXPECT_FALSE(material.transmission().has_value());
-    EXPECT_FLOAT_EQ(material.transmission().value_or(TransmissionParams{}).ior, 1.5f);
+    CHECK_FALSE(material.transmission().has_value());
+    CHECK(material.transmission().value_or(TransmissionParams{}).ior ==
+          Catch::Approx(1.5f).margin(1e-5f));
 }
 
-TEST(LoadMaterialIor, AuthoredValuePropagates)
+TEST_CASE("LoadMaterialIor.AuthoredValuePropagates", "[LoadMaterialIor]")
 {
     fastgltf::Material gltfMat;
     gltfMat.ior = 2.42f; // diamond
     Material material;
     applyIor(gltfMat, material);
-    ASSERT_TRUE(material.transmission().has_value());
-    EXPECT_FLOAT_EQ(material.transmission()->ior, 2.42f);
+    REQUIRE(material.transmission().has_value());
+    CHECK(material.transmission()->ior == Catch::Approx(2.42f).margin(1e-5f));
 }
 
 // ---------------------------------------------------------------------------
@@ -1244,19 +1297,19 @@ static void applyClearcoat(const fastgltf::Material& gltfMat, Material& material
     material.clearcoat(clearcoat);
 }
 
-TEST(LoadMaterialClearcoat, AbsentExtensionLeavesDefaults)
+TEST_CASE("LoadMaterialClearcoat.AbsentExtensionLeavesDefaults", "[LoadMaterialClearcoat]")
 {
     fastgltf::Material gltfMat;
     Material material;
     applyClearcoat(gltfMat, material);
-    EXPECT_FALSE(material.clearcoat().has_value());
+    CHECK_FALSE(material.clearcoat().has_value());
     const ClearcoatParams defaults = material.clearcoat().value_or(ClearcoatParams{});
-    EXPECT_FLOAT_EQ(defaults.factor, 0.0f);
-    EXPECT_FLOAT_EQ(defaults.roughness, 0.0f);
-    EXPECT_FLOAT_EQ(defaults.normalScale, 1.0f);
+    CHECK(defaults.factor == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(defaults.roughness == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(defaults.normalScale == Catch::Approx(1.0f).margin(1e-5f));
 }
 
-TEST(LoadMaterialClearcoat, AuthoredFactorAndRoughnessPropagate)
+TEST_CASE("LoadMaterialClearcoat.AuthoredFactorAndRoughnessPropagate", "[LoadMaterialClearcoat]")
 {
     fastgltf::Material gltfMat;
     gltfMat.clearcoat = std::make_unique<fastgltf::MaterialClearcoat>();
@@ -1264,12 +1317,12 @@ TEST(LoadMaterialClearcoat, AuthoredFactorAndRoughnessPropagate)
     gltfMat.clearcoat->clearcoatRoughnessFactor = 0.2f;
     Material material;
     applyClearcoat(gltfMat, material);
-    ASSERT_TRUE(material.clearcoat().has_value());
-    EXPECT_FLOAT_EQ(material.clearcoat()->factor, 0.75f);
-    EXPECT_FLOAT_EQ(material.clearcoat()->roughness, 0.2f);
+    REQUIRE(material.clearcoat().has_value());
+    CHECK(material.clearcoat()->factor == Catch::Approx(0.75f).margin(1e-5f));
+    CHECK(material.clearcoat()->roughness == Catch::Approx(0.2f).margin(1e-5f));
 }
 
-TEST(LoadMaterialClearcoat, NormalScalePropagates)
+TEST_CASE("LoadMaterialClearcoat.NormalScalePropagates", "[LoadMaterialClearcoat]")
 {
     fastgltf::Material gltfMat;
     gltfMat.clearcoat = std::make_unique<fastgltf::MaterialClearcoat>();
@@ -1278,8 +1331,8 @@ TEST(LoadMaterialClearcoat, NormalScalePropagates)
     info.scale = 0.4f;
     Material material;
     applyClearcoat(gltfMat, material);
-    ASSERT_TRUE(material.clearcoat().has_value());
-    EXPECT_FLOAT_EQ(material.clearcoat()->normalScale, 0.4f);
+    REQUIRE(material.clearcoat().has_value());
+    CHECK(material.clearcoat()->normalScale == Catch::Approx(0.4f).margin(1e-5f));
 }
 
 // ---------------------------------------------------------------------------
@@ -1303,30 +1356,30 @@ static void applyVolume(const fastgltf::Material& gltfMat, fire_engine::Material
     material.volume(volume);
 }
 
-TEST(LoadMaterialVolume, AbsentExtensionLeavesDefaults)
+TEST_CASE("LoadMaterialVolume.AbsentExtensionLeavesDefaults", "[LoadMaterialVolume]")
 {
     fastgltf::Material gltfMat;
     Material material;
     applyVolume(gltfMat, material);
-    EXPECT_FALSE(material.volume().has_value());
+    CHECK_FALSE(material.volume().has_value());
     const fire_engine::VolumeParams defaults =
         material.volume().value_or(fire_engine::VolumeParams{});
-    EXPECT_FLOAT_EQ(defaults.thicknessFactor, 0.0f);
-    EXPECT_TRUE(std::isinf(defaults.attenuationDistance));
+    CHECK(defaults.thicknessFactor == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(std::isinf(defaults.attenuationDistance));
 }
 
-TEST(LoadMaterialVolume, ThicknessFactorPropagates)
+TEST_CASE("LoadMaterialVolume.ThicknessFactorPropagates", "[LoadMaterialVolume]")
 {
     fastgltf::Material gltfMat;
     gltfMat.volume = std::make_unique<fastgltf::MaterialVolume>();
     gltfMat.volume->thicknessFactor = 0.5f;
     Material material;
     applyVolume(gltfMat, material);
-    ASSERT_TRUE(material.volume().has_value());
-    EXPECT_FLOAT_EQ(material.volume()->thicknessFactor, 0.5f);
+    REQUIRE(material.volume().has_value());
+    CHECK(material.volume()->thicknessFactor == Catch::Approx(0.5f).margin(1e-5f));
 }
 
-TEST(LoadMaterialVolume, AttenuationColorAndDistancePropagate)
+TEST_CASE("LoadMaterialVolume.AttenuationColorAndDistancePropagate", "[LoadMaterialVolume]")
 {
     fastgltf::Material gltfMat;
     gltfMat.volume = std::make_unique<fastgltf::MaterialVolume>();
@@ -1334,7 +1387,7 @@ TEST(LoadMaterialVolume, AttenuationColorAndDistancePropagate)
     gltfMat.volume->attenuationDistance = 4.0f;
     Material material;
     applyVolume(gltfMat, material);
-    ASSERT_TRUE(material.volume().has_value());
-    EXPECT_EQ(material.volume()->attenuationColor, fire_engine::Colour3(0.3f, 0.5f, 0.7f));
-    EXPECT_FLOAT_EQ(material.volume()->attenuationDistance, 4.0f);
+    REQUIRE(material.volume().has_value());
+    CHECK(material.volume()->attenuationColor == fire_engine::Colour3(0.3f, 0.5f, 0.7f));
+    CHECK(material.volume()->attenuationDistance == Catch::Approx(4.0f).margin(1e-5f));
 }

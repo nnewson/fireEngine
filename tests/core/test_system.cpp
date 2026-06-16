@@ -1,6 +1,7 @@
 #include <fire_engine/core/system.hpp>
 
-#include <gtest/gtest.h>
+#include <catch2/catch_approx.hpp>
+#include <catch2/catch_test_macros.hpp>
 
 using fire_engine::SystemT;
 
@@ -44,43 +45,43 @@ using MockSystem = SystemT<MockBackend>;
 // Delegation
 // ==========================================================================
 
-TEST(SystemT, InitDelegatesToBackend)
+TEST_CASE("SystemT.InitDelegatesToBackend", "[SystemT]")
 {
     MockBackend::reset();
-    EXPECT_FALSE(MockBackend::initCalled);
+    CHECK_FALSE(MockBackend::initCalled);
     MockSystem::init();
-    EXPECT_TRUE(MockBackend::initCalled);
+    CHECK(MockBackend::initCalled);
 }
 
-TEST(SystemT, DestroyDelegatesToBackend)
+TEST_CASE("SystemT.DestroyDelegatesToBackend", "[SystemT]")
 {
     MockBackend::reset();
-    EXPECT_FALSE(MockBackend::destroyCalled);
+    CHECK_FALSE(MockBackend::destroyCalled);
     MockSystem::destroy();
-    EXPECT_TRUE(MockBackend::destroyCalled);
+    CHECK(MockBackend::destroyCalled);
 }
 
-TEST(SystemT, GetTimeDelegatesToBackend)
+TEST_CASE("SystemT.GetTimeDelegatesToBackend", "[SystemT]")
 {
     MockBackend::reset();
     MockBackend::mockTime = 42.5;
-    EXPECT_DOUBLE_EQ(MockSystem::getTime(), 42.5);
+    CHECK(MockSystem::getTime() == Catch::Approx(42.5).margin(1e-5f));
 }
 
-TEST(SystemT, GetTimeReflectsChanges)
+TEST_CASE("SystemT.GetTimeReflectsChanges", "[SystemT]")
 {
     MockBackend::reset();
     MockBackend::mockTime = 1.0;
-    EXPECT_DOUBLE_EQ(MockSystem::getTime(), 1.0);
+    CHECK(MockSystem::getTime() == Catch::Approx(1.0).margin(1e-5f));
     MockBackend::mockTime = 2.0;
-    EXPECT_DOUBLE_EQ(MockSystem::getTime(), 2.0);
+    CHECK(MockSystem::getTime() == Catch::Approx(2.0).margin(1e-5f));
 }
 
 // ==========================================================================
 // Non-instantiable
 // ==========================================================================
 
-TEST(SystemT, IsNotInstantiable)
+TEST_CASE("SystemT.IsNotInstantiable", "[SystemT]")
 {
     static_assert(!std::is_default_constructible_v<MockSystem>);
 }

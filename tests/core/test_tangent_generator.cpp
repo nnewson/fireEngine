@@ -3,14 +3,15 @@
 #include <cmath>
 #include <vector>
 
-#include <gtest/gtest.h>
+#include <catch2/catch_approx.hpp>
+#include <catch2/catch_test_macros.hpp>
 
 using fire_engine::TangentGenerator;
 using fire_engine::Vec2;
 using fire_engine::Vec3;
 using fire_engine::Vec4;
 
-TEST(TangentGenerator, GeneratesTangentsForPlanarQuad)
+TEST_CASE("TangentGenerator.GeneratesTangentsForPlanarQuad", "[TangentGenerator]")
 {
     std::vector<Vec3> positions = {
         {0.0f, 0.0f, 0.0f},
@@ -29,18 +30,18 @@ TEST(TangentGenerator, GeneratesTangentsForPlanarQuad)
 
     auto result = TangentGenerator::generate(positions, normals, texcoords, indices);
 
-    ASSERT_TRUE(result.succeeded);
-    ASSERT_EQ(result.tangents.size(), positions.size());
+    REQUIRE(result.succeeded);
+    REQUIRE(result.tangents.size() == positions.size());
     for (const auto& tangent : result.tangents)
     {
-        EXPECT_NEAR(tangent.x(), 1.0f, 1e-4f);
-        EXPECT_NEAR(tangent.y(), 0.0f, 1e-4f);
-        EXPECT_NEAR(tangent.z(), 0.0f, 1e-4f);
-        EXPECT_TRUE(std::abs(tangent.w()) == 1.0f);
+        CHECK(tangent.x() == Catch::Approx(1.0f).margin(1e-4f));
+        CHECK(tangent.y() == Catch::Approx(0.0f).margin(1e-4f));
+        CHECK(tangent.z() == Catch::Approx(0.0f).margin(1e-4f));
+        CHECK(std::abs(tangent.w()) == 1.0f);
     }
 }
 
-TEST(TangentGenerator, GeneratedTangentsAreOrthogonalToNormals)
+TEST_CASE("TangentGenerator.GeneratedTangentsAreOrthogonalToNormals", "[TangentGenerator]")
 {
     std::vector<Vec3> positions = {
         {0.0f, 0.0f, 0.0f},
@@ -57,15 +58,15 @@ TEST(TangentGenerator, GeneratedTangentsAreOrthogonalToNormals)
 
     auto result = TangentGenerator::generate(positions, normals, texcoords, indices);
 
-    ASSERT_TRUE(result.succeeded);
+    REQUIRE(result.succeeded);
     for (std::size_t i = 0; i < normals.size(); ++i)
     {
         Vec3 tangent{result.tangents[i].x(), result.tangents[i].y(), result.tangents[i].z()};
-        EXPECT_NEAR(Vec3::dotProduct(normals[i], tangent), 0.0f, 1e-4f);
+        CHECK(Vec3::dotProduct(normals[i], tangent) == Catch::Approx(0.0f).margin(1e-4f));
     }
 }
 
-TEST(TangentGenerator, GeneratesNegativeHandednessForMirroredUvs)
+TEST_CASE("TangentGenerator.GeneratesNegativeHandednessForMirroredUvs", "[TangentGenerator]")
 {
     std::vector<Vec3> positions = {
         {0.0f, 0.0f, 0.0f},
@@ -84,14 +85,14 @@ TEST(TangentGenerator, GeneratesNegativeHandednessForMirroredUvs)
 
     auto result = TangentGenerator::generate(positions, normals, texcoords, indices);
 
-    ASSERT_TRUE(result.succeeded);
+    REQUIRE(result.succeeded);
     for (const auto& tangent : result.tangents)
     {
-        EXPECT_FLOAT_EQ(tangent.w(), -1.0f);
+        CHECK(tangent.w() == Catch::Approx(-1.0f).margin(1e-5f));
     }
 }
 
-TEST(TangentGenerator, FailsWhenUvsAreMissing)
+TEST_CASE("TangentGenerator.FailsWhenUvsAreMissing", "[TangentGenerator]")
 {
     std::vector<Vec3> positions = {
         {0.0f, 0.0f, 0.0f},
@@ -104,11 +105,11 @@ TEST(TangentGenerator, FailsWhenUvsAreMissing)
 
     auto result = TangentGenerator::generate(positions, normals, texcoords, indices);
 
-    EXPECT_FALSE(result.succeeded);
-    EXPECT_EQ(result.reason, "missing UVs");
+    CHECK_FALSE(result.succeeded);
+    CHECK(result.reason == "missing UVs");
 }
 
-TEST(TangentGenerator, FailsOnDegenerateUvMapping)
+TEST_CASE("TangentGenerator.FailsOnDegenerateUvMapping", "[TangentGenerator]")
 {
     std::vector<Vec3> positions = {
         {0.0f, 0.0f, 0.0f},
@@ -125,11 +126,11 @@ TEST(TangentGenerator, FailsOnDegenerateUvMapping)
 
     auto result = TangentGenerator::generate(positions, normals, texcoords, indices);
 
-    EXPECT_FALSE(result.succeeded);
-    EXPECT_EQ(result.reason, "degenerate UV mapping");
+    CHECK_FALSE(result.succeeded);
+    CHECK(result.reason == "degenerate UV mapping");
 }
 
-TEST(TangentGenerator, FallsBackForVerticesOnlyInDegenerateUvTriangles)
+TEST_CASE("TangentGenerator.FallsBackForVerticesOnlyInDegenerateUvTriangles", "[TangentGenerator]")
 {
     std::vector<Vec3> positions = {
         {0.0f, 0.0f, 0.0f}, {1.0f, 0.0f, 0.0f}, {1.0f, 1.0f, 0.0f},
@@ -145,13 +146,14 @@ TEST(TangentGenerator, FallsBackForVerticesOnlyInDegenerateUvTriangles)
 
     auto result = TangentGenerator::generate(positions, normals, texcoords, indices);
 
-    ASSERT_TRUE(result.succeeded);
-    ASSERT_EQ(result.tangents.size(), positions.size());
+    REQUIRE(result.succeeded);
+    REQUIRE(result.tangents.size() == positions.size());
     for (const auto& tangent : result.tangents)
     {
         Vec3 tangentDir{tangent.x(), tangent.y(), tangent.z()};
-        EXPECT_GT(tangentDir.magnitudeSquared(), 0.0f);
-        EXPECT_NEAR(Vec3::dotProduct(Vec3{0.0f, 0.0f, 1.0f}, tangentDir), 0.0f, 1e-4f);
-        EXPECT_TRUE(std::abs(tangent.w()) == 1.0f);
+        CHECK(tangentDir.magnitudeSquared() > 0.0f);
+        CHECK(Vec3::dotProduct(Vec3{0.0f, 0.0f, 1.0f}, tangentDir) ==
+              Catch::Approx(0.0f).margin(1e-4f));
+        CHECK(std::abs(tangent.w()) == 1.0f);
     }
 }

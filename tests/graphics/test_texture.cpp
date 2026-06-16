@@ -1,4 +1,7 @@
-#include <gtest/gtest.h>
+#include <catch2/catch_approx.hpp>
+#include <catch2/catch_test_macros.hpp>
+
+#include <type_traits>
 
 #include <fire_engine/graphics/texture.hpp>
 
@@ -8,52 +11,52 @@ using namespace fire_engine;
 // Default construction
 // ---------------------------------------------------------------------------
 
-TEST(Texture, DefaultNotLoaded)
+TEST_CASE("Texture.DefaultNotLoaded", "[Texture]")
 {
     Texture tex;
-    EXPECT_FALSE(tex.loaded());
+    CHECK_FALSE(tex.loaded());
 }
 
-TEST(Texture, DefaultHandleIsNull)
+TEST_CASE("Texture.DefaultHandleIsNull", "[Texture]")
 {
     Texture tex;
-    EXPECT_EQ(tex.handle(), NullTexture);
+    CHECK(tex.handle() == NullTexture);
 }
 
-TEST(Texture, DefaultEncodingIsSrgb)
+TEST_CASE("Texture.DefaultEncodingIsSrgb", "[Texture]")
 {
     Texture tex;
-    EXPECT_EQ(tex.encoding(), TextureEncoding::Srgb);
+    CHECK(tex.encoding() == TextureEncoding::Srgb);
 }
 
 // ---------------------------------------------------------------------------
 // Move semantics
 // ---------------------------------------------------------------------------
 
-TEST(Texture, IsNonCopyable)
+TEST_CASE("Texture.IsNonCopyable", "[Texture]")
 {
-    EXPECT_FALSE(std::is_copy_constructible_v<Texture>);
-    EXPECT_FALSE(std::is_copy_assignable_v<Texture>);
+    static_assert(!std::is_copy_constructible_v<Texture>);
+    static_assert(!std::is_copy_assignable_v<Texture>);
 }
 
-TEST(Texture, IsNothrowMovable)
+TEST_CASE("Texture.IsNothrowMovable", "[Texture]")
 {
-    EXPECT_TRUE(std::is_nothrow_move_constructible_v<Texture>);
-    EXPECT_TRUE(std::is_nothrow_move_assignable_v<Texture>);
+    static_assert(std::is_nothrow_move_constructible_v<Texture>);
+    static_assert(std::is_nothrow_move_assignable_v<Texture>);
 }
 
-TEST(Texture, MoveConstructionTransfersState)
+TEST_CASE("Texture.MoveConstructionTransfersState", "[Texture]")
 {
     Texture original;
     Texture moved(std::move(original));
-    EXPECT_FALSE(moved.loaded());
-    EXPECT_EQ(moved.handle(), NullTexture);
+    CHECK_FALSE(moved.loaded());
+    CHECK(moved.handle() == NullTexture);
 }
 
-TEST(Texture, MoveAssignmentTransfersState)
+TEST_CASE("Texture.MoveAssignmentTransfersState", "[Texture]")
 {
     Texture original;
     Texture target;
     target = std::move(original);
-    EXPECT_FALSE(target.loaded());
+    CHECK_FALSE(target.loaded());
 }

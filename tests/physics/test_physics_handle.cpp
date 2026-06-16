@@ -1,4 +1,5 @@
-#include <gtest/gtest.h>
+#include <catch2/catch_approx.hpp>
+#include <catch2/catch_test_macros.hpp>
 
 #include <fire_engine/physics/physics_handle.hpp>
 
@@ -6,33 +7,33 @@ using fire_engine::PhysicsBodyHandle;
 using fire_engine::PhysicsColliderHandle;
 using fire_engine::PhysicsConstraintHandle;
 
-TEST(PhysicsHandle, DefaultIsInvalid)
+TEST_CASE("PhysicsHandle.DefaultIsInvalid", "[PhysicsHandle]")
 {
     constexpr PhysicsBodyHandle handle;
-    EXPECT_FALSE(handle.valid());
-    EXPECT_EQ(handle.value(), 0U);
+    CHECK_FALSE(handle.valid());
+    CHECK(handle.value() == 0U);
 }
 
-TEST(PhysicsHandle, NonZeroIsValid)
+TEST_CASE("PhysicsHandle.NonZeroIsValid", "[PhysicsHandle]")
 {
     constexpr PhysicsColliderHandle handle{7U};
-    EXPECT_TRUE(handle.valid());
-    EXPECT_EQ(handle.value(), 7U);
+    CHECK(handle.valid());
+    CHECK(handle.value() == 7U);
 }
 
-TEST(PhysicsHandle, EqualityComparesValue)
+TEST_CASE("PhysicsHandle.EqualityComparesValue", "[PhysicsHandle]")
 {
     constexpr PhysicsConstraintHandle a{3U};
     constexpr PhysicsConstraintHandle b{3U};
     constexpr PhysicsConstraintHandle c{4U};
 
-    EXPECT_EQ(a, b);
-    EXPECT_NE(a, c);
+    CHECK(a == b);
+    CHECK(a != c);
     static_assert(a == b);
     static_assert(a != c);
 }
 
-TEST(PhysicsHandle, ComparisonsAreConstexpr)
+TEST_CASE("PhysicsHandle.ComparisonsAreConstexpr", "[PhysicsHandle]")
 {
     constexpr PhysicsBodyHandle handle{1U};
     static_assert(handle.valid());

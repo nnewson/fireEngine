@@ -5,7 +5,10 @@
 #include <limits>
 #include <numbers>
 
-#include <gtest/gtest.h>
+#include <support/test_traits.hpp>
+
+#include <catch2/catch_approx.hpp>
+#include <catch2/catch_test_macros.hpp>
 
 using fire_engine::Mat4;
 using fire_engine::Vec3;
@@ -24,11 +27,13 @@ static void expectIdentity(const Mat4& m)
         {
             if (row == col)
             {
-                EXPECT_FLOAT_EQ((m[row, col]), 1.0f) << "row=" << row << " col=" << col;
+                INFO("row=" << row << " col=" << col);
+                CHECK((m[row, col]) == Catch::Approx(1.0f).margin(1e-5f));
             }
             else
             {
-                EXPECT_FLOAT_EQ((m[row, col]), 0.0f) << "row=" << row << " col=" << col;
+                INFO("row=" << row << " col=" << col);
+                CHECK((m[row, col]) == Catch::Approx(0.0f).margin(1e-5f));
             }
         }
     }
@@ -40,7 +45,8 @@ static void expectZero(const Mat4& m)
     {
         for (int row = 0; row < 4; ++row)
         {
-            EXPECT_FLOAT_EQ((m[row, col]), 0.0f) << "row=" << row << " col=" << col;
+            INFO("row=" << row << " col=" << col);
+            CHECK((m[row, col]) == Catch::Approx(0.0f).margin(1e-5f));
         }
     }
 }
@@ -51,37 +57,38 @@ static void expectNear(const Mat4& a, const Mat4& b, float eps = kEps)
     {
         for (int row = 0; row < 4; ++row)
         {
-            EXPECT_NEAR((a[row, col]), (b[row, col]), eps) << "row=" << row << " col=" << col;
+            INFO("row=" << row << " col=" << col);
+            CHECK((a[row, col]) == Catch::Approx((b[row, col])).margin(eps));
         }
     }
 }
 
 static void expectNear(const Vec4& v, float x, float y, float z, float w, float eps = kEps)
 {
-    EXPECT_NEAR(v.x(), x, eps);
-    EXPECT_NEAR(v.y(), y, eps);
-    EXPECT_NEAR(v.z(), z, eps);
-    EXPECT_NEAR(v.w(), w, eps);
+    CHECK(v.x() == Catch::Approx(x).margin(eps));
+    CHECK(v.y() == Catch::Approx(y).margin(eps));
+    CHECK(v.z() == Catch::Approx(z).margin(eps));
+    CHECK(v.w() == Catch::Approx(w).margin(eps));
 }
 
 // ==========================================================================
 // Construction
 // ==========================================================================
 
-TEST(Mat4Construction, DefaultIsZero)
+TEST_CASE("Mat4Construction.DefaultIsZero", "[Mat4Construction]")
 {
     Mat4 m;
     expectZero(m);
 }
 
-TEST(Mat4Construction, CopyConstruct)
+TEST_CASE("Mat4Construction.CopyConstruct", "[Mat4Construction]")
 {
     Mat4 a = Mat4::identity();
     Mat4 b{a};
     expectIdentity(b);
 }
 
-TEST(Mat4Construction, CopyAssign)
+TEST_CASE("Mat4Construction.CopyAssign", "[Mat4Construction]")
 {
     Mat4 a = Mat4::identity();
     Mat4 b;
@@ -93,48 +100,48 @@ TEST(Mat4Construction, CopyAssign)
 // Accessors
 // ==========================================================================
 
-TEST(Mat4Accessors, SetAndGet)
+TEST_CASE("Mat4Accessors.SetAndGet", "[Mat4Accessors]")
 {
     Mat4 m;
     m[2, 3] = 42.0f;
-    EXPECT_FLOAT_EQ((m[2, 3]), 42.0f);
+    CHECK((m[2, 3]) == Catch::Approx(42.0f).margin(1e-5f));
 }
 
-TEST(Mat4Accessors, SetDoesNotAffectOtherElements)
+TEST_CASE("Mat4Accessors.SetDoesNotAffectOtherElements", "[Mat4Accessors]")
 {
     Mat4 m;
     m[1, 2] = 7.0f;
-    EXPECT_FLOAT_EQ((m[0, 0]), 0.0f);
-    EXPECT_FLOAT_EQ((m[1, 2]), 7.0f);
-    EXPECT_FLOAT_EQ((m[2, 1]), 0.0f);
+    CHECK((m[0, 0]) == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK((m[1, 2]) == Catch::Approx(7.0f).margin(1e-5f));
+    CHECK((m[2, 1]) == Catch::Approx(0.0f).margin(1e-5f));
 }
 
-TEST(Mat4Accessors, DataReturnsColumnMajorPointer)
+TEST_CASE("Mat4Accessors.DataReturnsColumnMajorPointer", "[Mat4Accessors]")
 {
     Mat4 m = Mat4::identity();
     const float* d = m.data();
     // Column-major: m[0]=m(0,0), m[1]=m(1,0), ..., m[4]=m(0,1)
-    EXPECT_FLOAT_EQ(d[0], 1.0f);  // (0,0)
-    EXPECT_FLOAT_EQ(d[1], 0.0f);  // (1,0)
-    EXPECT_FLOAT_EQ(d[4], 0.0f);  // (0,1)
-    EXPECT_FLOAT_EQ(d[5], 1.0f);  // (1,1)
-    EXPECT_FLOAT_EQ(d[15], 1.0f); // (3,3)
+    CHECK(d[0] == Catch::Approx(1.0f).margin(1e-5f));  // (0,0)
+    CHECK(d[1] == Catch::Approx(0.0f).margin(1e-5f));  // (1,0)
+    CHECK(d[4] == Catch::Approx(0.0f).margin(1e-5f));  // (0,1)
+    CHECK(d[5] == Catch::Approx(1.0f).margin(1e-5f));  // (1,1)
+    CHECK(d[15] == Catch::Approx(1.0f).margin(1e-5f)); // (3,3)
 }
 
 // ==========================================================================
 // Identity
 // ==========================================================================
 
-TEST(Mat4Identity, DiagonalOnes)
+TEST_CASE("Mat4Identity.DiagonalOnes", "[Mat4Identity]")
 {
     Mat4 m = Mat4::identity();
-    EXPECT_FLOAT_EQ((m[0, 0]), 1.0f);
-    EXPECT_FLOAT_EQ((m[1, 1]), 1.0f);
-    EXPECT_FLOAT_EQ((m[2, 2]), 1.0f);
-    EXPECT_FLOAT_EQ((m[3, 3]), 1.0f);
+    CHECK((m[0, 0]) == Catch::Approx(1.0f).margin(1e-5f));
+    CHECK((m[1, 1]) == Catch::Approx(1.0f).margin(1e-5f));
+    CHECK((m[2, 2]) == Catch::Approx(1.0f).margin(1e-5f));
+    CHECK((m[3, 3]) == Catch::Approx(1.0f).margin(1e-5f));
 }
 
-TEST(Mat4Identity, OffDiagonalZeros)
+TEST_CASE("Mat4Identity.OffDiagonalZeros", "[Mat4Identity]")
 {
     Mat4 m = Mat4::identity();
     for (int col = 0; col < 4; ++col)
@@ -143,7 +150,8 @@ TEST(Mat4Identity, OffDiagonalZeros)
         {
             if (row != col)
             {
-                EXPECT_FLOAT_EQ((m[row, col]), 0.0f) << "row=" << row << " col=" << col;
+                INFO("row=" << row << " col=" << col);
+                CHECK((m[row, col]) == Catch::Approx(0.0f).margin(1e-5f));
             }
         }
     }
@@ -153,66 +161,66 @@ TEST(Mat4Identity, OffDiagonalZeros)
 // Equality
 // ==========================================================================
 
-TEST(Mat4Equality, IdenticalMatrices)
+TEST_CASE("Mat4Equality.IdenticalMatrices", "[Mat4Equality]")
 {
     Mat4 a = Mat4::identity();
     Mat4 b = Mat4::identity();
-    EXPECT_TRUE(a == b);
+    CHECK(a == b);
 }
 
-TEST(Mat4Equality, DifferentMatrices)
+TEST_CASE("Mat4Equality.DifferentMatrices", "[Mat4Equality]")
 {
     Mat4 a = Mat4::identity();
     Mat4 b;
-    EXPECT_FALSE(a == b);
+    CHECK_FALSE(a == b);
 }
 
-TEST(Mat4Equality, SingleElementDifference)
+TEST_CASE("Mat4Equality.SingleElementDifference", "[Mat4Equality]")
 {
     Mat4 a = Mat4::identity();
     Mat4 b = Mat4::identity();
     b[2, 3] = 0.001f;
-    EXPECT_FALSE(a == b);
+    CHECK_FALSE(a == b);
 }
 
-TEST(Mat4Equality, ZeroMatrices)
+TEST_CASE("Mat4Equality.ZeroMatrices", "[Mat4Equality]")
 {
     Mat4 a;
     Mat4 b;
-    EXPECT_TRUE(a == b);
+    CHECK(a == b);
 }
 
-TEST(Mat4Equality, BitwiseEqualMatchesOperator)
+TEST_CASE("Mat4Equality.BitwiseEqualMatchesOperator", "[Mat4Equality]")
 {
     Mat4 a = Mat4::identity();
     Mat4 b = Mat4::identity();
     Mat4 c = Mat4::scale(Vec3{2.0f, 1.0f, 1.0f});
-    EXPECT_TRUE(a.bitwiseEqual(b));
-    EXPECT_FALSE(a.bitwiseEqual(c));
+    CHECK(a.bitwiseEqual(b));
+    CHECK_FALSE(a.bitwiseEqual(c));
 }
 
-TEST(Mat4Equality, ApproxEqualWithinTolerance)
+TEST_CASE("Mat4Equality.ApproxEqualWithinTolerance", "[Mat4Equality]")
 {
     Mat4 a = Mat4::identity();
     Mat4 b = Mat4::identity();
     b[0, 0] = 1.0f + 1e-7f;
-    EXPECT_FALSE(a == b);
-    EXPECT_TRUE(a.approxEqual(b, 1e-6f));
-    EXPECT_FALSE(a.approxEqual(b, 1e-9f));
+    CHECK_FALSE(a == b);
+    CHECK(a.approxEqual(b, 1e-6f));
+    CHECK_FALSE(a.approxEqual(b, 1e-9f));
 }
 
 // ==========================================================================
 // Multiplication
 // ==========================================================================
 
-TEST(Mat4Multiply, IdentityTimesIdentity)
+TEST_CASE("Mat4Multiply.IdentityTimesIdentity", "[Mat4Multiply]")
 {
     Mat4 I = Mat4::identity();
     Mat4 r = I * I;
     expectIdentity(r);
 }
 
-TEST(Mat4Multiply, IdentityTimesMatrix)
+TEST_CASE("Mat4Multiply.IdentityTimesMatrix", "[Mat4Multiply]")
 {
     Mat4 I = Mat4::identity();
     Mat4 a = Mat4::identity();
@@ -221,22 +229,22 @@ TEST(Mat4Multiply, IdentityTimesMatrix)
     a[2, 3] = 15.0f;
 
     Mat4 r = I * a;
-    EXPECT_FLOAT_EQ((r[0, 3]), 5.0f);
-    EXPECT_FLOAT_EQ((r[1, 3]), 10.0f);
-    EXPECT_FLOAT_EQ((r[2, 3]), 15.0f);
+    CHECK((r[0, 3]) == Catch::Approx(5.0f).margin(1e-5f));
+    CHECK((r[1, 3]) == Catch::Approx(10.0f).margin(1e-5f));
+    CHECK((r[2, 3]) == Catch::Approx(15.0f).margin(1e-5f));
 }
 
-TEST(Mat4Multiply, MatrixTimesIdentity)
+TEST_CASE("Mat4Multiply.MatrixTimesIdentity", "[Mat4Multiply]")
 {
     Mat4 I = Mat4::identity();
     Mat4 a = Mat4::identity();
     a[0, 3] = 5.0f;
 
     Mat4 r = a * I;
-    EXPECT_FLOAT_EQ((r[0, 3]), 5.0f);
+    CHECK((r[0, 3]) == Catch::Approx(5.0f).margin(1e-5f));
 }
 
-TEST(Mat4Multiply, ZeroMatrixTimesAnything)
+TEST_CASE("Mat4Multiply.ZeroMatrixTimesAnything", "[Mat4Multiply]")
 {
     Mat4 zero;
     Mat4 a = Mat4::identity();
@@ -244,7 +252,7 @@ TEST(Mat4Multiply, ZeroMatrixTimesAnything)
     expectZero(r);
 }
 
-TEST(Mat4Multiply, GeneralCase)
+TEST_CASE("Mat4Multiply.GeneralCase", "[Mat4Multiply]")
 {
     // Multiply two known matrices and verify a few elements
     Mat4 a = Mat4::identity();
@@ -259,13 +267,13 @@ TEST(Mat4Multiply, GeneralCase)
     // a * b: scales then translates
     // result should have (0,3) = 2*4 = 8, (1,3) = 3*5 = 15
     Mat4 r = a * b;
-    EXPECT_FLOAT_EQ((r[0, 0]), 2.0f);
-    EXPECT_FLOAT_EQ((r[1, 1]), 3.0f);
-    EXPECT_FLOAT_EQ((r[0, 3]), 8.0f);
-    EXPECT_FLOAT_EQ((r[1, 3]), 15.0f);
+    CHECK((r[0, 0]) == Catch::Approx(2.0f).margin(1e-5f));
+    CHECK((r[1, 1]) == Catch::Approx(3.0f).margin(1e-5f));
+    CHECK((r[0, 3]) == Catch::Approx(8.0f).margin(1e-5f));
+    CHECK((r[1, 3]) == Catch::Approx(15.0f).margin(1e-5f));
 }
 
-TEST(Mat4Multiply, NotCommutative)
+TEST_CASE("Mat4Multiply.NotCommutative", "[Mat4Multiply]")
 {
     Mat4 a = Mat4::identity();
     a[0, 1] = 1.0f; // shear
@@ -275,10 +283,10 @@ TEST(Mat4Multiply, NotCommutative)
 
     Mat4 ab = a * b;
     Mat4 ba = b * a;
-    EXPECT_FALSE(ab == ba);
+    CHECK_FALSE(ab == ba);
 }
 
-TEST(Mat4Multiply, MultiplyEqualsMatchesMultiply)
+TEST_CASE("Mat4Multiply.MultiplyEqualsMatchesMultiply", "[Mat4Multiply]")
 {
     Mat4 a = Mat4::identity();
     a[0, 0] = 2.0f;
@@ -287,10 +295,10 @@ TEST(Mat4Multiply, MultiplyEqualsMatchesMultiply)
 
     Mat4 expected = a * b;
     a *= b;
-    EXPECT_TRUE(a == expected);
+    CHECK(a == expected);
 }
 
-TEST(Mat4Multiply, Associative)
+TEST_CASE("Mat4Multiply.Associative", "[Mat4Multiply]")
 {
     Mat4 a = Mat4::rotateX(0.5f);
     Mat4 b = Mat4::rotateY(0.7f);
@@ -304,31 +312,31 @@ TEST(Mat4Multiply, Associative)
     expectNear(ab_c, a_bc);
 }
 
-TEST(Mat4MultiplyVec4, IdentityPreservesVector)
+TEST_CASE("Mat4MultiplyVec4.IdentityPreservesVector", "[Mat4MultiplyVec4]")
 {
     Vec4 r = Mat4::identity() * Vec4{1.0f, 2.0f, 3.0f, 4.0f};
     expectNear(r, 1.0f, 2.0f, 3.0f, 4.0f);
 }
 
-TEST(Mat4MultiplyVec4, TranslationTransformsPosition)
+TEST_CASE("Mat4MultiplyVec4.TranslationTransformsPosition", "[Mat4MultiplyVec4]")
 {
     Vec4 r = Mat4::translate({5.0f, 6.0f, 7.0f}) * Vec4{1.0f, 2.0f, 3.0f, 1.0f};
     expectNear(r, 6.0f, 8.0f, 10.0f, 1.0f);
 }
 
-TEST(Mat4MultiplyVec4, TranslationDoesNotTransformDirection)
+TEST_CASE("Mat4MultiplyVec4.TranslationDoesNotTransformDirection", "[Mat4MultiplyVec4]")
 {
     Vec4 r = Mat4::translate({5.0f, 6.0f, 7.0f}) * Vec4{1.0f, 2.0f, 3.0f, 0.0f};
     expectNear(r, 1.0f, 2.0f, 3.0f, 0.0f);
 }
 
-TEST(Mat4MultiplyVec4, ScaleTransformsVector)
+TEST_CASE("Mat4MultiplyVec4.ScaleTransformsVector", "[Mat4MultiplyVec4]")
 {
     Vec4 r = Mat4::scale({2.0f, 3.0f, 4.0f}) * Vec4{1.0f, 2.0f, 3.0f, 5.0f};
     expectNear(r, 2.0f, 6.0f, 12.0f, 5.0f);
 }
 
-TEST(Mat4MultiplyVec4, GeneralCaseUsesRowByColumnIndexing)
+TEST_CASE("Mat4MultiplyVec4.GeneralCaseUsesRowByColumnIndexing", "[Mat4MultiplyVec4]")
 {
     Mat4 m;
     m[0, 0] = 1.0f;
@@ -356,35 +364,35 @@ TEST(Mat4MultiplyVec4, GeneralCaseUsesRowByColumnIndexing)
 // RotateX
 // ==========================================================================
 
-TEST(Mat4RotateX, ZeroAngleIsIdentity)
+TEST_CASE("Mat4RotateX.ZeroAngleIsIdentity", "[Mat4RotateX]")
 {
     Mat4 r = Mat4::rotateX(0.0f);
     expectNear(r, Mat4::identity());
 }
 
-TEST(Mat4RotateX, NinetyDegrees)
+TEST_CASE("Mat4RotateX.NinetyDegrees", "[Mat4RotateX]")
 {
     float angle = std::numbers::pi_v<float> / 2.0f;
     Mat4 r = Mat4::rotateX(angle);
 
     // X axis unchanged
-    EXPECT_NEAR((r[0, 0]), 1.0f, kEps);
+    CHECK((r[0, 0]) == Catch::Approx(1.0f).margin(kEps));
     // cos(90) ~ 0
-    EXPECT_NEAR((r[1, 1]), 0.0f, kEps);
+    CHECK((r[1, 1]) == Catch::Approx(0.0f).margin(kEps));
     // sin(90) ~ 1
-    EXPECT_NEAR((r[2, 1]), 1.0f, kEps);
-    EXPECT_NEAR((r[1, 2]), -1.0f, kEps);
-    EXPECT_NEAR((r[2, 2]), 0.0f, kEps);
+    CHECK((r[2, 1]) == Catch::Approx(1.0f).margin(kEps));
+    CHECK((r[1, 2]) == Catch::Approx(-1.0f).margin(kEps));
+    CHECK((r[2, 2]) == Catch::Approx(0.0f).margin(kEps));
 }
 
-TEST(Mat4RotateX, FullRotationIsIdentity)
+TEST_CASE("Mat4RotateX.FullRotationIsIdentity", "[Mat4RotateX]")
 {
     float angle = 2.0f * std::numbers::pi_v<float>;
     Mat4 r = Mat4::rotateX(angle);
     expectNear(r, Mat4::identity());
 }
 
-TEST(Mat4RotateX, NegativeAngle)
+TEST_CASE("Mat4RotateX.NegativeAngle", "[Mat4RotateX]")
 {
     float angle = 0.5f;
     Mat4 pos = Mat4::rotateX(angle);
@@ -398,35 +406,35 @@ TEST(Mat4RotateX, NegativeAngle)
 // RotateY
 // ==========================================================================
 
-TEST(Mat4RotateY, ZeroAngleIsIdentity)
+TEST_CASE("Mat4RotateY.ZeroAngleIsIdentity", "[Mat4RotateY]")
 {
     Mat4 r = Mat4::rotateY(0.0f);
     expectNear(r, Mat4::identity());
 }
 
-TEST(Mat4RotateY, NinetyDegrees)
+TEST_CASE("Mat4RotateY.NinetyDegrees", "[Mat4RotateY]")
 {
     float angle = std::numbers::pi_v<float> / 2.0f;
     Mat4 r = Mat4::rotateY(angle);
 
     // Y axis unchanged
-    EXPECT_NEAR((r[1, 1]), 1.0f, kEps);
+    CHECK((r[1, 1]) == Catch::Approx(1.0f).margin(kEps));
     // cos(90) ~ 0
-    EXPECT_NEAR((r[0, 0]), 0.0f, kEps);
-    EXPECT_NEAR((r[2, 2]), 0.0f, kEps);
+    CHECK((r[0, 0]) == Catch::Approx(0.0f).margin(kEps));
+    CHECK((r[2, 2]) == Catch::Approx(0.0f).margin(kEps));
     // sin(90) ~ 1
-    EXPECT_NEAR((r[2, 0]), -1.0f, kEps);
-    EXPECT_NEAR((r[0, 2]), 1.0f, kEps);
+    CHECK((r[2, 0]) == Catch::Approx(-1.0f).margin(kEps));
+    CHECK((r[0, 2]) == Catch::Approx(1.0f).margin(kEps));
 }
 
-TEST(Mat4RotateY, FullRotationIsIdentity)
+TEST_CASE("Mat4RotateY.FullRotationIsIdentity", "[Mat4RotateY]")
 {
     float angle = 2.0f * std::numbers::pi_v<float>;
     Mat4 r = Mat4::rotateY(angle);
     expectNear(r, Mat4::identity());
 }
 
-TEST(Mat4RotateY, NegativeAngle)
+TEST_CASE("Mat4RotateY.NegativeAngle", "[Mat4RotateY]")
 {
     float angle = 0.8f;
     Mat4 pos = Mat4::rotateY(angle);
@@ -439,40 +447,40 @@ TEST(Mat4RotateY, NegativeAngle)
 // LookAt
 // ==========================================================================
 
-TEST(Mat4LookAt, LookingDownNegativeZ)
+TEST_CASE("Mat4LookAt.LookingDownNegativeZ", "[Mat4LookAt]")
 {
     // Standard OpenGL-style: eye at origin, looking down -Z, up is +Y
     Mat4 v = Mat4::lookAt({0, 0, 0}, {0, 0, -1}, {0, 1, 0});
 
     // Should be identity-like (camera at origin looking down -Z)
     // The view matrix maps -Z forward to +Z in view space
-    EXPECT_NEAR((v[0, 0]), 1.0f, kEps);
-    EXPECT_NEAR((v[1, 1]), 1.0f, kEps);
-    EXPECT_NEAR((v[2, 2]), 1.0f, kEps);
-    EXPECT_NEAR((v[3, 3]), 1.0f, kEps);
+    CHECK((v[0, 0]) == Catch::Approx(1.0f).margin(kEps));
+    CHECK((v[1, 1]) == Catch::Approx(1.0f).margin(kEps));
+    CHECK((v[2, 2]) == Catch::Approx(1.0f).margin(kEps));
+    CHECK((v[3, 3]) == Catch::Approx(1.0f).margin(kEps));
 }
 
-TEST(Mat4LookAt, TranslationComponent)
+TEST_CASE("Mat4LookAt.TranslationComponent", "[Mat4LookAt]")
 {
     // Eye at (0, 0, 5), looking at origin
     Mat4 v = Mat4::lookAt({0, 0, 5}, {0, 0, 0}, {0, 1, 0});
 
     // Translation in view space: eye is at +5 on Z, so view should translate by -5 on Z
-    EXPECT_NEAR((v[2, 3]), -5.0f, kEps);
+    CHECK((v[2, 3]) == Catch::Approx(-5.0f).margin(kEps));
 }
 
-TEST(Mat4LookAt, LookingAlongPositiveX)
+TEST_CASE("Mat4LookAt.LookingAlongPositiveX", "[Mat4LookAt]")
 {
     Mat4 v = Mat4::lookAt({0, 0, 0}, {1, 0, 0}, {0, 1, 0});
 
     // Forward is +X, which maps to -Z in view space
     // So the view matrix's third row should relate to the X world axis
-    EXPECT_NEAR((v[2, 0]), -1.0f, kEps);
+    CHECK((v[2, 0]) == Catch::Approx(-1.0f).margin(kEps));
     // Right is +Z (cross of +X forward and +Y up)
-    EXPECT_NEAR((v[0, 2]), 1.0f, kEps);
+    CHECK((v[0, 2]) == Catch::Approx(1.0f).margin(kEps));
 }
 
-TEST(Mat4LookAt, OffsetEye)
+TEST_CASE("Mat4LookAt.OffsetEye", "[Mat4LookAt]")
 {
     // Just verify it doesn't crash / produces finite values
     Mat4 v = Mat4::lookAt({3, 4, 5}, {0, 0, 0}, {0, 1, 0});
@@ -480,12 +488,13 @@ TEST(Mat4LookAt, OffsetEye)
     {
         for (int row = 0; row < 4; ++row)
         {
-            EXPECT_TRUE(std::isfinite(v[row, col])) << "row=" << row << " col=" << col;
+            INFO("row=" << row << " col=" << col);
+            CHECK(std::isfinite(v[row, col]));
         }
     }
 }
 
-TEST(Mat4LookAt, PreservesOrthonormality)
+TEST_CASE("Mat4LookAt.PreservesOrthonormality", "[Mat4LookAt]")
 {
     Mat4 v = Mat4::lookAt({1, 2, 3}, {4, 5, 6}, {0, 1, 0});
 
@@ -498,7 +507,8 @@ TEST(Mat4LookAt, PreservesOrthonormality)
         {
             len2 += v[r, c] * v[r, c];
         }
-        EXPECT_NEAR(len2, 1.0f, kEps) << "row " << r << " not unit length";
+        INFO("row " << r << " not unit length");
+        CHECK(len2 == Catch::Approx(1.0f).margin(kEps));
     }
 
     // Dot product of row 0 and row 1 should be ~0
@@ -507,10 +517,10 @@ TEST(Mat4LookAt, PreservesOrthonormality)
     {
         dot01 += v[0, c] * v[1, c];
     }
-    EXPECT_NEAR(dot01, 0.0f, kEps);
+    CHECK(dot01 == Catch::Approx(0.0f).margin(kEps));
 }
 
-TEST(Mat4LookAt, SameEyeAndTargetProducesFiniteFallbackView)
+TEST_CASE("Mat4LookAt.SameEyeAndTargetProducesFiniteFallbackView", "[Mat4LookAt]")
 {
     Mat4 v = Mat4::lookAt({1, 2, 3}, {1, 2, 3}, {0, 1, 0});
 
@@ -518,13 +528,14 @@ TEST(Mat4LookAt, SameEyeAndTargetProducesFiniteFallbackView)
     {
         for (int row = 0; row < 4; ++row)
         {
-            EXPECT_TRUE(std::isfinite(v[row, col])) << "row=" << row << " col=" << col;
+            INFO("row=" << row << " col=" << col);
+            CHECK(std::isfinite(v[row, col]));
         }
     }
-    EXPECT_NEAR((v[2, 3]), -3.0f, kEps);
+    CHECK((v[2, 3]) == Catch::Approx(-3.0f).margin(kEps));
 }
 
-TEST(Mat4LookAt, ForwardParallelToPreferredUpProducesFiniteOrthonormalView)
+TEST_CASE("Mat4LookAt.ForwardParallelToPreferredUpProducesFiniteOrthonormalView", "[Mat4LookAt]")
 {
     Mat4 v = Mat4::lookAt({0, 0, 0}, {0, 1, 0}, {0, 1, 0});
 
@@ -533,66 +544,67 @@ TEST(Mat4LookAt, ForwardParallelToPreferredUpProducesFiniteOrthonormalView)
         float len2 = 0.0f;
         for (int c = 0; c < 3; ++c)
         {
-            EXPECT_TRUE(std::isfinite(v[r, c])) << "row=" << r << " col=" << c;
+            INFO("row=" << r << " col=" << c);
+            CHECK(std::isfinite(v[r, c]));
             len2 += v[r, c] * v[r, c];
         }
-        EXPECT_NEAR(len2, 1.0f, kEps);
+        CHECK(len2 == Catch::Approx(1.0f).margin(kEps));
     }
 }
 
-TEST(ViewBasis, HandlesVerticalCameraTargets)
+TEST_CASE("ViewBasis.HandlesVerticalCameraTargets", "[ViewBasis]")
 {
     const ViewBasis upBasis = fire_engine::makeViewBasis({0, 0, 0}, {0, 1, 0});
     const ViewBasis downBasis = fire_engine::makeViewBasis({0, 0, 0}, {0, -1, 0});
 
-    EXPECT_GT(upBasis.right.magnitudeSquared(), 0.99f);
-    EXPECT_GT(upBasis.up.magnitudeSquared(), 0.99f);
-    EXPECT_GT(downBasis.right.magnitudeSquared(), 0.99f);
-    EXPECT_GT(downBasis.up.magnitudeSquared(), 0.99f);
-    EXPECT_NEAR(Vec3::dotProduct(upBasis.forward, upBasis.up), 0.0f, kEps);
-    EXPECT_NEAR(Vec3::dotProduct(downBasis.forward, downBasis.up), 0.0f, kEps);
+    CHECK(upBasis.right.magnitudeSquared() > 0.99f);
+    CHECK(upBasis.up.magnitudeSquared() > 0.99f);
+    CHECK(downBasis.right.magnitudeSquared() > 0.99f);
+    CHECK(downBasis.up.magnitudeSquared() > 0.99f);
+    CHECK(Vec3::dotProduct(upBasis.forward, upBasis.up) == Catch::Approx(0.0f).margin(kEps));
+    CHECK(Vec3::dotProduct(downBasis.forward, downBasis.up) == Catch::Approx(0.0f).margin(kEps));
 }
 
 // ==========================================================================
 // Perspective
 // ==========================================================================
 
-TEST(Mat4Perspective, BasicStructure)
+TEST_CASE("Mat4Perspective.BasicStructure", "[Mat4Perspective]")
 {
     float fov = std::numbers::pi_v<float> / 4.0f; // 45 degrees
     Mat4 p = Mat4::perspective(fov, 1.0f, 0.1f, 100.0f);
 
     // (3,2) should be -1 for Vulkan-style perspective
-    EXPECT_FLOAT_EQ((p[3, 2]), -1.0f);
+    CHECK((p[3, 2]) == Catch::Approx(-1.0f).margin(1e-5f));
     // (3,3) should be 0
-    EXPECT_FLOAT_EQ((p[3, 3]), 0.0f);
+    CHECK((p[3, 3]) == Catch::Approx(0.0f).margin(1e-5f));
     // Off-diagonal in first two rows/cols should be 0
-    EXPECT_FLOAT_EQ((p[0, 1]), 0.0f);
-    EXPECT_FLOAT_EQ((p[1, 0]), 0.0f);
+    CHECK((p[0, 1]) == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK((p[1, 0]) == Catch::Approx(0.0f).margin(1e-5f));
 }
 
-TEST(Mat4Perspective, AspectRatioAffectsX)
+TEST_CASE("Mat4Perspective.AspectRatioAffectsX", "[Mat4Perspective]")
 {
     float fov = std::numbers::pi_v<float> / 4.0f;
     Mat4 narrow = Mat4::perspective(fov, 0.5f, 0.1f, 100.0f);
     Mat4 wide = Mat4::perspective(fov, 2.0f, 0.1f, 100.0f);
 
     // Wider aspect => smaller (0,0) value
-    EXPECT_GT((narrow[0, 0]), (wide[0, 0]));
+    CHECK((narrow[0, 0]) > (wide[0, 0]));
     // Y component should be the same regardless of aspect
-    EXPECT_FLOAT_EQ((narrow[1, 1]), (wide[1, 1]));
+    CHECK((narrow[1, 1]) == Catch::Approx((wide[1, 1])).margin(1e-5f));
 }
 
-TEST(Mat4Perspective, VulkanYFlip)
+TEST_CASE("Mat4Perspective.VulkanYFlip", "[Mat4Perspective]")
 {
     float fov = std::numbers::pi_v<float> / 4.0f;
     Mat4 p = Mat4::perspective(fov, 1.0f, 0.1f, 100.0f);
 
     // Vulkan flips Y: (1,1) should be negative
-    EXPECT_LT((p[1, 1]), 0.0f);
+    CHECK((p[1, 1]) < 0.0f);
 }
 
-TEST(Mat4Perspective, NearFarMapping)
+TEST_CASE("Mat4Perspective.NearFarMapping", "[Mat4Perspective]")
 {
     float fov = std::numbers::pi_v<float> / 4.0f;
     Mat4 p = Mat4::perspective(fov, 1.0f, 0.1f, 100.0f);
@@ -601,11 +613,11 @@ TEST(Mat4Perspective, NearFarMapping)
     // For Vulkan: z_ndc = (far / (near - far)) * z_eye + (near * far) / (near - far)
     float expectedM22 = 100.0f / (0.1f - 100.0f);
     float expectedM23 = (0.1f * 100.0f) / (0.1f - 100.0f);
-    EXPECT_NEAR((p[2, 2]), expectedM22, kEps);
-    EXPECT_NEAR((p[2, 3]), expectedM23, kEps);
+    CHECK((p[2, 2]) == Catch::Approx(expectedM22).margin(kEps));
+    CHECK((p[2, 3]) == Catch::Approx(expectedM23).margin(kEps));
 }
 
-TEST(Mat4Perspective, AllElementsFinite)
+TEST_CASE("Mat4Perspective.AllElementsFinite", "[Mat4Perspective]")
 {
     float fov = std::numbers::pi_v<float> / 3.0f;
     Mat4 p = Mat4::perspective(fov, 16.0f / 9.0f, 0.01f, 1000.0f);
@@ -613,7 +625,8 @@ TEST(Mat4Perspective, AllElementsFinite)
     {
         for (int row = 0; row < 4; ++row)
         {
-            EXPECT_TRUE(std::isfinite(p[row, col])) << "row=" << row << " col=" << col;
+            INFO("row=" << row << " col=" << col);
+            CHECK(std::isfinite(p[row, col]));
         }
     }
 }
@@ -622,7 +635,7 @@ TEST(Mat4Perspective, AllElementsFinite)
 // Ortho
 // ==========================================================================
 
-TEST(Mat4Ortho, MapsForwardNegativeZIntoVulkanDepthRange)
+TEST_CASE("Mat4Ortho.MapsForwardNegativeZIntoVulkanDepthRange", "[Mat4Ortho]")
 {
     Mat4 o = Mat4::ortho(-1.0f, 1.0f, -1.0f, 1.0f, 0.0f, 10.0f);
 
@@ -630,34 +643,34 @@ TEST(Mat4Ortho, MapsForwardNegativeZIntoVulkanDepthRange)
     Vec4 farPoint = o * Vec4{0.0f, 0.0f, -10.0f, 1.0f};
     Vec4 midPoint = o * Vec4{0.0f, 0.0f, -5.0f, 1.0f};
 
-    EXPECT_NEAR(nearPoint.z(), 0.0f, kEps);
-    EXPECT_NEAR(farPoint.z(), 1.0f, kEps);
-    EXPECT_NEAR(midPoint.z(), 0.5f, kEps);
+    CHECK(nearPoint.z() == Catch::Approx(0.0f).margin(kEps));
+    CHECK(farPoint.z() == Catch::Approx(1.0f).margin(kEps));
+    CHECK(midPoint.z() == Catch::Approx(0.5f).margin(kEps));
 }
 
-TEST(Mat4Ortho, FlipsYForVulkanClipSpace)
+TEST_CASE("Mat4Ortho.FlipsYForVulkanClipSpace", "[Mat4Ortho]")
 {
     Mat4 o = Mat4::ortho(-2.0f, 2.0f, -2.0f, 2.0f, 0.0f, 10.0f);
 
     Vec4 top = o * Vec4{0.0f, 2.0f, 0.0f, 1.0f};
     Vec4 bottom = o * Vec4{0.0f, -2.0f, 0.0f, 1.0f};
 
-    EXPECT_NEAR(top.y(), -1.0f, kEps);
-    EXPECT_NEAR(bottom.y(), 1.0f, kEps);
+    CHECK(top.y() == Catch::Approx(-1.0f).margin(kEps));
+    CHECK(bottom.y() == Catch::Approx(1.0f).margin(kEps));
 }
 
 // ==========================================================================
 // Constexpr
 // ==========================================================================
 
-TEST(Mat4Constexpr, DefaultConstruction)
+TEST_CASE("Mat4Constexpr.DefaultConstruction", "[Mat4Constexpr]")
 {
     constexpr Mat4 m;
     static_assert((m[0, 0]) == 0.0f);
     static_assert((m[3, 3]) == 0.0f);
 }
 
-TEST(Mat4Constexpr, Identity)
+TEST_CASE("Mat4Constexpr.Identity", "[Mat4Constexpr]")
 {
     constexpr Mat4 I = Mat4::identity();
     static_assert(I[0, 0] == 1.0f);
@@ -667,7 +680,7 @@ TEST(Mat4Constexpr, Identity)
     static_assert(I[0, 1] == 0.0f);
 }
 
-TEST(Mat4Constexpr, Multiply)
+TEST_CASE("Mat4Constexpr.Multiply", "[Mat4Constexpr]")
 {
     constexpr Mat4 I = Mat4::identity();
     constexpr Mat4 r = I * I;
@@ -676,7 +689,7 @@ TEST(Mat4Constexpr, Multiply)
     static_assert((r[0, 1]) == 0.0f);
 }
 
-TEST(Mat4Constexpr, MultiplyVec4)
+TEST_CASE("Mat4Constexpr.MultiplyVec4", "[Mat4Constexpr]")
 {
     constexpr Vec4 r = Mat4::identity() * Vec4{1.0f, 2.0f, 3.0f, 4.0f};
     static_assert(r.x() == 1.0f);
@@ -685,7 +698,7 @@ TEST(Mat4Constexpr, MultiplyVec4)
     static_assert(r.w() == 4.0f);
 }
 
-TEST(Mat4Constexpr, Equality)
+TEST_CASE("Mat4Constexpr.Equality", "[Mat4Constexpr]")
 {
     constexpr Mat4 a = Mat4::identity();
     constexpr Mat4 b = Mat4::identity();
@@ -698,24 +711,13 @@ TEST(Mat4Constexpr, Equality)
 // Noexcept
 // ==========================================================================
 
-TEST(Mat4Noexcept, AllOperationsAreNoexcept)
+TEST_CASE("Mat4Noexcept.AllOperationsAreNoexcept", "[Mat4Noexcept]")
 {
-    Mat4 a = Mat4::identity();
-    Mat4 b = Mat4::identity();
-
-    static_assert(noexcept(Mat4{}));
-    static_assert(noexcept(Mat4::identity()));
-    static_assert(noexcept(a[0, 0]));
-    static_assert(noexcept(a[0, 0] = 1.0f));
-    static_assert(noexcept(a.data()));
-    static_assert(noexcept(a * b));
-    static_assert(noexcept(a *= b));
-    static_assert(noexcept(a * Vec4{}));
-    static_assert(noexcept(a == b));
-    static_assert(noexcept(Mat4::rotateX(0.0f)));
-    static_assert(noexcept(Mat4::rotateY(0.0f)));
-    static_assert(noexcept(Mat4::lookAt({}, {0, 0, -1}, {0, 1, 0})));
-    static_assert(noexcept(Mat4::perspective(1.0f, 1.0f, 0.1f, 100.0f)));
+    static_assert(std::is_nothrow_default_constructible_v<Mat4>);
+    static_assert(test_traits::has_nothrow_mat4_factories<Mat4, Vec3>);
+    static_assert(test_traits::has_nothrow_mat4_access<Mat4>);
+    static_assert(test_traits::has_nothrow_mat4_arithmetic<Mat4, Vec4>);
+    static_assert(test_traits::has_nothrow_equality<Mat4>);
 }
 
 // ==========================================================================
@@ -726,35 +728,35 @@ TEST(Mat4Noexcept, AllOperationsAreNoexcept)
 // RotateZ
 // ==========================================================================
 
-TEST(Mat4RotateZ, ZeroAngleIsIdentity)
+TEST_CASE("Mat4RotateZ.ZeroAngleIsIdentity", "[Mat4RotateZ]")
 {
     Mat4 r = Mat4::rotateZ(0.0f);
     expectNear(r, Mat4::identity());
 }
 
-TEST(Mat4RotateZ, NinetyDegrees)
+TEST_CASE("Mat4RotateZ.NinetyDegrees", "[Mat4RotateZ]")
 {
     float angle = std::numbers::pi_v<float> / 2.0f;
     Mat4 r = Mat4::rotateZ(angle);
 
     // Z axis unchanged
-    EXPECT_NEAR((r[2, 2]), 1.0f, kEps);
+    CHECK((r[2, 2]) == Catch::Approx(1.0f).margin(kEps));
     // cos(90) ~ 0
-    EXPECT_NEAR((r[0, 0]), 0.0f, kEps);
-    EXPECT_NEAR((r[1, 1]), 0.0f, kEps);
+    CHECK((r[0, 0]) == Catch::Approx(0.0f).margin(kEps));
+    CHECK((r[1, 1]) == Catch::Approx(0.0f).margin(kEps));
     // sin(90) ~ 1
-    EXPECT_NEAR((r[1, 0]), 1.0f, kEps);
-    EXPECT_NEAR((r[0, 1]), -1.0f, kEps);
+    CHECK((r[1, 0]) == Catch::Approx(1.0f).margin(kEps));
+    CHECK((r[0, 1]) == Catch::Approx(-1.0f).margin(kEps));
 }
 
-TEST(Mat4RotateZ, FullRotationIsIdentity)
+TEST_CASE("Mat4RotateZ.FullRotationIsIdentity", "[Mat4RotateZ]")
 {
     float angle = 2.0f * std::numbers::pi_v<float>;
     Mat4 r = Mat4::rotateZ(angle);
     expectNear(r, Mat4::identity());
 }
 
-TEST(Mat4RotateZ, NegativeAngle)
+TEST_CASE("Mat4RotateZ.NegativeAngle", "[Mat4RotateZ]")
 {
     float angle = 0.6f;
     Mat4 pos = Mat4::rotateZ(angle);
@@ -763,57 +765,52 @@ TEST(Mat4RotateZ, NegativeAngle)
     expectNear(product, Mat4::identity());
 }
 
-TEST(Mat4RotateZ, IsNoexcept)
-{
-    static_assert(noexcept(Mat4::rotateZ(0.0f)));
-}
-
 // ==========================================================================
 // Translate
 // ==========================================================================
 
-TEST(Mat4Translate, ZeroTranslationIsIdentity)
+TEST_CASE("Mat4Translate.ZeroTranslationIsIdentity", "[Mat4Translate]")
 {
     Mat4 t = Mat4::translate({0.0f, 0.0f, 0.0f});
-    EXPECT_EQ(t, Mat4::identity());
+    CHECK(t == Mat4::identity());
 }
 
-TEST(Mat4Translate, SetsColumn3)
+TEST_CASE("Mat4Translate.SetsColumn3", "[Mat4Translate]")
 {
     Mat4 t = Mat4::translate({5.0f, 10.0f, 15.0f});
-    EXPECT_FLOAT_EQ((t[0, 3]), 5.0f);
-    EXPECT_FLOAT_EQ((t[1, 3]), 10.0f);
-    EXPECT_FLOAT_EQ((t[2, 3]), 15.0f);
-    EXPECT_FLOAT_EQ((t[3, 3]), 1.0f);
+    CHECK((t[0, 3]) == Catch::Approx(5.0f).margin(1e-5f));
+    CHECK((t[1, 3]) == Catch::Approx(10.0f).margin(1e-5f));
+    CHECK((t[2, 3]) == Catch::Approx(15.0f).margin(1e-5f));
+    CHECK((t[3, 3]) == Catch::Approx(1.0f).margin(1e-5f));
 }
 
-TEST(Mat4Translate, DiagonalRemainsIdentity)
+TEST_CASE("Mat4Translate.DiagonalRemainsIdentity", "[Mat4Translate]")
 {
     Mat4 t = Mat4::translate({1.0f, 2.0f, 3.0f});
-    EXPECT_FLOAT_EQ((t[0, 0]), 1.0f);
-    EXPECT_FLOAT_EQ((t[1, 1]), 1.0f);
-    EXPECT_FLOAT_EQ((t[2, 2]), 1.0f);
+    CHECK((t[0, 0]) == Catch::Approx(1.0f).margin(1e-5f));
+    CHECK((t[1, 1]) == Catch::Approx(1.0f).margin(1e-5f));
+    CHECK((t[2, 2]) == Catch::Approx(1.0f).margin(1e-5f));
 }
 
-TEST(Mat4Translate, NegativeValues)
+TEST_CASE("Mat4Translate.NegativeValues", "[Mat4Translate]")
 {
     Mat4 t = Mat4::translate({-1.0f, -2.0f, -3.0f});
-    EXPECT_FLOAT_EQ((t[0, 3]), -1.0f);
-    EXPECT_FLOAT_EQ((t[1, 3]), -2.0f);
-    EXPECT_FLOAT_EQ((t[2, 3]), -3.0f);
+    CHECK((t[0, 3]) == Catch::Approx(-1.0f).margin(1e-5f));
+    CHECK((t[1, 3]) == Catch::Approx(-2.0f).margin(1e-5f));
+    CHECK((t[2, 3]) == Catch::Approx(-3.0f).margin(1e-5f));
 }
 
-TEST(Mat4Translate, CompositionAddsTranslations)
+TEST_CASE("Mat4Translate.CompositionAddsTranslations", "[Mat4Translate]")
 {
     Mat4 a = Mat4::translate({1.0f, 0.0f, 0.0f});
     Mat4 b = Mat4::translate({0.0f, 2.0f, 3.0f});
     Mat4 ab = a * b;
-    EXPECT_FLOAT_EQ((ab[0, 3]), 1.0f);
-    EXPECT_FLOAT_EQ((ab[1, 3]), 2.0f);
-    EXPECT_FLOAT_EQ((ab[2, 3]), 3.0f);
+    CHECK((ab[0, 3]) == Catch::Approx(1.0f).margin(1e-5f));
+    CHECK((ab[1, 3]) == Catch::Approx(2.0f).margin(1e-5f));
+    CHECK((ab[2, 3]) == Catch::Approx(3.0f).margin(1e-5f));
 }
 
-TEST(Mat4Translate, IsConstexpr)
+TEST_CASE("Mat4Translate.IsConstexpr", "[Mat4Translate]")
 {
     constexpr Mat4 t = Mat4::translate({1.0f, 2.0f, 3.0f});
     static_assert(t[0, 3] == 1.0f);
@@ -825,63 +822,63 @@ TEST(Mat4Translate, IsConstexpr)
 // Scale
 // ==========================================================================
 
-TEST(Mat4Scale, UniformScaleOne)
+TEST_CASE("Mat4Scale.UniformScaleOne", "[Mat4Scale]")
 {
     Mat4 s = Mat4::scale({1.0f, 1.0f, 1.0f});
-    EXPECT_EQ(s, Mat4::identity());
+    CHECK(s == Mat4::identity());
 }
 
-TEST(Mat4Scale, SetsDiagonal)
+TEST_CASE("Mat4Scale.SetsDiagonal", "[Mat4Scale]")
 {
     Mat4 s = Mat4::scale({2.0f, 3.0f, 4.0f});
-    EXPECT_FLOAT_EQ((s[0, 0]), 2.0f);
-    EXPECT_FLOAT_EQ((s[1, 1]), 3.0f);
-    EXPECT_FLOAT_EQ((s[2, 2]), 4.0f);
-    EXPECT_FLOAT_EQ((s[3, 3]), 1.0f);
+    CHECK((s[0, 0]) == Catch::Approx(2.0f).margin(1e-5f));
+    CHECK((s[1, 1]) == Catch::Approx(3.0f).margin(1e-5f));
+    CHECK((s[2, 2]) == Catch::Approx(4.0f).margin(1e-5f));
+    CHECK((s[3, 3]) == Catch::Approx(1.0f).margin(1e-5f));
 }
 
-TEST(Mat4Scale, OffDiagonalZeros)
+TEST_CASE("Mat4Scale.OffDiagonalZeros", "[Mat4Scale]")
 {
     Mat4 s = Mat4::scale({2.0f, 3.0f, 4.0f});
-    EXPECT_FLOAT_EQ((s[0, 1]), 0.0f);
-    EXPECT_FLOAT_EQ((s[0, 2]), 0.0f);
-    EXPECT_FLOAT_EQ((s[1, 0]), 0.0f);
-    EXPECT_FLOAT_EQ((s[1, 2]), 0.0f);
-    EXPECT_FLOAT_EQ((s[2, 0]), 0.0f);
-    EXPECT_FLOAT_EQ((s[2, 1]), 0.0f);
+    CHECK((s[0, 1]) == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK((s[0, 2]) == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK((s[1, 0]) == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK((s[1, 2]) == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK((s[2, 0]) == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK((s[2, 1]) == Catch::Approx(0.0f).margin(1e-5f));
 }
 
-TEST(Mat4Scale, CompositionMultipliesScales)
+TEST_CASE("Mat4Scale.CompositionMultipliesScales", "[Mat4Scale]")
 {
     Mat4 a = Mat4::scale({2.0f, 2.0f, 2.0f});
     Mat4 b = Mat4::scale({3.0f, 3.0f, 3.0f});
     Mat4 ab = a * b;
-    EXPECT_FLOAT_EQ((ab[0, 0]), 6.0f);
-    EXPECT_FLOAT_EQ((ab[1, 1]), 6.0f);
-    EXPECT_FLOAT_EQ((ab[2, 2]), 6.0f);
+    CHECK((ab[0, 0]) == Catch::Approx(6.0f).margin(1e-5f));
+    CHECK((ab[1, 1]) == Catch::Approx(6.0f).margin(1e-5f));
+    CHECK((ab[2, 2]) == Catch::Approx(6.0f).margin(1e-5f));
 }
 
-TEST(Mat4Scale, ScaleThenTranslate)
+TEST_CASE("Mat4Scale.ScaleThenTranslate", "[Mat4Scale]")
 {
     // Scale by 2 then translate by (1,0,0): translation is NOT scaled
     Mat4 s = Mat4::scale({2.0f, 2.0f, 2.0f});
     Mat4 t = Mat4::translate({1.0f, 0.0f, 0.0f});
     Mat4 st = s * t;
-    EXPECT_FLOAT_EQ((st[0, 0]), 2.0f);
-    EXPECT_FLOAT_EQ((st[0, 3]), 2.0f); // translation is scaled by parent
+    CHECK((st[0, 0]) == Catch::Approx(2.0f).margin(1e-5f));
+    CHECK((st[0, 3]) == Catch::Approx(2.0f).margin(1e-5f)); // translation is scaled by parent
 }
 
-TEST(Mat4Scale, TranslateThenScale)
+TEST_CASE("Mat4Scale.TranslateThenScale", "[Mat4Scale]")
 {
     // Translate then scale: translation is NOT affected
     Mat4 t = Mat4::translate({1.0f, 0.0f, 0.0f});
     Mat4 s = Mat4::scale({2.0f, 2.0f, 2.0f});
     Mat4 ts = t * s;
-    EXPECT_FLOAT_EQ((ts[0, 0]), 2.0f);
-    EXPECT_FLOAT_EQ((ts[0, 3]), 1.0f); // translation unaffected by scale
+    CHECK((ts[0, 0]) == Catch::Approx(2.0f).margin(1e-5f));
+    CHECK((ts[0, 3]) == Catch::Approx(1.0f).margin(1e-5f)); // translation unaffected by scale
 }
 
-TEST(Mat4Scale, IsConstexpr)
+TEST_CASE("Mat4Scale.IsConstexpr", "[Mat4Scale]")
 {
     constexpr Mat4 s = Mat4::scale({2.0f, 3.0f, 4.0f});
     static_assert(s[0, 0] == 2.0f);
@@ -893,7 +890,7 @@ TEST(Mat4Scale, IsConstexpr)
 // Edge Cases
 // ==========================================================================
 
-TEST(Mat4EdgeCases, RotateXThenRotateYNotCommutative)
+TEST_CASE("Mat4EdgeCases.RotateXThenRotateYNotCommutative", "[Mat4EdgeCases]")
 {
     Mat4 rx = Mat4::rotateX(0.3f);
     Mat4 ry = Mat4::rotateY(0.5f);
@@ -911,10 +908,10 @@ TEST(Mat4EdgeCases, RotateXThenRotateYNotCommutative)
             }
         }
     }
-    EXPECT_FALSE(equal);
+    CHECK_FALSE(equal);
 }
 
-TEST(Mat4EdgeCases, InverseRotation)
+TEST_CASE("Mat4EdgeCases.InverseRotation", "[Mat4EdgeCases]")
 {
     // Rotating by +angle then -angle should give identity
     float angle = 1.23f;
@@ -928,7 +925,7 @@ TEST(Mat4EdgeCases, InverseRotation)
     expectNear(product, Mat4::identity());
 }
 
-TEST(Mat4EdgeCases, MultiplyChain)
+TEST_CASE("Mat4EdgeCases.MultiplyChain", "[Mat4EdgeCases]")
 {
     // Chain of rotations should produce finite values
     Mat4 r = Mat4::identity();
@@ -940,7 +937,8 @@ TEST(Mat4EdgeCases, MultiplyChain)
     {
         for (int row = 0; row < 4; ++row)
         {
-            EXPECT_TRUE(std::isfinite(r[row, col])) << "row=" << row << " col=" << col;
+            INFO("row=" << row << " col=" << col);
+            CHECK(std::isfinite(r[row, col]));
         }
     }
 }

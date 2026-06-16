@@ -1,165 +1,206 @@
 #include <fire_engine/platform/application_args.hpp>
 
-#include <gtest/gtest.h>
+#include <catch2/catch_approx.hpp>
+#include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 
+#include <initializer_list>
+#include <string>
+#include <string_view>
+#include <vector>
+
+using fire_engine::ApplicationArgs;
 using fire_engine::DebugView;
 using fire_engine::parseApplicationArgs;
 
-TEST(ApplicationArgs, EmptyArgsUseDefaults)
+namespace
 {
-    char program[] = "fireEngineApp";
-    char* argv[] = {program};
 
-    const auto args = parseApplicationArgs(1, argv);
+struct ParsedArgs
+{
+    std::vector<std::string> storage;
+    std::vector<char*> argv;
+    ApplicationArgs args;
+};
 
-    EXPECT_TRUE(args.scenePath.empty());
-    EXPECT_TRUE(args.skyboxPath.empty());
-    EXPECT_EQ(args.debug.view, DebugView::None);
-    EXPECT_FALSE(args.debug.noShadows);
-    EXPECT_FALSE(args.addFloor);
-    EXPECT_FALSE(args.addParticles);
+ParsedArgs parseArgs(std::initializer_list<std::string_view> args)
+{
+    ParsedArgs parsed;
+    parsed.storage.reserve(args.size());
+    parsed.argv.reserve(args.size());
+
+    for (std::string_view arg : args)
+    {
+        parsed.storage.emplace_back(arg);
+    }
+
+    for (std::string& arg : parsed.storage)
+    {
+        parsed.argv.push_back(arg.data());
+    }
+
+    parsed.args = parseApplicationArgs(static_cast<int>(parsed.argv.size()), parsed.argv.data());
+    return parsed;
 }
 
-TEST(ApplicationArgs, SingleSceneArgumentSetsScenePath)
+} // namespace
+
+TEST_CASE("ApplicationArgs.EmptyArgsUseDefaults", "[ApplicationArgs]")
 {
-    char program[] = "fireEngineApp";
-    char scene[] = "Fox/Fox.gltf";
-    char* argv[] = {program, scene};
+    const auto parsed = parseArgs({"fireEngineApp"});
+    const auto& args = parsed.args;
 
-    const auto args = parseApplicationArgs(2, argv);
-
-    EXPECT_EQ(args.scenePath, "Fox/Fox.gltf");
-    EXPECT_TRUE(args.skyboxPath.empty());
-    EXPECT_EQ(args.debug.view, DebugView::None);
-    EXPECT_FALSE(args.debug.noShadows);
+    CHECK(args.scenePath.empty());
+    CHECK(args.skyboxPath.empty());
+    CHECK(args.debug.view == DebugView::None);
+    CHECK_FALSE(args.debug.noShadows);
+    CHECK(args.debug.taa);
+    CHECK_FALSE(args.debug.overlayVisible);
+    CHECK_FALSE(args.addFloor);
+    CHECK_FALSE(args.addParticles);
+    CHECK_FALSE(args.addCloth);
 }
 
-TEST(ApplicationArgs, SingleHdrArgumentSetsSkyboxPath)
+TEST_CASE("ApplicationArgs.SingleSceneArgumentSetsScenePath", "[ApplicationArgs]")
 {
-    char program[] = "fireEngineApp";
-    char skybox[] = "nightbox.hdr";
-    char* argv[] = {program, skybox};
+    const auto parsed = parseArgs({"fireEngineApp", "Fox/Fox.gltf"});
+    const auto& args = parsed.args;
 
-    const auto args = parseApplicationArgs(2, argv);
-
-    EXPECT_TRUE(args.scenePath.empty());
-    EXPECT_EQ(args.skyboxPath, "nightbox.hdr");
-    EXPECT_EQ(args.debug.view, DebugView::None);
-    EXPECT_FALSE(args.debug.noShadows);
+    CHECK(args.scenePath == "Fox/Fox.gltf");
+    CHECK(args.skyboxPath.empty());
+    CHECK(args.debug.view == DebugView::None);
+    CHECK_FALSE(args.debug.noShadows);
 }
 
-TEST(ApplicationArgs, SingleExrArgumentSetsSkyboxPath)
+TEST_CASE("ApplicationArgs.SingleHdrArgumentSetsSkyboxPath", "[ApplicationArgs]")
 {
-    char program[] = "fireEngineApp";
-    char skybox[] = "studio.EXR";
-    char* argv[] = {program, skybox};
+    const auto parsed = parseArgs({"fireEngineApp", "nightbox.hdr"});
+    const auto& args = parsed.args;
 
-    const auto args = parseApplicationArgs(2, argv);
-
-    EXPECT_TRUE(args.scenePath.empty());
-    EXPECT_EQ(args.skyboxPath, "studio.EXR");
-    EXPECT_EQ(args.debug.view, DebugView::None);
-    EXPECT_FALSE(args.debug.noShadows);
+    CHECK(args.scenePath.empty());
+    CHECK(args.skyboxPath == "nightbox.hdr");
+    CHECK(args.debug.view == DebugView::None);
+    CHECK_FALSE(args.debug.noShadows);
 }
 
-TEST(ApplicationArgs, TwoArgumentsKeepSceneThenSkyboxOrder)
+TEST_CASE("ApplicationArgs.SingleExrArgumentSetsSkyboxPath", "[ApplicationArgs]")
 {
-    char program[] = "fireEngineApp";
-    char scene[] = "Fox/Fox.gltf";
-    char skybox[] = "nightbox.hdr";
-    char* argv[] = {program, scene, skybox};
+    const auto parsed = parseArgs({"fireEngineApp", "studio.EXR"});
+    const auto& args = parsed.args;
 
-    const auto args = parseApplicationArgs(3, argv);
-
-    EXPECT_EQ(args.scenePath, "Fox/Fox.gltf");
-    EXPECT_EQ(args.skyboxPath, "nightbox.hdr");
-    EXPECT_EQ(args.debug.view, DebugView::None);
-    EXPECT_FALSE(args.debug.noShadows);
+    CHECK(args.scenePath.empty());
+    CHECK(args.skyboxPath == "studio.EXR");
+    CHECK(args.debug.view == DebugView::None);
+    CHECK_FALSE(args.debug.noShadows);
 }
 
-TEST(ApplicationArgs, DebugNormalsFlagSetsToggle)
+TEST_CASE("ApplicationArgs.TwoArgumentsKeepSceneThenSkyboxOrder", "[ApplicationArgs]")
 {
-    char program[] = "fireEngineApp";
-    char flag[] = "--debug-normals";
-    char* argv[] = {program, flag};
+    const auto parsed = parseArgs({"fireEngineApp", "Fox/Fox.gltf", "nightbox.hdr"});
+    const auto& args = parsed.args;
 
-    const auto args = parseApplicationArgs(2, argv);
-
-    EXPECT_EQ(args.debug.view, DebugView::Normals);
-    EXPECT_TRUE(args.scenePath.empty());
-    EXPECT_TRUE(args.skyboxPath.empty());
+    CHECK(args.scenePath == "Fox/Fox.gltf");
+    CHECK(args.skyboxPath == "nightbox.hdr");
+    CHECK(args.debug.view == DebugView::None);
+    CHECK_FALSE(args.debug.noShadows);
 }
 
-TEST(ApplicationArgs, ParticlesFlagSetsToggle)
+struct DebugFlagCase
 {
-    char program[] = "fireEngineApp";
-    char particles[] = "-p";
-    char scene[] = "RiggedSimple/RiggedSimple.gltf";
-    char* argv[] = {program, particles, scene};
+    std::string_view flag;
+    DebugView view;
+};
 
-    const auto args = parseApplicationArgs(3, argv);
+TEST_CASE("ApplicationArgs.DebugFlagsSetView", "[ApplicationArgs]")
+{
+    const auto testCase = GENERATE(values<DebugFlagCase>({
+        {"--debug-normals", DebugView::Normals},
+        {"--debug-ndotl", DebugView::NdotL},
+        {"--debug-shadow", DebugView::Shadow},
+        {"--debug-shadow-depth", DebugView::ShadowDepth},
+        {"--debug-velocity", DebugView::Velocity},
+    }));
+    CAPTURE(testCase.flag);
 
-    EXPECT_TRUE(args.addParticles);
-    EXPECT_FALSE(args.addFloor);
-    EXPECT_EQ(args.scenePath, "RiggedSimple/RiggedSimple.gltf");
+    const auto parsed = parseArgs({"fireEngineApp", testCase.flag});
+    const auto& args = parsed.args;
+
+    CHECK(args.debug.view == testCase.view);
+    CHECK(args.scenePath.empty());
+    CHECK(args.skyboxPath.empty());
 }
 
-TEST(ApplicationArgs, DebugNormalsFlagCoexistsWithSceneAndFloor)
+TEST_CASE("ApplicationArgs.ParticlesFlagSetsToggle", "[ApplicationArgs]")
 {
-    char program[] = "fireEngineApp";
-    char flag[] = "--debug-normals";
-    char floor[] = "-f";
-    char scene[] = "RiggedSimple/RiggedSimple.gltf";
-    char* argv[] = {program, flag, floor, scene};
+    const auto parsed = parseArgs({"fireEngineApp", "-p", "RiggedSimple/RiggedSimple.gltf"});
+    const auto& args = parsed.args;
 
-    const auto args = parseApplicationArgs(4, argv);
-
-    EXPECT_EQ(args.debug.view, DebugView::Normals);
-    EXPECT_TRUE(args.addFloor);
-    EXPECT_EQ(args.scenePath, "RiggedSimple/RiggedSimple.gltf");
+    CHECK(args.addParticles);
+    CHECK_FALSE(args.addFloor);
+    CHECK(args.scenePath == "RiggedSimple/RiggedSimple.gltf");
 }
 
-TEST(ApplicationArgs, DebugNdotLFlagSetsToggle)
+TEST_CASE("ApplicationArgs.ClothFlagSetsToggle", "[ApplicationArgs]")
 {
-    char program[] = "fireEngineApp";
-    char flag[] = "--debug-ndotl";
-    char* argv[] = {program, flag};
+    const auto parsed = parseArgs({"fireEngineApp", "-c", "RiggedSimple/RiggedSimple.gltf"});
+    const auto& args = parsed.args;
 
-    const auto args = parseApplicationArgs(2, argv);
-
-    EXPECT_EQ(args.debug.view, DebugView::NdotL);
+    CHECK(args.addCloth);
+    CHECK_FALSE(args.addParticles);
+    CHECK_FALSE(args.addFloor);
+    CHECK(args.scenePath == "RiggedSimple/RiggedSimple.gltf");
 }
 
-TEST(ApplicationArgs, DebugShadowFlagSetsToggle)
+TEST_CASE("ApplicationArgs.DebugNormalsFlagCoexistsWithSceneAndFloor", "[ApplicationArgs]")
 {
-    char program[] = "fireEngineApp";
-    char flag[] = "--debug-shadow";
-    char* argv[] = {program, flag};
+    const auto parsed =
+        parseArgs({"fireEngineApp", "--debug-normals", "-f", "RiggedSimple/RiggedSimple.gltf"});
+    const auto& args = parsed.args;
 
-    const auto args = parseApplicationArgs(2, argv);
-
-    EXPECT_EQ(args.debug.view, DebugView::Shadow);
+    CHECK(args.debug.view == DebugView::Normals);
+    CHECK(args.addFloor);
+    CHECK(args.scenePath == "RiggedSimple/RiggedSimple.gltf");
 }
 
-TEST(ApplicationArgs, DebugShadowDepthFlagSetsToggle)
+TEST_CASE("ApplicationArgs.LastDebugFlagWins", "[ApplicationArgs]")
 {
-    char program[] = "fireEngineApp";
-    char flag[] = "--debug-shadow-depth";
-    char* argv[] = {program, flag};
+    const auto parsed =
+        parseArgs({"fireEngineApp", "--debug-normals", "--debug-shadow", "--debug-velocity"});
+    const auto& args = parsed.args;
 
-    const auto args = parseApplicationArgs(2, argv);
-
-    EXPECT_EQ(args.debug.view, DebugView::ShadowDepth);
+    CHECK(args.debug.view == DebugView::Velocity);
 }
 
-TEST(ApplicationArgs, NoShadowsFlagSetsToggle)
+TEST_CASE("ApplicationArgs.NoShadowsFlagSetsToggle", "[ApplicationArgs]")
 {
-    char program[] = "fireEngineApp";
-    char flag[] = "--no-shadows";
-    char* argv[] = {program, flag};
+    const auto parsed = parseArgs({"fireEngineApp", "--no-shadows"});
+    const auto& args = parsed.args;
 
-    const auto args = parseApplicationArgs(2, argv);
+    CHECK(args.debug.noShadows);
+    CHECK(args.debug.view == DebugView::None);
+}
 
-    EXPECT_TRUE(args.debug.noShadows);
-    EXPECT_EQ(args.debug.view, DebugView::None);
+TEST_CASE("ApplicationArgs.NoTaaFlagDisablesTemporalAntialiasing", "[ApplicationArgs]")
+{
+    const auto parsed = parseArgs({"fireEngineApp", "--no-taa"});
+    const auto& args = parsed.args;
+
+    CHECK_FALSE(args.debug.taa);
+}
+
+TEST_CASE("ApplicationArgs.OverlayFlagShowsDebugOverlay", "[ApplicationArgs]")
+{
+    const auto parsed = parseArgs({"fireEngineApp", "--overlay"});
+    const auto& args = parsed.args;
+
+    CHECK(args.debug.overlayVisible);
+}
+
+TEST_CASE("ApplicationArgs.UnknownFlagIsTreatedAsPositional", "[ApplicationArgs]")
+{
+    const auto parsed = parseArgs({"fireEngineApp", "--unknown", "nightbox.hdr"});
+    const auto& args = parsed.args;
+
+    CHECK(args.scenePath == "--unknown");
+    CHECK(args.skyboxPath == "nightbox.hdr");
 }

@@ -10,11 +10,13 @@ project(fire_engine
 
 find_package(Vulkan REQUIRED)
 find_package(glfw3 3.3 REQUIRED)
-find_package(GTest REQUIRED)
+find_package(Catch2 3 CONFIG REQUIRED)
 find_package(Stb REQUIRED)
 find_package(fastgltf CONFIG REQUIRED)
 find_package(Ktx CONFIG REQUIRED)
 find_package(imgui CONFIG REQUIRED)
+
+include(cmake/fireengine_imgui.cmake)
 
 # --- Library ------------------------------------------------------------
 
@@ -89,7 +91,15 @@ target_compile_definitions(fireengine PRIVATE
     FIRE_ENGINE_SOURCE_ASSET_DIR="${PROJECT_SOURCE_DIR}/assets"
     FIRE_ENGINE_BUILD_ASSET_DIR="${CMAKE_CURRENT_BINARY_DIR}"
 )
-target_link_libraries(fireengine PUBLIC Vulkan::Vulkan glfw fastgltf::fastgltf KTX::ktx imgui::imgui)
+target_link_libraries(fireengine
+    PUBLIC
+        Vulkan::Vulkan
+        glfw
+        fastgltf::fastgltf
+        KTX::ktx
+    PRIVATE
+        fireengine_imgui
+)
 
 # --- Executable ---------------------------------------------------------
 
@@ -124,6 +134,7 @@ set(SHADER_SOURCES
     shaders/particle.frag
     shaders/cloth_predict.comp
     shaders/cloth_solve.comp
+    shaders/cloth_collide.comp
     shaders/cloth_finalize.comp
 )
 
@@ -209,7 +220,8 @@ add_executable(test_fire_engine
     tests/animation/test_animation.cpp
     tests/scene/test_transform.cpp
 )
-target_link_libraries(test_fire_engine PRIVATE fireengine GTest::gtest_main)
+target_include_directories(test_fire_engine PRIVATE ${PROJECT_SOURCE_DIR}/tests)
+target_link_libraries(test_fire_engine PRIVATE fireengine Catch2::Catch2WithMain)
 target_compile_options(test_fire_engine PRIVATE -Wall -Wextra -Wpedantic)
 
 file(GLOB_RECURSE TEST_ASSETS "${PROJECT_SOURCE_DIR}/tests/assets/*")
@@ -218,8 +230,8 @@ foreach(f IN LISTS TEST_ASSETS)
   configure_file("${f}" "${CMAKE_CURRENT_BINARY_DIR}/test_assets/${name}" COPYONLY)
 endforeach()
 
-include(GoogleTest)
-gtest_discover_tests(test_fire_engine)
+include(Catch)
+catch_discover_tests(test_fire_engine)
 
 # Layering guard: the Vulkan-free graphics layer must not include render/ from
 # its public headers. Runs as a CTest case so `ctest` catches regressions

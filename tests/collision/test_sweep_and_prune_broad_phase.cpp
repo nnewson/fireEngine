@@ -1,6 +1,7 @@
 #include <fire_engine/collision/sweep_and_prune_broad_phase.hpp>
 
-#include <gtest/gtest.h>
+#include <catch2/catch_approx.hpp>
+#include <catch2/catch_test_macros.hpp>
 
 using fire_engine::AABB;
 using fire_engine::Collider;
@@ -38,78 +39,80 @@ bool containsPair(const std::vector<fire_engine::CollisionPair>& pairs, const Co
 
 } // namespace
 
-TEST(ColliderUpdate, TranslatesLocalBoundsAsPositions)
+TEST_CASE("ColliderUpdate.TranslatesLocalBoundsAsPositions", "[ColliderUpdate]")
 {
     Collider collider = makeCollider({0.0f, 1.0f, 2.0f}, {1.0f, 2.0f, 3.0f},
                                      Mat4::translate({10.0f, 20.0f, 30.0f}));
 
     AABB bounds = collider.worldBounds();
-    EXPECT_FLOAT_EQ(bounds.min.x(), 10.0f);
-    EXPECT_FLOAT_EQ(bounds.min.y(), 21.0f);
-    EXPECT_FLOAT_EQ(bounds.min.z(), 32.0f);
-    EXPECT_FLOAT_EQ(bounds.max.x(), 11.0f);
-    EXPECT_FLOAT_EQ(bounds.max.y(), 22.0f);
-    EXPECT_FLOAT_EQ(bounds.max.z(), 33.0f);
+    CHECK(bounds.min.x() == Catch::Approx(10.0f).margin(1e-5f));
+    CHECK(bounds.min.y() == Catch::Approx(21.0f).margin(1e-5f));
+    CHECK(bounds.min.z() == Catch::Approx(32.0f).margin(1e-5f));
+    CHECK(bounds.max.x() == Catch::Approx(11.0f).margin(1e-5f));
+    CHECK(bounds.max.y() == Catch::Approx(22.0f).margin(1e-5f));
+    CHECK(bounds.max.z() == Catch::Approx(33.0f).margin(1e-5f));
 }
 
-TEST(ColliderUpdate, RebuildsConservativeBoundsForNegativeScale)
+TEST_CASE("ColliderUpdate.RebuildsConservativeBoundsForNegativeScale", "[ColliderUpdate]")
 {
     Collider collider =
         makeCollider({0.0f, 0.0f, 0.0f}, {1.0f, 2.0f, 3.0f}, Mat4::scale({-2.0f, 3.0f, -4.0f}));
 
     AABB bounds = collider.worldBounds();
-    EXPECT_FLOAT_EQ(bounds.min.x(), -2.0f);
-    EXPECT_FLOAT_EQ(bounds.min.y(), 0.0f);
-    EXPECT_FLOAT_EQ(bounds.min.z(), -12.0f);
-    EXPECT_FLOAT_EQ(bounds.max.x(), 0.0f);
-    EXPECT_FLOAT_EQ(bounds.max.y(), 6.0f);
-    EXPECT_FLOAT_EQ(bounds.max.z(), 0.0f);
+    CHECK(bounds.min.x() == Catch::Approx(-2.0f).margin(1e-5f));
+    CHECK(bounds.min.y() == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(bounds.min.z() == Catch::Approx(-12.0f).margin(1e-5f));
+    CHECK(bounds.max.x() == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(bounds.max.y() == Catch::Approx(6.0f).margin(1e-5f));
+    CHECK(bounds.max.z() == Catch::Approx(0.0f).margin(1e-5f));
 }
 
-TEST(ColliderUpdate, FirstUpdateSeedsPreviousAndSweptBoundsToCurrent)
+TEST_CASE("ColliderUpdate.FirstUpdateSeedsPreviousAndSweptBoundsToCurrent", "[ColliderUpdate]")
 {
     Collider collider =
         makeCollider({0.0f, 0.0f, 0.0f}, {1.0f, 1.0f, 1.0f}, Mat4::translate({2.0f, 0.0f, 0.0f}));
 
-    EXPECT_EQ(collider.previousWorldBounds().min, Vec3(2.0f, 0.0f, 0.0f));
-    EXPECT_EQ(collider.previousWorldBounds().max, Vec3(3.0f, 1.0f, 1.0f));
-    EXPECT_EQ(collider.sweptWorldBounds().min, Vec3(2.0f, 0.0f, 0.0f));
-    EXPECT_EQ(collider.sweptWorldBounds().max, Vec3(3.0f, 1.0f, 1.0f));
+    CHECK(collider.previousWorldBounds().min == Vec3(2.0f, 0.0f, 0.0f));
+    CHECK(collider.previousWorldBounds().max == Vec3(3.0f, 1.0f, 1.0f));
+    CHECK(collider.sweptWorldBounds().min == Vec3(2.0f, 0.0f, 0.0f));
+    CHECK(collider.sweptWorldBounds().max == Vec3(3.0f, 1.0f, 1.0f));
 }
 
-TEST(ColliderUpdate, SweptBoundsMergePreviousAndCurrentBounds)
+TEST_CASE("ColliderUpdate.SweptBoundsMergePreviousAndCurrentBounds", "[ColliderUpdate]")
 {
     Collider collider = makeCollider({0.0f, 0.0f, 0.0f}, {1.0f, 1.0f, 1.0f});
 
     collider.update(Mat4::translate({3.0f, 0.0f, 0.0f}));
 
-    EXPECT_EQ(collider.previousWorldBounds().min, Vec3(0.0f, 0.0f, 0.0f));
-    EXPECT_EQ(collider.previousWorldBounds().max, Vec3(1.0f, 1.0f, 1.0f));
-    EXPECT_EQ(collider.worldBounds().min, Vec3(3.0f, 0.0f, 0.0f));
-    EXPECT_EQ(collider.worldBounds().max, Vec3(4.0f, 1.0f, 1.0f));
-    EXPECT_EQ(collider.sweptWorldBounds().min, Vec3(0.0f, 0.0f, 0.0f));
-    EXPECT_EQ(collider.sweptWorldBounds().max, Vec3(4.0f, 1.0f, 1.0f));
+    CHECK(collider.previousWorldBounds().min == Vec3(0.0f, 0.0f, 0.0f));
+    CHECK(collider.previousWorldBounds().max == Vec3(1.0f, 1.0f, 1.0f));
+    CHECK(collider.worldBounds().min == Vec3(3.0f, 0.0f, 0.0f));
+    CHECK(collider.worldBounds().max == Vec3(4.0f, 1.0f, 1.0f));
+    CHECK(collider.sweptWorldBounds().min == Vec3(0.0f, 0.0f, 0.0f));
+    CHECK(collider.sweptWorldBounds().max == Vec3(4.0f, 1.0f, 1.0f));
 }
 
-TEST(SweepAndPruneBroadPhase, EmptyAndSingleColliderProduceNoPairs)
+TEST_CASE("SweepAndPruneBroadPhase.EmptyAndSingleColliderProduceNoPairs",
+          "[SweepAndPruneBroadPhase]")
 {
     SweepAndPruneBroadPhase broadPhase;
     broadPhase.update();
-    EXPECT_TRUE(broadPhase.possiblePairs().empty());
-    EXPECT_TRUE(broadPhase.validate());
+    CHECK(broadPhase.possiblePairs().empty());
+    CHECK(broadPhase.validate());
 
     Collider collider = makeCollider({0.0f, 0.0f, 0.0f}, {1.0f, 1.0f, 1.0f});
     ColliderId id = broadPhase.addCollider(collider);
     broadPhase.update();
 
-    EXPECT_TRUE(id.valid());
-    EXPECT_EQ(collider.colliderId(), id);
-    EXPECT_EQ(broadPhase.colliderCount(), 1U);
-    EXPECT_TRUE(broadPhase.possiblePairs().empty());
-    EXPECT_TRUE(broadPhase.validate());
+    CHECK(id.valid());
+    CHECK(collider.colliderId() == id);
+    CHECK(broadPhase.colliderCount() == 1U);
+    CHECK(broadPhase.possiblePairs().empty());
+    CHECK(broadPhase.validate());
 }
 
-TEST(SweepAndPruneBroadPhase, OverlapOnAllAxesProducesPossiblePair)
+TEST_CASE("SweepAndPruneBroadPhase.OverlapOnAllAxesProducesPossiblePair",
+          "[SweepAndPruneBroadPhase]")
 {
     Collider first = makeCollider({0.0f, 0.0f, 0.0f}, {2.0f, 2.0f, 2.0f});
     Collider second = makeCollider({1.0f, 1.0f, 1.0f}, {3.0f, 3.0f, 3.0f});
@@ -119,14 +122,15 @@ TEST(SweepAndPruneBroadPhase, OverlapOnAllAxesProducesPossiblePair)
     ColliderId secondId = broadPhase.addCollider(second);
     broadPhase.update();
 
-    ASSERT_EQ(broadPhase.possiblePairs().size(), 1U);
-    EXPECT_TRUE(containsPair(broadPhase.possiblePairs(), first, second));
-    EXPECT_EQ(broadPhase.possiblePairs()[0].firstId, firstId);
-    EXPECT_EQ(broadPhase.possiblePairs()[0].secondId, secondId);
-    EXPECT_TRUE(broadPhase.validate());
+    REQUIRE(broadPhase.possiblePairs().size() == 1U);
+    CHECK(containsPair(broadPhase.possiblePairs(), first, second));
+    CHECK(broadPhase.possiblePairs()[0].firstId == firstId);
+    CHECK(broadPhase.possiblePairs()[0].secondId == secondId);
+    CHECK(broadPhase.validate());
 }
 
-TEST(SweepAndPruneBroadPhase, AddColliderReturnsStableIdsAndAssignsEndPointIndices)
+TEST_CASE("SweepAndPruneBroadPhase.AddColliderReturnsStableIdsAndAssignsEndPointIndices",
+          "[SweepAndPruneBroadPhase]")
 {
     Collider first = makeCollider({0.0f, 0.0f, 0.0f}, {1.0f, 1.0f, 1.0f});
     Collider second = makeCollider({2.0f, 2.0f, 2.0f}, {3.0f, 3.0f, 3.0f});
@@ -135,28 +139,28 @@ TEST(SweepAndPruneBroadPhase, AddColliderReturnsStableIdsAndAssignsEndPointIndic
     ColliderId firstId = broadPhase.addCollider(first);
     ColliderId secondId = broadPhase.addCollider(second);
 
-    EXPECT_TRUE(firstId.valid());
-    EXPECT_TRUE(secondId.valid());
-    EXPECT_NE(firstId, secondId);
-    EXPECT_EQ(first.colliderId(), firstId);
-    EXPECT_EQ(second.colliderId(), secondId);
+    CHECK(firstId.valid());
+    CHECK(secondId.valid());
+    CHECK(firstId != secondId);
+    CHECK(first.colliderId() == firstId);
+    CHECK(second.colliderId() == secondId);
 
     for (EndPoint* endPoint : first.endPoints())
     {
-        EXPECT_NE(endPoint->index(), EndPoint::invalidIndex);
-        EXPECT_EQ(endPoint->colliderId(), firstId);
+        CHECK(endPoint->index() != EndPoint::invalidIndex);
+        CHECK(endPoint->colliderId() == firstId);
     }
 
     for (EndPoint* endPoint : second.endPoints())
     {
-        EXPECT_NE(endPoint->index(), EndPoint::invalidIndex);
-        EXPECT_EQ(endPoint->colliderId(), secondId);
+        CHECK(endPoint->index() != EndPoint::invalidIndex);
+        CHECK(endPoint->colliderId() == secondId);
     }
 
-    EXPECT_TRUE(broadPhase.validate());
+    CHECK(broadPhase.validate());
 }
 
-TEST(SweepAndPruneBroadPhase, OverlapOnOnlyTwoAxesIsPruned)
+TEST_CASE("SweepAndPruneBroadPhase.OverlapOnOnlyTwoAxesIsPruned", "[SweepAndPruneBroadPhase]")
 {
     Collider first = makeCollider({0.0f, 0.0f, 0.0f}, {2.0f, 2.0f, 2.0f});
     Collider second = makeCollider({1.0f, 1.0f, 3.0f}, {3.0f, 3.0f, 4.0f});
@@ -166,11 +170,11 @@ TEST(SweepAndPruneBroadPhase, OverlapOnOnlyTwoAxesIsPruned)
     broadPhase.addCollider(second);
     broadPhase.update();
 
-    EXPECT_TRUE(broadPhase.possiblePairs().empty());
-    EXPECT_TRUE(broadPhase.validate());
+    CHECK(broadPhase.possiblePairs().empty());
+    CHECK(broadPhase.validate());
 }
 
-TEST(SweepAndPruneBroadPhase, TouchingBoundsProducePossiblePair)
+TEST_CASE("SweepAndPruneBroadPhase.TouchingBoundsProducePossiblePair", "[SweepAndPruneBroadPhase]")
 {
     Collider first = makeCollider({0.0f, 0.0f, 0.0f}, {1.0f, 1.0f, 1.0f});
     Collider second = makeCollider({1.0f, 0.0f, 0.0f}, {2.0f, 1.0f, 1.0f});
@@ -180,12 +184,13 @@ TEST(SweepAndPruneBroadPhase, TouchingBoundsProducePossiblePair)
     broadPhase.addCollider(second);
     broadPhase.update();
 
-    ASSERT_EQ(broadPhase.possiblePairs().size(), 1U);
-    EXPECT_TRUE(containsPair(broadPhase.possiblePairs(), first, second));
-    EXPECT_TRUE(broadPhase.validate());
+    REQUIRE(broadPhase.possiblePairs().size() == 1U);
+    CHECK(containsPair(broadPhase.possiblePairs(), first, second));
+    CHECK(broadPhase.validate());
 }
 
-TEST(SweepAndPruneBroadPhase, UpdateColliderIncrementallyAddsPossiblePair)
+TEST_CASE("SweepAndPruneBroadPhase.UpdateColliderIncrementallyAddsPossiblePair",
+          "[SweepAndPruneBroadPhase]")
 {
     Collider first = makeCollider({0.0f, 0.0f, 0.0f}, {1.0f, 1.0f, 1.0f});
     Collider second = makeCollider({3.0f, 0.0f, 0.0f}, {4.0f, 1.0f, 1.0f});
@@ -193,17 +198,18 @@ TEST(SweepAndPruneBroadPhase, UpdateColliderIncrementallyAddsPossiblePair)
     SweepAndPruneBroadPhase broadPhase;
     broadPhase.addCollider(first);
     broadPhase.addCollider(second);
-    ASSERT_TRUE(broadPhase.possiblePairs().empty());
+    REQUIRE(broadPhase.possiblePairs().empty());
 
     second.update(Mat4::translate({-2.5f, 0.0f, 0.0f}));
     broadPhase.updateCollider(second);
 
-    ASSERT_EQ(broadPhase.possiblePairs().size(), 1U);
-    EXPECT_TRUE(containsPair(broadPhase.possiblePairs(), first, second));
-    EXPECT_TRUE(broadPhase.validate());
+    REQUIRE(broadPhase.possiblePairs().size() == 1U);
+    CHECK(containsPair(broadPhase.possiblePairs(), first, second));
+    CHECK(broadPhase.validate());
 }
 
-TEST(SweepAndPruneBroadPhase, UpdateColliderIncrementallyRemovesPossiblePair)
+TEST_CASE("SweepAndPruneBroadPhase.UpdateColliderIncrementallyRemovesPossiblePair",
+          "[SweepAndPruneBroadPhase]")
 {
     Collider first = makeCollider({0.0f, 0.0f, 0.0f}, {2.0f, 2.0f, 2.0f});
     Collider second = makeCollider({1.0f, 1.0f, 1.0f}, {3.0f, 3.0f, 3.0f});
@@ -211,23 +217,24 @@ TEST(SweepAndPruneBroadPhase, UpdateColliderIncrementallyRemovesPossiblePair)
     SweepAndPruneBroadPhase broadPhase;
     broadPhase.addCollider(first);
     broadPhase.addCollider(second);
-    ASSERT_EQ(broadPhase.possiblePairs().size(), 1U);
+    REQUIRE(broadPhase.possiblePairs().size() == 1U);
 
     second.update(Mat4::translate({5.0f, 0.0f, 0.0f}));
     broadPhase.updateCollider(second);
 
-    ASSERT_EQ(broadPhase.possiblePairs().size(), 1U);
-    EXPECT_TRUE(containsPair(broadPhase.possiblePairs(), first, second));
-    EXPECT_TRUE(broadPhase.validate());
+    REQUIRE(broadPhase.possiblePairs().size() == 1U);
+    CHECK(containsPair(broadPhase.possiblePairs(), first, second));
+    CHECK(broadPhase.validate());
 
     second.resetFrame(Mat4::translate({5.0f, 0.0f, 0.0f}));
     broadPhase.updateCollider(second);
 
-    EXPECT_TRUE(broadPhase.possiblePairs().empty());
-    EXPECT_TRUE(broadPhase.validate());
+    CHECK(broadPhase.possiblePairs().empty());
+    CHECK(broadPhase.validate());
 }
 
-TEST(SweepAndPruneBroadPhase, UpdateIncrementallyProcessesAllRegisteredColliders)
+TEST_CASE("SweepAndPruneBroadPhase.UpdateIncrementallyProcessesAllRegisteredColliders",
+          "[SweepAndPruneBroadPhase]")
 {
     Collider first = makeCollider({0.0f, 0.0f, 0.0f}, {1.0f, 1.0f, 1.0f});
     Collider second = makeCollider({3.0f, 0.0f, 0.0f}, {4.0f, 1.0f, 1.0f});
@@ -235,17 +242,18 @@ TEST(SweepAndPruneBroadPhase, UpdateIncrementallyProcessesAllRegisteredColliders
     SweepAndPruneBroadPhase broadPhase;
     broadPhase.addCollider(first);
     broadPhase.addCollider(second);
-    ASSERT_TRUE(broadPhase.possiblePairs().empty());
+    REQUIRE(broadPhase.possiblePairs().empty());
 
     second.update(Mat4::translate({-2.5f, 0.0f, 0.0f}));
     broadPhase.update();
 
-    ASSERT_EQ(broadPhase.possiblePairs().size(), 1U);
-    EXPECT_TRUE(containsPair(broadPhase.possiblePairs(), first, second));
-    EXPECT_TRUE(broadPhase.validate());
+    REQUIRE(broadPhase.possiblePairs().size() == 1U);
+    CHECK(containsPair(broadPhase.possiblePairs(), first, second));
+    CHECK(broadPhase.validate());
 }
 
-TEST(SweepAndPruneBroadPhase, SweptBoundsProducePossiblePairForFastPassThrough)
+TEST_CASE("SweepAndPruneBroadPhase.SweptBoundsProducePossiblePairForFastPassThrough",
+          "[SweepAndPruneBroadPhase]")
 {
     Collider moving = makeCollider({-3.0f, 0.0f, 0.0f}, {-2.0f, 1.0f, 1.0f});
     Collider target = makeCollider({0.0f, 0.0f, 0.0f}, {1.0f, 1.0f, 1.0f});
@@ -253,17 +261,18 @@ TEST(SweepAndPruneBroadPhase, SweptBoundsProducePossiblePairForFastPassThrough)
     SweepAndPruneBroadPhase broadPhase;
     broadPhase.addCollider(moving);
     broadPhase.addCollider(target);
-    ASSERT_TRUE(broadPhase.possiblePairs().empty());
+    REQUIRE(broadPhase.possiblePairs().empty());
 
     moving.update(Mat4::translate({5.0f, 0.0f, 0.0f}));
     broadPhase.updateCollider(moving);
 
-    ASSERT_EQ(broadPhase.possiblePairs().size(), 1U);
-    EXPECT_TRUE(containsPair(broadPhase.possiblePairs(), moving, target));
-    EXPECT_TRUE(broadPhase.validate());
+    REQUIRE(broadPhase.possiblePairs().size() == 1U);
+    CHECK(containsPair(broadPhase.possiblePairs(), moving, target));
+    CHECK(broadPhase.validate());
 }
 
-TEST(SweepAndPruneBroadPhase, RebuildSynchronisesStateAfterFilterChange)
+TEST_CASE("SweepAndPruneBroadPhase.RebuildSynchronisesStateAfterFilterChange",
+          "[SweepAndPruneBroadPhase]")
 {
     Collider first = makeCollider({0.0f, 0.0f, 0.0f}, {2.0f, 2.0f, 2.0f});
     Collider second = makeCollider({1.0f, 1.0f, 1.0f}, {3.0f, 3.0f, 3.0f});
@@ -271,16 +280,16 @@ TEST(SweepAndPruneBroadPhase, RebuildSynchronisesStateAfterFilterChange)
     SweepAndPruneBroadPhase broadPhase;
     broadPhase.addCollider(first);
     broadPhase.addCollider(second);
-    ASSERT_EQ(broadPhase.possiblePairs().size(), 1U);
+    REQUIRE(broadPhase.possiblePairs().size() == 1U);
 
     first.collisionMask(0U);
     broadPhase.rebuild();
 
-    EXPECT_TRUE(broadPhase.possiblePairs().empty());
-    EXPECT_TRUE(broadPhase.validate());
+    CHECK(broadPhase.possiblePairs().empty());
+    CHECK(broadPhase.validate());
 }
 
-TEST(SweepAndPruneBroadPhase, CollisionMasksFilterPairs)
+TEST_CASE("SweepAndPruneBroadPhase.CollisionMasksFilterPairs", "[SweepAndPruneBroadPhase]")
 {
     Collider first = makeCollider({0.0f, 0.0f, 0.0f}, {2.0f, 2.0f, 2.0f});
     Collider second = makeCollider({1.0f, 1.0f, 1.0f}, {3.0f, 3.0f, 3.0f});
@@ -293,18 +302,19 @@ TEST(SweepAndPruneBroadPhase, CollisionMasksFilterPairs)
     broadPhase.addCollider(first);
     broadPhase.addCollider(second);
 
-    EXPECT_TRUE(broadPhase.possiblePairs().empty());
-    EXPECT_TRUE(broadPhase.validate());
+    CHECK(broadPhase.possiblePairs().empty());
+    CHECK(broadPhase.validate());
 
     second.collisionLayer(1U << 1U);
     broadPhase.rebuild();
 
-    ASSERT_EQ(broadPhase.possiblePairs().size(), 1U);
-    EXPECT_TRUE(containsPair(broadPhase.possiblePairs(), first, second));
-    EXPECT_TRUE(broadPhase.validate());
+    REQUIRE(broadPhase.possiblePairs().size() == 1U);
+    CHECK(containsPair(broadPhase.possiblePairs(), first, second));
+    CHECK(broadPhase.validate());
 }
 
-TEST(SweepAndPruneBroadPhase, MultipleCollidersOnlyReturnMultiaxisOverlaps)
+TEST_CASE("SweepAndPruneBroadPhase.MultipleCollidersOnlyReturnMultiaxisOverlaps",
+          "[SweepAndPruneBroadPhase]")
 {
     Collider first = makeCollider({0.0f, 0.0f, 0.0f}, {2.0f, 2.0f, 2.0f});
     Collider second = makeCollider({1.0f, 1.0f, 1.0f}, {3.0f, 3.0f, 3.0f});
@@ -318,12 +328,12 @@ TEST(SweepAndPruneBroadPhase, MultipleCollidersOnlyReturnMultiaxisOverlaps)
     broadPhase.addCollider(fourth);
     broadPhase.update();
 
-    ASSERT_EQ(broadPhase.possiblePairs().size(), 1U);
-    EXPECT_TRUE(containsPair(broadPhase.possiblePairs(), first, second));
-    EXPECT_TRUE(broadPhase.validate());
+    REQUIRE(broadPhase.possiblePairs().size() == 1U);
+    CHECK(containsPair(broadPhase.possiblePairs(), first, second));
+    CHECK(broadPhase.validate());
 }
 
-TEST(SweepAndPruneBroadPhase, DuplicateColliderIsIgnored)
+TEST_CASE("SweepAndPruneBroadPhase.DuplicateColliderIsIgnored", "[SweepAndPruneBroadPhase]")
 {
     Collider collider = makeCollider({0.0f, 0.0f, 0.0f}, {1.0f, 1.0f, 1.0f});
 
@@ -332,13 +342,14 @@ TEST(SweepAndPruneBroadPhase, DuplicateColliderIsIgnored)
     ColliderId secondAdd = broadPhase.addCollider(collider);
     broadPhase.update();
 
-    EXPECT_EQ(firstAdd, secondAdd);
-    EXPECT_EQ(broadPhase.colliderCount(), 1U);
-    EXPECT_TRUE(broadPhase.possiblePairs().empty());
-    EXPECT_TRUE(broadPhase.validate());
+    CHECK(firstAdd == secondAdd);
+    CHECK(broadPhase.colliderCount() == 1U);
+    CHECK(broadPhase.possiblePairs().empty());
+    CHECK(broadPhase.validate());
 }
 
-TEST(SweepAndPruneBroadPhase, RemoveColliderByIdClearsPairsAndEndpointIndices)
+TEST_CASE("SweepAndPruneBroadPhase.RemoveColliderByIdClearsPairsAndEndpointIndices",
+          "[SweepAndPruneBroadPhase]")
 {
     Collider first = makeCollider({0.0f, 0.0f, 0.0f}, {2.0f, 2.0f, 2.0f});
     Collider second = makeCollider({1.0f, 1.0f, 1.0f}, {3.0f, 3.0f, 3.0f});
@@ -346,22 +357,23 @@ TEST(SweepAndPruneBroadPhase, RemoveColliderByIdClearsPairsAndEndpointIndices)
     SweepAndPruneBroadPhase broadPhase;
     ColliderId firstId = broadPhase.addCollider(first);
     broadPhase.addCollider(second);
-    ASSERT_EQ(broadPhase.possiblePairs().size(), 1U);
+    REQUIRE(broadPhase.possiblePairs().size() == 1U);
 
-    EXPECT_TRUE(broadPhase.removeCollider(firstId));
+    CHECK(broadPhase.removeCollider(firstId));
 
-    EXPECT_EQ(broadPhase.colliderCount(), 1U);
-    EXPECT_FALSE(first.colliderId().valid());
-    EXPECT_TRUE(broadPhase.possiblePairs().empty());
+    CHECK(broadPhase.colliderCount() == 1U);
+    CHECK_FALSE(first.colliderId().valid());
+    CHECK(broadPhase.possiblePairs().empty());
     for (EndPoint* endPoint : first.endPoints())
     {
-        EXPECT_EQ(endPoint->index(), EndPoint::invalidIndex);
-        EXPECT_FALSE(endPoint->colliderId().valid());
+        CHECK(endPoint->index() == EndPoint::invalidIndex);
+        CHECK_FALSE(endPoint->colliderId().valid());
     }
-    EXPECT_TRUE(broadPhase.validate());
+    CHECK(broadPhase.validate());
 }
 
-TEST(SweepAndPruneBroadPhase, RemoveColliderByReferenceClearsPairs)
+TEST_CASE("SweepAndPruneBroadPhase.RemoveColliderByReferenceClearsPairs",
+          "[SweepAndPruneBroadPhase]")
 {
     Collider first = makeCollider({0.0f, 0.0f, 0.0f}, {2.0f, 2.0f, 2.0f});
     Collider second = makeCollider({1.0f, 1.0f, 1.0f}, {3.0f, 3.0f, 3.0f});
@@ -369,26 +381,27 @@ TEST(SweepAndPruneBroadPhase, RemoveColliderByReferenceClearsPairs)
     SweepAndPruneBroadPhase broadPhase;
     broadPhase.addCollider(first);
     broadPhase.addCollider(second);
-    ASSERT_EQ(broadPhase.possiblePairs().size(), 1U);
+    REQUIRE(broadPhase.possiblePairs().size() == 1U);
 
-    EXPECT_TRUE(broadPhase.removeCollider(second));
+    CHECK(broadPhase.removeCollider(second));
 
-    EXPECT_EQ(broadPhase.colliderCount(), 1U);
-    EXPECT_TRUE(broadPhase.possiblePairs().empty());
-    EXPECT_TRUE(broadPhase.validate());
+    CHECK(broadPhase.colliderCount() == 1U);
+    CHECK(broadPhase.possiblePairs().empty());
+    CHECK(broadPhase.validate());
 }
 
-TEST(SweepAndPruneBroadPhase, RemoveUnregisteredColliderReturnsFalse)
+TEST_CASE("SweepAndPruneBroadPhase.RemoveUnregisteredColliderReturnsFalse",
+          "[SweepAndPruneBroadPhase]")
 {
     Collider collider = makeCollider({0.0f, 0.0f, 0.0f}, {1.0f, 1.0f, 1.0f});
     SweepAndPruneBroadPhase broadPhase;
 
-    EXPECT_FALSE(broadPhase.removeCollider(collider));
-    EXPECT_FALSE(broadPhase.removeCollider(ColliderId{123U}));
-    EXPECT_TRUE(broadPhase.validate());
+    CHECK_FALSE(broadPhase.removeCollider(collider));
+    CHECK_FALSE(broadPhase.removeCollider(ColliderId{123U}));
+    CHECK(broadPhase.validate());
 }
 
-TEST(SweepAndPruneBroadPhase, ClearRemovesCollidersAndPairs)
+TEST_CASE("SweepAndPruneBroadPhase.ClearRemovesCollidersAndPairs", "[SweepAndPruneBroadPhase]")
 {
     Collider first = makeCollider({0.0f, 0.0f, 0.0f}, {2.0f, 2.0f, 2.0f});
     Collider second = makeCollider({1.0f, 1.0f, 1.0f}, {3.0f, 3.0f, 3.0f});
@@ -397,13 +410,16 @@ TEST(SweepAndPruneBroadPhase, ClearRemovesCollidersAndPairs)
     broadPhase.addCollider(first);
     broadPhase.addCollider(second);
     broadPhase.update();
-    ASSERT_EQ(broadPhase.possiblePairs().size(), 1U);
+    REQUIRE(broadPhase.possiblePairs().size() == 1U);
 
     broadPhase.clear();
 
-    EXPECT_EQ(broadPhase.colliderCount(), 0U);
-    EXPECT_FALSE(first.colliderId().valid());
-    EXPECT_FALSE(second.colliderId().valid());
-    EXPECT_TRUE(broadPhase.possiblePairs().empty());
-    EXPECT_TRUE(broadPhase.validate());
+    CHECK(broadPhase.colliderCount() == 0U);
+    CHECK_FALSE(first.colliderId().valid());
+    CHECK_FALSE(second.colliderId().valid());
+    CHECK(broadPhase.possiblePairs().empty());
+    CHECK(broadPhase.validate());
+
+    CHECK_FALSE(broadPhase.removeCollider(first));
+    CHECK_FALSE(broadPhase.removeCollider(second));
 }

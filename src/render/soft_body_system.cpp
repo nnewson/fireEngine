@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <cstring>
 
 #include <fire_engine/graphics/vertex.hpp>
 #include <fire_engine/render/device.hpp>
@@ -57,6 +58,15 @@ struct ClothPush
     uint32_t pad{0};
 };
 
+// std140 collider UBO mirroring the `Colliders` block in cloth_collide.comp.
+// ClothCollider is 64 bytes (std140 element stride); count is padded to 16.
+struct ClothColliderUboGpu
+{
+    int32_t count{0};
+    int32_t pad[3]{};
+    ClothCollider colliders[SoftBodySystem::kMaxClothColliders]{};
+};
+
 [[nodiscard]] ComputePipelineConfig clothConfig(const char* shader)
 {
     ComputePipelineConfig config;
@@ -66,6 +76,7 @@ struct ClothPush
         {1, vk::DescriptorType::eStorageBuffer, 1,
          vk::ShaderStageFlagBits::eCompute}, // constraints
         {2, vk::DescriptorType::eStorageBuffer, 1, vk::ShaderStageFlagBits::eCompute}, // verts
+        {3, vk::DescriptorType::eUniformBuffer, 1, vk::ShaderStageFlagBits::eCompute}, // colliders
     };
     config.pushConstantRanges.emplace_back(vk::ShaderStageFlagBits::eCompute, 0,
                                            static_cast<uint32_t>(sizeof(ClothPush)));
@@ -84,17 +95,25 @@ SoftBodySystem::SoftBodySystem(const Device& device, Resources& resources)
       resources_{&resources},
       predict_(device, clothConfig("cloth_predict.comp.spv")),
       solve_(device, clothConfig("cloth_solve.comp.spv")),
+      collide_(device, clothConfig("cloth_collide.comp.spv")),
       finalize_(device, clothConfig("cloth_finalize.comp.spv"))
 {
-    std::array<vk::DescriptorPoolSize, 1> poolSizes{
-        {{vk::DescriptorType::eStorageBuffer, kMaxCloths * 3}}};
+    // kMaxFramesInFlight descriptor sets per cloth (one per frame), each with 3
+    // storage buffers + 1 uniform (the per-frame collider UBO).
+    constexpr uint32_t maxSets = kMaxCloths * kMaxFramesInFlight;
+    std::array<vk::DescriptorPoolSize, 2> poolSizes{{
+        {vk::DescriptorType::eStorageBuffer, maxSets * 3},
+        {vk::DescriptorType::eUniformBuffer, maxSets},
+    }};
     vk::DescriptorPoolCreateInfo ci{
         .flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet,
-        .maxSets = kMaxCloths,
+        .maxSets = maxSets,
         .poolSizeCount = static_cast<uint32_t>(poolSizes.size()),
         .pPoolSizes = poolSizes.data(),
     };
     pool_ = vk::raii::DescriptorPool(device_->device(), ci);
+
+    colliderUbo_ = resources_->createMappedUniformBuffers(sizeof(ClothColliderUboGpu));
 }
 
 void SoftBodySystem::addCloth(const ClothMesh& mesh, BufferHandle vertexBuffer)
@@ -132,36 +151,54 @@ void SoftBodySystem::addCloth(const ClothMesh& mesh, BufferHandle vertexBuffer)
     cloth.resZ = mesh.resZ;
 
     vk::DescriptorSetLayout layout = predict_.descriptorSetLayout();
-    vk::DescriptorSetAllocateInfo ai{
-        .descriptorPool = *pool_,
-        .descriptorSetCount = 1,
-        .pSetLayouts = &layout,
-    };
-    vk::raii::DescriptorSets sets(device_->device(), ai);
-    cloth.set = std::move(sets[0]);
-
-    const std::array<vk::DescriptorBufferInfo, 3> infos{{
-        {resources_->vulkanBuffer(cloth.particles), 0, vk::WholeSize},
-        {resources_->vulkanBuffer(cloth.constraints), 0, vk::WholeSize},
-        {resources_->vulkanBuffer(cloth.verts), 0, vk::WholeSize},
-    }};
-    std::array<vk::WriteDescriptorSet, 3> writes;
-    for (uint32_t b = 0; b < 3; ++b)
+    for (uint32_t f = 0; f < kMaxFramesInFlight; ++f)
     {
-        writes[b] = vk::WriteDescriptorSet{
-            .dstSet = *cloth.set,
-            .dstBinding = b,
-            .descriptorCount = 1,
-            .descriptorType = vk::DescriptorType::eStorageBuffer,
-            .pBufferInfo = &infos[b],
+        vk::DescriptorSetAllocateInfo ai{
+            .descriptorPool = *pool_,
+            .descriptorSetCount = 1,
+            .pSetLayouts = &layout,
         };
+        vk::raii::DescriptorSets sets(device_->device(), ai);
+        cloth.sets.push_back(std::move(sets[0]));
+
+        const std::array<vk::DescriptorBufferInfo, 3> storageInfos{{
+            {resources_->vulkanBuffer(cloth.particles), 0, vk::WholeSize},
+            {resources_->vulkanBuffer(cloth.constraints), 0, vk::WholeSize},
+            {resources_->vulkanBuffer(cloth.verts), 0, vk::WholeSize},
+        }};
+        const vk::DescriptorBufferInfo colliderInfo{
+            resources_->vulkanBuffer(colliderUbo_.buffers[f]), 0, vk::WholeSize};
+        const vk::DescriptorSet dst = *cloth.sets[f];
+        std::array<vk::WriteDescriptorSet, 4> writes{{
+            {.dstSet = dst,
+             .dstBinding = 0,
+             .descriptorCount = 1,
+             .descriptorType = vk::DescriptorType::eStorageBuffer,
+             .pBufferInfo = &storageInfos[0]},
+            {.dstSet = dst,
+             .dstBinding = 1,
+             .descriptorCount = 1,
+             .descriptorType = vk::DescriptorType::eStorageBuffer,
+             .pBufferInfo = &storageInfos[1]},
+            {.dstSet = dst,
+             .dstBinding = 2,
+             .descriptorCount = 1,
+             .descriptorType = vk::DescriptorType::eStorageBuffer,
+             .pBufferInfo = &storageInfos[2]},
+            {.dstSet = dst,
+             .dstBinding = 3,
+             .descriptorCount = 1,
+             .descriptorType = vk::DescriptorType::eUniformBuffer,
+             .pBufferInfo = &colliderInfo},
+        }};
+        device_->device().updateDescriptorSets(writes, {});
     }
-    device_->device().updateDescriptorSets(writes, {});
 
     cloths_.push_back(std::move(cloth));
 }
 
-void SoftBodySystem::recordSolve(vk::CommandBuffer cmd, float dt) const
+void SoftBodySystem::recordSolve(vk::CommandBuffer cmd, float dt, uint32_t frameIndex,
+                                 std::span<const ClothCollider> colliders) const
 {
     if (cloths_.empty())
     {
@@ -174,6 +211,16 @@ void SoftBodySystem::recordSolve(vk::CommandBuffer cmd, float dt) const
     {
         return;
     }
+
+    // Upload this frame's world colliders into its UBO (per-frame, so we don't
+    // race a still-in-flight read).
+    ClothColliderUboGpu ubo{};
+    ubo.count = static_cast<int32_t>(std::min<std::size_t>(colliders.size(), kMaxClothColliders));
+    for (int32_t k = 0; k < ubo.count; ++k)
+    {
+        ubo.colliders[k] = colliders[static_cast<std::size_t>(k)];
+    }
+    std::memcpy(colliderUbo_.mapped[frameIndex], &ubo, sizeof(ubo));
 
     auto particleBarrier = [&](const Cloth& c)
     {
@@ -188,7 +235,7 @@ void SoftBodySystem::recordSolve(vk::CommandBuffer cmd, float dt) const
     for (const Cloth& c : cloths_)
     {
         cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, predict_.pipelineLayout(), 0,
-                               *c.set, {});
+                               *c.sets[frameIndex], {});
         const uint32_t particleGroups = groups(c.particleCount);
 
         ClothPush push;
@@ -223,6 +270,14 @@ void SoftBodySystem::recordSolve(vk::CommandBuffer cmd, float dt) const
                 cmd.dispatch(groups(n), 1, 1);
                 particleBarrier(c);
             }
+
+            // Collision projection (after the distance solve), reads the collider
+            // UBO + particles, writes particles.
+            cmd.bindPipeline(vk::PipelineBindPoint::eCompute, collide_.pipeline());
+            cmd.pushConstants<ClothPush>(collide_.pipelineLayout(),
+                                         vk::ShaderStageFlagBits::eCompute, 0, push);
+            cmd.dispatch(particleGroups, 1, 1);
+            particleBarrier(c);
         }
 
         cmd.bindPipeline(vk::PipelineBindPoint::eCompute, finalize_.pipeline());

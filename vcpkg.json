@@ -1,7 +1,7 @@
 {
   "dependencies": [
+    "catch2",
     "fastgltf",
-    "gtest",
     "stb",
     "vulkan-headers",
     "ktx",

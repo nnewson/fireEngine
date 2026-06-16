@@ -1,4 +1,5 @@
-#include <gtest/gtest.h>
+#include <catch2/catch_approx.hpp>
+#include <catch2/catch_test_macros.hpp>
 
 #include <fire_engine/graphics/frame_info.hpp>
 
@@ -8,72 +9,72 @@ using namespace fire_engine;
 // Default construction
 // ---------------------------------------------------------------------------
 
-TEST(FrameInfo, DefaultCurrentFrameIsZero)
+TEST_CASE("FrameInfo.DefaultCurrentFrameIsZero", "[FrameInfo]")
 {
     FrameInfo info;
-    EXPECT_EQ(info.currentFrame, 0u);
+    CHECK(info.currentFrame == 0u);
 }
 
-TEST(FrameInfo, DefaultViewportWidthIsZero)
+TEST_CASE("FrameInfo.DefaultViewportWidthIsZero", "[FrameInfo]")
 {
     FrameInfo info;
-    EXPECT_EQ(info.viewportWidth, 0u);
+    CHECK(info.viewportWidth == 0u);
 }
 
-TEST(FrameInfo, DefaultViewportHeightIsZero)
+TEST_CASE("FrameInfo.DefaultViewportHeightIsZero", "[FrameInfo]")
 {
     FrameInfo info;
-    EXPECT_EQ(info.viewportHeight, 0u);
+    CHECK(info.viewportHeight == 0u);
 }
 
-TEST(FrameInfo, DefaultCameraPositionIsOrigin)
+TEST_CASE("FrameInfo.DefaultCameraPositionIsOrigin", "[FrameInfo]")
 {
     FrameInfo info;
-    EXPECT_FLOAT_EQ(info.cameraPosition.x(), 0.0f);
-    EXPECT_FLOAT_EQ(info.cameraPosition.y(), 0.0f);
-    EXPECT_FLOAT_EQ(info.cameraPosition.z(), 0.0f);
+    CHECK(info.cameraPosition.x() == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(info.cameraPosition.y() == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(info.cameraPosition.z() == Catch::Approx(0.0f).margin(1e-5f));
 }
 
-TEST(FrameInfo, DefaultCameraTargetIsOrigin)
+TEST_CASE("FrameInfo.DefaultCameraTargetIsOrigin", "[FrameInfo]")
 {
     FrameInfo info;
-    EXPECT_FLOAT_EQ(info.cameraTarget.x(), 0.0f);
-    EXPECT_FLOAT_EQ(info.cameraTarget.y(), 0.0f);
-    EXPECT_FLOAT_EQ(info.cameraTarget.z(), 0.0f);
+    CHECK(info.cameraTarget.x() == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(info.cameraTarget.y() == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(info.cameraTarget.z() == Catch::Approx(0.0f).margin(1e-5f));
 }
 
-TEST(FrameInfo, DefaultAlphaPipelinesAreNull)
+TEST_CASE("FrameInfo.DefaultAlphaPipelinesAreNull", "[FrameInfo]")
 {
     FrameInfo info;
-    EXPECT_EQ(info.pipelines.opaque, NullPipeline);
-    EXPECT_EQ(info.pipelines.opaqueDoubleSided, NullPipeline);
-    EXPECT_EQ(info.pipelines.blend, NullPipeline);
+    CHECK(info.pipelines.opaque == NullPipeline);
+    CHECK(info.pipelines.opaqueDoubleSided == NullPipeline);
+    CHECK(info.pipelines.blend == NullPipeline);
 }
 
-TEST(FrameInfo, DefaultShadowPipelineIsNull)
+TEST_CASE("FrameInfo.DefaultShadowPipelineIsNull", "[FrameInfo]")
 {
     FrameInfo info;
-    EXPECT_EQ(info.shadowPipeline, NullPipeline);
+    CHECK(info.shadowPipeline == NullPipeline);
 }
 
-TEST(FrameInfo, DefaultShadowViewProjsAreZero)
+TEST_CASE("FrameInfo.DefaultShadowViewProjsAreZero", "[FrameInfo]")
 {
     FrameInfo info;
     Mat4 zero;
     for (const Mat4& m : info.shadowViewProjs)
     {
-        EXPECT_EQ(m, zero);
+        CHECK(m == zero);
     }
 }
 
-TEST(FrameInfo, AssignShadowPipelineRoundTrip)
+TEST_CASE("FrameInfo.AssignShadowPipelineRoundTrip", "[FrameInfo]")
 {
     FrameInfo info;
     info.shadowPipeline = PipelineHandle{7};
-    EXPECT_EQ(info.shadowPipeline, PipelineHandle{7});
+    CHECK(info.shadowPipeline == PipelineHandle{7});
 }
 
-TEST(FrameInfo, AssignShadowViewProjsRoundTrip)
+TEST_CASE("FrameInfo.AssignShadowViewProjsRoundTrip", "[FrameInfo]")
 {
     FrameInfo info;
     Mat4 id = Mat4::identity();
@@ -83,7 +84,7 @@ TEST(FrameInfo, AssignShadowViewProjsRoundTrip)
     }
     for (const Mat4& m : info.shadowViewProjs)
     {
-        EXPECT_EQ(m, id);
+        CHECK(m == id);
     }
 }
 
@@ -91,57 +92,57 @@ TEST(FrameInfo, AssignShadowViewProjsRoundTrip)
 // Aggregate initialization
 // ---------------------------------------------------------------------------
 
-TEST(FrameInfo, AggregateInit)
+TEST_CASE("FrameInfo.AggregateInit", "[FrameInfo]")
 {
     FrameInfo info{1, 1920, 1080, {2.0f, 3.0f, 4.0f}, {0.0f, 0.0f, 0.0f}};
-    EXPECT_EQ(info.currentFrame, 1u);
-    EXPECT_EQ(info.viewportWidth, 1920u);
-    EXPECT_EQ(info.viewportHeight, 1080u);
-    EXPECT_FLOAT_EQ(info.cameraPosition.x(), 2.0f);
-    EXPECT_FLOAT_EQ(info.cameraPosition.y(), 3.0f);
-    EXPECT_FLOAT_EQ(info.cameraPosition.z(), 4.0f);
+    CHECK(info.currentFrame == 1u);
+    CHECK(info.viewportWidth == 1920u);
+    CHECK(info.viewportHeight == 1080u);
+    CHECK(info.cameraPosition.x() == Catch::Approx(2.0f).margin(1e-5f));
+    CHECK(info.cameraPosition.y() == Catch::Approx(3.0f).margin(1e-5f));
+    CHECK(info.cameraPosition.z() == Catch::Approx(4.0f).margin(1e-5f));
 }
 
 // ---------------------------------------------------------------------------
 // Member assignment
 // ---------------------------------------------------------------------------
 
-TEST(FrameInfo, AssignCurrentFrame)
+TEST_CASE("FrameInfo.AssignCurrentFrame", "[FrameInfo]")
 {
     FrameInfo info;
     info.currentFrame = 1;
-    EXPECT_EQ(info.currentFrame, 1u);
+    CHECK(info.currentFrame == 1u);
 }
 
-TEST(FrameInfo, AssignViewportDimensions)
+TEST_CASE("FrameInfo.AssignViewportDimensions", "[FrameInfo]")
 {
     FrameInfo info;
     info.viewportWidth = 2560;
     info.viewportHeight = 1440;
-    EXPECT_EQ(info.viewportWidth, 2560u);
-    EXPECT_EQ(info.viewportHeight, 1440u);
+    CHECK(info.viewportWidth == 2560u);
+    CHECK(info.viewportHeight == 1440u);
 }
 
-TEST(FrameInfo, AssignCameraVectors)
+TEST_CASE("FrameInfo.AssignCameraVectors", "[FrameInfo]")
 {
     FrameInfo info;
     info.cameraPosition = {5.0f, 10.0f, 15.0f};
     info.cameraTarget = {0.0f, 1.0f, 0.0f};
-    EXPECT_FLOAT_EQ(info.cameraPosition.x(), 5.0f);
-    EXPECT_FLOAT_EQ(info.cameraTarget.y(), 1.0f);
+    CHECK(info.cameraPosition.x() == Catch::Approx(5.0f).margin(1e-5f));
+    CHECK(info.cameraTarget.y() == Catch::Approx(1.0f).margin(1e-5f));
 }
 
 // ---------------------------------------------------------------------------
 // Copy semantics
 // ---------------------------------------------------------------------------
 
-TEST(FrameInfo, CopyPreservesAllFields)
+TEST_CASE("FrameInfo.CopyPreservesAllFields", "[FrameInfo]")
 {
     FrameInfo original{0, 800, 600, {1.0f, 2.0f, 3.0f}, {4.0f, 5.0f, 6.0f}};
     FrameInfo copy = original;
-    EXPECT_EQ(copy.currentFrame, original.currentFrame);
-    EXPECT_EQ(copy.viewportWidth, original.viewportWidth);
-    EXPECT_EQ(copy.viewportHeight, original.viewportHeight);
-    EXPECT_EQ(copy.cameraPosition, original.cameraPosition);
-    EXPECT_EQ(copy.cameraTarget, original.cameraTarget);
+    CHECK(copy.currentFrame == original.currentFrame);
+    CHECK(copy.viewportWidth == original.viewportWidth);
+    CHECK(copy.viewportHeight == original.viewportHeight);
+    CHECK(copy.cameraPosition == original.cameraPosition);
+    CHECK(copy.cameraTarget == original.cameraTarget);
 }

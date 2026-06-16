@@ -1,4 +1,5 @@
-#include <gtest/gtest.h>
+#include <catch2/catch_approx.hpp>
+#include <catch2/catch_test_macros.hpp>
 
 #include <cstring>
 
@@ -20,32 +21,32 @@ using fire_engine::UniformBufferObject;
 // MorphUBO structure tests
 // ---------------------------------------------------------------------------
 
-TEST(MorphUBO, DefaultInitialisation)
+TEST_CASE("MorphUBO.DefaultInitialisation", "[MorphUBO]")
 {
     MorphUBO ubo{};
-    EXPECT_EQ(ubo.hasMorph, 0);
-    EXPECT_EQ(ubo.morphTargetCount, 0);
-    EXPECT_EQ(ubo.vertexCount, 0);
+    CHECK(ubo.hasMorph == 0);
+    CHECK(ubo.morphTargetCount == 0);
+    CHECK(ubo.vertexCount == 0);
     for (int i = 0; i < fire_engine::kMaxMorphTargets; ++i)
     {
-        EXPECT_FLOAT_EQ(ubo.weights[i], 0.0f);
+        CHECK(ubo.weights[i] == Catch::Approx(0.0f).margin(1e-5f));
     }
 }
 
-TEST(MorphUBO, MaxMorphTargetsConstant)
+TEST_CASE("MorphUBO.MaxMorphTargetsConstant", "[MorphUBO]")
 {
-    EXPECT_GE(fire_engine::kMaxMorphTargets, 2);
-    EXPECT_EQ(fire_engine::kMaxMorphTargets, 8);
+    CHECK(fire_engine::kMaxMorphTargets >= 2);
+    CHECK(fire_engine::kMaxMorphTargets == 8);
 }
 
-TEST(MorphUBO, WeightsArraySize)
+TEST_CASE("MorphUBO.WeightsArraySize", "[MorphUBO]")
 {
     MorphUBO ubo{};
-    EXPECT_EQ(sizeof(ubo.weights) / sizeof(float),
-              static_cast<std::size_t>(fire_engine::kMaxMorphTargets));
+    CHECK(sizeof(ubo.weights) / sizeof(float) ==
+          static_cast<std::size_t>(fire_engine::kMaxMorphTargets));
 }
 
-TEST(MorphUBO, SetWeights)
+TEST_CASE("MorphUBO.SetWeights", "[MorphUBO]")
 {
     MorphUBO ubo{};
     ubo.hasMorph = 1;
@@ -54,35 +55,35 @@ TEST(MorphUBO, SetWeights)
     ubo.weights[0] = 0.5f;
     ubo.weights[1] = 0.8f;
 
-    EXPECT_EQ(ubo.hasMorph, 1);
-    EXPECT_EQ(ubo.morphTargetCount, 2);
-    EXPECT_EQ(ubo.vertexCount, 24);
-    EXPECT_FLOAT_EQ(ubo.weights[0], 0.5f);
-    EXPECT_FLOAT_EQ(ubo.weights[1], 0.8f);
+    CHECK(ubo.hasMorph == 1);
+    CHECK(ubo.morphTargetCount == 2);
+    CHECK(ubo.vertexCount == 24);
+    CHECK(ubo.weights[0] == Catch::Approx(0.5f).margin(1e-5f));
+    CHECK(ubo.weights[1] == Catch::Approx(0.8f).margin(1e-5f));
 }
 
 // ---------------------------------------------------------------------------
 // UBO alignment sanity
 // ---------------------------------------------------------------------------
 
-TEST(UBO, UniformBufferObjectSize)
+TEST_CASE("UBO.UniformBufferObjectSize", "[UBO]")
 {
     // Must be compatible with std140 layout
-    EXPECT_EQ(sizeof(UniformBufferObject) % 16, 0u);
+    CHECK(sizeof(UniformBufferObject) % 16 == 0u);
 }
 
-TEST(UBO, MaterialUBOSize)
+TEST_CASE("UBO.MaterialUBOSize", "[UBO]")
 {
-    EXPECT_EQ(sizeof(MaterialUBO) % 16, 0u);
+    CHECK(sizeof(MaterialUBO) % 16 == 0u);
 }
 
-TEST(UBO, MaterialUBOHasTextureDefaultsToZero)
+TEST_CASE("UBO.MaterialUBOHasTextureDefaultsToZero", "[UBO]")
 {
     MaterialUBO ubo{};
-    EXPECT_EQ(ubo.textureFlags[0], 0);
+    CHECK(ubo.textureFlags[0] == 0);
 }
 
-TEST(UBO, MaterialUBOFieldOrder)
+TEST_CASE("UBO.MaterialUBOFieldOrder", "[UBO]")
 {
     static_assert(offsetof(MaterialUBO, diffuseAlpha) < offsetof(MaterialUBO, emissiveRoughness),
                   "diffuseAlpha must precede emissiveRoughness to match shader layout");
@@ -97,39 +98,39 @@ TEST(UBO, MaterialUBOFieldOrder)
     SUCCEED();
 }
 
-TEST(UBO, MaterialUBOAlphaCutoffRoundTrip)
+TEST_CASE("UBO.MaterialUBOAlphaCutoffRoundTrip", "[UBO]")
 {
     MaterialUBO ubo{};
     ubo.materialParams[2] = 0.25f;
-    EXPECT_FLOAT_EQ(ubo.materialParams[2], 0.25f);
+    CHECK(ubo.materialParams[2] == Catch::Approx(0.25f).margin(1e-5f));
 }
 
-TEST(UBO, MaterialUBOAlphaRoundTrip)
+TEST_CASE("UBO.MaterialUBOAlphaRoundTrip", "[UBO]")
 {
     MaterialUBO ubo{};
     ubo.diffuseAlpha[3] = 0.75f;
-    EXPECT_FLOAT_EQ(ubo.diffuseAlpha[3], 0.75f);
+    CHECK(ubo.diffuseAlpha[3] == Catch::Approx(0.75f).margin(1e-5f));
 }
 
-TEST(UBO, MaterialUBOHasTextureCanBeSet)
+TEST_CASE("UBO.MaterialUBOHasTextureCanBeSet", "[UBO]")
 {
     MaterialUBO ubo{};
     ubo.textureFlags[0] = 1;
-    EXPECT_EQ(ubo.textureFlags[0], 1);
+    CHECK(ubo.textureFlags[0] == 1);
 }
 
-TEST(UBO, MaterialUBOTexCoordIndicesDefaultToZero)
+TEST_CASE("UBO.MaterialUBOTexCoordIndicesDefaultToZero", "[UBO]")
 {
     MaterialUBO ubo{};
     for (int i = 0; i < 4; ++i)
     {
-        EXPECT_EQ(ubo.texCoordIndices[i], 0);
+        CHECK(ubo.texCoordIndices[i] == 0);
     }
     // Occlusion's UV-set index also lives in extraFlags.y.
-    EXPECT_EQ(ubo.extraFlags[1], 0);
+    CHECK(ubo.extraFlags[1] == 0);
 }
 
-TEST(UBO, MaterialUBOTexCoordIndicesRoundTrip)
+TEST_CASE("UBO.MaterialUBOTexCoordIndicesRoundTrip", "[UBO]")
 {
     MaterialUBO ubo{};
     ubo.texCoordIndices[0] = 1; // baseColor on TEXCOORD_1
@@ -137,55 +138,55 @@ TEST(UBO, MaterialUBOTexCoordIndicesRoundTrip)
     ubo.texCoordIndices[2] = 1; // normal on TEXCOORD_1
     ubo.texCoordIndices[3] = 0;
     ubo.extraFlags[1] = 1; // occlusion on TEXCOORD_1
-    EXPECT_EQ(ubo.texCoordIndices[0], 1);
-    EXPECT_EQ(ubo.texCoordIndices[2], 1);
-    EXPECT_EQ(ubo.extraFlags[1], 1);
+    CHECK(ubo.texCoordIndices[0] == 1);
+    CHECK(ubo.texCoordIndices[2] == 1);
+    CHECK(ubo.extraFlags[1] == 1);
 }
 
-TEST(UBO, MaterialUBOHasEmissiveTextureCanBeSet)
+TEST_CASE("UBO.MaterialUBOHasEmissiveTextureCanBeSet", "[UBO]")
 {
     MaterialUBO ubo{};
     ubo.textureFlags[1] = 1;
-    EXPECT_EQ(ubo.textureFlags[1], 1);
+    CHECK(ubo.textureFlags[1] == 1);
 }
 
-TEST(UBO, MaterialUBOHasNormalTextureCanBeSet)
+TEST_CASE("UBO.MaterialUBOHasNormalTextureCanBeSet", "[UBO]")
 {
     MaterialUBO ubo{};
     ubo.textureFlags[2] = 1;
-    EXPECT_EQ(ubo.textureFlags[2], 1);
+    CHECK(ubo.textureFlags[2] == 1);
 }
 
-TEST(UBO, MaterialUBOHasMetallicRoughnessTextureCanBeSet)
+TEST_CASE("UBO.MaterialUBOHasMetallicRoughnessTextureCanBeSet", "[UBO]")
 {
     MaterialUBO ubo{};
     ubo.textureFlags[3] = 1;
-    EXPECT_EQ(ubo.textureFlags[3], 1);
+    CHECK(ubo.textureFlags[3] == 1);
 }
 
-TEST(UBO, MaterialUBOHasOcclusionTextureCanBeSet)
+TEST_CASE("UBO.MaterialUBOHasOcclusionTextureCanBeSet", "[UBO]")
 {
     MaterialUBO ubo{};
     ubo.extraFlags[0] = 1;
-    EXPECT_EQ(ubo.extraFlags[0], 1);
+    CHECK(ubo.extraFlags[0] == 1);
 }
 
-TEST(UBO, MaterialUBOTransmissionDefaultsMatchShaderExpectations)
+TEST_CASE("UBO.MaterialUBOTransmissionDefaultsMatchShaderExpectations", "[UBO]")
 {
     MaterialUBO ubo{};
     const auto t = fire_engine::slotIndex(fire_engine::MaterialTextureSlot::Transmission);
-    EXPECT_FLOAT_EQ(ubo.uv[t].offsetScale[0], 0.0f);
-    EXPECT_FLOAT_EQ(ubo.uv[t].offsetScale[1], 0.0f);
-    EXPECT_FLOAT_EQ(ubo.uv[t].offsetScale[2], 1.0f);
-    EXPECT_FLOAT_EQ(ubo.uv[t].offsetScale[3], 1.0f);
-    EXPECT_FLOAT_EQ(ubo.uv[t].rotation, 0.0f);
-    EXPECT_FLOAT_EQ(ubo.transmissionParams[0], 0.0f);
-    EXPECT_FLOAT_EQ(ubo.transmissionParams[1], 0.0f);
-    EXPECT_FLOAT_EQ(ubo.transmissionParams[2], 0.0f);
-    EXPECT_FLOAT_EQ(ubo.transmissionParams[3], 1.5f);
+    CHECK(ubo.uv[t].offsetScale[0] == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(ubo.uv[t].offsetScale[1] == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(ubo.uv[t].offsetScale[2] == Catch::Approx(1.0f).margin(1e-5f));
+    CHECK(ubo.uv[t].offsetScale[3] == Catch::Approx(1.0f).margin(1e-5f));
+    CHECK(ubo.uv[t].rotation == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(ubo.transmissionParams[0] == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(ubo.transmissionParams[1] == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(ubo.transmissionParams[2] == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(ubo.transmissionParams[3] == Catch::Approx(1.5f).margin(1e-5f));
 }
 
-TEST(UBO, MaterialUBOTransmissionFieldsRoundTrip)
+TEST_CASE("UBO.MaterialUBOTransmissionFieldsRoundTrip", "[UBO]")
 {
     MaterialUBO ubo{};
     const auto t = fire_engine::slotIndex(fire_engine::MaterialTextureSlot::Transmission);
@@ -199,37 +200,37 @@ TEST(UBO, MaterialUBOTransmissionFieldsRoundTrip)
     ubo.transmissionParams[2] = 1.0f;
     ubo.transmissionParams[3] = 1.0f;
 
-    EXPECT_FLOAT_EQ(ubo.uv[t].offsetScale[0], 0.25f);
-    EXPECT_FLOAT_EQ(ubo.uv[t].offsetScale[1], 0.5f);
-    EXPECT_FLOAT_EQ(ubo.uv[t].offsetScale[2], 0.75f);
-    EXPECT_FLOAT_EQ(ubo.uv[t].offsetScale[3], 1.25f);
-    EXPECT_FLOAT_EQ(ubo.uv[t].rotation, 0.6f);
-    EXPECT_FLOAT_EQ(ubo.transmissionParams[0], 1.0f);
-    EXPECT_FLOAT_EQ(ubo.transmissionParams[1], 1.0f);
-    EXPECT_FLOAT_EQ(ubo.transmissionParams[2], 1.0f);
-    EXPECT_FLOAT_EQ(ubo.transmissionParams[3], 1.0f);
+    CHECK(ubo.uv[t].offsetScale[0] == Catch::Approx(0.25f).margin(1e-5f));
+    CHECK(ubo.uv[t].offsetScale[1] == Catch::Approx(0.5f).margin(1e-5f));
+    CHECK(ubo.uv[t].offsetScale[2] == Catch::Approx(0.75f).margin(1e-5f));
+    CHECK(ubo.uv[t].offsetScale[3] == Catch::Approx(1.25f).margin(1e-5f));
+    CHECK(ubo.uv[t].rotation == Catch::Approx(0.6f).margin(1e-5f));
+    CHECK(ubo.transmissionParams[0] == Catch::Approx(1.0f).margin(1e-5f));
+    CHECK(ubo.transmissionParams[1] == Catch::Approx(1.0f).margin(1e-5f));
+    CHECK(ubo.transmissionParams[2] == Catch::Approx(1.0f).margin(1e-5f));
+    CHECK(ubo.transmissionParams[3] == Catch::Approx(1.0f).margin(1e-5f));
 }
 
-TEST(UBO, MaterialUBOVolumeDefaultsMatchShaderExpectations)
+TEST_CASE("UBO.MaterialUBOVolumeDefaultsMatchShaderExpectations", "[UBO]")
 {
     MaterialUBO ubo{};
     const auto t = fire_engine::slotIndex(fire_engine::MaterialTextureSlot::Thickness);
-    EXPECT_FLOAT_EQ(ubo.volumeParams[0], 0.0f);
-    EXPECT_FLOAT_EQ(ubo.volumeParams[1], 0.0f);
-    EXPECT_FLOAT_EQ(ubo.volumeParams[2], 0.0f);
-    EXPECT_FLOAT_EQ(ubo.volumeParams[3], 0.0f);
-    EXPECT_FLOAT_EQ(ubo.attenuation[0], 1.0f);
-    EXPECT_FLOAT_EQ(ubo.attenuation[1], 1.0f);
-    EXPECT_FLOAT_EQ(ubo.attenuation[2], 1.0f);
-    EXPECT_FLOAT_EQ(ubo.attenuation[3], 1.0e6f);
-    EXPECT_FLOAT_EQ(ubo.uv[t].offsetScale[0], 0.0f);
-    EXPECT_FLOAT_EQ(ubo.uv[t].offsetScale[1], 0.0f);
-    EXPECT_FLOAT_EQ(ubo.uv[t].offsetScale[2], 1.0f);
-    EXPECT_FLOAT_EQ(ubo.uv[t].offsetScale[3], 1.0f);
-    EXPECT_FLOAT_EQ(ubo.uv[t].rotation, 0.0f);
+    CHECK(ubo.volumeParams[0] == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(ubo.volumeParams[1] == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(ubo.volumeParams[2] == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(ubo.volumeParams[3] == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(ubo.attenuation[0] == Catch::Approx(1.0f).margin(1e-5f));
+    CHECK(ubo.attenuation[1] == Catch::Approx(1.0f).margin(1e-5f));
+    CHECK(ubo.attenuation[2] == Catch::Approx(1.0f).margin(1e-5f));
+    CHECK(ubo.attenuation[3] == Catch::Approx(1.0e6f).margin(1e-5f));
+    CHECK(ubo.uv[t].offsetScale[0] == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(ubo.uv[t].offsetScale[1] == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(ubo.uv[t].offsetScale[2] == Catch::Approx(1.0f).margin(1e-5f));
+    CHECK(ubo.uv[t].offsetScale[3] == Catch::Approx(1.0f).margin(1e-5f));
+    CHECK(ubo.uv[t].rotation == Catch::Approx(0.0f).margin(1e-5f));
 }
 
-TEST(UBO, MaterialUBOVolumeFieldsRoundTrip)
+TEST_CASE("UBO.MaterialUBOVolumeFieldsRoundTrip", "[UBO]")
 {
     MaterialUBO ubo{};
     const auto t = fire_engine::slotIndex(fire_engine::MaterialTextureSlot::Thickness);
@@ -246,21 +247,21 @@ TEST(UBO, MaterialUBOVolumeFieldsRoundTrip)
     ubo.uv[t].offsetScale[3] = 0.9f;
     ubo.uv[t].rotation = 0.35f;
 
-    EXPECT_FLOAT_EQ(ubo.volumeParams[0], 0.125f);
-    EXPECT_FLOAT_EQ(ubo.volumeParams[1], 1.0f);
-    EXPECT_FLOAT_EQ(ubo.volumeParams[2], 1.0f);
-    EXPECT_FLOAT_EQ(ubo.attenuation[0], 0.3f);
-    EXPECT_FLOAT_EQ(ubo.attenuation[1], 0.5f);
-    EXPECT_FLOAT_EQ(ubo.attenuation[2], 0.7f);
-    EXPECT_FLOAT_EQ(ubo.attenuation[3], 4.0f);
-    EXPECT_FLOAT_EQ(ubo.uv[t].offsetScale[0], 0.1f);
-    EXPECT_FLOAT_EQ(ubo.uv[t].offsetScale[1], 0.2f);
-    EXPECT_FLOAT_EQ(ubo.uv[t].offsetScale[2], 0.8f);
-    EXPECT_FLOAT_EQ(ubo.uv[t].offsetScale[3], 0.9f);
-    EXPECT_FLOAT_EQ(ubo.uv[t].rotation, 0.35f);
+    CHECK(ubo.volumeParams[0] == Catch::Approx(0.125f).margin(1e-5f));
+    CHECK(ubo.volumeParams[1] == Catch::Approx(1.0f).margin(1e-5f));
+    CHECK(ubo.volumeParams[2] == Catch::Approx(1.0f).margin(1e-5f));
+    CHECK(ubo.attenuation[0] == Catch::Approx(0.3f).margin(1e-5f));
+    CHECK(ubo.attenuation[1] == Catch::Approx(0.5f).margin(1e-5f));
+    CHECK(ubo.attenuation[2] == Catch::Approx(0.7f).margin(1e-5f));
+    CHECK(ubo.attenuation[3] == Catch::Approx(4.0f).margin(1e-5f));
+    CHECK(ubo.uv[t].offsetScale[0] == Catch::Approx(0.1f).margin(1e-5f));
+    CHECK(ubo.uv[t].offsetScale[1] == Catch::Approx(0.2f).margin(1e-5f));
+    CHECK(ubo.uv[t].offsetScale[2] == Catch::Approx(0.8f).margin(1e-5f));
+    CHECK(ubo.uv[t].offsetScale[3] == Catch::Approx(0.9f).margin(1e-5f));
+    CHECK(ubo.uv[t].rotation == Catch::Approx(0.35f).margin(1e-5f));
 }
 
-TEST(UBO, MaterialUBOTextureFlagsFieldOrder)
+TEST_CASE("UBO.MaterialUBOTextureFlagsFieldOrder", "[UBO]")
 {
     static_assert(offsetof(MaterialUBO, textureFlags) % 16 == 0,
                   "textureFlags must be 16-byte aligned for std140 ivec4");
@@ -269,55 +270,55 @@ TEST(UBO, MaterialUBOTextureFlagsFieldOrder)
     SUCCEED();
 }
 
-TEST(UBO, MorphUBOSize)
+TEST_CASE("UBO.MorphUBOSize", "[UBO]")
 {
-    EXPECT_EQ(sizeof(MorphUBO) % 16, 0u);
+    CHECK(sizeof(MorphUBO) % 16 == 0u);
 }
 
-TEST(UBO, SkinUBOSize)
+TEST_CASE("UBO.SkinUBOSize", "[UBO]")
 {
-    EXPECT_EQ(sizeof(SkinUBO) % 16, 0u);
+    CHECK(sizeof(SkinUBO) % 16 == 0u);
 }
 
-TEST(UBO, LightUBOSize)
+TEST_CASE("UBO.LightUBOSize", "[UBO]")
 {
-    EXPECT_EQ(sizeof(LightUBO) % 16, 0u);
+    CHECK(sizeof(LightUBO) % 16 == 0u);
 }
 
-TEST(UBO, EnvironmentCaptureUBOSize)
+TEST_CASE("UBO.EnvironmentCaptureUBOSize", "[UBO]")
 {
-    EXPECT_EQ(sizeof(EnvironmentCaptureUBO) % 16, 0u);
+    CHECK(sizeof(EnvironmentCaptureUBO) % 16 == 0u);
 }
 
-TEST(UBO, EnvironmentCaptureUBODefaultFaceIndexIsZero)
+TEST_CASE("UBO.EnvironmentCaptureUBODefaultFaceIndexIsZero", "[UBO]")
 {
     EnvironmentCaptureUBO ubo{};
-    EXPECT_EQ(ubo.faceIndex, 0);
-    EXPECT_EQ(ubo.faceExtent, 0);
+    CHECK(ubo.faceIndex == 0);
+    CHECK(ubo.faceExtent == 0);
 }
 
-TEST(UBO, LightUBODefaults)
+TEST_CASE("UBO.LightUBODefaults", "[UBO]")
 {
     LightUBO ubo{};
-    EXPECT_EQ(ubo.lightCount, 0);
+    CHECK(ubo.lightCount == 0);
     for (int i = 0; i < 4; ++i)
     {
-        EXPECT_FLOAT_EQ(ubo.iblParams[i], 0.0f);
-        EXPECT_FLOAT_EQ(ubo.shadowParams[i], 0.0f);
-        EXPECT_FLOAT_EQ(ubo.environmentParams[i], 0.0f);
+        CHECK(ubo.iblParams[i] == Catch::Approx(0.0f).margin(1e-5f));
+        CHECK(ubo.shadowParams[i] == Catch::Approx(0.0f).margin(1e-5f));
+        CHECK(ubo.environmentParams[i] == Catch::Approx(0.0f).margin(1e-5f));
     }
     for (int i = 0; i < fire_engine::kMaxLights; ++i)
     {
         for (int j = 0; j < 4; ++j)
         {
-            EXPECT_FLOAT_EQ(ubo.lights[i].position[j], 0.0f);
-            EXPECT_FLOAT_EQ(ubo.lights[i].direction[j], 0.0f);
-            EXPECT_FLOAT_EQ(ubo.lights[i].colour[j], 0.0f);
+            CHECK(ubo.lights[i].position[j] == Catch::Approx(0.0f).margin(1e-5f));
+            CHECK(ubo.lights[i].direction[j] == Catch::Approx(0.0f).margin(1e-5f));
+            CHECK(ubo.lights[i].colour[j] == Catch::Approx(0.0f).margin(1e-5f));
         }
     }
 }
 
-TEST(UBO, LightUBOFieldOrder)
+TEST_CASE("UBO.LightUBOFieldOrder", "[UBO]")
 {
     static_assert(offsetof(LightUBO, cascadeViewProj) < offsetof(LightUBO, cascadeSplits),
                   "cascadeViewProj must precede cascadeSplits to match shader layout");
@@ -338,7 +339,7 @@ TEST(UBO, LightUBOFieldOrder)
     SUCCEED();
 }
 
-TEST(UBO, LightUBOFieldsAligned16)
+TEST_CASE("UBO.LightUBOFieldsAligned16", "[UBO]")
 {
     static_assert(offsetof(LightUBO, cascadeViewProj) % 16 == 0,
                   "cascadeViewProj must be 16-byte aligned for std140 mat4[]");
@@ -361,52 +362,53 @@ TEST(UBO, LightUBOFieldsAligned16)
     SUCCEED();
 }
 
-TEST(UBO, LightDataSizeAligned)
+TEST_CASE("UBO.LightDataSizeAligned", "[UBO]")
 {
-    EXPECT_EQ(sizeof(fire_engine::LightData) % 16, 0u);
-    EXPECT_EQ(sizeof(fire_engine::LightData), 64u);
+    CHECK(sizeof(fire_engine::LightData) % 16 == 0u);
+    CHECK(sizeof(fire_engine::LightData) == 64u);
 }
 
-TEST(UBO, ForwardPushConstantsDefaultsToNoSelfShadowSlot)
+TEST_CASE("UBO.ForwardPushConstantsDefaultsToNoSelfShadowSlot", "[UBO]")
 {
     ForwardPushConstants pc{};
-    EXPECT_EQ(pc.selfShadowSlot, -1);
-    EXPECT_EQ(sizeof(ForwardPushConstants), 16u);
+    CHECK(pc.selfShadowSlot == -1);
+    CHECK(sizeof(ForwardPushConstants) == 16u);
 }
 
-TEST(UBO, ShadowPushConstantsCanCarryInlineLightMatrix)
+TEST_CASE("UBO.ShadowPushConstantsCanCarryInlineLightMatrix", "[UBO]")
 {
     ShadowPushConstants pc{};
-    EXPECT_EQ(pc.matrixIndex, 0);
-    EXPECT_EQ(pc.selfShadowSlot, -1);
-    EXPECT_FLOAT_EQ(pc.selfShadowDepthEpsilon, fire_engine::kSkinnedSelfShadowDepthEpsilon);
-    EXPECT_EQ(sizeof(ShadowPushConstants) % 16, 0u);
-    EXPECT_EQ(pc.lightViewProj, fire_engine::Mat4::identity());
+    CHECK(pc.matrixIndex == 0);
+    CHECK(pc.selfShadowSlot == -1);
+    CHECK(pc.selfShadowDepthEpsilon ==
+          Catch::Approx(fire_engine::kSkinnedSelfShadowDepthEpsilon).margin(1e-5f));
+    CHECK(sizeof(ShadowPushConstants) % 16 == 0u);
+    CHECK(pc.lightViewProj == fire_engine::Mat4::identity());
 }
 
 // ---------------------------------------------------------------------------
 // ShadowUBO structure tests
 // ---------------------------------------------------------------------------
 
-TEST(UBO, ShadowUBOSize)
+TEST_CASE("UBO.ShadowUBOSize", "[UBO]")
 {
-    EXPECT_EQ(sizeof(ShadowUBO) % 16, 0u);
+    CHECK(sizeof(ShadowUBO) % 16 == 0u);
 }
 
-TEST(UBO, ShadowUBODefaultHasSkinIsZero)
+TEST_CASE("UBO.ShadowUBODefaultHasSkinIsZero", "[UBO]")
 {
     ShadowUBO ubo{};
-    EXPECT_EQ(ubo.hasSkin, 0);
+    CHECK(ubo.hasSkin == 0);
 }
 
-TEST(UBO, ShadowUBOHasSkinCanBeSet)
+TEST_CASE("UBO.ShadowUBOHasSkinCanBeSet", "[UBO]")
 {
     ShadowUBO ubo{};
     ubo.hasSkin = 1;
-    EXPECT_EQ(ubo.hasSkin, 1);
+    CHECK(ubo.hasSkin == 1);
 }
 
-TEST(UBO, ShadowUBOFieldOrder)
+TEST_CASE("UBO.ShadowUBOFieldOrder", "[UBO]")
 {
     static_assert(offsetof(ShadowUBO, model) < offsetof(ShadowUBO, lightViewProj),
                   "model must precede lightViewProj to match shader layout");
@@ -415,7 +417,7 @@ TEST(UBO, ShadowUBOFieldOrder)
     SUCCEED();
 }
 
-TEST(UBO, ShadowUBOMatricesAligned16)
+TEST_CASE("UBO.ShadowUBOMatricesAligned16", "[UBO]")
 {
     static_assert(offsetof(ShadowUBO, model) % 16 == 0,
                   "model must be 16-byte aligned for std140 mat4");

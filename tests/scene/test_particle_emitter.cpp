@@ -1,4 +1,5 @@
-#include <gtest/gtest.h>
+#include <catch2/catch_approx.hpp>
+#include <catch2/catch_test_macros.hpp>
 
 #include <vector>
 
@@ -21,13 +22,13 @@ using fire_engine::ParticleEmitter;
 using fire_engine::SceneGraph;
 using fire_engine::Vec3;
 
-TEST(ParticleEmitter, ComponentNameIsParticleEmitter)
+TEST_CASE("ParticleEmitter.ComponentNameIsParticleEmitter", "[ParticleEmitter]")
 {
     Components c = ParticleEmitter{};
-    EXPECT_EQ(componentName(c), "ParticleEmitter");
+    CHECK(componentName(c) == "ParticleEmitter");
 }
 
-TEST(ParticleEmitter, SettersRoundTrip)
+TEST_CASE("ParticleEmitter.SettersRoundTrip", "[ParticleEmitter]")
 {
     ParticleEmitter e;
     e.spawnRate(1234.0f);
@@ -37,28 +38,28 @@ TEST(ParticleEmitter, SettersRoundTrip)
     e.intensity(7.0f);
     e.coneAngle(0.5f);
     e.colour(Colour3{0.2f, 0.4f, 0.6f});
-    EXPECT_FLOAT_EQ(e.spawnRate(), 1234.0f);
-    EXPECT_FLOAT_EQ(e.lifetime(), 3.5f);
-    EXPECT_FLOAT_EQ(e.size(), 0.25f);
-    EXPECT_FLOAT_EQ(e.gravity(), -9.8f);
-    EXPECT_FLOAT_EQ(e.intensity(), 7.0f);
-    EXPECT_FLOAT_EQ(e.coneAngle(), 0.5f);
-    EXPECT_EQ(e.colour(), Colour3(0.2f, 0.4f, 0.6f));
+    CHECK(e.spawnRate() == Catch::Approx(1234.0f).margin(1e-5f));
+    CHECK(e.lifetime() == Catch::Approx(3.5f).margin(1e-5f));
+    CHECK(e.size() == Catch::Approx(0.25f).margin(1e-5f));
+    CHECK(e.gravity() == Catch::Approx(-9.8f).margin(1e-5f));
+    CHECK(e.intensity() == Catch::Approx(7.0f).margin(1e-5f));
+    CHECK(e.coneAngle() == Catch::Approx(0.5f).margin(1e-5f));
+    CHECK(e.colour() == Colour3(0.2f, 0.4f, 0.6f));
 }
 
-TEST(ParticleEmitter, ToEmitterStateResolvesWorldPosition)
+TEST_CASE("ParticleEmitter.ToEmitterStateResolvesWorldPosition", "[ParticleEmitter]")
 {
     ParticleEmitter e;
     auto world = Mat4::translate(Vec3{3.0f, 4.0f, 5.0f});
     EmitterState s = ParticleEmitter::toEmitterState(e, world);
-    EXPECT_FLOAT_EQ(s.worldPosition.x(), 3.0f);
-    EXPECT_FLOAT_EQ(s.worldPosition.y(), 4.0f);
-    EXPECT_FLOAT_EQ(s.worldPosition.z(), 5.0f);
+    CHECK(s.worldPosition.x() == Catch::Approx(3.0f).margin(1e-5f));
+    CHECK(s.worldPosition.y() == Catch::Approx(4.0f).margin(1e-5f));
+    CHECK(s.worldPosition.z() == Catch::Approx(5.0f).margin(1e-5f));
     // Pure translation leaves the velocity direction unrotated.
-    EXPECT_FLOAT_EQ(s.baseVelocity.y(), e.baseVelocity().y());
+    CHECK(s.baseVelocity.y() == Catch::Approx(e.baseVelocity().y()).margin(1e-5f));
 }
 
-TEST(ParticleEmitter, GatherEmittersFindsWorldPosition)
+TEST_CASE("ParticleEmitter.GatherEmittersFindsWorldPosition", "[ParticleEmitter]")
 {
     SceneGraph sg;
     auto node = std::make_unique<Node>("Fountain");
@@ -69,16 +70,16 @@ TEST(ParticleEmitter, GatherEmittersFindsWorldPosition)
     sg.resolve(); // populate composedWorld_ without needing an InputState
 
     std::vector<EmitterState> emitters = sg.gatherEmitters();
-    ASSERT_EQ(emitters.size(), 1u);
-    EXPECT_FLOAT_EQ(emitters[0].worldPosition.x(), 1.0f);
-    EXPECT_FLOAT_EQ(emitters[0].worldPosition.y(), 2.0f);
-    EXPECT_FLOAT_EQ(emitters[0].worldPosition.z(), -3.0f);
+    REQUIRE(emitters.size() == 1u);
+    CHECK(emitters[0].worldPosition.x() == Catch::Approx(1.0f).margin(1e-5f));
+    CHECK(emitters[0].worldPosition.y() == Catch::Approx(2.0f).margin(1e-5f));
+    CHECK(emitters[0].worldPosition.z() == Catch::Approx(-3.0f).margin(1e-5f));
 }
 
-TEST(ParticleEmitter, GatherEmittersIgnoresNonEmitters)
+TEST_CASE("ParticleEmitter.GatherEmittersIgnoresNonEmitters", "[ParticleEmitter]")
 {
     SceneGraph sg;
     sg.addNode(std::make_unique<Node>("Empty"));
     sg.resolve();
-    EXPECT_TRUE(sg.gatherEmitters().empty());
+    CHECK(sg.gatherEmitters().empty());
 }

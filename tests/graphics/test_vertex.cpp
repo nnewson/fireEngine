@@ -1,6 +1,9 @@
 #include <fire_engine/graphics/vertex.hpp>
 
-#include <gtest/gtest.h>
+#include <support/test_traits.hpp>
+
+#include <catch2/catch_approx.hpp>
+#include <catch2/catch_test_macros.hpp>
 
 using fire_engine::Colour3;
 using fire_engine::Joints4;
@@ -13,279 +16,265 @@ using fire_engine::Vertex;
 // Construction
 // ==========================================================================
 
-TEST(VertexConstruction, DefaultIsZeroed)
+TEST_CASE("VertexConstruction.DefaultIsZeroed", "[VertexConstruction]")
 {
     Vertex v;
-    EXPECT_FLOAT_EQ(v.position().x(), 0.0f);
-    EXPECT_FLOAT_EQ(v.position().y(), 0.0f);
-    EXPECT_FLOAT_EQ(v.position().z(), 0.0f);
-    EXPECT_FLOAT_EQ(v.colour().r(), 0.0f);
-    EXPECT_FLOAT_EQ(v.colour().g(), 0.0f);
-    EXPECT_FLOAT_EQ(v.colour().b(), 0.0f);
-    EXPECT_FLOAT_EQ(v.normal().x(), 0.0f);
-    EXPECT_FLOAT_EQ(v.normal().y(), 0.0f);
-    EXPECT_FLOAT_EQ(v.normal().z(), 0.0f);
-    EXPECT_FLOAT_EQ(v.texCoord().s(), 0.0f);
-    EXPECT_FLOAT_EQ(v.texCoord().t(), 0.0f);
-    EXPECT_FLOAT_EQ(v.tangent().x(), 0.0f);
-    EXPECT_FLOAT_EQ(v.tangent().y(), 0.0f);
-    EXPECT_FLOAT_EQ(v.tangent().z(), 0.0f);
-    EXPECT_FLOAT_EQ(v.tangent().w(), 0.0f);
-    EXPECT_FLOAT_EQ(v.weights().x(), 0.0f);
-    EXPECT_FLOAT_EQ(v.weights().y(), 0.0f);
-    EXPECT_FLOAT_EQ(v.weights().z(), 0.0f);
-    EXPECT_FLOAT_EQ(v.weights().w(), 0.0f);
-    EXPECT_EQ(v.joints().j0(), 0u);
-    EXPECT_EQ(v.joints().j1(), 0u);
-    EXPECT_EQ(v.joints().j2(), 0u);
-    EXPECT_EQ(v.joints().j3(), 0u);
+    CHECK(v.position().x() == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(v.position().y() == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(v.position().z() == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(v.colour().r() == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(v.colour().g() == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(v.colour().b() == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(v.normal().x() == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(v.normal().y() == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(v.normal().z() == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(v.texCoord().s() == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(v.texCoord().t() == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(v.tangent().x() == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(v.tangent().y() == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(v.tangent().z() == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(v.tangent().w() == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(v.weights().x() == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(v.weights().y() == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(v.weights().z() == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(v.weights().w() == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(v.joints().j0() == 0u);
+    CHECK(v.joints().j1() == 0u);
+    CHECK(v.joints().j2() == 0u);
+    CHECK(v.joints().j3() == 0u);
 }
 
-TEST(VertexConstruction, FullConstructor)
+TEST_CASE("VertexConstruction.FullConstructor", "[VertexConstruction]")
 {
     Vertex v({1.0f, 2.0f, 3.0f}, {0.5f, 0.6f, 0.7f}, {0.0f, 1.0f, 0.0f}, {0.25f, 0.75f});
-    EXPECT_FLOAT_EQ(v.position().x(), 1.0f);
-    EXPECT_FLOAT_EQ(v.position().y(), 2.0f);
-    EXPECT_FLOAT_EQ(v.position().z(), 3.0f);
-    EXPECT_FLOAT_EQ(v.colour().r(), 0.5f);
-    EXPECT_FLOAT_EQ(v.colour().g(), 0.6f);
-    EXPECT_FLOAT_EQ(v.colour().b(), 0.7f);
-    EXPECT_FLOAT_EQ(v.normal().x(), 0.0f);
-    EXPECT_FLOAT_EQ(v.normal().y(), 1.0f);
-    EXPECT_FLOAT_EQ(v.normal().z(), 0.0f);
-    EXPECT_FLOAT_EQ(v.texCoord().s(), 0.25f);
-    EXPECT_FLOAT_EQ(v.texCoord().t(), 0.75f);
+    CHECK(v.position().x() == Catch::Approx(1.0f).margin(1e-5f));
+    CHECK(v.position().y() == Catch::Approx(2.0f).margin(1e-5f));
+    CHECK(v.position().z() == Catch::Approx(3.0f).margin(1e-5f));
+    CHECK(v.colour().r() == Catch::Approx(0.5f).margin(1e-5f));
+    CHECK(v.colour().g() == Catch::Approx(0.6f).margin(1e-5f));
+    CHECK(v.colour().b() == Catch::Approx(0.7f).margin(1e-5f));
+    CHECK(v.normal().x() == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(v.normal().y() == Catch::Approx(1.0f).margin(1e-5f));
+    CHECK(v.normal().z() == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(v.texCoord().s() == Catch::Approx(0.25f).margin(1e-5f));
+    CHECK(v.texCoord().t() == Catch::Approx(0.75f).margin(1e-5f));
 }
 
-TEST(VertexConstruction, FullConstructorWithTangent)
+TEST_CASE("VertexConstruction.FullConstructorWithTangent", "[VertexConstruction]")
 {
     Vertex v({1.0f, 2.0f, 3.0f}, {0.5f, 0.6f, 0.7f}, {0.0f, 1.0f, 0.0f}, {0.25f, 0.75f}, {},
              {0.0f, 0.0f, 0.0f, 0.0f}, {0.1f, 0.2f, 0.3f, 1.0f});
-    EXPECT_FLOAT_EQ(v.tangent().x(), 0.1f);
-    EXPECT_FLOAT_EQ(v.tangent().y(), 0.2f);
-    EXPECT_FLOAT_EQ(v.tangent().z(), 0.3f);
-    EXPECT_FLOAT_EQ(v.tangent().w(), 1.0f);
+    CHECK(v.tangent().x() == Catch::Approx(0.1f).margin(1e-5f));
+    CHECK(v.tangent().y() == Catch::Approx(0.2f).margin(1e-5f));
+    CHECK(v.tangent().z() == Catch::Approx(0.3f).margin(1e-5f));
+    CHECK(v.tangent().w() == Catch::Approx(1.0f).margin(1e-5f));
 }
 
-TEST(VertexConstruction, TangentHandednessNegative)
+TEST_CASE("VertexConstruction.TangentHandednessNegative", "[VertexConstruction]")
 {
     Vertex v({0, 0, 0}, {0, 0, 0}, {0, 1, 0}, {0, 0}, {}, {0.0f, 0.0f, 0.0f, 0.0f},
              {1.0f, 0.0f, 0.0f, -1.0f});
-    EXPECT_FLOAT_EQ(v.tangent().w(), -1.0f);
+    CHECK(v.tangent().w() == Catch::Approx(-1.0f).margin(1e-5f));
 }
 
-TEST(VertexConstruction, WeightsConstructor)
+TEST_CASE("VertexConstruction.WeightsConstructor", "[VertexConstruction]")
 {
     Vertex v({0, 0, 0}, {0, 0, 0}, {0, 1, 0}, {0, 0}, {1, 2, 3, 4}, {0.4f, 0.3f, 0.2f, 0.1f});
-    EXPECT_FLOAT_EQ(v.weights().x(), 0.4f);
-    EXPECT_FLOAT_EQ(v.weights().y(), 0.3f);
-    EXPECT_FLOAT_EQ(v.weights().z(), 0.2f);
-    EXPECT_FLOAT_EQ(v.weights().w(), 0.1f);
+    CHECK(v.weights().x() == Catch::Approx(0.4f).margin(1e-5f));
+    CHECK(v.weights().y() == Catch::Approx(0.3f).margin(1e-5f));
+    CHECK(v.weights().z() == Catch::Approx(0.2f).margin(1e-5f));
+    CHECK(v.weights().w() == Catch::Approx(0.1f).margin(1e-5f));
 }
 
 // ==========================================================================
 // Accessors
 // ==========================================================================
 
-TEST(VertexAccessors, SetPosition)
+TEST_CASE("VertexAccessors.SetPosition", "[VertexAccessors]")
 {
     Vertex v;
     v.position({4.0f, 5.0f, 6.0f});
-    EXPECT_FLOAT_EQ(v.position().x(), 4.0f);
-    EXPECT_FLOAT_EQ(v.position().y(), 5.0f);
-    EXPECT_FLOAT_EQ(v.position().z(), 6.0f);
+    CHECK(v.position().x() == Catch::Approx(4.0f).margin(1e-5f));
+    CHECK(v.position().y() == Catch::Approx(5.0f).margin(1e-5f));
+    CHECK(v.position().z() == Catch::Approx(6.0f).margin(1e-5f));
 }
 
-TEST(VertexAccessors, SetColour)
+TEST_CASE("VertexAccessors.SetColour", "[VertexAccessors]")
 {
     Vertex v;
     v.colour({0.1f, 0.2f, 0.3f});
-    EXPECT_FLOAT_EQ(v.colour().r(), 0.1f);
-    EXPECT_FLOAT_EQ(v.colour().g(), 0.2f);
-    EXPECT_FLOAT_EQ(v.colour().b(), 0.3f);
+    CHECK(v.colour().r() == Catch::Approx(0.1f).margin(1e-5f));
+    CHECK(v.colour().g() == Catch::Approx(0.2f).margin(1e-5f));
+    CHECK(v.colour().b() == Catch::Approx(0.3f).margin(1e-5f));
 }
 
-TEST(VertexAccessors, SetNormal)
+TEST_CASE("VertexAccessors.SetNormal", "[VertexAccessors]")
 {
     Vertex v;
     v.normal({0.0f, 0.0f, 1.0f});
-    EXPECT_FLOAT_EQ(v.normal().x(), 0.0f);
-    EXPECT_FLOAT_EQ(v.normal().y(), 0.0f);
-    EXPECT_FLOAT_EQ(v.normal().z(), 1.0f);
+    CHECK(v.normal().x() == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(v.normal().y() == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(v.normal().z() == Catch::Approx(1.0f).margin(1e-5f));
 }
 
-TEST(VertexAccessors, SetTexCoords)
+TEST_CASE("VertexAccessors.SetTexCoords", "[VertexAccessors]")
 {
     Vertex v;
     v.texCoord({0.5f, 0.75f});
-    EXPECT_FLOAT_EQ(v.texCoord().s(), 0.5f);
-    EXPECT_FLOAT_EQ(v.texCoord().t(), 0.75f);
+    CHECK(v.texCoord().s() == Catch::Approx(0.5f).margin(1e-5f));
+    CHECK(v.texCoord().t() == Catch::Approx(0.75f).margin(1e-5f));
 }
 
-TEST(VertexAccessors, SetTangent)
+TEST_CASE("VertexAccessors.SetTangent", "[VertexAccessors]")
 {
     Vertex v;
     v.tangent({0.6f, 0.7f, 0.8f, -1.0f});
-    EXPECT_FLOAT_EQ(v.tangent().x(), 0.6f);
-    EXPECT_FLOAT_EQ(v.tangent().y(), 0.7f);
-    EXPECT_FLOAT_EQ(v.tangent().z(), 0.8f);
-    EXPECT_FLOAT_EQ(v.tangent().w(), -1.0f);
+    CHECK(v.tangent().x() == Catch::Approx(0.6f).margin(1e-5f));
+    CHECK(v.tangent().y() == Catch::Approx(0.7f).margin(1e-5f));
+    CHECK(v.tangent().z() == Catch::Approx(0.8f).margin(1e-5f));
+    CHECK(v.tangent().w() == Catch::Approx(-1.0f).margin(1e-5f));
 }
 
-TEST(VertexAccessors, SetJoints)
+TEST_CASE("VertexAccessors.SetJoints", "[VertexAccessors]")
 {
     Vertex v;
     v.joints({10, 20, 30, 40});
-    EXPECT_EQ(v.joints().j0(), 10u);
-    EXPECT_EQ(v.joints().j1(), 20u);
-    EXPECT_EQ(v.joints().j2(), 30u);
-    EXPECT_EQ(v.joints().j3(), 40u);
+    CHECK(v.joints().j0() == 10u);
+    CHECK(v.joints().j1() == 20u);
+    CHECK(v.joints().j2() == 30u);
+    CHECK(v.joints().j3() == 40u);
 }
 
-TEST(VertexAccessors, SetWeights)
+TEST_CASE("VertexAccessors.SetWeights", "[VertexAccessors]")
 {
     Vertex v;
     v.weights({0.25f, 0.25f, 0.25f, 0.25f});
-    EXPECT_FLOAT_EQ(v.weights().x(), 0.25f);
-    EXPECT_FLOAT_EQ(v.weights().y(), 0.25f);
-    EXPECT_FLOAT_EQ(v.weights().z(), 0.25f);
-    EXPECT_FLOAT_EQ(v.weights().w(), 0.25f);
+    CHECK(v.weights().x() == Catch::Approx(0.25f).margin(1e-5f));
+    CHECK(v.weights().y() == Catch::Approx(0.25f).margin(1e-5f));
+    CHECK(v.weights().z() == Catch::Approx(0.25f).margin(1e-5f));
+    CHECK(v.weights().w() == Catch::Approx(0.25f).margin(1e-5f));
 }
 
 // ==========================================================================
 // Equality
 // ==========================================================================
 
-TEST(VertexEquality, IdenticalVertices)
+TEST_CASE("VertexEquality.IdenticalVertices", "[VertexEquality]")
 {
     Vertex a({1.0f, 2.0f, 3.0f}, {0.5f, 0.5f, 0.5f}, {0.0f, 1.0f, 0.0f}, {0.1f, 0.2f});
     Vertex b({1.0f, 2.0f, 3.0f}, {0.5f, 0.5f, 0.5f}, {0.0f, 1.0f, 0.0f}, {0.1f, 0.2f});
-    EXPECT_TRUE(a == b);
+    CHECK(a == b);
 }
 
-TEST(VertexEquality, DifferentPosition)
+TEST_CASE("VertexEquality.DifferentPosition", "[VertexEquality]")
 {
     Vertex a({1.0f, 2.0f, 3.0f}, {0.5f, 0.5f, 0.5f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f});
     Vertex b({9.0f, 2.0f, 3.0f}, {0.5f, 0.5f, 0.5f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f});
-    EXPECT_FALSE(a == b);
+    CHECK_FALSE(a == b);
 }
 
-TEST(VertexEquality, DifferentColour)
+TEST_CASE("VertexEquality.DifferentColour", "[VertexEquality]")
 {
     Vertex a({1.0f, 2.0f, 3.0f}, {0.5f, 0.5f, 0.5f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f});
     Vertex b({1.0f, 2.0f, 3.0f}, {1.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f});
-    EXPECT_FALSE(a == b);
+    CHECK_FALSE(a == b);
 }
 
-TEST(VertexEquality, DifferentNormal)
+TEST_CASE("VertexEquality.DifferentNormal", "[VertexEquality]")
 {
     Vertex a({1.0f, 2.0f, 3.0f}, {0.5f, 0.5f, 0.5f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f});
     Vertex b({1.0f, 2.0f, 3.0f}, {0.5f, 0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}, {0.0f, 0.0f});
-    EXPECT_FALSE(a == b);
+    CHECK_FALSE(a == b);
 }
 
-TEST(VertexEquality, DifferentTexS)
+TEST_CASE("VertexEquality.DifferentTexS", "[VertexEquality]")
 {
     Vertex a({1.0f, 2.0f, 3.0f}, {0.5f, 0.5f, 0.5f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f});
     Vertex b({1.0f, 2.0f, 3.0f}, {0.5f, 0.5f, 0.5f}, {0.0f, 1.0f, 0.0f}, {1.0f, 0.0f});
-    EXPECT_FALSE(a == b);
+    CHECK_FALSE(a == b);
 }
 
-TEST(VertexEquality, DifferentTexT)
+TEST_CASE("VertexEquality.DifferentTexT", "[VertexEquality]")
 {
     Vertex a({1.0f, 2.0f, 3.0f}, {0.5f, 0.5f, 0.5f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f});
     Vertex b({1.0f, 2.0f, 3.0f}, {0.5f, 0.5f, 0.5f}, {0.0f, 1.0f, 0.0f}, {0.0f, 1.0f});
-    EXPECT_FALSE(a == b);
+    CHECK_FALSE(a == b);
 }
 
-TEST(VertexEquality, DefaultVerticesAreEqual)
+TEST_CASE("VertexEquality.DefaultVerticesAreEqual", "[VertexEquality]")
 {
     Vertex a;
     Vertex b;
-    EXPECT_TRUE(a == b);
+    CHECK(a == b);
 }
 
 // ==========================================================================
 // Second UV set (TEXCOORD_1) — defaults to (0, 0); round-trips via accessors.
 // ==========================================================================
 
-TEST(VertexTexCoord1, DefaultsToZero)
+TEST_CASE("VertexTexCoord1.DefaultsToZero", "[VertexTexCoord1]")
 {
     Vertex v;
-    EXPECT_FLOAT_EQ(v.texCoord1().s(), 0.0f);
-    EXPECT_FLOAT_EQ(v.texCoord1().t(), 0.0f);
+    CHECK(v.texCoord1().s() == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(v.texCoord1().t() == Catch::Approx(0.0f).margin(1e-5f));
 }
 
-TEST(VertexTexCoord1, SetterRoundTrips)
+TEST_CASE("VertexTexCoord1.SetterRoundTrips", "[VertexTexCoord1]")
 {
     Vertex v;
     v.texCoord1({0.25f, 0.75f});
-    EXPECT_FLOAT_EQ(v.texCoord1().s(), 0.25f);
-    EXPECT_FLOAT_EQ(v.texCoord1().t(), 0.75f);
+    CHECK(v.texCoord1().s() == Catch::Approx(0.25f).margin(1e-5f));
+    CHECK(v.texCoord1().t() == Catch::Approx(0.75f).margin(1e-5f));
 }
 
 // ==========================================================================
 // Copy and Move Semantics
 // ==========================================================================
 
-TEST(VertexCopy, CopyConstructCreatesIndependentCopy)
+TEST_CASE("VertexCopy.CopyConstructCreatesIndependentCopy", "[VertexCopy]")
 {
     Vertex a({1.0f, 2.0f, 3.0f}, {0.5f, 0.5f, 0.5f}, {0.0f, 1.0f, 0.0f}, {0.1f, 0.2f});
     Vertex b{a};
-    EXPECT_TRUE(a == b);
+    CHECK(a == b);
 
     b.position({9.0f, 9.0f, 9.0f});
-    EXPECT_FLOAT_EQ(a.position().x(), 1.0f);
+    CHECK(a.position().x() == Catch::Approx(1.0f).margin(1e-5f));
 }
 
-TEST(VertexCopy, CopyAssignCreatesIndependentCopy)
+TEST_CASE("VertexCopy.CopyAssignCreatesIndependentCopy", "[VertexCopy]")
 {
     Vertex a({1.0f, 2.0f, 3.0f}, {0.5f, 0.5f, 0.5f}, {0.0f, 1.0f, 0.0f}, {0.1f, 0.2f});
     Vertex b;
     b = a;
-    EXPECT_TRUE(a == b);
+    CHECK(a == b);
 }
 
-TEST(VertexMove, MoveConstructTransfersState)
+TEST_CASE("VertexMove.MoveConstructTransfersState", "[VertexMove]")
 {
     Vertex a({1.0f, 2.0f, 3.0f}, {0.5f, 0.5f, 0.5f}, {0.0f, 1.0f, 0.0f}, {0.1f, 0.2f});
     Vertex b{std::move(a)};
-    EXPECT_FLOAT_EQ(b.position().x(), 1.0f);
-    EXPECT_FLOAT_EQ(b.texCoord().s(), 0.1f);
+    CHECK(b.position().x() == Catch::Approx(1.0f).margin(1e-5f));
+    CHECK(b.texCoord().s() == Catch::Approx(0.1f).margin(1e-5f));
 }
 
 // ==========================================================================
 // Noexcept guarantees
 // ==========================================================================
 
-TEST(VertexNoexcept, AllAccessorsAreNoexcept)
+TEST_CASE("VertexNoexcept.AllAccessorsAreNoexcept", "[VertexNoexcept]")
 {
-    Vertex v;
-
-    static_assert(noexcept(Vertex{}));
-    static_assert(noexcept(Vertex({}, {}, {}, {})));
-    static_assert(noexcept(v.position()));
-    static_assert(noexcept(v.colour()));
-    static_assert(noexcept(v.normal()));
-    static_assert(noexcept(v.texCoord()));
-    static_assert(noexcept(v.joints()));
-    static_assert(noexcept(v.tangent()));
-    static_assert(noexcept(v.weights()));
-    static_assert(noexcept(v.position({})));
-    static_assert(noexcept(v.colour({})));
-    static_assert(noexcept(v.normal({})));
-    static_assert(noexcept(v.texCoord({})));
-    static_assert(noexcept(v.joints({})));
-    static_assert(noexcept(v.tangent({})));
-    static_assert(noexcept(v.weights({})));
-    static_assert(noexcept(v == v));
+    static_assert(std::is_nothrow_default_constructible_v<Vertex>);
+    static_assert(test_traits::nothrow_constructible_from_v<Vertex, Vec3, Colour3, Vec3, Vec2>);
+    static_assert(
+        test_traits::has_nothrow_vertex_accessors<Vertex, Vec2, Vec3, Vec4, Colour3, Joints4>);
+    static_assert(test_traits::has_nothrow_equality<Vertex>);
 }
 
 // ==========================================================================
 // Layout — Vulkan vertex input compatibility
 // ==========================================================================
 
-TEST(VertexLayout, SizeAndOffsets)
+TEST_CASE("VertexLayout.SizeAndOffsets", "[VertexLayout]")
 {
     // Vec2 and Vec4 are standard-layout with float data_[N]
     static_assert(sizeof(Vec2) == sizeof(float) * 2);

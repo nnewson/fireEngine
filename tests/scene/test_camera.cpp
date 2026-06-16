@@ -5,7 +5,8 @@
 #include <fire_engine/input/input_state.hpp>
 #include <fire_engine/scene/transform.hpp>
 
-#include <gtest/gtest.h>
+#include <catch2/catch_approx.hpp>
+#include <catch2/catch_test_macros.hpp>
 
 using fire_engine::Camera;
 using fire_engine::InputState;
@@ -18,97 +19,97 @@ using fire_engine::Vec3;
 // Construction
 // ==========================================================================
 
-TEST(CameraConstruction, DefaultPosition)
+TEST_CASE("CameraConstruction.DefaultPosition", "[CameraConstruction]")
 {
     Camera cam;
-    EXPECT_FLOAT_EQ(cam.localPosition().x(), 2.0f);
-    EXPECT_FLOAT_EQ(cam.localPosition().y(), 2.0f);
-    EXPECT_FLOAT_EQ(cam.localPosition().z(), 2.0f);
+    CHECK(cam.localPosition().x() == Catch::Approx(2.0f).margin(1e-5f));
+    CHECK(cam.localPosition().y() == Catch::Approx(2.0f).margin(1e-5f));
+    CHECK(cam.localPosition().z() == Catch::Approx(2.0f).margin(1e-5f));
 }
 
-TEST(CameraConstruction, DefaultYaw)
+TEST_CASE("CameraConstruction.DefaultYaw", "[CameraConstruction]")
 {
     Camera cam;
-    EXPECT_FLOAT_EQ(cam.localYaw(), -2.356f);
+    CHECK(cam.localYaw() == Catch::Approx(-2.356f).margin(1e-5f));
 }
 
-TEST(CameraConstruction, DefaultPitch)
+TEST_CASE("CameraConstruction.DefaultPitch", "[CameraConstruction]")
 {
     Camera cam;
-    EXPECT_FLOAT_EQ(cam.localPitch(), -0.615f);
+    CHECK(cam.localPitch() == Catch::Approx(-0.615f).margin(1e-5f));
 }
 
 // ==========================================================================
 // Accessors
 // ==========================================================================
 
-TEST(CameraAccessors, SetPosition)
+TEST_CASE("CameraAccessors.SetPosition", "[CameraAccessors]")
 {
     Camera cam;
     cam.localPosition({5.0f, 10.0f, -3.0f});
-    EXPECT_FLOAT_EQ(cam.localPosition().x(), 5.0f);
-    EXPECT_FLOAT_EQ(cam.localPosition().y(), 10.0f);
-    EXPECT_FLOAT_EQ(cam.localPosition().z(), -3.0f);
+    CHECK(cam.localPosition().x() == Catch::Approx(5.0f).margin(1e-5f));
+    CHECK(cam.localPosition().y() == Catch::Approx(10.0f).margin(1e-5f));
+    CHECK(cam.localPosition().z() == Catch::Approx(-3.0f).margin(1e-5f));
 }
 
-TEST(CameraAccessors, SetYaw)
+TEST_CASE("CameraAccessors.SetYaw", "[CameraAccessors]")
 {
     Camera cam;
     cam.localYaw(1.0f);
-    EXPECT_FLOAT_EQ(cam.localYaw(), 1.0f);
+    CHECK(cam.localYaw() == Catch::Approx(1.0f).margin(1e-5f));
 }
 
-TEST(CameraAccessors, SetPitch)
+TEST_CASE("CameraAccessors.SetPitch", "[CameraAccessors]")
 {
     Camera cam;
     cam.localPitch(0.5f);
-    EXPECT_FLOAT_EQ(cam.localPitch(), 0.5f);
+    CHECK(cam.localPitch() == Catch::Approx(0.5f).margin(1e-5f));
 }
 
 // ==========================================================================
 // Pitch clamping
 // ==========================================================================
 
-TEST(CameraPitchClamp, ClampsAboveMax)
+TEST_CASE("CameraPitchClamp.ClampsAboveMax", "[CameraPitchClamp]")
 {
     Camera cam;
     cam.localPitch(2.0f);
-    EXPECT_FLOAT_EQ(cam.localPitch(), 1.5f);
+    CHECK(cam.localPitch() == Catch::Approx(1.5f).margin(1e-5f));
 }
 
-TEST(CameraPitchClamp, ClampsBelowMin)
+TEST_CASE("CameraPitchClamp.ClampsBelowMin", "[CameraPitchClamp]")
 {
     Camera cam;
     cam.localPitch(-2.0f);
-    EXPECT_FLOAT_EQ(cam.localPitch(), -1.5f);
+    CHECK(cam.localPitch() == Catch::Approx(-1.5f).margin(1e-5f));
 }
 
-TEST(CameraPitchClamp, ExactMaxIsAllowed)
+TEST_CASE("CameraPitchClamp.ExactMaxIsAllowed", "[CameraPitchClamp]")
 {
     Camera cam;
     cam.localPitch(1.5f);
-    EXPECT_FLOAT_EQ(cam.localPitch(), 1.5f);
+    CHECK(cam.localPitch() == Catch::Approx(1.5f).margin(1e-5f));
 }
 
-TEST(CameraPitchClamp, ExactMinIsAllowed)
+TEST_CASE("CameraPitchClamp.ExactMinIsAllowed", "[CameraPitchClamp]")
 {
     Camera cam;
     cam.localPitch(-1.5f);
-    EXPECT_FLOAT_EQ(cam.localPitch(), -1.5f);
+    CHECK(cam.localPitch() == Catch::Approx(-1.5f).margin(1e-5f));
 }
 
-TEST(CameraPitchClamp, WithinRangeUnchanged)
+TEST_CASE("CameraPitchClamp.WithinRangeUnchanged", "[CameraPitchClamp]")
 {
     Camera cam;
     cam.localPitch(0.75f);
-    EXPECT_FLOAT_EQ(cam.localPitch(), 0.75f);
+    CHECK(cam.localPitch() == Catch::Approx(0.75f).margin(1e-5f));
 }
 
 // ==========================================================================
 // Local target calculation
 // ==========================================================================
 
-TEST(CameraLocalTarget, ZeroPitchYawLooksAlongPositiveX)
+TEST_CASE("CameraLocalTarget.ZeroPitchYawLooksAlongPositiveX", "[CameraLocalTarget]")
 {
     Camera cam;
     cam.localPosition({0.0f, 0.0f, 0.0f});
@@ -117,12 +118,12 @@ TEST(CameraLocalTarget, ZeroPitchYawLooksAlongPositiveX)
 
     Vec3 t = cam.localTarget();
     // cos(0)*cos(0) = 1, sin(0) = 0, cos(0)*sin(0) = 0
-    EXPECT_NEAR(t.x(), 1.0f, 1e-6f);
-    EXPECT_NEAR(t.y(), 0.0f, 1e-6f);
-    EXPECT_NEAR(t.z(), 0.0f, 1e-6f);
+    CHECK(t.x() == Catch::Approx(1.0f).margin(1e-6f));
+    CHECK(t.y() == Catch::Approx(0.0f).margin(1e-6f));
+    CHECK(t.z() == Catch::Approx(0.0f).margin(1e-6f));
 }
 
-TEST(CameraLocalTarget, YawRotatesInXZPlane)
+TEST_CASE("CameraLocalTarget.YawRotatesInXZPlane", "[CameraLocalTarget]")
 {
     Camera cam;
     cam.localPosition({0.0f, 0.0f, 0.0f});
@@ -131,12 +132,12 @@ TEST(CameraLocalTarget, YawRotatesInXZPlane)
     // yaw = pi/2 should look along +Z
     cam.localYaw(static_cast<float>(M_PI) / 2.0f);
     Vec3 t = cam.localTarget();
-    EXPECT_NEAR(t.x(), 0.0f, 1e-5f);
-    EXPECT_NEAR(t.y(), 0.0f, 1e-5f);
-    EXPECT_NEAR(t.z(), 1.0f, 1e-5f);
+    CHECK(t.x() == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(t.y() == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(t.z() == Catch::Approx(1.0f).margin(1e-5f));
 }
 
-TEST(CameraLocalTarget, PitchLooksUpward)
+TEST_CASE("CameraLocalTarget.PitchLooksUpward", "[CameraLocalTarget]")
 {
     Camera cam;
     cam.localPosition({0.0f, 0.0f, 0.0f});
@@ -145,11 +146,11 @@ TEST(CameraLocalTarget, PitchLooksUpward)
     // pitch = pi/4 should raise Y component
     cam.localPitch(static_cast<float>(M_PI) / 4.0f);
     Vec3 t = cam.localTarget();
-    EXPECT_NEAR(t.y(), std::sin(static_cast<float>(M_PI) / 4.0f), 1e-6f);
-    EXPECT_GT(t.y(), 0.0f);
+    CHECK(t.y() == Catch::Approx(std::sin(static_cast<float>(M_PI) / 4.0f)).margin(1e-6f));
+    CHECK(t.y() > 0.0f);
 }
 
-TEST(CameraLocalTarget, TargetOffsetsFromPosition)
+TEST_CASE("CameraLocalTarget.TargetOffsetsFromPosition", "[CameraLocalTarget]")
 {
     Camera cam;
     cam.localPosition({10.0f, 20.0f, 30.0f});
@@ -158,12 +159,12 @@ TEST(CameraLocalTarget, TargetOffsetsFromPosition)
 
     Vec3 t = cam.localTarget();
     // Target should be position + direction
-    EXPECT_NEAR(t.x(), 11.0f, 1e-6f);
-    EXPECT_NEAR(t.y(), 20.0f, 1e-6f);
-    EXPECT_NEAR(t.z(), 30.0f, 1e-6f);
+    CHECK(t.x() == Catch::Approx(11.0f).margin(1e-6f));
+    CHECK(t.y() == Catch::Approx(20.0f).margin(1e-6f));
+    CHECK(t.z() == Catch::Approx(30.0f).margin(1e-6f));
 }
 
-TEST(CameraLocalTarget, NegativeYawLooksAlongNegativeZ)
+TEST_CASE("CameraLocalTarget.NegativeYawLooksAlongNegativeZ", "[CameraLocalTarget]")
 {
     Camera cam;
     cam.localPosition({0.0f, 0.0f, 0.0f});
@@ -171,15 +172,15 @@ TEST(CameraLocalTarget, NegativeYawLooksAlongNegativeZ)
     cam.localPitch(0.0f);
 
     Vec3 t = cam.localTarget();
-    EXPECT_NEAR(t.x(), 0.0f, 1e-5f);
-    EXPECT_NEAR(t.z(), -1.0f, 1e-5f);
+    CHECK(t.x() == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(t.z() == Catch::Approx(-1.0f).margin(1e-5f));
 }
 
 // ==========================================================================
 // Copy semantics
 // ==========================================================================
 
-TEST(CameraCopy, CopyConstructCreatesIndependentCopy)
+TEST_CASE("CameraCopy.CopyConstructCreatesIndependentCopy", "[CameraCopy]")
 {
     Camera a;
     a.localPosition({1.0f, 2.0f, 3.0f});
@@ -187,51 +188,51 @@ TEST(CameraCopy, CopyConstructCreatesIndependentCopy)
     a.localPitch(0.3f);
 
     Camera b{a};
-    EXPECT_FLOAT_EQ(b.localPosition().x(), 1.0f);
-    EXPECT_FLOAT_EQ(b.localYaw(), 0.5f);
-    EXPECT_FLOAT_EQ(b.localPitch(), 0.3f);
+    CHECK(b.localPosition().x() == Catch::Approx(1.0f).margin(1e-5f));
+    CHECK(b.localYaw() == Catch::Approx(0.5f).margin(1e-5f));
+    CHECK(b.localPitch() == Catch::Approx(0.3f).margin(1e-5f));
 
     // Modifying b should not affect a
     b.localYaw(1.0f);
-    EXPECT_FLOAT_EQ(a.localYaw(), 0.5f);
+    CHECK(a.localYaw() == Catch::Approx(0.5f).margin(1e-5f));
 }
 
-TEST(CameraCopy, CopyAssignCreatesIndependentCopy)
+TEST_CASE("CameraCopy.CopyAssignCreatesIndependentCopy", "[CameraCopy]")
 {
     Camera a;
     a.localPosition({4.0f, 5.0f, 6.0f});
 
     Camera b;
     b = a;
-    EXPECT_FLOAT_EQ(b.localPosition().x(), 4.0f);
+    CHECK(b.localPosition().x() == Catch::Approx(4.0f).margin(1e-5f));
 
     b.localPosition({0.0f, 0.0f, 0.0f});
-    EXPECT_FLOAT_EQ(a.localPosition().x(), 4.0f);
+    CHECK(a.localPosition().x() == Catch::Approx(4.0f).margin(1e-5f));
 }
 
 // ==========================================================================
 // Move semantics
 // ==========================================================================
 
-TEST(CameraMove, MoveConstructTransfersState)
+TEST_CASE("CameraMove.MoveConstructTransfersState", "[CameraMove]")
 {
     Camera a;
     a.localPosition({7.0f, 8.0f, 9.0f});
     a.localYaw(1.2f);
 
     Camera b{std::move(a)};
-    EXPECT_FLOAT_EQ(b.localPosition().x(), 7.0f);
-    EXPECT_FLOAT_EQ(b.localYaw(), 1.2f);
+    CHECK(b.localPosition().x() == Catch::Approx(7.0f).margin(1e-5f));
+    CHECK(b.localYaw() == Catch::Approx(1.2f).margin(1e-5f));
 }
 
-TEST(CameraMove, MoveAssignTransfersState)
+TEST_CASE("CameraMove.MoveAssignTransfersState", "[CameraMove]")
 {
     Camera a;
     a.localPitch(0.8f);
 
     Camera b;
     b = std::move(a);
-    EXPECT_FLOAT_EQ(b.localPitch(), 0.8f);
+    CHECK(b.localPitch() == Catch::Approx(0.8f).margin(1e-5f));
 }
 
 // ==========================================================================
@@ -244,7 +245,7 @@ using fire_engine::CameraState;
 // World transform composition
 // ==========================================================================
 
-TEST(CameraWorldTransform, ImportedIdentityCameraLooksDownNegativeZ)
+TEST_CASE("CameraWorldTransform.ImportedIdentityCameraLooksDownNegativeZ", "[CameraWorldTransform]")
 {
     Camera cam;
     cam.localPosition({0.0f, 0.0f, 0.0f});
@@ -257,15 +258,16 @@ TEST(CameraWorldTransform, ImportedIdentityCameraLooksDownNegativeZ)
 
     cam.update(InputState{}, t);
 
-    EXPECT_NEAR(cam.worldPosition().x(), 0.0f, 1e-5f);
-    EXPECT_NEAR(cam.worldPosition().y(), 24.0f, 1e-5f);
-    EXPECT_NEAR(cam.worldPosition().z(), 60.0f, 1e-5f);
-    EXPECT_NEAR(cam.worldTarget().x(), 0.0f, 1e-5f);
-    EXPECT_NEAR(cam.worldTarget().y(), 24.0f, 1e-5f);
-    EXPECT_NEAR(cam.worldTarget().z(), 59.0f, 1e-5f);
+    CHECK(cam.worldPosition().x() == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(cam.worldPosition().y() == Catch::Approx(24.0f).margin(1e-5f));
+    CHECK(cam.worldPosition().z() == Catch::Approx(60.0f).margin(1e-5f));
+    CHECK(cam.worldTarget().x() == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(cam.worldTarget().y() == Catch::Approx(24.0f).margin(1e-5f));
+    CHECK(cam.worldTarget().z() == Catch::Approx(59.0f).margin(1e-5f));
 }
 
-TEST(CameraWorldTransform, ParentTransformContributesToWorldPosition)
+TEST_CASE("CameraWorldTransform.ParentTransformContributesToWorldPosition",
+          "[CameraWorldTransform]")
 {
     Camera cam;
     cam.localPosition({0.0f, 0.0f, 0.0f});
@@ -278,13 +280,13 @@ TEST(CameraWorldTransform, ParentTransformContributesToWorldPosition)
 
     cam.update(InputState{}, t);
 
-    EXPECT_NEAR(cam.worldPosition().x(), 11.0f, 1e-5f);
-    EXPECT_NEAR(cam.worldPosition().y(), 22.0f, 1e-5f);
-    EXPECT_NEAR(cam.worldPosition().z(), 33.0f, 1e-5f);
-    EXPECT_NEAR(cam.worldTarget().z(), 32.0f, 1e-5f);
+    CHECK(cam.worldPosition().x() == Catch::Approx(11.0f).margin(1e-5f));
+    CHECK(cam.worldPosition().y() == Catch::Approx(22.0f).margin(1e-5f));
+    CHECK(cam.worldPosition().z() == Catch::Approx(33.0f).margin(1e-5f));
+    CHECK(cam.worldTarget().z() == Catch::Approx(32.0f).margin(1e-5f));
 }
 
-TEST(CameraWorldTransform, NodeRotationRotatesImportedCameraForward)
+TEST_CASE("CameraWorldTransform.NodeRotationRotatesImportedCameraForward", "[CameraWorldTransform]")
 {
     Camera cam;
     cam.localPosition({0.0f, 0.0f, 0.0f});
@@ -298,12 +300,12 @@ TEST(CameraWorldTransform, NodeRotationRotatesImportedCameraForward)
 
     cam.update(InputState{}, t);
 
-    EXPECT_NEAR(cam.worldTarget().x(), -1.0f, 1e-5f);
-    EXPECT_NEAR(cam.worldTarget().y(), 0.0f, 1e-5f);
-    EXPECT_NEAR(cam.worldTarget().z(), 0.0f, 1e-5f);
+    CHECK(cam.worldTarget().x() == Catch::Approx(-1.0f).margin(1e-5f));
+    CHECK(cam.worldTarget().y() == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(cam.worldTarget().z() == Catch::Approx(0.0f).margin(1e-5f));
 }
 
-TEST(CameraMovement, ForwardMovesAlongYawDirection)
+TEST_CASE("CameraMovement.ForwardMovesAlongYawDirection", "[CameraMovement]")
 {
     Camera cam;
     cam.localPosition({0.0f, 0.0f, 0.0f});
@@ -319,12 +321,12 @@ TEST(CameraMovement, ForwardMovesAlongYawDirection)
     cam.update(state, t);
 
     // yaw=0 → forward_xz = (cos(0), 0, sin(0)) = (1, 0, 0)
-    EXPECT_NEAR(cam.localPosition().x(), 1.0f, 1e-5f);
-    EXPECT_NEAR(cam.localPosition().y(), 0.0f, 1e-5f);
-    EXPECT_NEAR(cam.localPosition().z(), 0.0f, 1e-5f);
+    CHECK(cam.localPosition().x() == Catch::Approx(1.0f).margin(1e-5f));
+    CHECK(cam.localPosition().y() == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(cam.localPosition().z() == Catch::Approx(0.0f).margin(1e-5f));
 }
 
-TEST(CameraMovement, StrafeMovesPerpendicularToYaw)
+TEST_CASE("CameraMovement.StrafeMovesPerpendicularToYaw", "[CameraMovement]")
 {
     Camera cam;
     cam.localPosition({0.0f, 0.0f, 0.0f});
@@ -340,12 +342,12 @@ TEST(CameraMovement, StrafeMovesPerpendicularToYaw)
     cam.update(state, t);
 
     // yaw=0 → right = (sin(0), 0, -cos(0)) = (0, 0, -1)
-    EXPECT_NEAR(cam.localPosition().x(), 0.0f, 1e-5f);
-    EXPECT_NEAR(cam.localPosition().y(), 0.0f, 1e-5f);
-    EXPECT_NEAR(cam.localPosition().z(), -1.0f, 1e-5f);
+    CHECK(cam.localPosition().x() == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(cam.localPosition().y() == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(cam.localPosition().z() == Catch::Approx(-1.0f).margin(1e-5f));
 }
 
-TEST(CameraMovement, ForwardAtYaw90MovesAlongPositiveZ)
+TEST_CASE("CameraMovement.ForwardAtYaw90MovesAlongPositiveZ", "[CameraMovement]")
 {
     Camera cam;
     cam.localPosition({0.0f, 0.0f, 0.0f});
@@ -361,11 +363,11 @@ TEST(CameraMovement, ForwardAtYaw90MovesAlongPositiveZ)
     cam.update(state, t);
 
     // yaw=pi/2 → forward_xz = (cos(pi/2), 0, sin(pi/2)) = (0, 0, 1)
-    EXPECT_NEAR(cam.localPosition().x(), 0.0f, 1e-5f);
-    EXPECT_NEAR(cam.localPosition().z(), 1.0f, 1e-5f);
+    CHECK(cam.localPosition().x() == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(cam.localPosition().z() == Catch::Approx(1.0f).margin(1e-5f));
 }
 
-TEST(CameraMovement, PositiveYDeltaMovesUpwardInWorldSpace)
+TEST_CASE("CameraMovement.PositiveYDeltaMovesUpwardInWorldSpace", "[CameraMovement]")
 {
     Camera cam;
     cam.localPosition({0.0f, 0.0f, 0.0f});
@@ -380,12 +382,12 @@ TEST(CameraMovement, PositiveYDeltaMovesUpwardInWorldSpace)
     Transform t;
     cam.update(state, t);
 
-    EXPECT_NEAR(cam.localPosition().x(), 0.0f, 1e-5f);
-    EXPECT_NEAR(cam.localPosition().y(), 1.5f, 1e-5f);
-    EXPECT_NEAR(cam.localPosition().z(), 0.0f, 1e-5f);
+    CHECK(cam.localPosition().x() == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(cam.localPosition().y() == Catch::Approx(1.5f).margin(1e-5f));
+    CHECK(cam.localPosition().z() == Catch::Approx(0.0f).margin(1e-5f));
 }
 
-TEST(CameraMovement, NegativeYDeltaMovesDownwardInWorldSpace)
+TEST_CASE("CameraMovement.NegativeYDeltaMovesDownwardInWorldSpace", "[CameraMovement]")
 {
     Camera cam;
     cam.localPosition({0.0f, 2.0f, 0.0f});
@@ -400,12 +402,12 @@ TEST(CameraMovement, NegativeYDeltaMovesDownwardInWorldSpace)
     Transform t;
     cam.update(state, t);
 
-    EXPECT_NEAR(cam.localPosition().x(), 0.0f, 1e-5f);
-    EXPECT_NEAR(cam.localPosition().y(), 1.25f, 1e-5f);
-    EXPECT_NEAR(cam.localPosition().z(), 0.0f, 1e-5f);
+    CHECK(cam.localPosition().x() == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(cam.localPosition().y() == Catch::Approx(1.25f).margin(1e-5f));
+    CHECK(cam.localPosition().z() == Catch::Approx(0.0f).margin(1e-5f));
 }
 
-TEST(CameraMovement, VerticalMovementCombinesWithYawRelativeMovement)
+TEST_CASE("CameraMovement.VerticalMovementCombinesWithYawRelativeMovement", "[CameraMovement]")
 {
     Camera cam;
     cam.localPosition({0.0f, 0.0f, 0.0f});
@@ -420,16 +422,16 @@ TEST(CameraMovement, VerticalMovementCombinesWithYawRelativeMovement)
     Transform t;
     cam.update(state, t);
 
-    EXPECT_NEAR(cam.localPosition().x(), 1.0f, 1e-5f);
-    EXPECT_NEAR(cam.localPosition().y(), 2.0f, 1e-5f);
-    EXPECT_NEAR(cam.localPosition().z(), -1.0f, 1e-5f);
+    CHECK(cam.localPosition().x() == Catch::Approx(1.0f).margin(1e-5f));
+    CHECK(cam.localPosition().y() == Catch::Approx(2.0f).margin(1e-5f));
+    CHECK(cam.localPosition().z() == Catch::Approx(-1.0f).margin(1e-5f));
 }
 
 // ==========================================================================
 // Zoom
 // ==========================================================================
 
-TEST(CameraZoom, ZoomMovesAlongViewDirection)
+TEST_CASE("CameraZoom.ZoomMovesAlongViewDirection", "[CameraZoom]")
 {
     Camera cam;
     cam.localPosition({0.0f, 0.0f, 0.0f});
@@ -445,12 +447,12 @@ TEST(CameraZoom, ZoomMovesAlongViewDirection)
     cam.update(state, t);
 
     // yaw=0, pitch=0 → forward_3d = (1, 0, 0)
-    EXPECT_NEAR(cam.localPosition().x(), 2.0f, 1e-5f);
-    EXPECT_NEAR(cam.localPosition().y(), 0.0f, 1e-5f);
-    EXPECT_NEAR(cam.localPosition().z(), 0.0f, 1e-5f);
+    CHECK(cam.localPosition().x() == Catch::Approx(2.0f).margin(1e-5f));
+    CHECK(cam.localPosition().y() == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(cam.localPosition().z() == Catch::Approx(0.0f).margin(1e-5f));
 }
 
-TEST(CameraZoom, ZoomWithPitchMovesVertically)
+TEST_CASE("CameraZoom.ZoomWithPitchMovesVertically", "[CameraZoom]")
 {
     Camera cam;
     cam.localPosition({0.0f, 0.0f, 0.0f});
@@ -468,12 +470,12 @@ TEST(CameraZoom, ZoomWithPitchMovesVertically)
     // forward_3d = (cos(pi/4)*cos(0), sin(pi/4), cos(pi/4)*sin(0))
     float c = std::cos(static_cast<float>(M_PI) / 4.0f);
     float s = std::sin(static_cast<float>(M_PI) / 4.0f);
-    EXPECT_NEAR(cam.localPosition().x(), c, 1e-5f);
-    EXPECT_NEAR(cam.localPosition().y(), s, 1e-5f);
-    EXPECT_NEAR(cam.localPosition().z(), 0.0f, 1e-5f);
+    CHECK(cam.localPosition().x() == Catch::Approx(c).margin(1e-5f));
+    CHECK(cam.localPosition().y() == Catch::Approx(s).margin(1e-5f));
+    CHECK(cam.localPosition().z() == Catch::Approx(0.0f).margin(1e-5f));
 }
 
-TEST(CameraZoom, NegativeZoomMovesBackward)
+TEST_CASE("CameraZoom.NegativeZoomMovesBackward", "[CameraZoom]")
 {
     Camera cam;
     cam.localPosition({0.0f, 0.0f, 0.0f});
@@ -488,14 +490,14 @@ TEST(CameraZoom, NegativeZoomMovesBackward)
     Transform t;
     cam.update(state, t);
 
-    EXPECT_NEAR(cam.localPosition().x(), -1.0f, 1e-5f);
+    CHECK(cam.localPosition().x() == Catch::Approx(-1.0f).margin(1e-5f));
 }
 
 // ==========================================================================
 // Rotation via update
 // ==========================================================================
 
-TEST(CameraRotation, DeltaYawAppliedViaUpdate)
+TEST_CASE("CameraRotation.DeltaYawAppliedViaUpdate", "[CameraRotation]")
 {
     Camera cam;
     cam.localPosition({0.0f, 0.0f, 0.0f});
@@ -510,10 +512,10 @@ TEST(CameraRotation, DeltaYawAppliedViaUpdate)
     Transform t;
     cam.update(state, t);
 
-    EXPECT_FLOAT_EQ(cam.localYaw(), 0.5f);
+    CHECK(cam.localYaw() == Catch::Approx(0.5f).margin(1e-5f));
 }
 
-TEST(CameraRotation, DeltaPitchAppliedViaUpdate)
+TEST_CASE("CameraRotation.DeltaPitchAppliedViaUpdate", "[CameraRotation]")
 {
     Camera cam;
     cam.localPosition({0.0f, 0.0f, 0.0f});
@@ -528,5 +530,5 @@ TEST(CameraRotation, DeltaPitchAppliedViaUpdate)
     Transform t;
     cam.update(state, t);
 
-    EXPECT_FLOAT_EQ(cam.localPitch(), 0.3f);
+    CHECK(cam.localPitch() == Catch::Approx(0.3f).margin(1e-5f));
 }

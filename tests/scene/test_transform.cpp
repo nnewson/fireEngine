@@ -1,6 +1,7 @@
 #include <fire_engine/scene/transform.hpp>
 
-#include <gtest/gtest.h>
+#include <catch2/catch_approx.hpp>
+#include <catch2/catch_test_macros.hpp>
 
 #include <fire_engine/math/quaternion.hpp>
 
@@ -12,125 +13,125 @@ using fire_engine::Transform;
 // Default Construction
 // ==========================================================================
 
-TEST(TransformConstruction, DefaultPosition)
+TEST_CASE("TransformConstruction.DefaultPosition", "[TransformConstruction]")
 {
     Transform t;
-    EXPECT_FLOAT_EQ(t.position().x(), 0.0f);
-    EXPECT_FLOAT_EQ(t.position().y(), 0.0f);
-    EXPECT_FLOAT_EQ(t.position().z(), 0.0f);
+    CHECK(t.position().x() == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(t.position().y() == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(t.position().z() == Catch::Approx(0.0f).margin(1e-5f));
 }
 
-TEST(TransformConstruction, DefaultRotation)
+TEST_CASE("TransformConstruction.DefaultRotation", "[TransformConstruction]")
 {
     Transform t;
-    EXPECT_FLOAT_EQ(t.rotation().x(), 0.0f);
-    EXPECT_FLOAT_EQ(t.rotation().y(), 0.0f);
-    EXPECT_FLOAT_EQ(t.rotation().z(), 0.0f);
-    EXPECT_FLOAT_EQ(t.rotation().w(), 1.0f);
+    CHECK(t.rotation().x() == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(t.rotation().y() == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(t.rotation().z() == Catch::Approx(0.0f).margin(1e-5f));
+    CHECK(t.rotation().w() == Catch::Approx(1.0f).margin(1e-5f));
 }
 
-TEST(TransformConstruction, DefaultScale)
+TEST_CASE("TransformConstruction.DefaultScale", "[TransformConstruction]")
 {
     Transform t;
-    EXPECT_FLOAT_EQ(t.scale().x(), 1.0f);
-    EXPECT_FLOAT_EQ(t.scale().y(), 1.0f);
-    EXPECT_FLOAT_EQ(t.scale().z(), 1.0f);
+    CHECK(t.scale().x() == Catch::Approx(1.0f).margin(1e-5f));
+    CHECK(t.scale().y() == Catch::Approx(1.0f).margin(1e-5f));
+    CHECK(t.scale().z() == Catch::Approx(1.0f).margin(1e-5f));
 }
 
-TEST(TransformConstruction, DefaultLocalIsIdentity)
+TEST_CASE("TransformConstruction.DefaultLocalIsIdentity", "[TransformConstruction]")
 {
     Transform t;
-    EXPECT_EQ(t.local(), Mat4::identity());
+    CHECK(t.local() == Mat4::identity());
 }
 
-TEST(TransformConstruction, DefaultWorldIsIdentity)
+TEST_CASE("TransformConstruction.DefaultWorldIsIdentity", "[TransformConstruction]")
 {
     Transform t;
-    EXPECT_EQ(t.world(), Mat4::identity());
+    CHECK(t.world() == Mat4::identity());
 }
 
 // ==========================================================================
 // Accessors
 // ==========================================================================
 
-TEST(TransformAccessors, SetPosition)
+TEST_CASE("TransformAccessors.SetPosition", "[TransformAccessors]")
 {
     Transform t;
     t.position({1.0f, 2.0f, 3.0f});
-    EXPECT_FLOAT_EQ(t.position().x(), 1.0f);
-    EXPECT_FLOAT_EQ(t.position().y(), 2.0f);
-    EXPECT_FLOAT_EQ(t.position().z(), 3.0f);
+    CHECK(t.position().x() == Catch::Approx(1.0f).margin(1e-5f));
+    CHECK(t.position().y() == Catch::Approx(2.0f).margin(1e-5f));
+    CHECK(t.position().z() == Catch::Approx(3.0f).margin(1e-5f));
 }
 
-TEST(TransformAccessors, SetRotation)
+TEST_CASE("TransformAccessors.SetRotation", "[TransformAccessors]")
 {
     Transform t;
     t.rotation(Quaternion{0.1f, 0.2f, 0.3f, 0.4f});
-    EXPECT_FLOAT_EQ(t.rotation().x(), 0.1f);
-    EXPECT_FLOAT_EQ(t.rotation().y(), 0.2f);
-    EXPECT_FLOAT_EQ(t.rotation().z(), 0.3f);
-    EXPECT_FLOAT_EQ(t.rotation().w(), 0.4f);
+    CHECK(t.rotation().x() == Catch::Approx(0.1f).margin(1e-5f));
+    CHECK(t.rotation().y() == Catch::Approx(0.2f).margin(1e-5f));
+    CHECK(t.rotation().z() == Catch::Approx(0.3f).margin(1e-5f));
+    CHECK(t.rotation().w() == Catch::Approx(0.4f).margin(1e-5f));
 }
 
-TEST(TransformAccessors, SetScale)
+TEST_CASE("TransformAccessors.SetScale", "[TransformAccessors]")
 {
     Transform t;
     t.scale({2.0f, 3.0f, 4.0f});
-    EXPECT_FLOAT_EQ(t.scale().x(), 2.0f);
-    EXPECT_FLOAT_EQ(t.scale().y(), 3.0f);
-    EXPECT_FLOAT_EQ(t.scale().z(), 4.0f);
+    CHECK(t.scale().x() == Catch::Approx(2.0f).margin(1e-5f));
+    CHECK(t.scale().y() == Catch::Approx(3.0f).margin(1e-5f));
+    CHECK(t.scale().z() == Catch::Approx(4.0f).margin(1e-5f));
 }
 
 // ==========================================================================
 // Update with identity parent
 // ==========================================================================
 
-TEST(TransformUpdate, DefaultWithIdentityParentProducesIdentity)
+TEST_CASE("TransformUpdate.DefaultWithIdentityParentProducesIdentity", "[TransformUpdate]")
 {
     Transform t;
     t.update(Mat4::identity());
-    EXPECT_EQ(t.local(), Mat4::identity());
-    EXPECT_EQ(t.world(), Mat4::identity());
+    CHECK(t.local() == Mat4::identity());
+    CHECK(t.world() == Mat4::identity());
 }
 
-TEST(TransformUpdate, TranslationAffectsLocalMatrix)
+TEST_CASE("TransformUpdate.TranslationAffectsLocalMatrix", "[TransformUpdate]")
 {
     Transform t;
     t.position({5.0f, 10.0f, 15.0f});
     t.update(Mat4::identity());
 
     // Column-major: translation is in column 3
-    EXPECT_FLOAT_EQ((t.local()[0, 3]), 5.0f);
-    EXPECT_FLOAT_EQ((t.local()[1, 3]), 10.0f);
-    EXPECT_FLOAT_EQ((t.local()[2, 3]), 15.0f);
+    CHECK((t.local()[0, 3]) == Catch::Approx(5.0f).margin(1e-5f));
+    CHECK((t.local()[1, 3]) == Catch::Approx(10.0f).margin(1e-5f));
+    CHECK((t.local()[2, 3]) == Catch::Approx(15.0f).margin(1e-5f));
 }
 
-TEST(TransformUpdate, ScaleAffectsLocalMatrix)
+TEST_CASE("TransformUpdate.ScaleAffectsLocalMatrix", "[TransformUpdate]")
 {
     Transform t;
     t.scale({2.0f, 3.0f, 4.0f});
     t.update(Mat4::identity());
 
-    EXPECT_FLOAT_EQ((t.local()[0, 0]), 2.0f);
-    EXPECT_FLOAT_EQ((t.local()[1, 1]), 3.0f);
-    EXPECT_FLOAT_EQ((t.local()[2, 2]), 4.0f);
+    CHECK((t.local()[0, 0]) == Catch::Approx(2.0f).margin(1e-5f));
+    CHECK((t.local()[1, 1]) == Catch::Approx(3.0f).margin(1e-5f));
+    CHECK((t.local()[2, 2]) == Catch::Approx(4.0f).margin(1e-5f));
 }
 
-TEST(TransformUpdate, WorldEqualsLocalWithIdentityParent)
+TEST_CASE("TransformUpdate.WorldEqualsLocalWithIdentityParent", "[TransformUpdate]")
 {
     Transform t;
     t.position({1.0f, 2.0f, 3.0f});
     t.scale({2.0f, 2.0f, 2.0f});
     t.update(Mat4::identity());
 
-    EXPECT_EQ(t.world(), t.local());
+    CHECK(t.world() == t.local());
 }
 
 // ==========================================================================
 // Update with non-identity parent
 // ==========================================================================
 
-TEST(TransformUpdate, ParentTranslationAddsToChild)
+TEST_CASE("TransformUpdate.ParentTranslationAddsToChild", "[TransformUpdate]")
 {
     Mat4 parent = Mat4::translate({10.0f, 20.0f, 30.0f});
 
@@ -139,12 +140,12 @@ TEST(TransformUpdate, ParentTranslationAddsToChild)
     t.update(parent);
 
     // World translation should be parent + child
-    EXPECT_FLOAT_EQ((t.world()[0, 3]), 11.0f);
-    EXPECT_FLOAT_EQ((t.world()[1, 3]), 22.0f);
-    EXPECT_FLOAT_EQ((t.world()[2, 3]), 33.0f);
+    CHECK((t.world()[0, 3]) == Catch::Approx(11.0f).margin(1e-5f));
+    CHECK((t.world()[1, 3]) == Catch::Approx(22.0f).margin(1e-5f));
+    CHECK((t.world()[2, 3]) == Catch::Approx(33.0f).margin(1e-5f));
 }
 
-TEST(TransformUpdate, ParentScaleScalesChildTranslation)
+TEST_CASE("TransformUpdate.ParentScaleScalesChildTranslation", "[TransformUpdate]")
 {
     Mat4 parent = Mat4::scale({2.0f, 2.0f, 2.0f});
 
@@ -153,12 +154,12 @@ TEST(TransformUpdate, ParentScaleScalesChildTranslation)
     t.update(parent);
 
     // Child position should be doubled by parent scale
-    EXPECT_FLOAT_EQ((t.world()[0, 3]), 10.0f);
-    EXPECT_FLOAT_EQ((t.world()[1, 3]), 10.0f);
-    EXPECT_FLOAT_EQ((t.world()[2, 3]), 10.0f);
+    CHECK((t.world()[0, 3]) == Catch::Approx(10.0f).margin(1e-5f));
+    CHECK((t.world()[1, 3]) == Catch::Approx(10.0f).margin(1e-5f));
+    CHECK((t.world()[2, 3]) == Catch::Approx(10.0f).margin(1e-5f));
 }
 
-TEST(TransformUpdate, WorldIsParentTimesLocal)
+TEST_CASE("TransformUpdate.WorldIsParentTimesLocal", "[TransformUpdate]")
 {
     Mat4 parent = Mat4::translate({1.0f, 0.0f, 0.0f}) * Mat4::scale({2.0f, 2.0f, 2.0f});
 
@@ -167,14 +168,14 @@ TEST(TransformUpdate, WorldIsParentTimesLocal)
     t.update(parent);
 
     Mat4 expected = parent * t.local();
-    EXPECT_EQ(t.world(), expected);
+    CHECK(t.world() == expected);
 }
 
 // ==========================================================================
 // Hierarchy simulation
 // ==========================================================================
 
-TEST(TransformHierarchy, ThreeLevelHierarchy)
+TEST_CASE("TransformHierarchy.ThreeLevelHierarchy", "[TransformHierarchy]")
 {
     // Simulate grandparent → parent → child
     Transform grandparent;
@@ -190,28 +191,28 @@ TEST(TransformHierarchy, ThreeLevelHierarchy)
     child.update(parent.world());
 
     // Child's world X should be 10 + 5 + 1 = 16
-    EXPECT_FLOAT_EQ((child.world()[0, 3]), 16.0f);
+    CHECK((child.world()[0, 3]) == Catch::Approx(16.0f).margin(1e-5f));
 }
 
 // ==========================================================================
 // Copy and Move Semantics
 // ==========================================================================
 
-TEST(TransformCopy, CopyConstructCreatesIndependentCopy)
+TEST_CASE("TransformCopy.CopyConstructCreatesIndependentCopy", "[TransformCopy]")
 {
     Transform a;
     a.position({1.0f, 2.0f, 3.0f});
     a.update(Mat4::identity());
 
     Transform b{a};
-    EXPECT_FLOAT_EQ(b.position().x(), 1.0f);
-    EXPECT_EQ(b.local(), a.local());
+    CHECK(b.position().x() == Catch::Approx(1.0f).margin(1e-5f));
+    CHECK(b.local() == a.local());
 
     b.position({9.0f, 9.0f, 9.0f});
-    EXPECT_FLOAT_EQ(a.position().x(), 1.0f);
+    CHECK(a.position().x() == Catch::Approx(1.0f).margin(1e-5f));
 }
 
-TEST(TransformMove, MoveConstructTransfersState)
+TEST_CASE("TransformMove.MoveConstructTransfersState", "[TransformMove]")
 {
     Transform a;
     a.position({4.0f, 5.0f, 6.0f});
@@ -219,6 +220,6 @@ TEST(TransformMove, MoveConstructTransfersState)
     Mat4 expectedLocal = a.local();
 
     Transform b{std::move(a)};
-    EXPECT_FLOAT_EQ(b.position().x(), 4.0f);
-    EXPECT_EQ(b.local(), expectedLocal);
+    CHECK(b.position().x() == Catch::Approx(4.0f).margin(1e-5f));
+    CHECK(b.local() == expectedLocal);
 }

@@ -1,12 +1,15 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
+#include <span>
 #include <vector>
 
 #include <vulkan/vulkan_raii.hpp>
 
 #include <fire_engine/graphics/cloth.hpp>
 #include <fire_engine/graphics/gpu_handle.hpp>
+#include <fire_engine/graphics/gpu_limits.hpp>
 #include <fire_engine/render/compute_pipeline.hpp>
 #include <fire_engine/render/resources.hpp>
 
@@ -46,10 +49,14 @@ public:
         return cloths_.empty();
     }
 
-    // Record the substep dispatch chain for every cloth, ending with a
-    // compute-write → vertex-input-read barrier on each render vertex buffer.
-    // Recorded before the shadow pass.
-    void recordSolve(vk::CommandBuffer cmd, float dt) const;
+    // Record the substep dispatch chain for every cloth (predict → solve → collide
+    // per substep, then finalize), ending with a compute-write → vertex-input-read
+    // barrier on each render vertex buffer. Uploads `colliders` into this frame's
+    // collider UBO first. Recorded before the shadow pass.
+    void recordSolve(vk::CommandBuffer cmd, float dt, uint32_t frameIndex,
+                     std::span<const ClothCollider> colliders) const;
+
+    static constexpr uint32_t kMaxClothColliders = 16;
 
 private:
     struct Cloth
@@ -57,7 +64,9 @@ private:
         BufferHandle particles{NullBuffer};
         BufferHandle constraints{NullBuffer};
         BufferHandle verts{NullBuffer};
-        vk::raii::DescriptorSet set{nullptr};
+        // One descriptor set per frame-in-flight: 0/1/2 are the shared particle/
+        // constraint/vertex buffers, binding 3 is that frame's collider UBO.
+        std::vector<vk::raii::DescriptorSet> sets;
         uint32_t particleCount{0};
         std::vector<uint32_t> colourRanges;
         uint32_t resX{0};
@@ -68,8 +77,12 @@ private:
     Resources* resources_{nullptr};
     ComputePipeline predict_;
     ComputePipeline solve_;
+    ComputePipeline collide_;
     ComputePipeline finalize_;
     vk::raii::DescriptorPool pool_{nullptr};
+    // Per-frame collider UBO (count + ClothCollider[kMaxClothColliders]), rewritten
+    // each frame from the gathered world colliders.
+    Resources::MappedBufferSet colliderUbo_;
     std::vector<Cloth> cloths_;
 };
 

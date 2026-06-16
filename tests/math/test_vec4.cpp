@@ -2,7 +2,10 @@
 
 #include <cmath>
 
-#include <gtest/gtest.h>
+#include <support/test_traits.hpp>
+
+#include <catch2/catch_approx.hpp>
+#include <catch2/catch_test_macros.hpp>
 
 using fire_engine::Vec4;
 
@@ -12,29 +15,29 @@ static constexpr float kEps = 1e-6f;
 
 static void expectNear(const Vec4& v, float ex, float ey, float ez, float ew, float eps = kEps)
 {
-    EXPECT_NEAR(v.x(), ex, eps);
-    EXPECT_NEAR(v.y(), ey, eps);
-    EXPECT_NEAR(v.z(), ez, eps);
-    EXPECT_NEAR(v.w(), ew, eps);
+    CHECK(v.x() == Catch::Approx(ex).margin(eps));
+    CHECK(v.y() == Catch::Approx(ey).margin(eps));
+    CHECK(v.z() == Catch::Approx(ez).margin(eps));
+    CHECK(v.w() == Catch::Approx(ew).margin(eps));
 }
 
 // ==========================================================================
 // Construction
 // ==========================================================================
 
-TEST(Vec4Construction, DefaultIsZero)
+TEST_CASE("Vec4Construction.DefaultIsZero", "[Vec4Construction]")
 {
     Vec4 v{};
     expectNear(v, 0.0f, 0.0f, 0.0f, 0.0f);
 }
 
-TEST(Vec4Construction, ExplicitValues)
+TEST_CASE("Vec4Construction.ExplicitValues", "[Vec4Construction]")
 {
     Vec4 v{1.0f, 2.0f, 3.0f, 4.0f};
     expectNear(v, 1.0f, 2.0f, 3.0f, 4.0f);
 }
 
-TEST(Vec4Construction, PartialArgs)
+TEST_CASE("Vec4Construction.PartialArgs", "[Vec4Construction]")
 {
     Vec4 vx{5.0f};
     expectNear(vx, 5.0f, 0.0f, 0.0f, 0.0f);
@@ -46,19 +49,19 @@ TEST(Vec4Construction, PartialArgs)
     expectNear(vxyz, 5.0f, 6.0f, 7.0f, 0.0f);
 }
 
-TEST(Vec4Construction, NegativeValues)
+TEST_CASE("Vec4Construction.NegativeValues", "[Vec4Construction]")
 {
     Vec4 v{-1.0f, -2.0f, -3.0f, -4.0f};
     expectNear(v, -1.0f, -2.0f, -3.0f, -4.0f);
 }
 
-TEST(Vec4Construction, LargeValues)
+TEST_CASE("Vec4Construction.LargeValues", "[Vec4Construction]")
 {
     Vec4 v{1e10f, -1e10f, 1e10f, -1e10f};
     expectNear(v, 1e10f, -1e10f, 1e10f, -1e10f);
 }
 
-TEST(Vec4Construction, Constexpr)
+TEST_CASE("Vec4Construction.Constexpr", "[Vec4Construction]")
 {
     constexpr Vec4 v{3.0f, 4.0f, 5.0f, 6.0f};
     static_assert(v.x() == 3.0f);
@@ -71,16 +74,16 @@ TEST(Vec4Construction, Constexpr)
 // Accessors
 // ==========================================================================
 
-TEST(Vec4Accessors, GettersReturnComponents)
+TEST_CASE("Vec4Accessors.GettersReturnComponents", "[Vec4Accessors]")
 {
     Vec4 v{7.0f, 8.0f, 9.0f, 10.0f};
-    EXPECT_FLOAT_EQ(v.x(), 7.0f);
-    EXPECT_FLOAT_EQ(v.y(), 8.0f);
-    EXPECT_FLOAT_EQ(v.z(), 9.0f);
-    EXPECT_FLOAT_EQ(v.w(), 10.0f);
+    CHECK(v.x() == Catch::Approx(7.0f).margin(1e-5f));
+    CHECK(v.y() == Catch::Approx(8.0f).margin(1e-5f));
+    CHECK(v.z() == Catch::Approx(9.0f).margin(1e-5f));
+    CHECK(v.w() == Catch::Approx(10.0f).margin(1e-5f));
 }
 
-TEST(Vec4Accessors, SettersModifyComponents)
+TEST_CASE("Vec4Accessors.SettersModifyComponents", "[Vec4Accessors]")
 {
     Vec4 v{};
     v.x(10.0f);
@@ -90,41 +93,41 @@ TEST(Vec4Accessors, SettersModifyComponents)
     expectNear(v, 10.0f, 20.0f, 30.0f, 40.0f);
 }
 
-TEST(Vec4Accessors, SetterGetterRoundTrip)
+TEST_CASE("Vec4Accessors.SetterGetterRoundTrip", "[Vec4Accessors]")
 {
     Vec4 v{};
     v.x(42.0f);
-    EXPECT_FLOAT_EQ(v.x(), 42.0f);
+    CHECK(v.x() == Catch::Approx(42.0f).margin(1e-5f));
     v.w(-1.0f);
-    EXPECT_FLOAT_EQ(v.w(), -1.0f);
+    CHECK(v.w() == Catch::Approx(-1.0f).margin(1e-5f));
 }
 
 // ==========================================================================
 // Equality
 // ==========================================================================
 
-TEST(Vec4Equality, EqualVectors)
+TEST_CASE("Vec4Equality.EqualVectors", "[Vec4Equality]")
 {
     Vec4 a{1.0f, 2.0f, 3.0f, 4.0f};
     Vec4 b{1.0f, 2.0f, 3.0f, 4.0f};
-    EXPECT_EQ(a, b);
+    CHECK(a == b);
 }
 
-TEST(Vec4Equality, DifferentVectors)
+TEST_CASE("Vec4Equality.DifferentVectors", "[Vec4Equality]")
 {
     Vec4 a{1.0f, 2.0f, 3.0f, 4.0f};
     Vec4 b{1.0f, 2.0f, 3.0f, 5.0f};
     Vec4 c{0.0f, 2.0f, 3.0f, 4.0f};
-    EXPECT_NE(a, b);
-    EXPECT_NE(a, c);
+    CHECK(a != b);
+    CHECK(a != c);
 }
 
-TEST(Vec4Equality, DefaultEqualDefault)
+TEST_CASE("Vec4Equality.DefaultEqualDefault", "[Vec4Equality]")
 {
-    EXPECT_EQ(Vec4{}, Vec4{});
+    CHECK(Vec4{} == Vec4{});
 }
 
-TEST(Vec4Equality, Constexpr)
+TEST_CASE("Vec4Equality.Constexpr", "[Vec4Equality]")
 {
     constexpr Vec4 a{1.0f, 2.0f, 3.0f, 4.0f};
     constexpr Vec4 b{1.0f, 2.0f, 3.0f, 4.0f};
@@ -135,27 +138,27 @@ TEST(Vec4Equality, Constexpr)
 // Arithmetic — Addition
 // ==========================================================================
 
-TEST(Vec4Addition, BasicAdd)
+TEST_CASE("Vec4Addition.BasicAdd", "[Vec4Addition]")
 {
     Vec4 a{1.0f, 2.0f, 3.0f, 4.0f};
     Vec4 b{5.0f, 6.0f, 7.0f, 8.0f};
     expectNear(a + b, 6.0f, 8.0f, 10.0f, 12.0f);
 }
 
-TEST(Vec4Addition, CompoundAdd)
+TEST_CASE("Vec4Addition.CompoundAdd", "[Vec4Addition]")
 {
     Vec4 a{1.0f, 2.0f, 3.0f, 4.0f};
     a += Vec4{10.0f, 20.0f, 30.0f, 40.0f};
     expectNear(a, 11.0f, 22.0f, 33.0f, 44.0f);
 }
 
-TEST(Vec4Addition, AddZero)
+TEST_CASE("Vec4Addition.AddZero", "[Vec4Addition]")
 {
     Vec4 a{5.0f, 6.0f, 7.0f, 8.0f};
     expectNear(a + Vec4{}, 5.0f, 6.0f, 7.0f, 8.0f);
 }
 
-TEST(Vec4Addition, Constexpr)
+TEST_CASE("Vec4Addition.Constexpr", "[Vec4Addition]")
 {
     constexpr Vec4 r = Vec4{1.0f, 2.0f, 3.0f, 4.0f} + Vec4{5.0f, 6.0f, 7.0f, 8.0f};
     static_assert(r.x() == 6.0f);
@@ -166,21 +169,21 @@ TEST(Vec4Addition, Constexpr)
 // Arithmetic — Subtraction
 // ==========================================================================
 
-TEST(Vec4Subtraction, BasicSub)
+TEST_CASE("Vec4Subtraction.BasicSub", "[Vec4Subtraction]")
 {
     Vec4 a{5.0f, 6.0f, 7.0f, 8.0f};
     Vec4 b{1.0f, 2.0f, 3.0f, 4.0f};
     expectNear(a - b, 4.0f, 4.0f, 4.0f, 4.0f);
 }
 
-TEST(Vec4Subtraction, CompoundSub)
+TEST_CASE("Vec4Subtraction.CompoundSub", "[Vec4Subtraction]")
 {
     Vec4 v{10.0f, 20.0f, 30.0f, 40.0f};
     v -= Vec4{3.0f, 4.0f, 5.0f, 6.0f};
     expectNear(v, 7.0f, 16.0f, 25.0f, 34.0f);
 }
 
-TEST(Vec4Subtraction, SubSelf)
+TEST_CASE("Vec4Subtraction.SubSelf", "[Vec4Subtraction]")
 {
     Vec4 v{7.0f, 8.0f, 9.0f, 10.0f};
     expectNear(v - v, 0.0f, 0.0f, 0.0f, 0.0f);
@@ -190,26 +193,26 @@ TEST(Vec4Subtraction, SubSelf)
 // Arithmetic — Scalar Multiply
 // ==========================================================================
 
-TEST(Vec4ScalarMultiply, BasicMul)
+TEST_CASE("Vec4ScalarMultiply.BasicMul", "[Vec4ScalarMultiply]")
 {
     Vec4 v{1.0f, 2.0f, 3.0f, 4.0f};
     expectNear(v * 3.0f, 3.0f, 6.0f, 9.0f, 12.0f);
 }
 
-TEST(Vec4ScalarMultiply, CompoundMul)
+TEST_CASE("Vec4ScalarMultiply.CompoundMul", "[Vec4ScalarMultiply]")
 {
     Vec4 v{2.0f, 3.0f, 4.0f, 5.0f};
     v *= 4.0f;
     expectNear(v, 8.0f, 12.0f, 16.0f, 20.0f);
 }
 
-TEST(Vec4ScalarMultiply, MulZero)
+TEST_CASE("Vec4ScalarMultiply.MulZero", "[Vec4ScalarMultiply]")
 {
     Vec4 v{5.0f, 6.0f, 7.0f, 8.0f};
     expectNear(v * 0.0f, 0.0f, 0.0f, 0.0f, 0.0f);
 }
 
-TEST(Vec4ScalarMultiply, MulNegative)
+TEST_CASE("Vec4ScalarMultiply.MulNegative", "[Vec4ScalarMultiply]")
 {
     Vec4 v{1.0f, -2.0f, 3.0f, -4.0f};
     expectNear(v * -1.0f, -1.0f, 2.0f, -3.0f, 4.0f);
@@ -219,20 +222,20 @@ TEST(Vec4ScalarMultiply, MulNegative)
 // Arithmetic — Scalar Divide
 // ==========================================================================
 
-TEST(Vec4ScalarDivide, BasicDiv)
+TEST_CASE("Vec4ScalarDivide.BasicDiv", "[Vec4ScalarDivide]")
 {
     Vec4 v{6.0f, 8.0f, 10.0f, 12.0f};
     expectNear(v / 2.0f, 3.0f, 4.0f, 5.0f, 6.0f);
 }
 
-TEST(Vec4ScalarDivide, CompoundDiv)
+TEST_CASE("Vec4ScalarDivide.CompoundDiv", "[Vec4ScalarDivide]")
 {
     Vec4 v{10.0f, 20.0f, 30.0f, 40.0f};
     v /= 5.0f;
     expectNear(v, 2.0f, 4.0f, 6.0f, 8.0f);
 }
 
-TEST(Vec4ScalarDivide, DivOne)
+TEST_CASE("Vec4ScalarDivide.DivOne", "[Vec4ScalarDivide]")
 {
     Vec4 v{3.0f, 4.0f, 5.0f, 6.0f};
     expectNear(v / 1.0f, 3.0f, 4.0f, 5.0f, 6.0f);
@@ -242,28 +245,28 @@ TEST(Vec4ScalarDivide, DivOne)
 // Dot Product
 // ==========================================================================
 
-TEST(Vec4DotProduct, StaticMethod)
+TEST_CASE("Vec4DotProduct.StaticMethod", "[Vec4DotProduct]")
 {
     Vec4 a{1.0f, 0.0f, 0.0f, 0.0f};
     Vec4 b{0.0f, 1.0f, 0.0f, 0.0f};
-    EXPECT_FLOAT_EQ(Vec4::dotProduct(a, b), 0.0f);
+    CHECK(Vec4::dotProduct(a, b) == Catch::Approx(0.0f).margin(1e-5f));
 }
 
-TEST(Vec4DotProduct, MemberMethod)
+TEST_CASE("Vec4DotProduct.MemberMethod", "[Vec4DotProduct]")
 {
     Vec4 a{1.0f, 2.0f, 3.0f, 4.0f};
     Vec4 b{1.0f, 2.0f, 3.0f, 4.0f};
-    EXPECT_FLOAT_EQ(a.dotProduct(b), 30.0f);
+    CHECK(a.dotProduct(b) == Catch::Approx(30.0f).margin(1e-5f));
 }
 
-TEST(Vec4DotProduct, Perpendicular)
+TEST_CASE("Vec4DotProduct.Perpendicular", "[Vec4DotProduct]")
 {
     Vec4 a{1.0f, 0.0f, 0.0f, 0.0f};
     Vec4 b{0.0f, 0.0f, 1.0f, 0.0f};
-    EXPECT_FLOAT_EQ(Vec4::dotProduct(a, b), 0.0f);
+    CHECK(Vec4::dotProduct(a, b) == Catch::Approx(0.0f).margin(1e-5f));
 }
 
-TEST(Vec4DotProduct, Constexpr)
+TEST_CASE("Vec4DotProduct.Constexpr", "[Vec4DotProduct]")
 {
     constexpr Vec4 a{1.0f, 2.0f, 3.0f, 4.0f};
     constexpr Vec4 b{5.0f, 6.0f, 7.0f, 8.0f};
@@ -275,86 +278,86 @@ TEST(Vec4DotProduct, Constexpr)
 // Magnitude
 // ==========================================================================
 
-TEST(Vec4Magnitude, UnitX)
+TEST_CASE("Vec4Magnitude.UnitX", "[Vec4Magnitude]")
 {
     Vec4 v{1.0f, 0.0f, 0.0f, 0.0f};
-    EXPECT_FLOAT_EQ(v.magnitude(), 1.0f);
+    CHECK(v.magnitude() == Catch::Approx(1.0f).margin(1e-5f));
 }
 
-TEST(Vec4Magnitude, UnitW)
+TEST_CASE("Vec4Magnitude.UnitW", "[Vec4Magnitude]")
 {
     Vec4 v{0.0f, 0.0f, 0.0f, 1.0f};
-    EXPECT_FLOAT_EQ(v.magnitude(), 1.0f);
+    CHECK(v.magnitude() == Catch::Approx(1.0f).margin(1e-5f));
 }
 
-TEST(Vec4Magnitude, KnownValue)
+TEST_CASE("Vec4Magnitude.KnownValue", "[Vec4Magnitude]")
 {
     Vec4 v{1.0f, 2.0f, 3.0f, 4.0f};
-    EXPECT_NEAR(v.magnitude(), std::sqrt(30.0f), kEps);
+    CHECK(v.magnitude() == Catch::Approx(std::sqrt(30.0f)).margin(kEps));
 }
 
-TEST(Vec4Magnitude, Zero)
+TEST_CASE("Vec4Magnitude.Zero", "[Vec4Magnitude]")
 {
     Vec4 v{};
-    EXPECT_FLOAT_EQ(v.magnitude(), 0.0f);
+    CHECK(v.magnitude() == Catch::Approx(0.0f).margin(1e-5f));
 }
 
-TEST(Vec4Magnitude, Squared)
+TEST_CASE("Vec4Magnitude.Squared", "[Vec4Magnitude]")
 {
     Vec4 v{1.0f, 2.0f, 3.0f, 4.0f};
-    EXPECT_FLOAT_EQ(v.magnitudeSquared(), 30.0f);
+    CHECK(v.magnitudeSquared() == Catch::Approx(30.0f).margin(1e-5f));
 }
 
 // ==========================================================================
 // Normalise
 // ==========================================================================
 
-TEST(Vec4Normalise, StaticMethod)
+TEST_CASE("Vec4Normalise.StaticMethod", "[Vec4Normalise]")
 {
     Vec4 v{1.0f, 2.0f, 3.0f, 4.0f};
     Vec4 n = Vec4::normalise(v);
-    EXPECT_NEAR(n.magnitude(), 1.0f, kEps);
+    CHECK(n.magnitude() == Catch::Approx(1.0f).margin(kEps));
 }
 
-TEST(Vec4Normalise, MemberMethod)
+TEST_CASE("Vec4Normalise.MemberMethod", "[Vec4Normalise]")
 {
     Vec4 v{0.0f, 0.0f, 0.0f, 5.0f};
     v.normalise();
     expectNear(v, 0.0f, 0.0f, 0.0f, 1.0f);
 }
 
-TEST(Vec4Normalise, ZeroVectorStaysZero)
+TEST_CASE("Vec4Normalise.ZeroVectorStaysZero", "[Vec4Normalise]")
 {
     Vec4 n = Vec4::normalise(Vec4{});
     expectNear(n, 0.0f, 0.0f, 0.0f, 0.0f);
 }
 
-TEST(Vec4Normalise, AlreadyUnit)
+TEST_CASE("Vec4Normalise.AlreadyUnit", "[Vec4Normalise]")
 {
     Vec4 v{1.0f, 0.0f, 0.0f, 0.0f};
     Vec4 n = Vec4::normalise(v);
     expectNear(n, 1.0f, 0.0f, 0.0f, 0.0f);
 }
 
-TEST(Vec4Normalise, NegativeComponents)
+TEST_CASE("Vec4Normalise.NegativeComponents", "[Vec4Normalise]")
 {
     Vec4 v{-1.0f, -2.0f, -3.0f, -4.0f};
     Vec4 n = Vec4::normalise(v);
-    EXPECT_NEAR(n.magnitude(), 1.0f, kEps);
+    CHECK(n.magnitude() == Catch::Approx(1.0f).margin(kEps));
 }
 
 // ==========================================================================
 // Copy and Move
 // ==========================================================================
 
-TEST(Vec4Copy, CopyConstruct)
+TEST_CASE("Vec4Copy.CopyConstruct", "[Vec4Copy]")
 {
     Vec4 a{1.0f, 2.0f, 3.0f, 4.0f};
     Vec4 b{a};
     expectNear(b, 1.0f, 2.0f, 3.0f, 4.0f);
 }
 
-TEST(Vec4Copy, CopyAssign)
+TEST_CASE("Vec4Copy.CopyAssign", "[Vec4Copy]")
 {
     Vec4 a{1.0f, 2.0f, 3.0f, 4.0f};
     Vec4 b{};
@@ -362,14 +365,14 @@ TEST(Vec4Copy, CopyAssign)
     expectNear(b, 1.0f, 2.0f, 3.0f, 4.0f);
 }
 
-TEST(Vec4Move, MoveConstruct)
+TEST_CASE("Vec4Move.MoveConstruct", "[Vec4Move]")
 {
     Vec4 a{3.0f, 4.0f, 5.0f, 6.0f};
     Vec4 b{std::move(a)};
     expectNear(b, 3.0f, 4.0f, 5.0f, 6.0f);
 }
 
-TEST(Vec4Move, MoveAssign)
+TEST_CASE("Vec4Move.MoveAssign", "[Vec4Move]")
 {
     Vec4 a{5.0f, 6.0f, 7.0f, 8.0f};
     Vec4 b{};
@@ -381,68 +384,45 @@ TEST(Vec4Move, MoveAssign)
 // Noexcept
 // ==========================================================================
 
-TEST(Vec4Noexcept, Construction)
+TEST_CASE("Vec4Noexcept.Construction", "[Vec4Noexcept]")
 {
-    static_assert(noexcept(Vec4{}));
-    static_assert(noexcept(Vec4{1.0f, 2.0f, 3.0f, 4.0f}));
+    static_assert(std::is_nothrow_default_constructible_v<Vec4>);
+    static_assert(test_traits::nothrow_constructible_from_v<Vec4, float, float, float, float>);
 }
 
-TEST(Vec4Noexcept, Accessors)
+TEST_CASE("Vec4Noexcept.Accessors", "[Vec4Noexcept]")
 {
-    Vec4 v{};
-    static_assert(noexcept(v.x()));
-    static_assert(noexcept(v.y()));
-    static_assert(noexcept(v.z()));
-    static_assert(noexcept(v.w()));
-    static_assert(noexcept(v.x(1.0f)));
-    static_assert(noexcept(v.y(1.0f)));
-    static_assert(noexcept(v.z(1.0f)));
-    static_assert(noexcept(v.w(1.0f)));
+    static_assert(test_traits::has_nothrow_vec4_accessors<Vec4>);
 }
 
-TEST(Vec4Noexcept, Arithmetic)
+TEST_CASE("Vec4Noexcept.Arithmetic", "[Vec4Noexcept]")
 {
-    Vec4 a{}, b{};
-    static_assert(noexcept(a + b));
-    static_assert(noexcept(a - b));
-    static_assert(noexcept(a * 1.0f));
-    static_assert(noexcept(a / 1.0f));
-    static_assert(noexcept(a += b));
-    static_assert(noexcept(a -= b));
-    static_assert(noexcept(a *= 1.0f));
-    static_assert(noexcept(a /= 1.0f));
+    static_assert(test_traits::has_nothrow_vec_arithmetic<Vec4>);
 }
 
-TEST(Vec4Noexcept, DotMagnitudeNormalise)
+TEST_CASE("Vec4Noexcept.DotMagnitudeNormalise", "[Vec4Noexcept]")
 {
-    Vec4 v{1.0f, 0.0f, 0.0f, 0.0f};
-    static_assert(noexcept(Vec4::dotProduct(v, v)));
-    static_assert(noexcept(v.dotProduct(v)));
-    static_assert(noexcept(v.magnitude()));
-    static_assert(noexcept(v.magnitudeSquared()));
-    static_assert(noexcept(Vec4::normalise(v)));
-    static_assert(noexcept(v.normalise()));
+    static_assert(test_traits::has_nothrow_vec_common_math<Vec4>);
 }
 
-TEST(Vec4Noexcept, Equality)
+TEST_CASE("Vec4Noexcept.Equality", "[Vec4Noexcept]")
 {
-    Vec4 a{}, b{};
-    static_assert(noexcept(a == b));
+    static_assert(test_traits::has_nothrow_equality<Vec4>);
 }
 
 // ==========================================================================
 // Edge Cases
 // ==========================================================================
 
-TEST(Vec4EdgeCases, VerySmallValues)
+TEST_CASE("Vec4EdgeCases.VerySmallValues", "[Vec4EdgeCases]")
 {
     Vec4 v{1e-20f, 1e-20f, 1e-20f, 1e-20f};
-    EXPECT_NEAR(v.magnitude(), 2e-20f, 1e-25f);
+    CHECK(v.magnitude() == Catch::Approx(2e-20f).margin(1e-25f));
 }
 
-TEST(Vec4EdgeCases, MixedSignDot)
+TEST_CASE("Vec4EdgeCases.MixedSignDot", "[Vec4EdgeCases]")
 {
     Vec4 a{1.0f, -1.0f, 1.0f, -1.0f};
     Vec4 b{-1.0f, 1.0f, -1.0f, 1.0f};
-    EXPECT_FLOAT_EQ(Vec4::dotProduct(a, b), -4.0f);
+    CHECK(Vec4::dotProduct(a, b) == Catch::Approx(-4.0f).margin(1e-5f));
 }

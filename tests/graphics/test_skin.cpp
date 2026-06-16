@@ -2,7 +2,8 @@
 #include <fire_engine/input/input_state.hpp>
 #include <fire_engine/scene/node.hpp>
 
-#include <gtest/gtest.h>
+#include <catch2/catch_approx.hpp>
+#include <catch2/catch_test_macros.hpp>
 
 using fire_engine::InputState;
 using fire_engine::Mat4;
@@ -13,44 +14,44 @@ using fire_engine::Skin;
 // Default Construction
 // ==========================================================================
 
-TEST(SkinConstruction, DefaultEmpty)
+TEST_CASE("SkinConstruction.DefaultEmpty", "[SkinConstruction]")
 {
     Skin skin;
-    EXPECT_TRUE(skin.empty());
-    EXPECT_EQ(skin.jointCount(), 0u);
+    CHECK(skin.empty());
+    CHECK(skin.jointCount() == 0u);
 }
 
-TEST(SkinConstruction, DefaultName)
+TEST_CASE("SkinConstruction.DefaultName", "[SkinConstruction]")
 {
     Skin skin;
-    EXPECT_TRUE(skin.name().empty());
+    CHECK(skin.name().empty());
 }
 
 // ==========================================================================
 // Name
 // ==========================================================================
 
-TEST(SkinName, SetAndGet)
+TEST_CASE("SkinName.SetAndGet", "[SkinName]")
 {
     Skin skin;
     skin.name("TestSkin");
-    EXPECT_EQ(skin.name(), "TestSkin");
+    CHECK(skin.name() == "TestSkin");
 }
 
 // ==========================================================================
 // Add Joints
 // ==========================================================================
 
-TEST(SkinAddJoint, SingleJoint)
+TEST_CASE("SkinAddJoint.SingleJoint", "[SkinAddJoint]")
 {
     Skin skin;
     Node node("joint0");
     skin.addJoint(&node, Mat4::identity());
-    EXPECT_EQ(skin.jointCount(), 1u);
-    EXPECT_FALSE(skin.empty());
+    CHECK(skin.jointCount() == 1u);
+    CHECK_FALSE(skin.empty());
 }
 
-TEST(SkinAddJoint, MultipleJoints)
+TEST_CASE("SkinAddJoint.MultipleJoints", "[SkinAddJoint]")
 {
     Skin skin;
     Node n0("joint0");
@@ -59,21 +60,21 @@ TEST(SkinAddJoint, MultipleJoints)
     skin.addJoint(&n0, Mat4::identity());
     skin.addJoint(&n1, Mat4::identity());
     skin.addJoint(&n2, Mat4::identity());
-    EXPECT_EQ(skin.jointCount(), 3u);
+    CHECK(skin.jointCount() == 3u);
 }
 
 // ==========================================================================
 // Compute Joint Matrices
 // ==========================================================================
 
-TEST(SkinComputeJointMatrices, EmptySkin)
+TEST_CASE("SkinComputeJointMatrices.EmptySkin", "[SkinComputeJointMatrices]")
 {
     Skin skin;
     auto matrices = skin.computeJointMatrices();
-    EXPECT_TRUE(matrices.empty());
+    CHECK(matrices.empty());
 }
 
-TEST(SkinComputeJointMatrices, IdentityInverseBind)
+TEST_CASE("SkinComputeJointMatrices.IdentityInverseBind", "[SkinComputeJointMatrices]")
 {
     Skin skin;
     Node node("joint0");
@@ -83,7 +84,7 @@ TEST(SkinComputeJointMatrices, IdentityInverseBind)
     skin.addJoint(&node, Mat4::identity());
     auto matrices = skin.computeJointMatrices();
 
-    ASSERT_EQ(matrices.size(), 1u);
+    REQUIRE(matrices.size() == 1u);
     // world (identity) * inverseBind (identity) = identity
     for (int row = 0; row < 4; ++row)
     {
@@ -91,12 +92,12 @@ TEST(SkinComputeJointMatrices, IdentityInverseBind)
         {
             float expected = (row == col) ? 1.0f : 0.0f;
             float actual = matrices[0][row, col];
-            EXPECT_FLOAT_EQ(actual, expected);
+            CHECK(actual == Catch::Approx(expected).margin(1e-5f));
         }
     }
 }
 
-TEST(SkinComputeJointMatrices, WithTranslation)
+TEST_CASE("SkinComputeJointMatrices.WithTranslation", "[SkinComputeJointMatrices]")
 {
     Skin skin;
     Node node("joint0");
@@ -108,16 +109,16 @@ TEST(SkinComputeJointMatrices, WithTranslation)
     skin.addJoint(&node, Mat4::identity());
     auto matrices = skin.computeJointMatrices();
 
-    ASSERT_EQ(matrices.size(), 1u);
+    REQUIRE(matrices.size() == 1u);
     float tx = matrices[0][0, 3];
-    EXPECT_FLOAT_EQ(tx, 5.0f);
+    CHECK(tx == Catch::Approx(5.0f).margin(1e-5f));
 }
 
 // ==========================================================================
 // Move Semantics
 // ==========================================================================
 
-TEST(SkinMove, MoveConstruction)
+TEST_CASE("SkinMove.MoveConstruction", "[SkinMove]")
 {
     Skin skin;
     Node n0("joint0");
@@ -125,11 +126,11 @@ TEST(SkinMove, MoveConstruction)
     skin.name("TestSkin");
 
     Skin moved(std::move(skin));
-    EXPECT_EQ(moved.jointCount(), 1u);
-    EXPECT_EQ(moved.name(), "TestSkin");
+    CHECK(moved.jointCount() == 1u);
+    CHECK(moved.name() == "TestSkin");
 }
 
-TEST(SkinMove, MoveAssignment)
+TEST_CASE("SkinMove.MoveAssignment", "[SkinMove]")
 {
     Skin skin;
     Node n0("joint0");
@@ -137,5 +138,5 @@ TEST(SkinMove, MoveAssignment)
 
     Skin other;
     other = std::move(skin);
-    EXPECT_EQ(other.jointCount(), 1u);
+    CHECK(other.jointCount() == 1u);
 }

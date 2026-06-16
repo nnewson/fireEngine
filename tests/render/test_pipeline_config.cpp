@@ -1,4 +1,5 @@
-#include <gtest/gtest.h>
+#include <catch2/catch_approx.hpp>
+#include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
 
@@ -11,17 +12,17 @@ using fire_engine::ForwardBinding;
 using fire_engine::Pipeline;
 using fire_engine::ShadowBinding;
 
-TEST(PipelineConfig, ForwardConfigBindingsSplitBetweenSets)
+TEST_CASE("PipelineConfig.ForwardConfigBindingsSplitBetweenSets", "[PipelineConfig]")
 {
     using fire_engine::ForwardGlobalBinding;
     auto config = Pipeline::forwardConfig();
 
     // Set 0 — per-object / per-material bindings: frame, material, skin,
     // morph UBO + SSBO, base + 9 material textures (10 total).
-    EXPECT_EQ(config.bindings.size(), 15u);
+    CHECK(config.bindings.size() == 15u);
     // Set 1 — forward globals: light UBO + 5 shadow maps + debug image + 2
     // standalone samplers + 3 IBL textures + sceneColor.
-    EXPECT_EQ(config.globalBindings.size(), 13u);
+    CHECK(config.globalBindings.size() == 13u);
 
     auto hasObjectBinding = [&](ForwardBinding binding)
     {
@@ -36,45 +37,45 @@ TEST(PipelineConfig, ForwardConfigBindingsSplitBetweenSets)
     };
 
     // Per-object set 0 bindings.
-    EXPECT_TRUE(hasObjectBinding(ForwardBinding::TransmissionTexture));
-    EXPECT_TRUE(hasObjectBinding(ForwardBinding::ClearcoatTexture));
-    EXPECT_TRUE(hasObjectBinding(ForwardBinding::ClearcoatRoughnessTexture));
-    EXPECT_TRUE(hasObjectBinding(ForwardBinding::ClearcoatNormalTexture));
-    EXPECT_TRUE(hasObjectBinding(ForwardBinding::ThicknessTexture));
+    CHECK(hasObjectBinding(ForwardBinding::TransmissionTexture));
+    CHECK(hasObjectBinding(ForwardBinding::ClearcoatTexture));
+    CHECK(hasObjectBinding(ForwardBinding::ClearcoatRoughnessTexture));
+    CHECK(hasObjectBinding(ForwardBinding::ClearcoatNormalTexture));
+    CHECK(hasObjectBinding(ForwardBinding::ThicknessTexture));
 
     // Forward globals set 1 bindings.
-    EXPECT_TRUE(hasGlobalBinding(ForwardGlobalBinding::Light));
-    EXPECT_TRUE(hasGlobalBinding(ForwardGlobalBinding::IrradianceMap));
-    EXPECT_TRUE(hasGlobalBinding(ForwardGlobalBinding::PrefilteredMap));
-    EXPECT_TRUE(hasGlobalBinding(ForwardGlobalBinding::BrdfLut));
-    EXPECT_TRUE(hasGlobalBinding(ForwardGlobalBinding::ShadowCompareSampler));
-    EXPECT_TRUE(hasGlobalBinding(ForwardGlobalBinding::SceneColour));
-    EXPECT_TRUE(hasGlobalBinding(ForwardGlobalBinding::SpotShadowMap));
-    EXPECT_TRUE(hasGlobalBinding(ForwardGlobalBinding::PointShadowMap));
-    EXPECT_TRUE(hasGlobalBinding(ForwardGlobalBinding::ShadowDebugSampler));
-    EXPECT_TRUE(hasGlobalBinding(ForwardGlobalBinding::ShadowDebugImage));
-    EXPECT_TRUE(hasGlobalBinding(ForwardGlobalBinding::WorldShadowMap));
-    EXPECT_TRUE(hasGlobalBinding(ForwardGlobalBinding::SelfShadowMap));
-    EXPECT_TRUE(hasGlobalBinding(ForwardGlobalBinding::ShadowMap));
+    CHECK(hasGlobalBinding(ForwardGlobalBinding::Light));
+    CHECK(hasGlobalBinding(ForwardGlobalBinding::IrradianceMap));
+    CHECK(hasGlobalBinding(ForwardGlobalBinding::PrefilteredMap));
+    CHECK(hasGlobalBinding(ForwardGlobalBinding::BrdfLut));
+    CHECK(hasGlobalBinding(ForwardGlobalBinding::ShadowCompareSampler));
+    CHECK(hasGlobalBinding(ForwardGlobalBinding::SceneColour));
+    CHECK(hasGlobalBinding(ForwardGlobalBinding::SpotShadowMap));
+    CHECK(hasGlobalBinding(ForwardGlobalBinding::PointShadowMap));
+    CHECK(hasGlobalBinding(ForwardGlobalBinding::ShadowDebugSampler));
+    CHECK(hasGlobalBinding(ForwardGlobalBinding::ShadowDebugImage));
+    CHECK(hasGlobalBinding(ForwardGlobalBinding::WorldShadowMap));
+    CHECK(hasGlobalBinding(ForwardGlobalBinding::SelfShadowMap));
+    CHECK(hasGlobalBinding(ForwardGlobalBinding::ShadowMap));
 }
 
-TEST(PipelineConfig, ForwardConfigIncludesSelfShadowPushConstant)
+TEST_CASE("PipelineConfig.ForwardConfigIncludesSelfShadowPushConstant", "[PipelineConfig]")
 {
     auto config = Pipeline::forwardConfig();
 
-    ASSERT_EQ(config.pushConstantRanges.size(), 1u);
-    EXPECT_EQ(config.pushConstantRanges[0].stageFlags, vk::ShaderStageFlagBits::eFragment);
-    EXPECT_EQ(config.pushConstantRanges[0].offset, 0u);
-    EXPECT_EQ(config.pushConstantRanges[0].size,
-              static_cast<uint32_t>(sizeof(fire_engine::ForwardPushConstants)));
+    REQUIRE(config.pushConstantRanges.size() == 1u);
+    CHECK(config.pushConstantRanges[0].stageFlags == vk::ShaderStageFlagBits::eFragment);
+    CHECK(config.pushConstantRanges[0].offset == 0u);
+    CHECK(config.pushConstantRanges[0].size ==
+          static_cast<uint32_t>(sizeof(fire_engine::ForwardPushConstants)));
 }
 
-TEST(PipelineConfig, ShadowConfigCullsFrontFaces)
+TEST_CASE("PipelineConfig.ShadowConfigCullsFrontFaces", "[PipelineConfig]")
 {
     auto config = Pipeline::shadowConfig();
 
-    EXPECT_EQ(config.cullMode, vk::CullModeFlagBits::eFront);
-    EXPECT_TRUE(config.depthBiasEnable);
+    CHECK(config.cullMode == vk::CullModeFlagBits::eFront);
+    CHECK(config.depthBiasEnable);
 
     auto hasBinding = [&](ShadowBinding binding)
     {
@@ -82,11 +83,11 @@ TEST(PipelineConfig, ShadowConfigCullsFrontFaces)
                            { return entry.binding == bindingIndex(binding); });
     };
 
-    EXPECT_TRUE(hasBinding(ShadowBinding::SelfShadowFirstMap));
-    EXPECT_TRUE(hasBinding(ShadowBinding::SelfShadowDepthSampler));
+    CHECK(hasBinding(ShadowBinding::SelfShadowFirstMap));
+    CHECK(hasBinding(ShadowBinding::SelfShadowDepthSampler));
 }
 
-TEST(PipelineConfig, SelfShadowConfigsCulling)
+TEST_CASE("PipelineConfig.SelfShadowConfigsCulling", "[PipelineConfig]")
 {
     // First pass rasterises both faces so it captures the light-facing depth.
     // Second pass culls front faces so only back-facing fragments survive,
@@ -95,90 +96,93 @@ TEST(PipelineConfig, SelfShadowConfigsCulling)
     auto first = Pipeline::selfShadowFirstConfig();
     auto second = Pipeline::selfShadowSecondConfig();
 
-    EXPECT_EQ(first.cullMode, vk::CullModeFlagBits::eNone);
-    EXPECT_EQ(first.fragShaderPath, "shadow.frag.spv");
-    EXPECT_EQ(second.cullMode, vk::CullModeFlagBits::eFront);
-    EXPECT_EQ(second.fragShaderPath, "self_shadow_second.frag.spv");
+    CHECK(first.cullMode == vk::CullModeFlagBits::eNone);
+    CHECK(first.fragShaderPath == "shadow.frag.spv");
+    CHECK(second.cullMode == vk::CullModeFlagBits::eFront);
+    CHECK(second.fragShaderPath == "self_shadow_second.frag.spv");
 }
 
-TEST(PipelineConfig, SkyboxConfigIncludesCubemapSamplerBinding)
+TEST_CASE("PipelineConfig.SkyboxConfigIncludesCubemapSamplerBinding", "[PipelineConfig]")
 {
     auto config = Pipeline::skyboxConfig();
 
-    ASSERT_EQ(config.bindings.size(), 3u);
-    EXPECT_EQ(config.bindings[0].binding, 0u);
-    EXPECT_EQ(config.bindings[1].binding, 1u);
-    EXPECT_EQ(config.bindings[1].descriptorType, vk::DescriptorType::eCombinedImageSampler);
-    EXPECT_EQ(config.bindings[2].binding, 2u);
-    EXPECT_EQ(config.bindings[2].descriptorType, vk::DescriptorType::eUniformBuffer);
+    REQUIRE(config.bindings.size() == 3u);
+    CHECK(config.bindings[0].binding == 0u);
+    CHECK(config.bindings[1].binding == 1u);
+    CHECK(config.bindings[1].descriptorType == vk::DescriptorType::eCombinedImageSampler);
+    CHECK(config.bindings[2].binding == 2u);
+    CHECK(config.bindings[2].descriptorType == vk::DescriptorType::eUniformBuffer);
 }
 
-TEST(PipelineConfig, EnvironmentConvertConfigIncludesPanoramaSamplerBinding)
+TEST_CASE("PipelineConfig.EnvironmentConvertConfigIncludesPanoramaSamplerBinding",
+          "[PipelineConfig]")
 {
     auto config = Pipeline::environmentConvertConfig({});
 
-    ASSERT_EQ(config.bindings.size(), 1u);
-    EXPECT_EQ(config.vertShaderPath, "skybox.vert.spv");
-    EXPECT_EQ(config.fragShaderPath, "environment_convert.frag.spv");
-    EXPECT_FALSE(config.useVertexInput);
-    EXPECT_FALSE(config.depthTestEnable);
-    EXPECT_FALSE(config.depthWrite);
-    EXPECT_EQ(config.bindings[0].binding, 0u);
-    EXPECT_EQ(config.bindings[0].descriptorType, vk::DescriptorType::eCombinedImageSampler);
-    ASSERT_EQ(config.pushConstantRanges.size(), 1u);
-    EXPECT_EQ(config.pushConstantRanges[0].stageFlags, vk::ShaderStageFlagBits::eFragment);
-    EXPECT_EQ(config.pushConstantRanges[0].offset, 0u);
-    EXPECT_EQ(config.pushConstantRanges[0].size,
-              static_cast<uint32_t>(sizeof(fire_engine::EnvironmentCaptureUBO)));
+    REQUIRE(config.bindings.size() == 1u);
+    CHECK(config.vertShaderPath == "skybox.vert.spv");
+    CHECK(config.fragShaderPath == "environment_convert.frag.spv");
+    CHECK_FALSE(config.useVertexInput);
+    CHECK_FALSE(config.depthTestEnable);
+    CHECK_FALSE(config.depthWrite);
+    CHECK(config.bindings[0].binding == 0u);
+    CHECK(config.bindings[0].descriptorType == vk::DescriptorType::eCombinedImageSampler);
+    REQUIRE(config.pushConstantRanges.size() == 1u);
+    CHECK(config.pushConstantRanges[0].stageFlags == vk::ShaderStageFlagBits::eFragment);
+    CHECK(config.pushConstantRanges[0].offset == 0u);
+    CHECK(config.pushConstantRanges[0].size ==
+          static_cast<uint32_t>(sizeof(fire_engine::EnvironmentCaptureUBO)));
 }
 
-TEST(PipelineConfig, IrradianceConvolutionConfigIncludesCubemapSamplerBinding)
+TEST_CASE("PipelineConfig.IrradianceConvolutionConfigIncludesCubemapSamplerBinding",
+          "[PipelineConfig]")
 {
     auto config = Pipeline::irradianceConvolutionConfig({});
 
-    ASSERT_EQ(config.bindings.size(), 1u);
-    EXPECT_EQ(config.vertShaderPath, "skybox.vert.spv");
-    EXPECT_EQ(config.fragShaderPath, "irradiance_convolution.frag.spv");
-    EXPECT_FALSE(config.useVertexInput);
-    EXPECT_FALSE(config.depthTestEnable);
-    EXPECT_FALSE(config.depthWrite);
-    EXPECT_EQ(config.bindings[0].binding, 0u);
-    EXPECT_EQ(config.bindings[0].descriptorType, vk::DescriptorType::eCombinedImageSampler);
-    ASSERT_EQ(config.pushConstantRanges.size(), 1u);
-    EXPECT_EQ(config.pushConstantRanges[0].stageFlags, vk::ShaderStageFlagBits::eFragment);
-    EXPECT_EQ(config.pushConstantRanges[0].offset, 0u);
-    EXPECT_EQ(config.pushConstantRanges[0].size,
-              static_cast<uint32_t>(sizeof(fire_engine::EnvironmentCaptureUBO)));
+    REQUIRE(config.bindings.size() == 1u);
+    CHECK(config.vertShaderPath == "skybox.vert.spv");
+    CHECK(config.fragShaderPath == "irradiance_convolution.frag.spv");
+    CHECK_FALSE(config.useVertexInput);
+    CHECK_FALSE(config.depthTestEnable);
+    CHECK_FALSE(config.depthWrite);
+    CHECK(config.bindings[0].binding == 0u);
+    CHECK(config.bindings[0].descriptorType == vk::DescriptorType::eCombinedImageSampler);
+    REQUIRE(config.pushConstantRanges.size() == 1u);
+    CHECK(config.pushConstantRanges[0].stageFlags == vk::ShaderStageFlagBits::eFragment);
+    CHECK(config.pushConstantRanges[0].offset == 0u);
+    CHECK(config.pushConstantRanges[0].size ==
+          static_cast<uint32_t>(sizeof(fire_engine::EnvironmentCaptureUBO)));
 }
 
-TEST(PipelineConfig, PrefilterEnvironmentConfigIncludesCubemapSamplerBinding)
+TEST_CASE("PipelineConfig.PrefilterEnvironmentConfigIncludesCubemapSamplerBinding",
+          "[PipelineConfig]")
 {
     auto config = Pipeline::prefilterEnvironmentConfig({});
 
-    ASSERT_EQ(config.bindings.size(), 1u);
-    EXPECT_EQ(config.vertShaderPath, "skybox.vert.spv");
-    EXPECT_EQ(config.fragShaderPath, "prefilter_environment.frag.spv");
-    EXPECT_FALSE(config.useVertexInput);
-    EXPECT_FALSE(config.depthTestEnable);
-    EXPECT_FALSE(config.depthWrite);
-    EXPECT_EQ(config.bindings[0].binding, 0u);
-    EXPECT_EQ(config.bindings[0].descriptorType, vk::DescriptorType::eCombinedImageSampler);
-    ASSERT_EQ(config.pushConstantRanges.size(), 1u);
-    EXPECT_EQ(config.pushConstantRanges[0].stageFlags, vk::ShaderStageFlagBits::eFragment);
-    EXPECT_EQ(config.pushConstantRanges[0].offset, 0u);
-    EXPECT_EQ(config.pushConstantRanges[0].size,
-              static_cast<uint32_t>(sizeof(fire_engine::EnvironmentPrefilterPushConstants)));
+    REQUIRE(config.bindings.size() == 1u);
+    CHECK(config.vertShaderPath == "skybox.vert.spv");
+    CHECK(config.fragShaderPath == "prefilter_environment.frag.spv");
+    CHECK_FALSE(config.useVertexInput);
+    CHECK_FALSE(config.depthTestEnable);
+    CHECK_FALSE(config.depthWrite);
+    CHECK(config.bindings[0].binding == 0u);
+    CHECK(config.bindings[0].descriptorType == vk::DescriptorType::eCombinedImageSampler);
+    REQUIRE(config.pushConstantRanges.size() == 1u);
+    CHECK(config.pushConstantRanges[0].stageFlags == vk::ShaderStageFlagBits::eFragment);
+    CHECK(config.pushConstantRanges[0].offset == 0u);
+    CHECK(config.pushConstantRanges[0].size ==
+          static_cast<uint32_t>(sizeof(fire_engine::EnvironmentPrefilterPushConstants)));
 }
 
-TEST(PipelineConfig, BrdfIntegrationConfigUsesNoBindings)
+TEST_CASE("PipelineConfig.BrdfIntegrationConfigUsesNoBindings", "[PipelineConfig]")
 {
     auto config = Pipeline::brdfIntegrationConfig({});
 
-    EXPECT_TRUE(config.bindings.empty());
-    EXPECT_EQ(config.vertShaderPath, "postprocess.vert.spv");
-    EXPECT_EQ(config.fragShaderPath, "brdf_integration.frag.spv");
-    EXPECT_FALSE(config.useVertexInput);
-    EXPECT_FALSE(config.depthTestEnable);
-    EXPECT_FALSE(config.depthWrite);
-    EXPECT_TRUE(config.pushConstantRanges.empty());
+    CHECK(config.bindings.empty());
+    CHECK(config.vertShaderPath == "postprocess.vert.spv");
+    CHECK(config.fragShaderPath == "brdf_integration.frag.spv");
+    CHECK_FALSE(config.useVertexInput);
+    CHECK_FALSE(config.depthTestEnable);
+    CHECK_FALSE(config.depthWrite);
+    CHECK(config.pushConstantRanges.empty());
 }

@@ -214,10 +214,16 @@ Build:
 cmake --build build
 ```
 
-Run the tests (979 tests):
+Run the Catch2 test binary:
 
 ```bash
 ./build/test_fire_engine
+```
+
+Run the full CTest suite, including the graphics-layer include guard:
+
+```bash
+ctest --test-dir build --output-on-failure
 ```
 
 Run the application:
@@ -244,9 +250,11 @@ Managed via the vcpkg manifest (`vcpkg.json`):
 - `fastgltf` — glTF 2.0 parser
 - `stb` — image loading (stb_image, incl. HDR)
 - `ktx` — KTX2 / Basis Universal textures
-- `gtest` — Google Test framework
+- `catch2` — Catch2 v3 test framework
 - `imgui[glfw-binding,vulkan-binding]` — debug overlay (ImGui core + GLFW platform
-  backend + Vulkan renderer backend; pulls vcpkg's GLFW)
+  backend + Vulkan renderer backend). The engine links Vulkan and GLFW directly; the local
+  `cmake/fireengine_imgui.cmake` helper wraps vcpkg's `imgui::imgui` archive without inheriting
+  its transitive Vulkan/GLFW link interface, avoiding duplicate static-library entries.
 
 **Toolchain: Current built with Apple Clang** (`/usr/bin/clang++`). The vcpkg toolchain inherits the
 project's compiler (via `CC`/`CXX`), so all ports build from the manifest. The project

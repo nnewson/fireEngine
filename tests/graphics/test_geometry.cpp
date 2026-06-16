@@ -1,4 +1,7 @@
-#include <gtest/gtest.h>
+#include <catch2/catch_approx.hpp>
+#include <catch2/catch_test_macros.hpp>
+
+#include <type_traits>
 
 #include <fire_engine/graphics/geometry.hpp>
 #include <fire_engine/graphics/material.hpp>
@@ -9,30 +12,30 @@ using namespace fire_engine;
 // Construction and defaults
 // ---------------------------------------------------------------------------
 
-TEST(Geometry, DefaultConstructionNotLoaded)
+TEST_CASE("Geometry.DefaultConstructionNotLoaded", "[Geometry]")
 {
     Geometry geo;
-    EXPECT_FALSE(geo.loaded());
+    CHECK_FALSE(geo.loaded());
 }
 
-TEST(Geometry, DefaultConstructionEmptyVertices)
+TEST_CASE("Geometry.DefaultConstructionEmptyVertices", "[Geometry]")
 {
     Geometry geo;
-    EXPECT_TRUE(geo.vertices().empty());
+    CHECK(geo.vertices().empty());
 }
 
-TEST(Geometry, DefaultConstructionEmptyIndices)
+TEST_CASE("Geometry.DefaultConstructionEmptyIndices", "[Geometry]")
 {
     Geometry geo;
-    EXPECT_TRUE(geo.indices().empty());
-    EXPECT_EQ(geo.indexCount(), 0);
+    CHECK(geo.indices().empty());
+    CHECK(geo.indexCount() == 0);
 }
 
 // ---------------------------------------------------------------------------
 // Vertices
 // ---------------------------------------------------------------------------
 
-TEST(Geometry, SetAndGetVertices)
+TEST_CASE("Geometry.SetAndGetVertices", "[Geometry]")
 {
     Geometry geo;
     std::vector<Vertex> verts = {
@@ -41,105 +44,105 @@ TEST(Geometry, SetAndGetVertices)
         {{0, 1, 0}, {1, 1, 1}, {0, 1, 0}, {0, 1}},
     };
     geo.vertices(verts);
-    EXPECT_EQ(geo.vertices().size(), 3);
+    CHECK(geo.vertices().size() == 3);
 }
 
-TEST(Geometry, VerticesMoveSemantics)
+TEST_CASE("Geometry.VerticesMoveSemantics", "[Geometry]")
 {
     Geometry geo;
     std::vector<Vertex> verts = {
         {{0, 0, 0}, {1, 1, 1}, {0, 1, 0}, {0, 0}},
     };
     geo.vertices(std::move(verts));
-    EXPECT_EQ(geo.vertices().size(), 1);
+    CHECK(geo.vertices().size() == 1);
 }
 
 // ---------------------------------------------------------------------------
 // Indices
 // ---------------------------------------------------------------------------
 
-TEST(Geometry, SetAndGetIndices)
+TEST_CASE("Geometry.SetAndGetIndices", "[Geometry]")
 {
     Geometry geo;
     std::vector<uint16_t> idxs = {0, 1, 2, 2, 3, 0};
     geo.indices(idxs);
-    EXPECT_EQ(geo.indices().size(), 6);
-    EXPECT_EQ(geo.indexCount(), 6);
+    CHECK(geo.indices().size() == 6);
+    CHECK(geo.indexCount() == 6);
 }
 
-TEST(Geometry, IndicesMoveSemantics)
+TEST_CASE("Geometry.IndicesMoveSemantics", "[Geometry]")
 {
     Geometry geo;
     std::vector<uint16_t> idxs = {0, 1, 2};
     geo.indices(std::move(idxs));
-    EXPECT_EQ(geo.indexCount(), 3);
+    CHECK(geo.indexCount() == 3);
 }
 
-TEST(Geometry, SetAndGetUInt32Indices)
+TEST_CASE("Geometry.SetAndGetUInt32Indices", "[Geometry]")
 {
     Geometry geo;
     std::vector<uint32_t> idxs = {0u, 65536u, 70000u};
     geo.indices(idxs);
-    EXPECT_EQ(geo.indices().size(), 3u);
-    EXPECT_EQ(geo.indices()[1], 65536u);
-    EXPECT_EQ(geo.indices()[2], 70000u);
-    EXPECT_EQ(geo.indexType(), DrawIndexType::UInt32);
+    REQUIRE(geo.indices().size() == 3u);
+    CHECK(geo.indices()[1] == 65536u);
+    CHECK(geo.indices()[2] == 70000u);
+    CHECK(geo.indexType() == DrawIndexType::UInt32);
 }
 
-TEST(Geometry, CastsShadowDefaultsToTrue)
+TEST_CASE("Geometry.CastsShadowDefaultsToTrue", "[Geometry]")
 {
     Geometry geo;
-    EXPECT_TRUE(geo.castsShadow());
+    CHECK(geo.castsShadow());
 }
 
-TEST(Geometry, CastsShadowRoundTrip)
+TEST_CASE("Geometry.CastsShadowRoundTrip", "[Geometry]")
 {
     Geometry geo;
     geo.castsShadow(false);
-    EXPECT_FALSE(geo.castsShadow());
+    CHECK_FALSE(geo.castsShadow());
     geo.castsShadow(true);
-    EXPECT_TRUE(geo.castsShadow());
+    CHECK(geo.castsShadow());
 }
 
 // ---------------------------------------------------------------------------
 // Material pointer
 // ---------------------------------------------------------------------------
 
-TEST(Geometry, DefaultMaterialIsNull)
+TEST_CASE("Geometry.DefaultMaterialIsNull", "[Geometry]")
 {
     Geometry geo;
     // material() dereferences the pointer, so we just check we can set one
     Material mat;
     geo.material(&mat);
-    EXPECT_EQ(geo.material().name(), mat.name());
+    CHECK(geo.material().name() == mat.name());
 }
 
-TEST(Geometry, MaterialPointerAssignment)
+TEST_CASE("Geometry.MaterialPointerAssignment", "[Geometry]")
 {
     Geometry geo;
     Material mat;
     mat.name("test_mat");
     geo.material(&mat);
-    EXPECT_EQ(geo.material().name(), "test_mat");
+    CHECK(geo.material().name() == "test_mat");
 }
 
 // ---------------------------------------------------------------------------
 // Move semantics (Geometry is non-copyable)
 // ---------------------------------------------------------------------------
 
-TEST(Geometry, IsNonCopyable)
+TEST_CASE("Geometry.IsNonCopyable", "[Geometry]")
 {
-    EXPECT_FALSE(std::is_copy_constructible_v<Geometry>);
-    EXPECT_FALSE(std::is_copy_assignable_v<Geometry>);
+    static_assert(!std::is_copy_constructible_v<Geometry>);
+    static_assert(!std::is_copy_assignable_v<Geometry>);
 }
 
-TEST(Geometry, IsNothrowMovable)
+TEST_CASE("Geometry.IsNothrowMovable", "[Geometry]")
 {
-    EXPECT_TRUE(std::is_nothrow_move_constructible_v<Geometry>);
-    EXPECT_TRUE(std::is_nothrow_move_assignable_v<Geometry>);
+    static_assert(std::is_nothrow_move_constructible_v<Geometry>);
+    static_assert(std::is_nothrow_move_assignable_v<Geometry>);
 }
 
-TEST(Geometry, MoveConstructionTransfersVerticesAndIndices)
+TEST_CASE("Geometry.MoveConstructionTransfersVerticesAndIndices", "[Geometry]")
 {
     Geometry original;
     std::vector<Vertex> verts = {
@@ -151,12 +154,12 @@ TEST(Geometry, MoveConstructionTransfersVerticesAndIndices)
     original.indices(idxs);
 
     Geometry moved(std::move(original));
-    EXPECT_EQ(moved.vertices().size(), 2);
-    EXPECT_EQ(moved.indexCount(), 2);
-    EXPECT_FALSE(moved.loaded());
+    CHECK(moved.vertices().size() == 2);
+    CHECK(moved.indexCount() == 2);
+    CHECK_FALSE(moved.loaded());
 }
 
-TEST(Geometry, MoveAssignmentTransfersState)
+TEST_CASE("Geometry.MoveAssignmentTransfersState", "[Geometry]")
 {
     Geometry original;
     std::vector<Vertex> verts = {{{0, 0, 0}, {1, 1, 1}, {0, 1, 0}, {0, 0}}};
@@ -164,22 +167,22 @@ TEST(Geometry, MoveAssignmentTransfersState)
 
     Geometry target;
     target = std::move(original);
-    EXPECT_EQ(target.vertices().size(), 1);
+    CHECK(target.vertices().size() == 1);
 }
 
 // ---------------------------------------------------------------------------
 // Morph target tests
 // ---------------------------------------------------------------------------
 
-TEST(GeometryMorph, DefaultHasNoMorphTargets)
+TEST_CASE("GeometryMorph.DefaultHasNoMorphTargets", "[GeometryMorph]")
 {
     Geometry geo;
-    EXPECT_EQ(geo.morphTargetCount(), 0u);
-    EXPECT_TRUE(geo.morphPositions().empty());
-    EXPECT_TRUE(geo.morphNormals().empty());
+    CHECK(geo.morphTargetCount() == 0u);
+    CHECK(geo.morphPositions().empty());
+    CHECK(geo.morphNormals().empty());
 }
 
-TEST(GeometryMorph, SetMorphPositions)
+TEST_CASE("GeometryMorph.SetMorphPositions", "[GeometryMorph]")
 {
     Geometry geo;
     std::vector<std::vector<Vec3>> positions = {
@@ -187,22 +190,22 @@ TEST(GeometryMorph, SetMorphPositions)
         {{0.0f, 0.0f, 1.0f}, {1.0f, 1.0f, 0.0f}},
     };
     geo.morphPositions(positions);
-    EXPECT_EQ(geo.morphTargetCount(), 2u);
-    EXPECT_EQ(geo.morphPositions().size(), 2u);
-    EXPECT_EQ(geo.morphPositions()[0].size(), 2u);
+    CHECK(geo.morphTargetCount() == 2u);
+    REQUIRE(geo.morphPositions().size() == 2u);
+    REQUIRE(geo.morphPositions()[0].size() == 2u);
 }
 
-TEST(GeometryMorph, SetMorphNormals)
+TEST_CASE("GeometryMorph.SetMorphNormals", "[GeometryMorph]")
 {
     Geometry geo;
     std::vector<std::vector<Vec3>> normals = {
         {{0.0f, 0.0f, 1.0f}},
     };
     geo.morphNormals(normals);
-    EXPECT_EQ(geo.morphNormals().size(), 1u);
+    CHECK(geo.morphNormals().size() == 1u);
 }
 
-TEST(GeometryMorph, MorphTargetCountReflectsPositions)
+TEST_CASE("GeometryMorph.MorphTargetCountReflectsPositions", "[GeometryMorph]")
 {
     Geometry geo;
     geo.morphPositions({
@@ -210,39 +213,39 @@ TEST(GeometryMorph, MorphTargetCountReflectsPositions)
         {{0.0f, 1.0f, 0.0f}},
         {{0.0f, 0.0f, 1.0f}},
     });
-    EXPECT_EQ(geo.morphTargetCount(), 3u);
+    CHECK(geo.morphTargetCount() == 3u);
 }
 
 // ---------------------------------------------------------------------------
 // Buffer handle accessors (before load)
 // ---------------------------------------------------------------------------
 
-TEST(Geometry, DefaultVertexBufferIsNull)
+TEST_CASE("Geometry.DefaultVertexBufferIsNull", "[Geometry]")
 {
     Geometry geo;
-    EXPECT_EQ(geo.vertexBuffer(), NullBuffer);
+    CHECK(geo.vertexBuffer() == NullBuffer);
 }
 
-TEST(Geometry, DefaultIndexBufferIsNull)
+TEST_CASE("Geometry.DefaultIndexBufferIsNull", "[Geometry]")
 {
     Geometry geo;
-    EXPECT_EQ(geo.indexBuffer(), NullBuffer);
+    CHECK(geo.indexBuffer() == NullBuffer);
 }
 
-TEST(Geometry, MoveTransfersBufferHandles)
+TEST_CASE("Geometry.MoveTransfersBufferHandles", "[Geometry]")
 {
     Geometry original;
     // Before load, handles are NullBuffer — verify move preserves that
     Geometry moved(std::move(original));
-    EXPECT_EQ(moved.vertexBuffer(), NullBuffer);
-    EXPECT_EQ(moved.indexBuffer(), NullBuffer);
+    CHECK(moved.vertexBuffer() == NullBuffer);
+    CHECK(moved.indexBuffer() == NullBuffer);
 }
 
 // ---------------------------------------------------------------------------
 // Morph target move
 // ---------------------------------------------------------------------------
 
-TEST(GeometryMorph, MoveRetainsMorphData)
+TEST_CASE("GeometryMorph.MoveRetainsMorphData", "[GeometryMorph]")
 {
     Geometry original;
     original.morphPositions({
@@ -252,6 +255,6 @@ TEST(GeometryMorph, MoveRetainsMorphData)
         {{0.0f, 0.0f, 1.0f}},
     });
     Geometry moved(std::move(original));
-    EXPECT_EQ(moved.morphTargetCount(), 1u);
-    EXPECT_EQ(moved.morphNormals().size(), 1u);
+    CHECK(moved.morphTargetCount() == 1u);
+    REQUIRE(moved.morphNormals().size() == 1u);
 }

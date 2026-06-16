@@ -2,7 +2,10 @@
 
 #include <limits>
 
-#include <gtest/gtest.h>
+#include <support/test_traits.hpp>
+
+#include <catch2/catch_approx.hpp>
+#include <catch2/catch_test_macros.hpp>
 
 using fire_engine::Colour3;
 
@@ -12,28 +15,28 @@ static constexpr float kEps = 1e-6f;
 
 static void expectNear(const Colour3& c, float er, float eg, float eb, float eps = kEps)
 {
-    EXPECT_NEAR(c.r(), er, eps);
-    EXPECT_NEAR(c.g(), eg, eps);
-    EXPECT_NEAR(c.b(), eb, eps);
+    CHECK(c.r() == Catch::Approx(er).margin(eps));
+    CHECK(c.g() == Catch::Approx(eg).margin(eps));
+    CHECK(c.b() == Catch::Approx(eb).margin(eps));
 }
 
 // ==========================================================================
 // Construction
 // ==========================================================================
 
-TEST(Colour3Construction, DefaultIsZero)
+TEST_CASE("Colour3Construction.DefaultIsZero", "[Colour3Construction]")
 {
     Colour3 c{};
     expectNear(c, 0.0f, 0.0f, 0.0f);
 }
 
-TEST(Colour3Construction, ExplicitValues)
+TEST_CASE("Colour3Construction.ExplicitValues", "[Colour3Construction]")
 {
     Colour3 c{0.1f, 0.5f, 0.9f};
     expectNear(c, 0.1f, 0.5f, 0.9f);
 }
 
-TEST(Colour3Construction, PartialArgs)
+TEST_CASE("Colour3Construction.PartialArgs", "[Colour3Construction]")
 {
     Colour3 cr{0.5f};
     expectNear(cr, 0.5f, 0.0f, 0.0f);
@@ -42,45 +45,45 @@ TEST(Colour3Construction, PartialArgs)
     expectNear(crg, 0.5f, 0.6f, 0.0f);
 }
 
-TEST(Colour3Construction, White)
+TEST_CASE("Colour3Construction.White", "[Colour3Construction]")
 {
     Colour3 c{1.0f, 1.0f, 1.0f};
     expectNear(c, 1.0f, 1.0f, 1.0f);
 }
 
-TEST(Colour3Construction, ValuesOutsideZeroOne)
+TEST_CASE("Colour3Construction.ValuesOutsideZeroOne", "[Colour3Construction]")
 {
     Colour3 c{-0.5f, 2.0f, 100.0f};
     expectNear(c, -0.5f, 2.0f, 100.0f);
 }
 
-TEST(Colour3Construction, CopyConstruct)
+TEST_CASE("Colour3Construction.CopyConstruct", "[Colour3Construction]")
 {
     Colour3 a{0.1f, 0.2f, 0.3f};
     Colour3 b{a};
     expectNear(b, 0.1f, 0.2f, 0.3f);
 }
 
-TEST(Colour3Construction, ImplicitConversion)
+TEST_CASE("Colour3Construction.ImplicitConversion", "[Colour3Construction]")
 {
     // Non-explicit constructor allows implicit brace init
     auto fn = [](const Colour3& c) { return c.r(); };
-    EXPECT_FLOAT_EQ(fn({0.5f, 0.0f, 0.0f}), 0.5f);
+    CHECK(fn({0.5f, 0.0f, 0.0f}) == Catch::Approx(0.5f).margin(1e-5f));
 }
 
 // ==========================================================================
 // Getters / Setters
 // ==========================================================================
 
-TEST(Colour3Accessors, GettersReturnCorrectValues)
+TEST_CASE("Colour3Accessors.GettersReturnCorrectValues", "[Colour3Accessors]")
 {
     Colour3 c{0.1f, 0.2f, 0.3f};
-    EXPECT_FLOAT_EQ(c.r(), 0.1f);
-    EXPECT_FLOAT_EQ(c.g(), 0.2f);
-    EXPECT_FLOAT_EQ(c.b(), 0.3f);
+    CHECK(c.r() == Catch::Approx(0.1f).margin(1e-5f));
+    CHECK(c.g() == Catch::Approx(0.2f).margin(1e-5f));
+    CHECK(c.b() == Catch::Approx(0.3f).margin(1e-5f));
 }
 
-TEST(Colour3Accessors, SettersModifyValues)
+TEST_CASE("Colour3Accessors.SettersModifyValues", "[Colour3Accessors]")
 {
     Colour3 c{};
     c.r(0.4f);
@@ -89,7 +92,7 @@ TEST(Colour3Accessors, SettersModifyValues)
     expectNear(c, 0.4f, 0.5f, 0.6f);
 }
 
-TEST(Colour3Accessors, SettersOverwritePreviousValues)
+TEST_CASE("Colour3Accessors.SettersOverwritePreviousValues", "[Colour3Accessors]")
 {
     Colour3 c{0.1f, 0.2f, 0.3f};
     c.r(0.9f);
@@ -100,61 +103,61 @@ TEST(Colour3Accessors, SettersOverwritePreviousValues)
 // Equality
 // ==========================================================================
 
-TEST(Colour3Equality, EqualColours)
+TEST_CASE("Colour3Equality.EqualColours", "[Colour3Equality]")
 {
     Colour3 a{0.5f, 0.6f, 0.7f};
     Colour3 b{0.5f, 0.6f, 0.7f};
-    EXPECT_TRUE(a == b);
+    CHECK(a == b);
 }
 
-TEST(Colour3Equality, DifferentR)
+TEST_CASE("Colour3Equality.DifferentR", "[Colour3Equality]")
 {
     Colour3 a{0.1f, 0.5f, 0.5f};
     Colour3 b{0.9f, 0.5f, 0.5f};
-    EXPECT_FALSE(a == b);
+    CHECK_FALSE(a == b);
 }
 
-TEST(Colour3Equality, DifferentG)
+TEST_CASE("Colour3Equality.DifferentG", "[Colour3Equality]")
 {
     Colour3 a{0.5f, 0.1f, 0.5f};
     Colour3 b{0.5f, 0.9f, 0.5f};
-    EXPECT_FALSE(a == b);
+    CHECK_FALSE(a == b);
 }
 
-TEST(Colour3Equality, DifferentB)
+TEST_CASE("Colour3Equality.DifferentB", "[Colour3Equality]")
 {
     Colour3 a{0.5f, 0.5f, 0.1f};
     Colour3 b{0.5f, 0.5f, 0.9f};
-    EXPECT_FALSE(a == b);
+    CHECK_FALSE(a == b);
 }
 
-TEST(Colour3Equality, ZeroColours)
+TEST_CASE("Colour3Equality.ZeroColours", "[Colour3Equality]")
 {
     Colour3 a{};
     Colour3 b{};
-    EXPECT_TRUE(a == b);
+    CHECK(a == b);
 }
 
-TEST(Colour3Equality, NegativeZeroEqualsPositiveZero)
+TEST_CASE("Colour3Equality.NegativeZeroEqualsPositiveZero", "[Colour3Equality]")
 {
     Colour3 a{0.0f, 0.0f, 0.0f};
     Colour3 b{-0.0f, -0.0f, -0.0f};
-    EXPECT_TRUE(a == b);
+    CHECK(a == b);
 }
 
-TEST(Colour3Equality, NaNNotEqual)
+TEST_CASE("Colour3Equality.NaNNotEqual", "[Colour3Equality]")
 {
     float nan = std::numeric_limits<float>::quiet_NaN();
     Colour3 a{nan, 0.0f, 0.0f};
     Colour3 b{nan, 0.0f, 0.0f};
-    EXPECT_FALSE(a == b);
+    CHECK_FALSE(a == b);
 }
 
 // ==========================================================================
 // Constexpr
 // ==========================================================================
 
-TEST(Colour3Constexpr, ConstructionAndAccessAtCompileTime)
+TEST_CASE("Colour3Constexpr.ConstructionAndAccessAtCompileTime", "[Colour3Constexpr]")
 {
     constexpr Colour3 c{0.1f, 0.2f, 0.3f};
     static_assert(c.r() == 0.1f);
@@ -162,7 +165,7 @@ TEST(Colour3Constexpr, ConstructionAndAccessAtCompileTime)
     static_assert(c.b() == 0.3f);
 }
 
-TEST(Colour3Constexpr, DefaultConstructionAtCompileTime)
+TEST_CASE("Colour3Constexpr.DefaultConstructionAtCompileTime", "[Colour3Constexpr]")
 {
     constexpr Colour3 c{};
     static_assert(c.r() == 0.0f);
@@ -170,7 +173,7 @@ TEST(Colour3Constexpr, DefaultConstructionAtCompileTime)
     static_assert(c.b() == 0.0f);
 }
 
-TEST(Colour3Constexpr, EqualityAtCompileTime)
+TEST_CASE("Colour3Constexpr.EqualityAtCompileTime", "[Colour3Constexpr]")
 {
     constexpr Colour3 a{0.5f, 0.5f, 0.5f};
     constexpr Colour3 b{0.5f, 0.5f, 0.5f};
@@ -183,17 +186,10 @@ TEST(Colour3Constexpr, EqualityAtCompileTime)
 // Noexcept guarantees
 // ==========================================================================
 
-TEST(Colour3Noexcept, AllOperationsAreNoexcept)
+TEST_CASE("Colour3Noexcept.AllOperationsAreNoexcept", "[Colour3Noexcept]")
 {
-    Colour3 a{0.1f, 0.2f, 0.3f};
-
-    static_assert(noexcept(Colour3{}));
-    static_assert(noexcept(Colour3{0.1f, 0.2f, 0.3f}));
-    static_assert(noexcept(a.r()));
-    static_assert(noexcept(a.g()));
-    static_assert(noexcept(a.b()));
-    static_assert(noexcept(a.r(0.1f)));
-    static_assert(noexcept(a.g(0.1f)));
-    static_assert(noexcept(a.b(0.1f)));
-    static_assert(noexcept(a == a));
+    static_assert(std::is_nothrow_default_constructible_v<Colour3>);
+    static_assert(test_traits::nothrow_constructible_from_v<Colour3, float, float, float>);
+    static_assert(test_traits::has_nothrow_colour3_accessors<Colour3>);
+    static_assert(test_traits::has_nothrow_equality<Colour3>);
 }

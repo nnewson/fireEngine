@@ -2,7 +2,8 @@
 
 #include <stdexcept>
 
-#include <gtest/gtest.h>
+#include <catch2/catch_approx.hpp>
+#include <catch2/catch_test_macros.hpp>
 
 using fire_engine::ShaderLoader;
 
@@ -10,34 +11,34 @@ using fire_engine::ShaderLoader;
 // load_from_file
 // ==========================================================================
 
-TEST(ShaderLoaderLoadFromFile, LoadsFileData)
+TEST_CASE("ShaderLoaderLoadFromFile.LoadsFileData", "[ShaderLoaderLoadFromFile]")
 {
     auto data = ShaderLoader::load_from_file("test_assets/test_data.bin");
-    EXPECT_FALSE(data.empty());
+    CHECK_FALSE(data.empty());
 }
 
-TEST(ShaderLoaderLoadFromFile, DataMatchesFileContents)
+TEST_CASE("ShaderLoaderLoadFromFile.DataMatchesFileContents", "[ShaderLoaderLoadFromFile]")
 {
     auto data = ShaderLoader::load_from_file("test_assets/test_data.bin");
     std::string content(data.begin(), data.end());
-    EXPECT_NE(content.find("HELLO"), std::string::npos);
+    CHECK(content.find("HELLO") != std::string::npos);
 }
 
-TEST(ShaderLoaderLoadFromFile, SizeMatchesFileSize)
+TEST_CASE("ShaderLoaderLoadFromFile.SizeMatchesFileSize", "[ShaderLoaderLoadFromFile]")
 {
     auto data = ShaderLoader::load_from_file("test_assets/test_data.bin");
-    EXPECT_GT(data.size(), 0u);
+    CHECK(data.size() > 0u);
 }
 
-TEST(ShaderLoaderLoadFromFile, NonExistentFileThrows)
+TEST_CASE("ShaderLoaderLoadFromFile.NonExistentFileThrows", "[ShaderLoaderLoadFromFile]")
 {
-    EXPECT_THROW(static_cast<void>(ShaderLoader::load_from_file("test_assets/nonexistent.spv")),
-                 std::runtime_error);
+    CHECK_THROWS_AS(static_cast<void>(ShaderLoader::load_from_file("test_assets/nonexistent.spv")),
+                    std::runtime_error);
 }
 
-TEST(ShaderLoaderLoadFromFile, TwoLoadsReturnSameData)
+TEST_CASE("ShaderLoaderLoadFromFile.TwoLoadsReturnSameData", "[ShaderLoaderLoadFromFile]")
 {
     auto a = ShaderLoader::load_from_file("test_assets/test_data.bin");
     auto b = ShaderLoader::load_from_file("test_assets/test_data.bin");
-    EXPECT_EQ(a, b);
+    CHECK(a == b);
 }

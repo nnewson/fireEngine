@@ -1,7 +1,9 @@
-#include <gtest/gtest.h>
+#include <catch2/catch_approx.hpp>
+#include <catch2/catch_test_macros.hpp>
 
 #include <cstdint>
 #include <limits>
+#include <type_traits>
 
 #include <fire_engine/graphics/gpu_handle.hpp>
 
@@ -11,46 +13,46 @@ using namespace fire_engine;
 // Null handle constants
 // ---------------------------------------------------------------------------
 
-TEST(GpuHandle, NullBufferIsMaxUint32)
+TEST_CASE("GpuHandle.NullBufferIsMaxUint32", "[GpuHandle]")
 {
-    EXPECT_EQ(static_cast<uint32_t>(NullBuffer), std::numeric_limits<uint32_t>::max());
+    CHECK(static_cast<uint32_t>(NullBuffer) == std::numeric_limits<uint32_t>::max());
 }
 
-TEST(GpuHandle, NullTextureIsMaxUint32)
+TEST_CASE("GpuHandle.NullTextureIsMaxUint32", "[GpuHandle]")
 {
-    EXPECT_EQ(static_cast<uint32_t>(NullTexture), std::numeric_limits<uint32_t>::max());
+    CHECK(static_cast<uint32_t>(NullTexture) == std::numeric_limits<uint32_t>::max());
 }
 
-TEST(GpuHandle, NullDescriptorSetIsMaxUint32)
+TEST_CASE("GpuHandle.NullDescriptorSetIsMaxUint32", "[GpuHandle]")
 {
-    EXPECT_EQ(static_cast<uint32_t>(NullDescriptorSet), std::numeric_limits<uint32_t>::max());
+    CHECK(static_cast<uint32_t>(NullDescriptorSet) == std::numeric_limits<uint32_t>::max());
 }
 
-TEST(GpuHandle, NullPipelineIsMaxUint32)
+TEST_CASE("GpuHandle.NullPipelineIsMaxUint32", "[GpuHandle]")
 {
-    EXPECT_EQ(static_cast<uint32_t>(NullPipeline), std::numeric_limits<uint32_t>::max());
+    CHECK(static_cast<uint32_t>(NullPipeline) == std::numeric_limits<uint32_t>::max());
 }
 
 // ---------------------------------------------------------------------------
 // Constexpr verification
 // ---------------------------------------------------------------------------
 
-TEST(GpuHandle, NullBufferIsConstexpr)
+TEST_CASE("GpuHandle.NullBufferIsConstexpr", "[GpuHandle]")
 {
     static_assert(NullBuffer == BufferHandle{std::numeric_limits<uint32_t>::max()});
 }
 
-TEST(GpuHandle, NullTextureIsConstexpr)
+TEST_CASE("GpuHandle.NullTextureIsConstexpr", "[GpuHandle]")
 {
     static_assert(NullTexture == TextureHandle{std::numeric_limits<uint32_t>::max()});
 }
 
-TEST(GpuHandle, NullDescriptorSetIsConstexpr)
+TEST_CASE("GpuHandle.NullDescriptorSetIsConstexpr", "[GpuHandle]")
 {
     static_assert(NullDescriptorSet == DescriptorSetHandle{std::numeric_limits<uint32_t>::max()});
 }
 
-TEST(GpuHandle, NullPipelineIsConstexpr)
+TEST_CASE("GpuHandle.NullPipelineIsConstexpr", "[GpuHandle]")
 {
     static_assert(NullPipeline == PipelineHandle{std::numeric_limits<uint32_t>::max()});
 }
@@ -59,133 +61,133 @@ TEST(GpuHandle, NullPipelineIsConstexpr)
 // Handle equality and comparison
 // ---------------------------------------------------------------------------
 
-TEST(GpuHandle, BufferHandleEqualityWithSameValue)
+TEST_CASE("GpuHandle.BufferHandleEqualityWithSameValue", "[GpuHandle]")
 {
     auto a = BufferHandle{42};
     auto b = BufferHandle{42};
-    EXPECT_EQ(a, b);
+    CHECK(a == b);
 }
 
-TEST(GpuHandle, BufferHandleInequalityWithDifferentValues)
+TEST_CASE("GpuHandle.BufferHandleInequalityWithDifferentValues", "[GpuHandle]")
 {
     auto a = BufferHandle{0};
     auto b = BufferHandle{1};
-    EXPECT_NE(a, b);
+    CHECK(a != b);
 }
 
-TEST(GpuHandle, TextureHandleEqualityWithSameValue)
+TEST_CASE("GpuHandle.TextureHandleEqualityWithSameValue", "[GpuHandle]")
 {
     auto a = TextureHandle{7};
     auto b = TextureHandle{7};
-    EXPECT_EQ(a, b);
+    CHECK(a == b);
 }
 
-TEST(GpuHandle, DescriptorSetHandleEqualityWithSameValue)
+TEST_CASE("GpuHandle.DescriptorSetHandleEqualityWithSameValue", "[GpuHandle]")
 {
     auto a = DescriptorSetHandle{3};
     auto b = DescriptorSetHandle{3};
-    EXPECT_EQ(a, b);
+    CHECK(a == b);
 }
 
-TEST(GpuHandle, PipelineHandleEqualityWithSameValue)
+TEST_CASE("GpuHandle.PipelineHandleEqualityWithSameValue", "[GpuHandle]")
 {
     auto a = PipelineHandle{9};
     auto b = PipelineHandle{9};
-    EXPECT_EQ(a, b);
+    CHECK(a == b);
 }
 
-TEST(GpuHandle, PipelineHandleInequalityWithDifferentValues)
+TEST_CASE("GpuHandle.PipelineHandleInequalityWithDifferentValues", "[GpuHandle]")
 {
     auto a = PipelineHandle{0};
     auto b = PipelineHandle{1};
-    EXPECT_NE(a, b);
+    CHECK(a != b);
 }
 
 // ---------------------------------------------------------------------------
 // Null vs valid handles
 // ---------------------------------------------------------------------------
 
-TEST(GpuHandle, ValidBufferHandleNotEqualToNull)
+TEST_CASE("GpuHandle.ValidBufferHandleNotEqualToNull", "[GpuHandle]")
 {
     auto valid = BufferHandle{0};
-    EXPECT_NE(valid, NullBuffer);
+    CHECK(valid != NullBuffer);
 }
 
-TEST(GpuHandle, ValidTextureHandleNotEqualToNull)
+TEST_CASE("GpuHandle.ValidTextureHandleNotEqualToNull", "[GpuHandle]")
 {
     auto valid = TextureHandle{0};
-    EXPECT_NE(valid, NullTexture);
+    CHECK(valid != NullTexture);
 }
 
-TEST(GpuHandle, ValidDescriptorSetHandleNotEqualToNull)
+TEST_CASE("GpuHandle.ValidDescriptorSetHandleNotEqualToNull", "[GpuHandle]")
 {
     auto valid = DescriptorSetHandle{0};
-    EXPECT_NE(valid, NullDescriptorSet);
+    CHECK(valid != NullDescriptorSet);
 }
 
-TEST(GpuHandle, ValidPipelineHandleNotEqualToNull)
+TEST_CASE("GpuHandle.ValidPipelineHandleNotEqualToNull", "[GpuHandle]")
 {
     auto valid = PipelineHandle{0};
-    EXPECT_NE(valid, NullPipeline);
+    CHECK(valid != NullPipeline);
 }
 
 // ---------------------------------------------------------------------------
 // Type safety — handles are distinct types
 // ---------------------------------------------------------------------------
 
-TEST(GpuHandle, HandleTypesAreDistinct)
+TEST_CASE("GpuHandle.HandleTypesAreDistinct", "[GpuHandle]")
 {
-    EXPECT_FALSE((std::is_same_v<BufferHandle, TextureHandle>));
-    EXPECT_FALSE((std::is_same_v<BufferHandle, DescriptorSetHandle>));
-    EXPECT_FALSE((std::is_same_v<TextureHandle, DescriptorSetHandle>));
-    EXPECT_FALSE((std::is_same_v<BufferHandle, PipelineHandle>));
-    EXPECT_FALSE((std::is_same_v<TextureHandle, PipelineHandle>));
-    EXPECT_FALSE((std::is_same_v<DescriptorSetHandle, PipelineHandle>));
+    static_assert(!std::is_same_v<BufferHandle, TextureHandle>);
+    static_assert(!std::is_same_v<BufferHandle, DescriptorSetHandle>);
+    static_assert(!std::is_same_v<TextureHandle, DescriptorSetHandle>);
+    static_assert(!std::is_same_v<BufferHandle, PipelineHandle>);
+    static_assert(!std::is_same_v<TextureHandle, PipelineHandle>);
+    static_assert(!std::is_same_v<DescriptorSetHandle, PipelineHandle>);
 }
 
 // ---------------------------------------------------------------------------
 // Round-trip cast
 // ---------------------------------------------------------------------------
 
-TEST(GpuHandle, BufferHandleRoundTrip)
+TEST_CASE("GpuHandle.BufferHandleRoundTrip", "[GpuHandle]")
 {
     uint32_t id = 123;
     auto handle = BufferHandle{id};
-    EXPECT_EQ(static_cast<uint32_t>(handle), id);
+    CHECK(static_cast<uint32_t>(handle) == id);
 }
 
-TEST(GpuHandle, TextureHandleRoundTrip)
+TEST_CASE("GpuHandle.TextureHandleRoundTrip", "[GpuHandle]")
 {
     uint32_t id = 456;
     auto handle = TextureHandle{id};
-    EXPECT_EQ(static_cast<uint32_t>(handle), id);
+    CHECK(static_cast<uint32_t>(handle) == id);
 }
 
-TEST(GpuHandle, DescriptorSetHandleRoundTrip)
+TEST_CASE("GpuHandle.DescriptorSetHandleRoundTrip", "[GpuHandle]")
 {
     uint32_t id = 789;
     auto handle = DescriptorSetHandle{id};
-    EXPECT_EQ(static_cast<uint32_t>(handle), id);
+    CHECK(static_cast<uint32_t>(handle) == id);
 }
 
-TEST(GpuHandle, PipelineHandleRoundTrip)
+TEST_CASE("GpuHandle.PipelineHandleRoundTrip", "[GpuHandle]")
 {
     uint32_t id = 1011;
     auto handle = PipelineHandle{id};
-    EXPECT_EQ(static_cast<uint32_t>(handle), id);
+    CHECK(static_cast<uint32_t>(handle) == id);
 }
 
 // ---------------------------------------------------------------------------
 // MappedMemory alias
 // ---------------------------------------------------------------------------
 
-TEST(GpuHandle, MappedMemoryIsVoidPointer)
+TEST_CASE("GpuHandle.MappedMemoryIsVoidPointer", "[GpuHandle]")
 {
-    EXPECT_TRUE((std::is_same_v<MappedMemory, void*>));
+    static_assert(std::is_same_v<MappedMemory, void*>);
 }
 
-TEST(GpuHandle, MappedMemoryDefaultInitializesNull)
+TEST_CASE("GpuHandle.MappedMemoryDefaultInitializesNull", "[GpuHandle]")
 {
     MappedMemory ptr{};
-    EXPECT_EQ(ptr, nullptr);
+    CHECK(ptr == nullptr);
 }

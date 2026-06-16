@@ -1,41 +1,38 @@
 #include <fire_engine/input/variant_state.hpp>
 
-#include <gtest/gtest.h>
+#include <support/test_traits.hpp>
 
-#include <type_traits>
+#include <catch2/catch_approx.hpp>
+#include <catch2/catch_test_macros.hpp>
 
 using fire_engine::VariantState;
 
-TEST(VariantStateConstruction, DefaultHasNoCycleCommand)
+TEST_CASE("VariantStateConstruction.DefaultHasNoCycleCommand", "[VariantStateConstruction]")
 {
     VariantState s;
-    EXPECT_EQ(s.cycleDelta(), 0);
-    EXPECT_FALSE(s.hasCycleCommand());
+    CHECK(s.cycleDelta() == 0);
+    CHECK_FALSE(s.hasCycleCommand());
 }
 
-TEST(VariantStateAccessors, PositiveCycleRoundTrip)
+TEST_CASE("VariantStateAccessors.PositiveCycleRoundTrip", "[VariantStateAccessors]")
 {
     VariantState s;
     s.cycleDelta(1);
-    EXPECT_EQ(s.cycleDelta(), 1);
-    EXPECT_TRUE(s.hasCycleCommand());
+    CHECK(s.cycleDelta() == 1);
+    CHECK(s.hasCycleCommand());
 }
 
-TEST(VariantStateAccessors, NegativeCycleRoundTrip)
+TEST_CASE("VariantStateAccessors.NegativeCycleRoundTrip", "[VariantStateAccessors]")
 {
     VariantState s;
     s.cycleDelta(-1);
-    EXPECT_EQ(s.cycleDelta(), -1);
-    EXPECT_TRUE(s.hasCycleCommand());
+    CHECK(s.cycleDelta() == -1);
+    CHECK(s.hasCycleCommand());
 }
 
-TEST(VariantStateNoexcept, OperationsAreNoexcept)
+TEST_CASE("VariantStateNoexcept.OperationsAreNoexcept", "[VariantStateNoexcept]")
 {
-    VariantState s;
-
-    static_assert(noexcept(VariantState{}));
-    static_assert(noexcept(s.cycleDelta()));
-    static_assert(noexcept(s.cycleDelta(0)));
-    static_assert(noexcept(s.hasCycleCommand()));
+    static_assert(std::is_nothrow_default_constructible_v<VariantState>);
+    static_assert(test_traits::has_nothrow_variant_state_operations<VariantState>);
     static_assert(std::is_nothrow_move_constructible_v<VariantState>);
 }

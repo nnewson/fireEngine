@@ -45,6 +45,8 @@ private:
     // Demo cloth geometry (-c). Kept alive here for the same reason as the floor:
     // Object caches a Geometry pointer, so it must not move.
     std::unique_ptr<Geometry> clothGeometry_;
+    // Demo collision sphere the cloth drapes over (-c).
+    std::unique_ptr<Geometry> sphereGeometry_;
 
     void loadScene(std::string_view scene_path);
     void addFloorPlane();

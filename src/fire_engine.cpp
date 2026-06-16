@@ -1,7 +1,9 @@
 #include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <memory>
+#include <numbers>
 #include <print>
 
 #include <fire_engine/fire_engine.hpp>
@@ -112,15 +114,84 @@ void FireEngine::addParticleFountain()
     scene_.addNode(std::move(fountainNode));
 }
 
+namespace
+{
+
+// Procedural UV sphere (positions + outward normals + uv). Used as the visible
+// prop the demo cloth drapes over.
+void buildUvSphere(Geometry& geo, float radius, uint32_t stacks, uint32_t slices, Colour3 colour)
+{
+    constexpr float pi = std::numbers::pi_v<float>;
+    std::vector<Vertex> verts;
+    std::vector<uint32_t> indices;
+    for (uint32_t i = 0; i <= stacks; ++i)
+    {
+        const float v = static_cast<float>(i) / static_cast<float>(stacks);
+        const float phi = v * pi; // 0 (north pole) .. pi
+        for (uint32_t j = 0; j <= slices; ++j)
+        {
+            const float u = static_cast<float>(j) / static_cast<float>(slices);
+            const float theta = u * 2.0f * pi;
+            const Vec3 n{std::sin(phi) * std::cos(theta), std::cos(phi),
+                         std::sin(phi) * std::sin(theta)};
+            verts.emplace_back(n * radius, colour, n, Vec2{u, v});
+        }
+    }
+    const uint32_t cols = slices + 1;
+    for (uint32_t i = 0; i < stacks; ++i)
+    {
+        for (uint32_t j = 0; j < slices; ++j)
+        {
+            const uint32_t a = i * cols + j;
+            const uint32_t b = a + cols;
+            indices.insert(indices.end(), {a, b, a + 1, a + 1, b, b + 1});
+        }
+    }
+    geo.vertices(std::move(verts));
+    geo.indices(std::move(indices));
+}
+
+} // namespace
+
 void FireEngine::addClothDemo()
 {
-    // Procedural pinned cloth grid (Roadmap #2). For now this is a static mesh
-    // rendered through the normal forward/shadow path; the GPU XPBD solver writes
-    // its (storage-capable) vertex buffer each frame once the SoftBodySystem lands.
+    // Roadmap #2. A world-space unpinned cloth sheet falls and drapes over a
+    // sphere (a Static physics body whose collider the solver gathers), pooling on
+    // the ground plane (added in mainLoop). The solver writes the cloth's storage
+    // vertex buffer each frame; it renders through the normal forward/shadow path.
+    constexpr Vec3 sphereCenter{0.0f, 1.0f, 0.0f};
+    constexpr float sphereRadius = 0.7f;
+
+    // Visible sphere prop.
+    auto& sphereMat = assets_.addMaterial(Material{});
+    sphereMat.name("ClothSphere");
+    sphereMat.baseColor(Colour3{0.25f, 0.3f, 0.4f});
+    sphereMat.roughness(0.6f);
+    sphereMat.metallic(0.0f);
+    sphereGeometry_ = std::make_unique<Geometry>();
+    buildUvSphere(*sphereGeometry_, sphereRadius, 24, 32, Colour3{1.0f, 1.0f, 1.0f});
+    sphereGeometry_->material(&sphereMat);
+    sphereGeometry_->load(renderer_->resources());
+    Object sphereObject;
+    sphereObject.addGeometry(*sphereGeometry_);
+    sphereObject.load(renderer_->resources());
+    auto sphereNode = std::make_unique<Node>("ClothSphere");
+    sphereNode->component().emplace<Mesh>(std::move(sphereObject));
+    sphereNode->transform().position(sphereCenter);
+    scene_.addNode(std::move(sphereNode));
+
+    // Static physics body + sphere collider the cloth solver gathers each frame.
+    const PhysicsBodyHandle body = physics_.createBody(
+        PhysicsBodyDesc{.type = PhysicsBodyType::Static, .position = sphereCenter});
+    (void)physics_.createCollider(body, ColliderDesc{.shape = SphereShape{.radius = sphereRadius}});
+
+    // World-space cloth sheet above the sphere, unpinned.
     ClothGridParams params;
     params.resX = 40;
     params.resZ = 40;
-    params.spacing = 0.04f;
+    params.spacing = 0.05f;
+    params.pinTopCorners = false;
+    params.origin = Vec3{0.0f, 2.5f, 0.0f};
     ClothMesh cloth = makeGridCloth(params);
 
     auto& mat = assets_.addMaterial(Material{});
@@ -142,13 +213,12 @@ void FireEngine::addClothDemo()
     clothObject.addGeometry(*clothGeometry_);
     clothObject.load(renderer_->resources());
 
-    // Register with the GPU solver (particles/constraints from `cloth`; the
-    // solver writes the geometry's storage vertex buffer each frame).
+    // The solver writes the storage vertex buffer; cloth simulates in world space,
+    // so the node transform stays identity.
     renderer_->addCloth(cloth, clothGeometry_->vertexBuffer());
 
     auto clothNode = std::make_unique<Node>("ClothDemo");
     clothNode->component().emplace<Mesh>(std::move(clothObject));
-    clothNode->transform().position(Vec3{0.0f, 1.5f, 0.0f});
     scene_.addNode(std::move(clothNode));
 }
 
@@ -232,6 +302,11 @@ void FireEngine::mainLoop()
         }
 
         scene_.applyPhysics(physics_);
+
+        // World colliders for the cloth solver: physics bodies + the ground plane.
+        auto clothColliders = physics_.gatherColliders();
+        clothColliders.push_back(makePlaneCollider(Vec3{0.0f, 1.0f, 0.0f}, 0.0f));
+        renderer_->setClothColliders(clothColliders);
 
         renderer_->drawFrame(*window_, scene_, camera_->worldPosition(), camera_->worldTarget(),
                              dt);

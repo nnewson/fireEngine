@@ -1,4 +1,5 @@
-#include <gtest/gtest.h>
+#include <catch2/catch_approx.hpp>
+#include <catch2/catch_test_macros.hpp>
 
 #include <vector>
 
@@ -10,154 +11,154 @@ using namespace fire_engine;
 // Default construction
 // ---------------------------------------------------------------------------
 
-TEST(DrawCommand, DefaultVertexBufferIsNull)
+TEST_CASE("DrawCommand.DefaultVertexBufferIsNull", "[DrawCommand]")
 {
     DrawCommand cmd;
-    EXPECT_EQ(cmd.vertexBuffer, NullBuffer);
+    CHECK(cmd.vertexBuffer == NullBuffer);
 }
 
-TEST(DrawCommand, DefaultIndexBufferIsNull)
+TEST_CASE("DrawCommand.DefaultIndexBufferIsNull", "[DrawCommand]")
 {
     DrawCommand cmd;
-    EXPECT_EQ(cmd.indexBuffer, NullBuffer);
+    CHECK(cmd.indexBuffer == NullBuffer);
 }
 
-TEST(DrawCommand, DefaultIndexCountIsZero)
+TEST_CASE("DrawCommand.DefaultIndexCountIsZero", "[DrawCommand]")
 {
     DrawCommand cmd;
-    EXPECT_EQ(cmd.indexCount, 0u);
+    CHECK(cmd.indexCount == 0u);
 }
 
-TEST(DrawCommand, DefaultIndexTypeIsUInt16)
+TEST_CASE("DrawCommand.DefaultIndexTypeIsUInt16", "[DrawCommand]")
 {
     DrawCommand cmd;
-    EXPECT_EQ(cmd.indexType, DrawIndexType::UInt16);
+    CHECK(cmd.indexType == DrawIndexType::UInt16);
 }
 
-TEST(DrawCommand, DefaultDescriptorSetIsNull)
+TEST_CASE("DrawCommand.DefaultDescriptorSetIsNull", "[DrawCommand]")
 {
     DrawCommand cmd;
-    EXPECT_EQ(cmd.descriptorSet, NullDescriptorSet);
+    CHECK(cmd.descriptorSet == NullDescriptorSet);
 }
 
-TEST(DrawCommand, DefaultPipelineIsNull)
+TEST_CASE("DrawCommand.DefaultPipelineIsNull", "[DrawCommand]")
 {
     DrawCommand cmd;
-    EXPECT_EQ(cmd.pipeline, NullPipeline);
+    CHECK(cmd.pipeline == NullPipeline);
 }
 
-TEST(DrawCommand, DefaultSortDepthIsZero)
+TEST_CASE("DrawCommand.DefaultSortDepthIsZero", "[DrawCommand]")
 {
     DrawCommand cmd;
-    EXPECT_FLOAT_EQ(cmd.sortDepth, 0.0f);
+    CHECK(cmd.sortDepth == Catch::Approx(0.0f).margin(1e-5f));
 }
 
-TEST(DrawCommand, AssignSortDepth)
+TEST_CASE("DrawCommand.AssignSortDepth", "[DrawCommand]")
 {
     DrawCommand cmd;
     cmd.sortDepth = 42.5f;
-    EXPECT_FLOAT_EQ(cmd.sortDepth, 42.5f);
+    CHECK(cmd.sortDepth == Catch::Approx(42.5f).margin(1e-5f));
 }
 
-TEST(DrawCommand, DefaultTransmissiveIsFalse)
+TEST_CASE("DrawCommand.DefaultTransmissiveIsFalse", "[DrawCommand]")
 {
     DrawCommand cmd;
-    EXPECT_FALSE(cmd.transmissive);
+    CHECK_FALSE(cmd.transmissive);
 }
 
-TEST(DrawCommand, DefaultSelfShadowMetadataIsDisabled)
+TEST_CASE("DrawCommand.DefaultSelfShadowMetadataIsDisabled", "[DrawCommand]")
 {
     DrawCommand cmd;
-    EXPECT_EQ(cmd.objectId, 0u);
-    EXPECT_FALSE(cmd.hasSkin);
-    EXPECT_EQ(cmd.selfShadowSlot, -1);
-    EXPECT_FALSE(cmd.shadowBounds.valid);
-    EXPECT_EQ(cmd.selfShadowViewProj, Mat4::identity());
+    CHECK(cmd.objectId == 0u);
+    CHECK_FALSE(cmd.hasSkin);
+    CHECK(cmd.selfShadowSlot == -1);
+    CHECK_FALSE(cmd.shadowBounds.valid);
+    CHECK(cmd.selfShadowViewProj == Mat4::identity());
 }
 
-TEST(DrawCommand, AssignTransmissive)
+TEST_CASE("DrawCommand.AssignTransmissive", "[DrawCommand]")
 {
     DrawCommand cmd;
     cmd.transmissive = true;
-    EXPECT_TRUE(cmd.transmissive);
+    CHECK(cmd.transmissive);
 }
 
 // ---------------------------------------------------------------------------
 // Member assignment
 // ---------------------------------------------------------------------------
 
-TEST(DrawCommand, AssignVertexBuffer)
+TEST_CASE("DrawCommand.AssignVertexBuffer", "[DrawCommand]")
 {
     DrawCommand cmd;
     cmd.vertexBuffer = BufferHandle{5};
-    EXPECT_EQ(static_cast<uint32_t>(cmd.vertexBuffer), 5u);
+    CHECK(static_cast<uint32_t>(cmd.vertexBuffer) == 5u);
 }
 
-TEST(DrawCommand, AssignIndexBuffer)
+TEST_CASE("DrawCommand.AssignIndexBuffer", "[DrawCommand]")
 {
     DrawCommand cmd;
     cmd.indexBuffer = BufferHandle{10};
-    EXPECT_EQ(static_cast<uint32_t>(cmd.indexBuffer), 10u);
+    CHECK(static_cast<uint32_t>(cmd.indexBuffer) == 10u);
 }
 
-TEST(DrawCommand, AssignIndexCount)
+TEST_CASE("DrawCommand.AssignIndexCount", "[DrawCommand]")
 {
     DrawCommand cmd;
     cmd.indexCount = 36;
-    EXPECT_EQ(cmd.indexCount, 36u);
+    CHECK(cmd.indexCount == 36u);
 }
 
-TEST(DrawCommand, AssignIndexType)
+TEST_CASE("DrawCommand.AssignIndexType", "[DrawCommand]")
 {
     DrawCommand cmd;
     cmd.indexType = DrawIndexType::UInt32;
-    EXPECT_EQ(cmd.indexType, DrawIndexType::UInt32);
+    CHECK(cmd.indexType == DrawIndexType::UInt32);
 }
 
-TEST(DrawCommand, AssignDescriptorSet)
+TEST_CASE("DrawCommand.AssignDescriptorSet", "[DrawCommand]")
 {
     DrawCommand cmd;
     cmd.descriptorSet = DescriptorSetHandle{2};
-    EXPECT_EQ(static_cast<uint32_t>(cmd.descriptorSet), 2u);
+    CHECK(static_cast<uint32_t>(cmd.descriptorSet) == 2u);
 }
 
-TEST(DrawCommand, AssignPipeline)
+TEST_CASE("DrawCommand.AssignPipeline", "[DrawCommand]")
 {
     DrawCommand cmd;
     cmd.pipeline = PipelineHandle{7};
-    EXPECT_EQ(static_cast<uint32_t>(cmd.pipeline), 7u);
+    CHECK(static_cast<uint32_t>(cmd.pipeline) == 7u);
 }
 
 // ---------------------------------------------------------------------------
 // Aggregate initialization
 // ---------------------------------------------------------------------------
 
-TEST(DrawCommand, AggregateInit)
+TEST_CASE("DrawCommand.AggregateInit", "[DrawCommand]")
 {
     DrawCommand cmd{BufferHandle{1}, BufferHandle{2}, 24, DescriptorSetHandle{3},
                     PipelineHandle{4}};
-    EXPECT_EQ(static_cast<uint32_t>(cmd.vertexBuffer), 1u);
-    EXPECT_EQ(static_cast<uint32_t>(cmd.indexBuffer), 2u);
-    EXPECT_EQ(cmd.indexCount, 24u);
-    EXPECT_EQ(static_cast<uint32_t>(cmd.descriptorSet), 3u);
-    EXPECT_EQ(static_cast<uint32_t>(cmd.pipeline), 4u);
+    CHECK(static_cast<uint32_t>(cmd.vertexBuffer) == 1u);
+    CHECK(static_cast<uint32_t>(cmd.indexBuffer) == 2u);
+    CHECK(cmd.indexCount == 24u);
+    CHECK(static_cast<uint32_t>(cmd.descriptorSet) == 3u);
+    CHECK(static_cast<uint32_t>(cmd.pipeline) == 4u);
 }
 
 // ---------------------------------------------------------------------------
 // Collection usage
 // ---------------------------------------------------------------------------
 
-TEST(DrawCommand, StorableInVector)
+TEST_CASE("DrawCommand.StorableInVector", "[DrawCommand]")
 {
     std::vector<DrawCommand> commands;
     commands.push_back({BufferHandle{0}, BufferHandle{1}, 6, DescriptorSetHandle{0}});
     commands.push_back({BufferHandle{2}, BufferHandle{3}, 12, DescriptorSetHandle{1}});
-    EXPECT_EQ(commands.size(), 2u);
-    EXPECT_EQ(commands[0].indexCount, 6u);
-    EXPECT_EQ(commands[1].indexCount, 12u);
+    REQUIRE(commands.size() == 2u);
+    CHECK(commands[0].indexCount == 6u);
+    CHECK(commands[1].indexCount == 12u);
 }
 
-TEST(DrawCommand, ReserveAndEmplaceBack)
+TEST_CASE("DrawCommand.ReserveAndEmplaceBack", "[DrawCommand]")
 {
     std::vector<DrawCommand> commands;
     commands.reserve(3);
@@ -168,24 +169,24 @@ TEST(DrawCommand, ReserveAndEmplaceBack)
         cmd.indexCount = (i + 1) * 6;
         commands.push_back(cmd);
     }
-    EXPECT_EQ(commands.size(), 3u);
-    EXPECT_EQ(commands[2].indexCount, 18u);
+    REQUIRE(commands.size() == 3u);
+    CHECK(commands[2].indexCount == 18u);
 }
 
 // ---------------------------------------------------------------------------
 // Copy semantics
 // ---------------------------------------------------------------------------
 
-TEST(DrawCommand, CopyPreservesAllFields)
+TEST_CASE("DrawCommand.CopyPreservesAllFields", "[DrawCommand]")
 {
     DrawCommand original{BufferHandle{1}, BufferHandle{2}, 36, DescriptorSetHandle{4},
                          PipelineHandle{5}};
     original.indexType = DrawIndexType::UInt32;
     DrawCommand copy = original;
-    EXPECT_EQ(copy.vertexBuffer, original.vertexBuffer);
-    EXPECT_EQ(copy.indexBuffer, original.indexBuffer);
-    EXPECT_EQ(copy.indexCount, original.indexCount);
-    EXPECT_EQ(copy.indexType, original.indexType);
-    EXPECT_EQ(copy.descriptorSet, original.descriptorSet);
-    EXPECT_EQ(copy.pipeline, original.pipeline);
+    CHECK(copy.vertexBuffer == original.vertexBuffer);
+    CHECK(copy.indexBuffer == original.indexBuffer);
+    CHECK(copy.indexCount == original.indexCount);
+    CHECK(copy.indexType == original.indexType);
+    CHECK(copy.descriptorSet == original.descriptorSet);
+    CHECK(copy.pipeline == original.pipeline);
 }

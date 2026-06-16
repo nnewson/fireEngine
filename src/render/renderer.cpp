@@ -690,7 +690,7 @@ void Renderer::drawFrame(Window& display, SceneGraph& scene, Vec3 cameraPosition
 
     // Soft-body (cloth) solve runs first: it writes solved positions + normals
     // into the cloth vertex buffers that the shadow + forward passes then read.
-    softBody_.recordSolve(cmd, dt);
+    softBody_.recordSolve(cmd, dt, currentFrame_, clothColliders_);
 
     // Per-frame camera matrices. The forward pass rasterises with jitteredProj_
     // (TAA sub-pixel jitter); currentViewProj_ is jitter-free so motion vectors

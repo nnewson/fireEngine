@@ -111,6 +111,13 @@ public:
         softBody_.addCloth(mesh, vertexBuffer);
     }
 
+    // World-space colliders the cloth solver projects out of, refreshed each frame
+    // by the app (PhysicsWorld gather + ground plane) before drawFrame.
+    void setClothColliders(std::span<const ClothCollider> colliders)
+    {
+        clothColliders_.assign(colliders.begin(), colliders.end());
+    }
+
     [[nodiscard]] Resources& resources() noexcept
     {
         return resources_;
@@ -219,6 +226,7 @@ private:
     DebugOverlay overlay_;
     FrameStats stats_{};
     RenderTunables tunables_{};
+    std::vector<ClothCollider> clothColliders_;
     PipelineHandle forwardOpaqueHandle_{NullPipeline};
     PipelineHandle forwardOpaqueDoubleSidedHandle_{NullPipeline};
     PipelineHandle forwardBlendHandle_{NullPipeline};

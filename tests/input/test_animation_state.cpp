@@ -1,6 +1,9 @@
 #include <fire_engine/input/animation_state.hpp>
 
-#include <gtest/gtest.h>
+#include <support/test_traits.hpp>
+
+#include <catch2/catch_approx.hpp>
+#include <catch2/catch_test_macros.hpp>
 
 using fire_engine::AnimationState;
 
@@ -8,77 +11,73 @@ using fire_engine::AnimationState;
 // Default Construction
 // ==========================================================================
 
-TEST(AnimationStateConstruction, DefaultHasNoActiveAnimation)
+TEST_CASE("AnimationStateConstruction.DefaultHasNoActiveAnimation", "[AnimationStateConstruction]")
 {
     AnimationState s;
-    EXPECT_FALSE(s.hasActiveAnimation());
-    EXPECT_FALSE(s.activeAnimation().has_value());
+    CHECK_FALSE(s.hasActiveAnimation());
+    CHECK_FALSE(s.activeAnimation().has_value());
 }
 
 // ==========================================================================
 // Accessors
 // ==========================================================================
 
-TEST(AnimationStateAccessors, SetActiveAnimation)
+TEST_CASE("AnimationStateAccessors.SetActiveAnimation", "[AnimationStateAccessors]")
 {
     AnimationState s;
     s.activeAnimation(2);
-    EXPECT_TRUE(s.hasActiveAnimation());
-    EXPECT_EQ(*s.activeAnimation(), 2);
+    CHECK(s.hasActiveAnimation());
+    CHECK(*s.activeAnimation() == 2);
 }
 
-TEST(AnimationStateAccessors, OverwriteActiveAnimation)
+TEST_CASE("AnimationStateAccessors.OverwriteActiveAnimation", "[AnimationStateAccessors]")
 {
     AnimationState s;
     s.activeAnimation(1);
     s.activeAnimation(0);
-    EXPECT_EQ(*s.activeAnimation(), 0);
+    CHECK(*s.activeAnimation() == 0);
 }
 
 // ==========================================================================
 // Copy / Move
 // ==========================================================================
 
-TEST(AnimationStateCopy, CopyConstructCreatesIndependentCopy)
+TEST_CASE("AnimationStateCopy.CopyConstructCreatesIndependentCopy", "[AnimationStateCopy]")
 {
     AnimationState a;
     a.activeAnimation(3);
 
     AnimationState b{a};
-    EXPECT_EQ(*b.activeAnimation(), 3);
+    CHECK(*b.activeAnimation() == 3);
 
     b.activeAnimation(5);
-    EXPECT_EQ(*a.activeAnimation(), 3);
+    CHECK(*a.activeAnimation() == 3);
 }
 
-TEST(AnimationStateCopy, CopyAssign)
+TEST_CASE("AnimationStateCopy.CopyAssign", "[AnimationStateCopy]")
 {
     AnimationState a;
     a.activeAnimation(7);
     AnimationState b;
     b = a;
-    EXPECT_EQ(*b.activeAnimation(), 7);
+    CHECK(*b.activeAnimation() == 7);
 }
 
-TEST(AnimationStateMove, MoveConstructTransfersState)
+TEST_CASE("AnimationStateMove.MoveConstructTransfersState", "[AnimationStateMove]")
 {
     AnimationState a;
     a.activeAnimation(4);
     AnimationState b{std::move(a)};
-    EXPECT_EQ(*b.activeAnimation(), 4);
+    CHECK(*b.activeAnimation() == 4);
 }
 
 // ==========================================================================
 // Noexcept
 // ==========================================================================
 
-TEST(AnimationStateNoexcept, AllOperationsAreNoexcept)
+TEST_CASE("AnimationStateNoexcept.AllOperationsAreNoexcept", "[AnimationStateNoexcept]")
 {
-    AnimationState s;
-
-    static_assert(noexcept(AnimationState{}));
-    static_assert(noexcept(s.activeAnimation()));
-    static_assert(noexcept(s.hasActiveAnimation()));
-    static_assert(noexcept(s.activeAnimation(0)));
+    static_assert(std::is_nothrow_default_constructible_v<AnimationState>);
+    static_assert(test_traits::has_nothrow_animation_state_operations<AnimationState>);
     static_assert(std::is_nothrow_move_constructible_v<AnimationState>);
 }
