@@ -1,0 +1,72 @@
+#version 450
+
+// XPBD distance-constraint projection for one colour batch [rangeBegin, rangeEnd).
+// The batch is graph-coloured so no two constraints share a particle — the writes
+// are race-free within a dispatch (Gauss-Seidel by colour).
+
+layout(local_size_x = 64) in;
+
+struct Particle
+{
+    vec4 pos;  // xyz position, w = invMass
+    vec4 prev;
+    vec4 vel;
+};
+
+struct Constraint
+{
+    uint a;
+    uint b;
+    float restLength;
+    float compliance;
+};
+
+layout(std430, binding = 0) buffer Particles { Particle particles[]; };
+layout(std430, binding = 1) readonly buffer Constraints { Constraint constraints[]; };
+
+layout(push_constant) uniform Push {
+    vec4 gravity;
+    float dt; // substep dt
+    uint particleCount;
+    uint rangeBegin;
+    uint rangeEnd;
+    float damping;
+    uint resX;
+    uint resZ;
+    uint pad;
+} pc;
+
+void main()
+{
+    uint e = pc.rangeBegin + gl_GlobalInvocationID.x;
+    if (e >= pc.rangeEnd)
+    {
+        return;
+    }
+
+    Constraint c = constraints[e];
+    vec3 pa = particles[c.a].pos.xyz;
+    float wa = particles[c.a].pos.w;
+    vec3 pb = particles[c.b].pos.xyz;
+    float wb = particles[c.b].pos.w;
+
+    float wsum = wa + wb;
+    if (wsum <= 0.0)
+    {
+        return; // both pinned
+    }
+
+    vec3 d = pa - pb;
+    float len = length(d);
+    if (len < 1e-7)
+    {
+        return;
+    }
+
+    float alpha = c.compliance / (pc.dt * pc.dt);
+    float deltaLambda = -(len - c.restLength) / (wsum + alpha);
+    vec3 corr = deltaLambda * d / len;
+
+    particles[c.a].pos.xyz = pa + wa * corr;
+    particles[c.b].pos.xyz = pb - wb * corr;
+}

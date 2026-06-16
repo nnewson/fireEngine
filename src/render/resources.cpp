@@ -69,6 +69,32 @@ BufferHandle Resources::createVertexBuffer(std::span<const Vertex> vertices)
     return storeBuffer(std::move(buf), std::move(mem));
 }
 
+BufferHandle Resources::createStorageBuffer(std::size_t size, const void* initialData)
+{
+    auto [buf, mem] = device_->createBuffer(size, vk::BufferUsageFlagBits::eStorageBuffer,
+                                            vk::MemoryPropertyFlagBits::eHostVisible |
+                                                vk::MemoryPropertyFlagBits::eHostCoherent);
+    if (initialData != nullptr)
+    {
+        void* data = mem.mapMemory(0, size);
+        std::memcpy(data, initialData, size);
+        mem.unmapMemory();
+    }
+    return storeBuffer(std::move(buf), std::move(mem));
+}
+
+BufferHandle Resources::createStorageVertexBuffer(std::span<const Vertex> vertices)
+{
+    vk::DeviceSize size = vertices.size_bytes();
+    auto [buf, mem] = device_->createBuffer(
+        size, vk::BufferUsageFlagBits::eVertexBuffer | vk::BufferUsageFlagBits::eStorageBuffer,
+        vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
+    void* data = mem.mapMemory(0, size);
+    std::memcpy(data, vertices.data(), size);
+    mem.unmapMemory();
+    return storeBuffer(std::move(buf), std::move(mem));
+}
+
 BufferHandle Resources::createIndexBuffer(std::span<const uint16_t> indices)
 {
     vk::DeviceSize size = indices.size_bytes();

@@ -162,6 +162,7 @@ Renderer::Renderer(const Window& window, std::string environmentPath, RendererDe
       shadows_(device_, resources_),
       particles_(device_, swapchain_, resources_, postProcessing_.offscreenColourTarget()),
       taa_(device_, swapchain_, resources_, postProcessing_.offscreenColourTarget()),
+      softBody_(device_, resources_),
       profiler_(device_),
       overlay_(device_, swapchain_, window, debug.overlayVisible),
       environmentPath_(std::move(environmentPath))
@@ -686,6 +687,10 @@ void Renderer::drawFrame(Window& display, SceneGraph& scene, Vec3 cameraPosition
     cmd.begin(vk::CommandBufferBeginInfo{});
     // Reset this frame's timestamp range before any pass writes into it.
     profiler_.beginFrame(cmd, currentFrame_);
+
+    // Soft-body (cloth) solve runs first: it writes solved positions + normals
+    // into the cloth vertex buffers that the shadow + forward passes then read.
+    softBody_.recordSolve(cmd, dt);
 
     // Per-frame camera matrices. The forward pass rasterises with jitteredProj_
     // (TAA sub-pixel jitter); currentViewProj_ is jitter-free so motion vectors

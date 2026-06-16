@@ -26,7 +26,8 @@ public:
 
     void run(size_t width, size_t height, std::string_view app_name,
              std::string_view scene_path = "", std::string_view skybox_path = "",
-             bool addFloor = false, bool addParticles = false, RendererDebug debug = {});
+             bool addFloor = false, bool addParticles = false, bool addCloth = false,
+             RendererDebug debug = {});
 
 private:
     std::unique_ptr<Window> window_;
@@ -41,10 +42,14 @@ private:
     // resizing the asset vector after the glTF loader populated it would
     // invalidate every Object's cached Geometry pointer.
     std::unique_ptr<Geometry> floorGeometry_;
+    // Demo cloth geometry (-c). Kept alive here for the same reason as the floor:
+    // Object caches a Geometry pointer, so it must not move.
+    std::unique_ptr<Geometry> clothGeometry_;
 
     void loadScene(std::string_view scene_path);
     void addFloorPlane();
     void addParticleFountain();
+    void addClothDemo();
     void addTestCube();
     void mainLoop();
 };

@@ -91,6 +91,17 @@ public:
         castsShadow_ = value;
     }
 
+    // When set, load() allocates the vertex buffer with storage usage so the
+    // soft-body compute solver can write it in place each frame (cloth meshes).
+    void storageVertices(bool value) noexcept
+    {
+        storageVertices_ = value;
+    }
+    [[nodiscard]] bool storageVertices() const noexcept
+    {
+        return storageVertices_;
+    }
+
     [[nodiscard]] const std::vector<std::vector<Vec3>>& morphPositions() const noexcept
     {
         return morphPositions_;
@@ -137,6 +148,7 @@ private:
     BufferHandle vertexBuffer_{NullBuffer};
     BufferHandle indexBuffer_{NullBuffer};
     bool castsShadow_{true};
+    bool storageVertices_{false};
 };
 
 } // namespace fire_engine

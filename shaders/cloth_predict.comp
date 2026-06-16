@@ -1,0 +1,52 @@
+#version 450
+
+// XPBD substep prediction: derive velocity from the last substep's position
+// change (with damping), then integrate gravity and advance the position.
+// Pinned particles (invMass == 0) hold position.
+
+layout(local_size_x = 64) in;
+
+struct Particle
+{
+    vec4 pos;  // xyz position, w = invMass
+    vec4 prev; // xyz previous position
+    vec4 vel;  // xyz velocity
+};
+
+layout(std430, binding = 0) buffer Particles { Particle particles[]; };
+
+layout(push_constant) uniform Push {
+    vec4 gravity;        // xyz acceleration
+    float dt;            // substep dt
+    uint particleCount;
+    uint rangeBegin;     // (solve only)
+    uint rangeEnd;       // (solve only)
+    float damping;
+    uint resX;
+    uint resZ;
+    uint pad;
+} pc;
+
+void main()
+{
+    uint i = gl_GlobalInvocationID.x;
+    if (i >= pc.particleCount)
+    {
+        return;
+    }
+
+    Particle p = particles[i];
+    if (p.pos.w > 0.0)
+    {
+        vec3 vel = (p.pos.xyz - p.prev.xyz) / pc.dt * pc.damping; // 0 on the first substep
+        p.prev = p.pos;
+        vel += pc.gravity.xyz * pc.dt;
+        p.pos = vec4(p.pos.xyz + vel * pc.dt, p.pos.w);
+        p.vel = vec4(vel, 0.0);
+    }
+    else
+    {
+        p.prev = p.pos; // pinned: keep prev synced
+    }
+    particles[i] = p;
+}

@@ -1,0 +1,69 @@
+#version 450
+
+// Write the solved particle positions + recomputed grid normals into the render
+// vertex buffer (the same buffer the forward/shadow passes read as vertex input).
+// The buffer is a tightly-packed array of the C++ Vertex struct; we treat it as a
+// flat float array and write only position (floats 0..2) and normal (floats 6..8),
+// leaving the static attributes (colour/uv/tangent) untouched. STRIDE / offsets
+// are asserted against sizeof(Vertex) on the C++ side.
+
+layout(local_size_x = 64) in;
+
+struct Particle
+{
+    vec4 pos; // xyz position, w = invMass
+    vec4 prev;
+    vec4 vel;
+};
+
+layout(std430, binding = 0) readonly buffer Particles { Particle particles[]; };
+layout(std430, binding = 2) buffer Verts { float verts[]; };
+
+layout(push_constant) uniform Push {
+    vec4 gravity;
+    float dt;
+    uint particleCount;
+    uint rangeBegin;
+    uint rangeEnd;
+    float damping;
+    uint resX;
+    uint resZ;
+    uint pad;
+} pc;
+
+const uint STRIDE = 25u; // floats per Vertex (100 bytes)
+const uint POS_OFFSET = 0u;
+const uint NORMAL_OFFSET = 6u;
+
+void main()
+{
+    uint i = gl_GlobalInvocationID.x;
+    uint count = pc.resX * pc.resZ;
+    if (i >= count)
+    {
+        return;
+    }
+
+    vec3 pos = particles[i].pos.xyz;
+
+    // Per-vertex normal from central differences across the grid neighbours.
+    uint x = i % pc.resX;
+    uint z = i / pc.resX;
+    uint xm = x > 0u ? x - 1u : x;
+    uint xp = x + 1u < pc.resX ? x + 1u : x;
+    uint zm = z > 0u ? z - 1u : z;
+    uint zp = z + 1u < pc.resZ ? z + 1u : z;
+    vec3 dX = particles[z * pc.resX + xp].pos.xyz - particles[z * pc.resX + xm].pos.xyz;
+    vec3 dZ = particles[zp * pc.resX + x].pos.xyz - particles[zm * pc.resX + x].pos.xyz;
+    vec3 n = cross(dZ, dX);
+    float l = length(n);
+    n = l > 1e-7 ? n / l : vec3(0.0, 1.0, 0.0);
+
+    uint base = i * STRIDE;
+    verts[base + POS_OFFSET + 0u] = pos.x;
+    verts[base + POS_OFFSET + 1u] = pos.y;
+    verts[base + POS_OFFSET + 2u] = pos.z;
+    verts[base + NORMAL_OFFSET + 0u] = n.x;
+    verts[base + NORMAL_OFFSET + 1u] = n.y;
+    verts[base + NORMAL_OFFSET + 2u] = n.z;
+}

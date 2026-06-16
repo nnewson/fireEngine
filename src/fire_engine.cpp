@@ -8,6 +8,7 @@
 
 #include <fire_engine/core/gltf_loader.hpp>
 #include <fire_engine/core/system.hpp>
+#include <fire_engine/graphics/cloth.hpp>
 #include <fire_engine/graphics/geometry.hpp>
 #include <fire_engine/graphics/material.hpp>
 #include <fire_engine/graphics/object.hpp>
@@ -36,7 +37,7 @@ FireEngine::~FireEngine()
 
 void FireEngine::run(size_t width, size_t height, std::string_view app_name,
                      std::string_view scene_path, std::string_view skybox_path, bool addFloor,
-                     bool addParticles, RendererDebug debug)
+                     bool addParticles, bool addCloth, RendererDebug debug)
 {
     window_ = std::make_unique<Window>(width, height, app_name);
 
@@ -50,6 +51,10 @@ void FireEngine::run(size_t width, size_t height, std::string_view app_name,
     if (addParticles)
     {
         addParticleFountain();
+    }
+    if (addCloth)
+    {
+        addClothDemo();
     }
     mainLoop();
 }
@@ -105,6 +110,46 @@ void FireEngine::addParticleFountain()
     fountainNode->component().emplace<ParticleEmitter>();
     fountainNode->transform().position(Vec3{0.0f, 0.1f, 0.0f});
     scene_.addNode(std::move(fountainNode));
+}
+
+void FireEngine::addClothDemo()
+{
+    // Procedural pinned cloth grid (Roadmap #2). For now this is a static mesh
+    // rendered through the normal forward/shadow path; the GPU XPBD solver writes
+    // its (storage-capable) vertex buffer each frame once the SoftBodySystem lands.
+    ClothGridParams params;
+    params.resX = 40;
+    params.resZ = 40;
+    params.spacing = 0.04f;
+    ClothMesh cloth = makeGridCloth(params);
+
+    auto& mat = assets_.addMaterial(Material{});
+    mat.name("ClothDemo");
+    mat.baseColor(Colour3{0.85f, 0.2f, 0.25f});
+    mat.alpha(1.0f);
+    mat.roughness(0.9f);
+    mat.metallic(0.0f);
+    mat.doubleSided(true); // cloth is visible from both sides
+
+    clothGeometry_ = std::make_unique<Geometry>();
+    clothGeometry_->vertices(std::move(cloth.vertices));
+    clothGeometry_->indices(std::move(cloth.indices));
+    clothGeometry_->material(&mat);
+    clothGeometry_->storageVertices(true);
+    clothGeometry_->load(renderer_->resources());
+
+    Object clothObject;
+    clothObject.addGeometry(*clothGeometry_);
+    clothObject.load(renderer_->resources());
+
+    // Register with the GPU solver (particles/constraints from `cloth`; the
+    // solver writes the geometry's storage vertex buffer each frame).
+    renderer_->addCloth(cloth, clothGeometry_->vertexBuffer());
+
+    auto clothNode = std::make_unique<Node>("ClothDemo");
+    clothNode->component().emplace<Mesh>(std::move(clothObject));
+    clothNode->transform().position(Vec3{0.0f, 1.5f, 0.0f});
+    scene_.addNode(std::move(clothNode));
 }
 
 void FireEngine::loadScene(std::string_view scene_path)

@@ -22,6 +22,7 @@
 #include <fire_engine/render/render_tunables.hpp>
 #include <fire_engine/render/resources.hpp>
 #include <fire_engine/render/shadows.hpp>
+#include <fire_engine/render/soft_body_system.hpp>
 #include <fire_engine/render/swapchain.hpp>
 #include <fire_engine/render/taa.hpp>
 #include <fire_engine/render/transmission.hpp>
@@ -100,6 +101,14 @@ public:
     [[nodiscard]] Frame& frame() noexcept
     {
         return frame_;
+    }
+
+    // Register a cloth with the GPU soft-body solver (see SoftBodySystem). The
+    // mesh supplies the particle/constraint data; vertexBuffer is the cloth
+    // Geometry's storage vertex buffer that the solver writes each frame.
+    void addCloth(const ClothMesh& mesh, BufferHandle vertexBuffer)
+    {
+        softBody_.addCloth(mesh, vertexBuffer);
     }
 
     [[nodiscard]] Resources& resources() noexcept
@@ -205,6 +214,7 @@ private:
     Shadows shadows_;
     ParticleSystem particles_;
     Taa taa_;
+    SoftBodySystem softBody_;
     GpuProfiler profiler_;
     DebugOverlay overlay_;
     FrameStats stats_{};

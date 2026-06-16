@@ -40,6 +40,7 @@ add_library(fireengine SHARED
     src/core/system.cpp
     src/core/tangent_generator.cpp
     src/fire_engine.cpp
+    src/graphics/cloth.cpp
     src/graphics/geometry.cpp
     src/graphics/image.cpp
     src/graphics/ktx_image.cpp
@@ -68,6 +69,7 @@ add_library(fireengine SHARED
     src/render/renderer.cpp
     src/render/resources.cpp
     src/render/shadows.cpp
+    src/render/soft_body_system.cpp
     src/render/swapchain.cpp
     src/render/taa.cpp
     src/render/transmission.cpp
@@ -134,6 +136,9 @@ set(SHADER_SOURCES
     shaders/particle_simulate.comp
     shaders/particle.vert
     shaders/particle.frag
+    shaders/cloth_predict.comp
+    shaders/cloth_solve.comp
+    shaders/cloth_finalize.comp
 )
 
 foreach(shader IN LISTS SHADER_SOURCES)
@@ -179,6 +184,7 @@ add_executable(test_fire_engine
     tests/math/test_vec2.cpp
     tests/math/test_vec3.cpp
     tests/math/test_vec4.cpp
+    tests/graphics/test_cloth.cpp
     tests/graphics/test_colour3.cpp
     tests/graphics/test_joints4.cpp
     tests/graphics/test_image.cpp

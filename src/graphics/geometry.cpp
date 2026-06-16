@@ -7,7 +7,8 @@ namespace fire_engine
 
 void Geometry::load(Resources& resources)
 {
-    vertexBuffer_ = resources.createVertexBuffer(vertices_);
+    vertexBuffer_ = storageVertices_ ? resources.createStorageVertexBuffer(vertices_)
+                                     : resources.createVertexBuffer(vertices_);
     indexBuffer_ = resources.createIndexBuffer(indices_);
 }
 

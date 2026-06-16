@@ -46,6 +46,11 @@ public:
     // --- Buffer creation ---
 
     [[nodiscard]] BufferHandle createVertexBuffer(std::span<const Vertex> vertices);
+    // Vertex buffer that is also a storage buffer, so the cloth/soft-body compute
+    // solver can write positions + normals into it in place each frame and the
+    // forward/shadow passes read it as vertex input. Host-visible (mapped initial
+    // upload), like createVertexBuffer.
+    [[nodiscard]] BufferHandle createStorageVertexBuffer(std::span<const Vertex> vertices);
     [[nodiscard]] BufferHandle createIndexBuffer(std::span<const uint16_t> indices);
     [[nodiscard]] BufferHandle createIndexBuffer(std::span<const uint32_t> indices);
 
@@ -84,6 +89,11 @@ public:
     [[nodiscard]] MappedBufferSet createMappedUniformBuffers(std::size_t size);
     [[nodiscard]] MappedBufferSet createMappedStorageBuffer(std::size_t size,
                                                             const void* initialData);
+    // Single persistent host-visible storage buffer with initial contents. Used
+    // for the soft-body solver's particle / constraint buffers (per-instance sim
+    // state, shared across frames — the GPU serialises frames on the graphics
+    // queue, so no per-frame copies are needed).
+    [[nodiscard]] BufferHandle createStorageBuffer(std::size_t size, const void* initialData);
     [[nodiscard]] uint32_t allocateObjectId() noexcept;
 
     // --- Shadow map + offscreen textures ---
