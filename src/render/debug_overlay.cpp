@@ -41,12 +41,13 @@ DebugOverlay::DebugOverlay(const Device& device, const Swapchain& swapchain, con
     init.QueueFamily = device.graphicsFamily();
     init.Queue = static_cast<VkQueue>(*device.graphicsQueue());
     // Non-zero DescriptorPoolSize lets the backend own its descriptor pool (font
-    // atlas + any AddTexture calls), so we don't manage one here.
-    init.DescriptorPoolSize = IMGUI_IMPL_VULKAN_MINIMUM_IMAGE_SAMPLER_POOL_SIZE;
+    // atlas + any AddTexture calls), so we don't manage one here. Use a small fixed
+    // headroom (the backend asserts > 1).
+    init.DescriptorPoolSize = 8;
     init.MinImageCount = imageCount;
     init.ImageCount = imageCount;
     init.UseDynamicRendering = true;
-    init.PipelineInfoMain.PipelineRenderingCreateInfo = renderingInfo;
+    init.PipelineRenderingCreateInfo = renderingInfo;
 
     ImGui_ImplVulkan_Init(&init);
 }

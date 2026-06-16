@@ -17,7 +17,6 @@ namespace fire_engine
 
 Resources::Resources(const Device& device, const Pipeline& pipeline)
     : device_(&device),
-      pipeline_(&pipeline),
       descriptors_(device, pipeline, *this)
 {
     vk::CommandPoolCreateInfo poolCi{

@@ -4,6 +4,10 @@
     "gtest",
     "stb",
     "vulkan-headers",
-    "ktx"
+    "ktx",
+    {
+      "name": "imgui",
+      "features": ["glfw-binding", "vulkan-binding"]
+    }
   ]
 }

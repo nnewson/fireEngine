@@ -8,15 +8,6 @@ project(fire_engine
 
 # --- Dependencies -------------------------------------------------------
 
-# A few dependencies (ktx, imgui) can't build through the vcpkg manifest under
-# the current gcc + macOS SDK combo, so they're installed classic-mode into the
-# global vcpkg tree instead. Append that tree to the prefix path so find_package
-# locates them; the manifest-installed packages in build/vcpkg_installed are
-# searched first by the toolchain, so they still win for everything else.
-if(DEFINED ENV{VCPKG_ROOT} AND VCPKG_TARGET_TRIPLET)
-  list(APPEND CMAKE_PREFIX_PATH "$ENV{VCPKG_ROOT}/installed/${VCPKG_TARGET_TRIPLET}")
-endif()
-
 find_package(Vulkan REQUIRED)
 find_package(glfw3 3.3 REQUIRED)
 find_package(GTest REQUIRED)
@@ -83,14 +74,9 @@ add_library(fireengine SHARED
     src/scene/particle_emitter.cpp
     src/scene/scene_graph.cpp
     src/scene/transform.cpp
-    # Vendored ImGui GLFW platform backend (the vcpkg glfw-binding feature can't
-    # build under the current gcc/SDK combo, and we use system GLFW anyway). The
-    # ImGui core + Vulkan backend come from vcpkg imgui[vulkan-binding].
-    third_party/imgui/imgui_impl_glfw.cpp
 )
 
 target_include_directories(fireengine PUBLIC ${PROJECT_SOURCE_DIR}/include ${Stb_INCLUDE_DIR})
-target_include_directories(fireengine PRIVATE ${PROJECT_SOURCE_DIR}/third_party/imgui)
 target_compile_features(fireengine PUBLIC cxx_std_23)
 target_compile_options(fireengine PRIVATE -Wall -Wextra -Wpedantic)
 target_compile_definitions(fireengine PRIVATE

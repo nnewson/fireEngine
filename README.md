@@ -245,24 +245,21 @@ Managed via the vcpkg manifest (`vcpkg.json`):
 - `stb` — image loading (stb_image, incl. HDR)
 - `ktx` — KTX2 / Basis Universal textures
 - `gtest` — Google Test framework
+- `imgui[glfw-binding,vulkan-binding]` — debug overlay (ImGui core + GLFW platform
+  backend + Vulkan renderer backend; pulls vcpkg's GLFW)
 
-Installed classic-mode into the global vcpkg tree (the manifest build of these
-fails under the current gcc + macOS SDK combo; `CMAKE_PREFIX_PATH` is extended to
-the global tree so `find_package` still resolves them):
-
-- `imgui[vulkan-binding]` — debug overlay (ImGui core + Vulkan backend). The ImGui
-  **GLFW** platform backend is vendored under `third_party/imgui` and compiled against
-  system GLFW, because the vcpkg `glfw-binding` feature pulls vcpkg glfw3, which won't
-  build here. The vendored backend has a small documented patch (skips the Cocoa native
-  header that g++ can't parse).
+**Toolchain: Current built with Apple Clang** (`/usr/bin/clang++`). The vcpkg toolchain inherits the
+project's compiler (via `CC`/`CXX`), so all ports build from the manifest. The project
+formerly used Homebrew g++-15, which can't parse the Apple SDK framework headers — that
+broke the vcpkg builds of gtest/glfw3/imgui and forced classic-mode global installs plus
+a vendored imgui backend; the Clang switch removed all of that.
 
 Also requires:
 
-- System GLFW 3.3+
 - Vulkan SDK (for `glslc` shader compiler)
 
 ## Assets
 
-All glTF models are from the Khronos glTF Sample Models [repository](https://github.com/KhronosGroup/glTF-Sample-Models/tree/main): AlphaBlendModeTest, AnimatedCube, AnimatedMorphCube, BoomBoxWithAxes, BoxAnimated, BrainStem, CesiumMan, DamagedHelmet, Fox, InterpolationTest, **LightsPunctualLamp** (exercises KHR_lights_punctual + KHR_materials_transmission), MetalRoughSpheres, MorphPrimitivesTest, OrientationTest, RecursiveSkeletons, RiggedSimple, TextureCoordinateTest, TextureLinearInterpolationTest, TextureSettingsTest, VertexColorTest.
+All glTF models are from the Khronos glTF Sample Models [repository](https://github.com/KhronosGroup/glTF-Sample-Models/tree/main): AlphaBlendModeTest, AnimatedCube, AnimatedMorphCube, BoomBoxWithAxes, BoxAnimated, BrainStem, CesiumMan, DamagedHelmet, Fox, InterpolationTest, LightsPunctualLamp (exercises KHR_lights_punctual + KHR_materials_transmission), MetalRoughSpheres, MorphPrimitivesTest, OrientationTest, RecursiveSkeletons, RiggedSimple, TextureCoordinateTest, TextureLinearInterpolationTest, TextureSettingsTest, VertexColorTest.
 
 HDR equirectangular skyboxes (`skybox.hdr`, `nightbox.hdr`) drive the IBL precompute.

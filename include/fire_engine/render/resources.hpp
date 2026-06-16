@@ -240,7 +240,6 @@ private:
     [[nodiscard]] TextureHandle createFallbackTexture(FallbackTextureKind kind);
 
     const Device* device_;
-    const Pipeline* pipeline_;
     Descriptors descriptors_;
 
     vk::raii::CommandPool cmdPool_{nullptr};
