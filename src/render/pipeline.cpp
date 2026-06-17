@@ -181,19 +181,19 @@ PipelineConfig Pipeline::forwardConfig()
     // D32 depth. The velocity format must match Resources::createVelocityTarget.
     config.colourFormats = {vk::Format::eR16G16B16A16Sfloat, vk::Format::eR16G16Sfloat};
     config.depthFormat = vk::Format::eD32Sfloat;
-    return config;
-}
-
-PipelineConfig Pipeline::forwardDoubleSidedConfig()
-{
-    PipelineConfig config = forwardConfig();
-    config.cullMode = vk::CullModeFlagBits::eNone;
+    // Cull mode is dynamic so this one pipeline covers both single-sided
+    // (cull back) and double-sided (cull none) materials; the renderer sets it
+    // per draw from DrawCommand::doubleSided.
+    config.dynamicCullMode = true;
     return config;
 }
 
 PipelineConfig Pipeline::forwardBlendConfig()
 {
     PipelineConfig config = forwardConfig();
+    // Blend draws keep a static cull mode (eNone) — the renderer only sets the
+    // dynamic cull mode for the merged opaque pipeline, not for blend.
+    config.dynamicCullMode = false;
     config.cullMode = vk::CullModeFlagBits::eNone;
     config.depthWrite = false;
     config.blendEnable = true;
@@ -479,8 +479,15 @@ void Pipeline::createGraphicsPipeline(const PipelineConfig& config)
         .scissorCount = 1,
     };
 
-    std::array dynamicStates = {vk::DynamicState::eViewport, vk::DynamicState::eScissor,
-                                vk::DynamicState::eDepthBias};
+    std::vector<vk::DynamicState> dynamicStates{
+        vk::DynamicState::eViewport, vk::DynamicState::eScissor, vk::DynamicState::eDepthBias};
+    // Cull mode is core-1.3 dynamic state; opt in so the merged opaque pipeline
+    // can switch between back-face and no culling per draw (config.cullMode is
+    // then ignored — the renderer drives it).
+    if (config.dynamicCullMode)
+    {
+        dynamicStates.push_back(vk::DynamicState::eCullMode);
+    }
     vk::PipelineDynamicStateCreateInfo dynamicState{
         .dynamicStateCount = static_cast<uint32_t>(dynamicStates.size()),
         .pDynamicStates = dynamicStates.data(),

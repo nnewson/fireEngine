@@ -47,7 +47,6 @@ TEST_CASE("FrameInfo.DefaultAlphaPipelinesAreNull", "[FrameInfo]")
 {
     FrameInfo info;
     CHECK(info.pipelines.opaque == NullPipeline);
-    CHECK(info.pipelines.opaqueDoubleSided == NullPipeline);
     CHECK(info.pipelines.blend == NullPipeline);
 }
 

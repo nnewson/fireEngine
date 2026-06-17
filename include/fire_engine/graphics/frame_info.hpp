@@ -11,13 +11,15 @@
 namespace fire_engine
 {
 
-// Pipeline handles covering the three forward alpha variants. Object::render
-// picks one per geometry from the material's alphaMode/doubleSided flags. The
-// renderer later buckets blend draws so they can be sorted back-to-front.
+// Pipeline handles covering the forward alpha variants. Object::render picks
+// one per geometry from the material's alphaMode flag: opaque and double-sided
+// share `opaque` (cull mode is set per draw via dynamic state, see
+// DrawCommand::doubleSided); BLEND materials use `blend`, which keeps a static
+// blend equation (dynamic blend is unsupported on MoltenVK). The renderer
+// buckets blend draws so they can be sorted back-to-front.
 struct AlphaPipelines
 {
     PipelineHandle opaque{NullPipeline};
-    PipelineHandle opaqueDoubleSided{NullPipeline};
     PipelineHandle blend{NullPipeline};
 };
 

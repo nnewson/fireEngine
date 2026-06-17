@@ -166,11 +166,11 @@ The transient pipelines are destroyed once the bake completes; only the resultin
 
   On swapchain resize, only the `kMaxFramesInFlight` set-1 descriptors need rewriting (sceneColor, post-process targets, and any future recreated globals) via `Descriptors::updateGlobalDescriptors`; per-object set-0 and the global set-2 bindless descriptors are untouched.
 - Separate descriptor layouts for the skybox (SkyboxUBO + samplerCube + LightUBO), shadow (ShadowUBO with `lightViewProj[]` + SkinUBO + MorphUBO + MorphTargets SSBO + first self-shadow depth/sampler, plus `ShadowPushConstants` on the vertex/fragment stages), post-process (HDR sampler at 0 + bloom mip 0 sampler at 1, plus `PostProcessPushConstants { float bloomStrength }`), and bloom-down / bloom-up (single input mip sampler + `BloomPushConstants` on the fragment stage)
-- Three forward pipeline variants share the shader + binding layout but differ in cull mode, blend, and depth-write state:
-  - **opaque** (cull back, no blend, depth write) — OPAQUE and MASK materials with `doubleSided=false`
-  - **opaque-double-sided** (cull none, no blend, depth write) — OPAQUE and MASK with `doubleSided=true`
-  - **blend** (cull none, `SRC_ALPHA / ONE_MINUS_SRC_ALPHA` blend, no depth write) — BLEND materials
-- The forward, double-sided, blend, skybox, and transmission pipelines write **two colour attachments** — HDR colour + an RG16F screen-space velocity buffer (TAA) — with per-attachment blend state (velocity never blends; needs the `independentBlend` device feature)
+- Two forward pipeline variants share the shader + binding layout:
+  - **opaque** (no blend, depth write) — OPAQUE and MASK materials. Cull mode is a **dynamic state** (`VK_DYNAMIC_STATE_CULL_MODE`, core Vulkan 1.3) set per draw, so single-sided (cull back) and double-sided (cull none) geometry share this one pipeline; `DrawCommand::doubleSided` carries the choice.
+  - **blend** (cull none, `SRC_ALPHA / ONE_MINUS_SRC_ALPHA` blend, no depth write) — BLEND materials. Kept as a separate static-blend pipeline because dynamic blend state isn't available on MoltenVK (see [Limitations](#limitations)).
+- All graphics and compute pipelines are created through one shared `VkPipelineCache` (owned by `Device`), so the driver can dedupe compilation work and warm pipeline recreation on resize.
+- The forward, blend, skybox, and transmission pipelines write **two colour attachments** — HDR colour + an RG16F screen-space velocity buffer (TAA) — with per-attachment blend state (velocity never blends; needs the `independentBlend` device feature)
 - Additional persistent pipelines: **skybox** (fullscreen triangle, LEQUAL depth, no write), **shadow** (front-face cull, depth bias enabled, debug colour depth write), **self-shadow-first** and **self-shadow-second** (no cull; second pass rejects the first-depth surface), **transmission**, **TAA resolve** (fullscreen triangle, samples current colour + velocity + previous history, no depth), **post-process** (bloom mix + ACES + gamma, no depth), **bloom-down** (no blend, no depth, fullscreen triangle), **bloom-up** (additive eOne/eOne blend, no depth, fullscreen triangle)
 - Transient IBL pipelines (`environment_convert`, `irradiance_convolution`, `prefilter_environment`, `brdf_integration`) exist only during the startup precompute
 - Fullscreen and fragment-only pipeline configs share small factory helpers in `pipeline.cpp`; keep their returned `PipelineConfig` values stable because `tests/render/test_pipeline_config.cpp` locks the binding and state surface.
@@ -190,6 +190,20 @@ The transient pipelines are destroyed once the bake completes; only the resultin
 ### Fragment Shader
 
 The forward fragment shader picks a UV stream per sample (`pickUv(material.texCoordIndices.X)` returns TEXCOORD_0 or TEXCOORD_1), applies KHR_texture_transform (`applyUvTransform` does scale → CCW rotate → translate) and samples the right texture. If `material.extraFlags.z == 1` (KHR_materials_unlit) it writes `vec4(baseColor, alpha)` and returns immediately, skipping all lighting. Otherwise it runs a PBR Cook-Torrance BRDF (GGX + Schlick Fresnel + Smith G) **per light in a fixed-size loop over `light.lights[0..lightCount]`** — directional, point, and spot all share the same BRDF; point/spot add the KHR_lights_punctual `windowing² / d²` distance attenuation, spot adds a smooth cone factor, and only the first directional (`i == 0 && type == 0`) carries the directional shadow term. After the loop it adds diffuse IBL from the irradiance cubemap and specular IBL via the prefiltered cubemap + BRDF LUT split-sum **with Fdez-Aguera multi-scatter compensation** for energy-conserving rough conductors. **KHR_materials_transmission** then attenuates the diffuse lobes by `(1 − transmission)` and adds a separate transmission lobe on top, gated on `KHR_materials_volume` thickness: thin-walled materials (no volume) use a basecolor × env-irradiance-tint scatter (view-independent — no screen-space image to track the camera), while volumetric materials (thickness > 0) sample the captured sceneColor along the refracted ray, blurred by roughness, for scene-behind-glass refraction. Double-sided surfaces flip the shading normal to face the viewer on back faces (`gl_FrontFacing`) so the view-dependent terms don't evaluate against an inward-facing normal. The directional shadow term chooses one of 4 cascades with a 10% blend band at boundaries. Non-skinned receivers sample the full CSM; skinned receivers combine the world-only CSM with their second-depth per-object self-shadow map.
+
+## Limitations
+
+- **Forward pipeline collapse is partial — 2 variants, not 1.** The opaque and
+  double-sided forward pipelines are merged into a single pipeline using dynamic
+  cull mode (`VK_DYNAMIC_STATE_CULL_MODE`, core Vulkan 1.3, set per draw). The
+  BLEND pipeline is *not* folded in: collapsing it too would require dynamic
+  colour-blend state (`VK_EXT_extended_dynamic_state3`'s
+  `extendedDynamicState3ColorBlendEnable` / `…ColorBlendEquation`), which the
+  current MoltenVK reports as **unsupported** — the extension is advertised but
+  those two feature bits are `false`, because Metal bakes blend state into the
+  render-pipeline descriptor rather than letting it vary dynamically. On a
+  desktop driver that exposes those features the blend variant could fold into
+  the same pipeline; on MoltenVK it stays a separate static-blend pipeline.
 
 ## Setup
 

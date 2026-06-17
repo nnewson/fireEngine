@@ -75,6 +75,20 @@ TEST_CASE("PipelineConfig.ForwardConfigIncludesSelfShadowPushConstant", "[Pipeli
           static_cast<uint32_t>(sizeof(fire_engine::ForwardPushConstants)));
 }
 
+TEST_CASE("PipelineConfig.ForwardConfigUsesDynamicCullMode", "[PipelineConfig]")
+{
+    // Opaque + double-sided share one forward pipeline: cull mode is dynamic
+    // (set per draw). BLEND keeps a static cull mode (eNone) since dynamic blend
+    // state is unsupported on MoltenVK, so the blend pipeline stays separate.
+    auto forward = Pipeline::forwardConfig();
+    CHECK(forward.dynamicCullMode);
+
+    auto blend = Pipeline::forwardBlendConfig();
+    CHECK_FALSE(blend.dynamicCullMode);
+    CHECK(blend.cullMode == vk::CullModeFlagBits::eNone);
+    CHECK(blend.blendEnable);
+}
+
 TEST_CASE("PipelineConfig.ShadowConfigCullsFrontFaces", "[PipelineConfig]")
 {
     auto config = Pipeline::shadowConfig();

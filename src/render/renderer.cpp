@@ -152,7 +152,6 @@ Renderer::Renderer(const Window& window, std::string environmentPath, RendererDe
     : device_(window),
       swapchain_(device_, window),
       pipelineOpaque_(device_, Pipeline::forwardConfig()),
-      pipelineOpaqueDoubleSided_(device_, Pipeline::forwardDoubleSidedConfig()),
       pipelineBlend_(device_, Pipeline::forwardBlendConfig()),
       skyboxPipeline_(device_, Pipeline::skyboxConfig()),
       frame_(device_, swapchain_),
@@ -179,8 +178,6 @@ Renderer::Renderer(const Window& window, std::string environmentPath, RendererDe
     particles_.recreate(postProcessing_.offscreenColourTarget());
     forwardOpaqueHandle_ =
         resources_.registerPipeline(pipelineOpaque_.pipeline(), pipelineOpaque_.pipelineLayout());
-    forwardOpaqueDoubleSidedHandle_ = resources_.registerPipeline(
-        pipelineOpaqueDoubleSided_.pipeline(), pipelineOpaqueDoubleSided_.pipelineLayout());
     forwardBlendHandle_ =
         resources_.registerPipeline(pipelineBlend_.pipeline(), pipelineBlend_.pipelineLayout());
     skyboxPipelineHandle_ =
@@ -539,9 +536,8 @@ void Renderer::recordDrawBucket(vk::CommandBuffer cmd, const std::vector<DrawCom
 {
     for (const auto& dc : bucket)
     {
-        const bool isForwardPipeline = dc.pipeline == forwardOpaqueHandle_ ||
-                                       dc.pipeline == forwardOpaqueDoubleSidedHandle_ ||
-                                       dc.pipeline == forwardBlendHandle_;
+        const bool isForwardPipeline =
+            dc.pipeline == forwardOpaqueHandle_ || dc.pipeline == forwardBlendHandle_;
         if (dc.pipeline != lastBoundPipeline)
         {
             cmd.bindPipeline(vk::PipelineBindPoint::eGraphics,
@@ -566,6 +562,14 @@ void Renderer::recordDrawBucket(vk::CommandBuffer cmd, const std::vector<DrawCom
                                        resources_.bindlessDescriptorSet(), {});
             }
             lastBoundPipeline = dc.pipeline;
+        }
+        // The merged opaque/double-sided pipeline declares cull mode dynamic;
+        // set it per draw. Blend (static eNone) and skybox pipelines must not be
+        // touched here — they did not declare the dynamic state.
+        if (dc.pipeline == forwardOpaqueHandle_)
+        {
+            cmd.setCullMode(dc.doubleSided ? vk::CullModeFlagBits::eNone
+                                           : vk::CullModeFlagBits::eBack);
         }
         if (dc.vertexBuffer != NullBuffer)
         {
@@ -615,8 +619,7 @@ Renderer::DrawBuckets Renderer::collectDrawCommands(vk::CommandBuffer cmd, Scene
     std::vector<DrawCommand> drawCommands;
     recordSkybox(cameraPosition, cameraTarget, drawCommands);
 
-    AlphaPipelines pipelines{forwardOpaqueHandle_, forwardOpaqueDoubleSidedHandle_,
-                             forwardBlendHandle_};
+    AlphaPipelines pipelines{forwardOpaqueHandle_, forwardBlendHandle_};
     RenderContext ctx{device_,
                       swapchain_,
                       frame_,

@@ -44,6 +44,10 @@ struct PipelineConfig
     vk::BlendFactor srcAlphaBlend{vk::BlendFactor::eOne};
     vk::BlendFactor dstAlphaBlend{vk::BlendFactor::eZero};
     bool writeColour{true};
+    // When true the pipeline declares VK_DYNAMIC_STATE_CULL_MODE (core 1.3) and
+    // the static cullMode above is ignored — the renderer sets cull mode per
+    // draw. Lets opaque + double-sided geometry share one forward pipeline.
+    bool dynamicCullMode{false};
     bool depthBiasEnable{false};
     float depthBiasConstant{0.0f};
     float depthBiasSlope{0.0f};
@@ -95,13 +99,9 @@ public:
 
     // Factory producing the PipelineConfig for the forward-lit pipeline,
     // targeting the HDR offscreen colour + shared D32 depth via dynamic
-    // rendering.
+    // rendering. Serves both opaque and double-sided glTF materials — cull mode
+    // is a dynamic state (dynamicCullMode), set per draw by the renderer.
     [[nodiscard]] static PipelineConfig forwardConfig();
-
-    // Variant of forwardConfig with cullMode=None for glTF materials flagged
-    // doubleSided. Otherwise identical to forwardConfig (shaders, bindings,
-    // depth state).
-    [[nodiscard]] static PipelineConfig forwardDoubleSidedConfig();
 
     // Variant of forwardConfig for glTF BLEND materials: cullMode=None,
     // depthWrite disabled, straight-alpha blending

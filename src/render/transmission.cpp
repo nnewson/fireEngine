@@ -36,6 +36,10 @@ void recordTransmissionDrawBucket(vk::CommandBuffer cmd, std::span<const DrawCom
                                    resources.bindlessDescriptorSet(), {});
             lastBoundPipeline = dc.pipeline;
         }
+        // Transmissive draws always use the merged opaque/double-sided forward
+        // pipeline (BLEND draws are bucketed separately), which declares cull
+        // mode dynamic — set it per draw from the material's double-sided flag.
+        cmd.setCullMode(dc.doubleSided ? vk::CullModeFlagBits::eNone : vk::CullModeFlagBits::eBack);
         if (dc.vertexBuffer != NullBuffer)
         {
             cmd.bindVertexBuffers(0, resources.vulkanBuffer(dc.vertexBuffer), {vk::DeviceSize{0}});

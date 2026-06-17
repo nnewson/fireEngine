@@ -210,8 +210,9 @@ private:
 
     Device device_;
     Swapchain swapchain_;
+    // Forward pipeline for opaque + double-sided materials (cull mode set per
+    // draw via dynamic state). BLEND materials use pipelineBlend_.
     Pipeline pipelineOpaque_;
-    Pipeline pipelineOpaqueDoubleSided_;
     Pipeline pipelineBlend_;
     Pipeline skyboxPipeline_;
     Frame frame_;
@@ -228,7 +229,6 @@ private:
     RenderTunables tunables_{};
     std::vector<ClothCollider> clothColliders_;
     PipelineHandle forwardOpaqueHandle_{NullPipeline};
-    PipelineHandle forwardOpaqueDoubleSidedHandle_{NullPipeline};
     PipelineHandle forwardBlendHandle_{NullPipeline};
     PipelineHandle skyboxPipelineHandle_{NullPipeline};
     TextureHandle skyboxCubemapHandle_{NullTexture};

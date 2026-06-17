@@ -448,19 +448,11 @@ std::vector<DrawCommand> Object::buildDrawCommands(const FrameInfo& frame, const
     for (const auto& binding : bindings_)
     {
         const Material& mat = *binding.activeMaterial;
-        PipelineHandle pipe{};
-        if (mat.alphaMode() == AlphaMode::Blend)
-        {
-            pipe = frame.pipelines.blend;
-        }
-        else if (mat.doubleSided())
-        {
-            pipe = frame.pipelines.opaqueDoubleSided;
-        }
-        else
-        {
-            pipe = frame.pipelines.opaque;
-        }
+        // Opaque and double-sided materials share the opaque forward pipeline;
+        // the cull-mode difference is carried on the draw (doubleSided) and set
+        // via dynamic state. BLEND materials use the dedicated blend pipeline.
+        const bool isBlend = mat.alphaMode() == AlphaMode::Blend;
+        const PipelineHandle pipe = isBlend ? frame.pipelines.blend : frame.pipelines.opaque;
 
         Vec3 centroid{world[0, 3], world[1, 3], world[2, 3]};
         float depth = Vec3::dotProduct(forwardVec, centroid - frame.cameraPosition);
@@ -472,6 +464,7 @@ std::vector<DrawCommand> Object::buildDrawCommands(const FrameInfo& frame, const
         cmd.indexType = binding.geometry->indexType();
         cmd.descriptorSet = binding.descSets[frame.currentFrame];
         cmd.pipeline = pipe;
+        cmd.doubleSided = mat.doubleSided();
         cmd.sortDepth = depth;
         cmd.objectId = objectId_;
         cmd.hasSkin = hasSkin;

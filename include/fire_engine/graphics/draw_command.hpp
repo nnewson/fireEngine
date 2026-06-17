@@ -43,6 +43,11 @@ struct DrawCommand
     // the scene-colour capture so its fragment shader can sample the
     // post-opaque HDR target via screen-space refraction.
     bool transmissive{false};
+    // Drives the forward pipeline's dynamic cull mode: double-sided draws cull
+    // nothing, single-sided cull back faces. Opaque and double-sided draws share
+    // one forward pipeline (set per draw via VK_DYNAMIC_STATE_CULL_MODE); only
+    // relevant for the merged opaque/double-sided pipeline, ignored for blend.
+    bool doubleSided{false};
     uint32_t objectId{0};
     bool hasSkin{false};
     int selfShadowSlot{-1};
