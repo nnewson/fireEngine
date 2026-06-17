@@ -1,11 +1,11 @@
 #version 450
+#extension GL_EXT_buffer_reference : require
 
 // Write the solved particle positions + recomputed grid normals into the render
 // vertex buffer (the same buffer the forward/shadow passes read as vertex input).
 // The buffer is a tightly-packed array of the C++ Vertex struct; we treat it as a
-// flat float array and write only position (floats 0..2) and normal (floats 6..8),
-// leaving the static attributes (colour/uv/tangent) untouched. STRIDE / offsets
-// are asserted against sizeof(Vertex) on the C++ side.
+// flat float array and write only position (floats 0..2) and normal (floats 6..8).
+// Buffers reach the shader as bufferDeviceAddress pointers.
 
 layout(local_size_x = 64) in;
 
@@ -15,11 +15,31 @@ struct Particle
     vec4 prev;
     vec4 vel;
 };
+struct Constraint
+{
+    uint a;
+    uint b;
+    float restLength;
+    float compliance;
+};
+struct Collider
+{
+    vec4 a;
+    vec4 b;
+    vec4 c;
+    int type;
+};
 
-layout(std430, binding = 0) readonly buffer Particles { Particle particles[]; };
-layout(std430, binding = 2) buffer Verts { float verts[]; };
+layout(buffer_reference, std430) buffer Particles { Particle items[]; };
+layout(buffer_reference, std430) buffer Constraints { Constraint items[]; };
+layout(buffer_reference, std430) buffer Verts { float values[]; };
+layout(buffer_reference, std430) buffer Colliders { int count; Collider items[]; };
 
 layout(push_constant) uniform Push {
+    Particles particles;
+    Constraints constraints;
+    Verts verts;
+    Colliders colliders;
     vec4 gravity;
     vec4 wind;
     float dt;
@@ -45,7 +65,7 @@ void main()
         return;
     }
 
-    vec3 pos = particles[i].pos.xyz;
+    vec3 pos = pc.particles.items[i].pos.xyz;
 
     // Per-vertex normal from central differences across the grid neighbours.
     uint x = i % pc.resX;
@@ -54,17 +74,19 @@ void main()
     uint xp = x + 1u < pc.resX ? x + 1u : x;
     uint zm = z > 0u ? z - 1u : z;
     uint zp = z + 1u < pc.resZ ? z + 1u : z;
-    vec3 dX = particles[z * pc.resX + xp].pos.xyz - particles[z * pc.resX + xm].pos.xyz;
-    vec3 dZ = particles[zp * pc.resX + x].pos.xyz - particles[zm * pc.resX + x].pos.xyz;
-    vec3 n = cross(dZ, dX);
-    float l = length(n);
-    n = l > 1e-7 ? n / l : vec3(0.0, 1.0, 0.0);
+    vec3 dX = pc.particles.items[z * pc.resX + xp].pos.xyz
+            - pc.particles.items[z * pc.resX + xm].pos.xyz;
+    vec3 dZ = pc.particles.items[zp * pc.resX + x].pos.xyz
+            - pc.particles.items[zm * pc.resX + x].pos.xyz;
+    vec3 nrm = cross(dZ, dX);
+    float l = length(nrm);
+    nrm = l > 1e-7 ? nrm / l : vec3(0.0, 1.0, 0.0);
 
     uint base = i * STRIDE;
-    verts[base + POS_OFFSET + 0u] = pos.x;
-    verts[base + POS_OFFSET + 1u] = pos.y;
-    verts[base + POS_OFFSET + 2u] = pos.z;
-    verts[base + NORMAL_OFFSET + 0u] = n.x;
-    verts[base + NORMAL_OFFSET + 1u] = n.y;
-    verts[base + NORMAL_OFFSET + 2u] = n.z;
+    pc.verts.values[base + POS_OFFSET + 0u] = pos.x;
+    pc.verts.values[base + POS_OFFSET + 1u] = pos.y;
+    pc.verts.values[base + POS_OFFSET + 2u] = pos.z;
+    pc.verts.values[base + NORMAL_OFFSET + 0u] = nrm.x;
+    pc.verts.values[base + NORMAL_OFFSET + 1u] = nrm.y;
+    pc.verts.values[base + NORMAL_OFFSET + 2u] = nrm.z;
 }

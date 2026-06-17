@@ -82,7 +82,7 @@ void DebugOverlay::buildUi(const FrameStats& stats, RenderTunables& tunables)
     static constexpr std::array<const char*, kProfilePassCount> kPassNames{
         "Shadow", "Forward", "Transmission", "TAA", "Particles", "Bloom", "Post"};
 
-    ImGui::Begin("Fire Engine — Debug");
+    ImGui::Begin("Fire Engine - Debug");
 
     const float fps = stats.cpuFrameMs > 0.0f ? 1000.0f / stats.cpuFrameMs : 0.0f;
     ImGui::Text("CPU frame: %.2f ms (%.0f FPS)", stats.cpuFrameMs, fps);
@@ -138,7 +138,7 @@ void DebugOverlay::buildUi(const FrameStats& stats, RenderTunables& tunables)
         ImGui::Checkbox("No shadows", &tunables.noShadows);
     }
 
-    if (ImGui::CollapsingHeader("Lighting / post"))
+    if (ImGui::CollapsingHeader("Lighting / Post"))
     {
         ImGui::SliderFloat("Bloom", &tunables.bloomStrength, 0.0f, 0.2f);
         ImGui::SliderFloat("Diffuse IBL", &tunables.diffuseIbl, 0.0f, 2.0f);
@@ -153,7 +153,7 @@ void DebugOverlay::buildUi(const FrameStats& stats, RenderTunables& tunables)
         ImGui::SliderFloat("Size", &tunables.particleSizeScale, 0.1f, 4.0f);
     }
 
-    if (ImGui::CollapsingHeader("Cloth (-c)"))
+    if (ImGui::CollapsingHeader("Cloth"))
     {
         ImGui::SliderInt("Substeps", &tunables.clothSubsteps, 1, 40);
         // Compliance is inverse stiffness; the small range keeps it usable.

@@ -70,7 +70,11 @@ BufferHandle Resources::createVertexBuffer(std::span<const Vertex> vertices)
 
 BufferHandle Resources::createStorageBuffer(std::size_t size, const void* initialData)
 {
-    auto [buf, mem] = device_->createBuffer(size, vk::BufferUsageFlagBits::eStorageBuffer,
+    // eShaderDeviceAddress: the soft-body solver chains its buffers via 64-bit
+    // GPU pointers (bufferDeviceAddress) instead of descriptor sets.
+    auto [buf, mem] = device_->createBuffer(size,
+                                            vk::BufferUsageFlagBits::eStorageBuffer |
+                                                vk::BufferUsageFlagBits::eShaderDeviceAddress,
                                             vk::MemoryPropertyFlagBits::eHostVisible |
                                                 vk::MemoryPropertyFlagBits::eHostCoherent);
     if (initialData != nullptr)
@@ -86,12 +90,39 @@ BufferHandle Resources::createStorageVertexBuffer(std::span<const Vertex> vertic
 {
     vk::DeviceSize size = vertices.size_bytes();
     auto [buf, mem] = device_->createBuffer(
-        size, vk::BufferUsageFlagBits::eVertexBuffer | vk::BufferUsageFlagBits::eStorageBuffer,
+        size,
+        vk::BufferUsageFlagBits::eVertexBuffer | vk::BufferUsageFlagBits::eStorageBuffer |
+            vk::BufferUsageFlagBits::eShaderDeviceAddress,
         vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
     void* data = mem.mapMemory(0, size);
     std::memcpy(data, vertices.data(), size);
     mem.unmapMemory();
     return storeBuffer(std::move(buf), std::move(mem));
+}
+
+Resources::MappedBufferSet Resources::createMappedDeviceAddressBuffers(std::size_t size)
+{
+    // Per-frame, persistently-mapped storage buffers with a device address — for
+    // the soft-body solver's per-frame collider buffer (written each frame from
+    // the CPU, addressed by the compute shaders).
+    MappedBufferSet result;
+    for (int i = 0; i < kMaxFramesInFlight; ++i)
+    {
+        auto [buf, mem] = device_->createBuffer(static_cast<vk::DeviceSize>(size),
+                                                vk::BufferUsageFlagBits::eStorageBuffer |
+                                                    vk::BufferUsageFlagBits::eShaderDeviceAddress,
+                                                vk::MemoryPropertyFlagBits::eHostVisible |
+                                                    vk::MemoryPropertyFlagBits::eHostCoherent);
+        result.mapped[i] = mem.mapMemory(0, static_cast<vk::DeviceSize>(size));
+        result.buffers[i] = storeBuffer(std::move(buf), std::move(mem));
+    }
+    return result;
+}
+
+vk::DeviceAddress Resources::bufferAddress(BufferHandle handle) const noexcept
+{
+    return device_->device().getBufferAddress(vk::BufferDeviceAddressInfo{.buffer =
+                                                                              vulkanBuffer(handle)});
 }
 
 BufferHandle Resources::createIndexBuffer(std::span<const uint16_t> indices)

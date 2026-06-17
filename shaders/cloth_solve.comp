@@ -1,18 +1,18 @@
 #version 450
+#extension GL_EXT_buffer_reference : require
 
 // XPBD distance-constraint projection for one colour batch [rangeBegin, rangeEnd).
-// The batch is graph-coloured so no two constraints share a particle — the writes
-// are race-free within a dispatch (Gauss-Seidel by colour).
+// The batch is graph-coloured so no two constraints share a particle — race-free
+// within a dispatch (Gauss-Seidel by colour). Buffers via bufferDeviceAddress.
 
 layout(local_size_x = 64) in;
 
 struct Particle
 {
-    vec4 pos;  // xyz position, w = invMass
+    vec4 pos; // xyz position, w = invMass
     vec4 prev;
     vec4 vel;
 };
-
 struct Constraint
 {
     uint a;
@@ -20,14 +20,27 @@ struct Constraint
     float restLength;
     float compliance;
 };
+struct Collider
+{
+    vec4 a;
+    vec4 b;
+    vec4 c;
+    int type;
+};
 
-layout(std430, binding = 0) buffer Particles { Particle particles[]; };
-layout(std430, binding = 1) readonly buffer Constraints { Constraint constraints[]; };
+layout(buffer_reference, std430) buffer Particles { Particle items[]; };
+layout(buffer_reference, std430) buffer Constraints { Constraint items[]; };
+layout(buffer_reference, std430) buffer Verts { float values[]; };
+layout(buffer_reference, std430) buffer Colliders { int count; Collider items[]; };
 
 layout(push_constant) uniform Push {
+    Particles particles;
+    Constraints constraints;
+    Verts verts;
+    Colliders colliders;
     vec4 gravity;
     vec4 wind;
-    float dt; // substep dt
+    float dt;
     uint particleCount;
     uint rangeBegin;
     uint rangeEnd;
@@ -45,11 +58,11 @@ void main()
         return;
     }
 
-    Constraint c = constraints[e];
-    vec3 pa = particles[c.a].pos.xyz;
-    float wa = particles[c.a].pos.w;
-    vec3 pb = particles[c.b].pos.xyz;
-    float wb = particles[c.b].pos.w;
+    Constraint c = pc.constraints.items[e];
+    vec3 pa = pc.particles.items[c.a].pos.xyz;
+    float wa = pc.particles.items[c.a].pos.w;
+    vec3 pb = pc.particles.items[c.b].pos.xyz;
+    float wb = pc.particles.items[c.b].pos.w;
 
     float wsum = wa + wb;
     if (wsum <= 0.0)
@@ -68,6 +81,6 @@ void main()
     float deltaLambda = -(len - c.restLength) / (wsum + alpha);
     vec3 corr = deltaLambda * d / len;
 
-    particles[c.a].pos.xyz = pa + wa * corr;
-    particles[c.b].pos.xyz = pb - wb * corr;
+    pc.particles.items[c.a].pos.xyz = pa + wa * corr;
+    pc.particles.items[c.b].pos.xyz = pb - wb * corr;
 }

@@ -2,7 +2,6 @@
 #include <fire_engine/math/view_basis.hpp>
 
 #include <cmath>
-#include <limits>
 #include <numbers>
 
 #include <support/test_traits.hpp>

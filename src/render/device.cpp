@@ -210,6 +210,13 @@ void Device::createLogicalDevice()
     features13.synchronization2 = vk::True;
     features13.dynamicRendering = vk::True;
 
+    // bufferDeviceAddress (core 1.2): the soft-body solver passes its buffers to
+    // compute as 64-bit GPU pointers (GL_EXT_buffer_reference) instead of
+    // descriptor sets.
+    vk::PhysicalDeviceVulkan12Features features12{};
+    features12.bufferDeviceAddress = vk::True;
+    features13.pNext = &features12;
+
     // Shadow mapping uses sampler2DShadow (hardware PCF), which requires
     // compareEnable=VK_TRUE on the sampler. MoltenVK gates that behind the
     // portability-subset feature mutableComparisonSamplers — enable it here.
@@ -260,6 +267,13 @@ Device::createBuffer(vk::DeviceSize size, vk::BufferUsageFlags usage,
         .allocationSize = req.size,
         .memoryTypeIndex = findMemoryType(req.memoryTypeBits, props),
     };
+    // Buffers whose addresses are taken (bufferDeviceAddress) must be allocated
+    // with the matching memory-allocate flag.
+    vk::MemoryAllocateFlagsInfo flagsInfo{.flags = vk::MemoryAllocateFlagBits::eDeviceAddress};
+    if (usage & vk::BufferUsageFlagBits::eShaderDeviceAddress)
+    {
+        ai.pNext = &flagsInfo;
+    }
     vk::raii::DeviceMemory mem(device_, ai);
     buf.bindMemory(*mem, 0);
 

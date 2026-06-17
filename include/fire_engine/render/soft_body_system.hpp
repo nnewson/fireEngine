@@ -31,15 +31,15 @@ struct ClothSimParams
 };
 
 // Renderer-owned GPU soft-body (cloth) solver (Roadmap #2). Owns the XPBD compute
-// pipelines and, per registered cloth, the particle + constraint buffers and a
-// descriptor set. Each frame `recordSolve` runs the substep loop (predict →
-// per-colour distance solve → finalize) writing solved positions + normals into
-// the cloth's render vertex buffer, which the forward/shadow passes then read.
+// pipelines and, per registered cloth, the particle + constraint buffers. Each
+// frame `recordSolve` runs the substep loop (predict → per-colour distance solve
+// → collide → finalize) writing solved positions + normals into the cloth's
+// render vertex buffer, which the forward/shadow passes then read.
 //
-// v1 wires the solver with descriptor sets (the ParticleSystem pattern);
-// bufferDeviceAddress is a deferred follow-up (see roadmap.md). Cloths are
-// registered imperatively via addCloth — a Cloth scene component + gather is a
-// later refactor.
+// The solver is descriptor-free: every buffer (particles, constraints, render
+// verts, per-frame colliders) reaches the shaders as a 64-bit bufferDeviceAddress
+// pointer carried in the push constant. Cloths are registered imperatively via
+// addCloth — a Cloth scene component + gather is a later refactor.
 class SoftBodySystem
 {
 public:
@@ -51,9 +51,9 @@ public:
     SoftBodySystem(SoftBodySystem&&) noexcept = default;
     SoftBodySystem& operator=(SoftBodySystem&&) noexcept = default;
 
-    // Register a cloth: allocate + upload its particle/constraint buffers and bind
-    // a solver descriptor set over them and the (compute-writable) render vertex
-    // buffer. `vertexBuffer` is the Geometry's storage vertex buffer.
+    // Register a cloth: allocate + upload its particle/constraint buffers and cache
+    // their GPU addresses (plus the compute-writable render vertex buffer's).
+    // `vertexBuffer` is the Geometry's storage vertex buffer.
     void addCloth(const ClothMesh& mesh, BufferHandle vertexBuffer);
 
     [[nodiscard]] bool empty() const noexcept
@@ -64,7 +64,7 @@ public:
     // Record the substep dispatch chain for every cloth (predict → solve → collide
     // per substep, then finalize), ending with a compute-write → vertex-input-read
     // barrier on each render vertex buffer. Uploads `colliders` into this frame's
-    // collider UBO first. Recorded before the shadow pass.
+    // collider buffer first. Recorded before the shadow pass.
     void recordSolve(vk::CommandBuffer cmd, float dt, uint32_t frameIndex,
                      std::span<const ClothCollider> colliders, const ClothSimParams& params) const;
 
@@ -76,25 +76,25 @@ private:
         BufferHandle particles{NullBuffer};
         BufferHandle constraints{NullBuffer};
         BufferHandle verts{NullBuffer};
-        // One descriptor set per frame-in-flight: 0/1/2 are the shared particle/
-        // constraint/vertex buffers, binding 3 is that frame's collider UBO.
-        std::vector<vk::raii::DescriptorSet> sets;
+        // GPU pointers (bufferDeviceAddress) of the above, pushed to the solver.
+        vk::DeviceAddress particlesAddr{0};
+        vk::DeviceAddress constraintsAddr{0};
+        vk::DeviceAddress vertsAddr{0};
         uint32_t particleCount{0};
         std::vector<uint32_t> colourRanges;
         uint32_t resX{0};
         uint32_t resZ{0};
     };
 
-    const Device* device_{nullptr};
     Resources* resources_{nullptr};
     ComputePipeline predict_;
     ComputePipeline solve_;
     ComputePipeline collide_;
     ComputePipeline finalize_;
-    vk::raii::DescriptorPool pool_{nullptr};
-    // Per-frame collider UBO (count + ClothCollider[kMaxClothColliders]), rewritten
-    // each frame from the gathered world colliders.
-    Resources::MappedBufferSet colliderUbo_;
+    // Per-frame collider buffer (count + ClothCollider[kMaxClothColliders]) +
+    // its device address, rewritten each frame from the gathered world colliders.
+    Resources::MappedBufferSet colliderBuffers_;
+    std::array<vk::DeviceAddress, kMaxFramesInFlight> colliderAddrs_{};
     std::vector<Cloth> cloths_;
 };
 

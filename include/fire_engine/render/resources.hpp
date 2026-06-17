@@ -94,6 +94,11 @@ public:
     // state, shared across frames — the GPU serialises frames on the graphics
     // queue, so no per-frame copies are needed).
     [[nodiscard]] BufferHandle createStorageBuffer(std::size_t size, const void* initialData);
+    // Per-frame, persistently-mapped storage buffers with a device address (for
+    // the soft-body solver's per-frame collider buffer, addressed via bDA).
+    [[nodiscard]] MappedBufferSet createMappedDeviceAddressBuffers(std::size_t size);
+    // GPU pointer (bufferDeviceAddress) of a buffer created with eShaderDeviceAddress.
+    [[nodiscard]] vk::DeviceAddress bufferAddress(BufferHandle handle) const noexcept;
     [[nodiscard]] uint32_t allocateObjectId() noexcept;
 
     // --- Shadow map + offscreen textures ---

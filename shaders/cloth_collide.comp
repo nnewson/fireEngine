@@ -1,12 +1,12 @@
 #version 450
+#extension GL_EXT_buffer_reference : require
 
 // XPBD collision projection: push each (free) particle out of every world-space
-// collider. Runs each substep after the distance solve. Colliders come from the
-// per-frame UBO (gathered from PhysicsWorld + an explicit ground plane).
+// collider. Runs each substep after the distance solve. Buffers + the collider
+// list reach the shader as bufferDeviceAddress pointers in the push constant.
 
 layout(local_size_x = 64) in;
 
-const int kMaxClothColliders = 16;
 const float MARGIN = 0.01; // skin offset; keeps the cloth a touch off the surface
 
 struct Particle
@@ -15,7 +15,13 @@ struct Particle
     vec4 prev;
     vec4 vel;
 };
-
+struct Constraint
+{
+    uint a;
+    uint b;
+    float restLength;
+    float compliance;
+};
 // type 0 plane: a=(normal.xyz, offset); 1 sphere: a=(center.xyz, radius);
 // 2 box: a=center, b=halfExtents, c=orientation quat; 3 capsule: a=(p0.xyz, radius), b=(p1.xyz,_)
 struct Collider
@@ -26,13 +32,16 @@ struct Collider
     int type;
 };
 
-layout(std430, binding = 0) buffer Particles { Particle particles[]; };
-layout(std140, binding = 3) uniform Colliders {
-    int colliderCount;
-    Collider colliders[kMaxClothColliders];
-};
+layout(buffer_reference, std430) buffer Particles { Particle items[]; };
+layout(buffer_reference, std430) buffer Constraints { Constraint items[]; };
+layout(buffer_reference, std430) buffer Verts { float values[]; };
+layout(buffer_reference, std430) buffer Colliders { int count; Collider items[]; };
 
 layout(push_constant) uniform Push {
+    Particles particles;
+    Constraints constraints;
+    Verts verts;
+    Colliders colliders;
     vec4 gravity;
     vec4 wind;
     float dt;
@@ -45,7 +54,6 @@ layout(push_constant) uniform Push {
     float compliance;
 } pc;
 
-// Rotate v by quaternion q (xyz = vector part, w = scalar).
 vec3 qRotate(vec4 q, vec3 v)
 {
     return v + 2.0 * cross(q.xyz, cross(q.xyz, v) + q.w * v);
@@ -58,15 +66,16 @@ vec3 qRotateInv(vec4 q, vec3 v)
 void main()
 {
     uint i = gl_GlobalInvocationID.x;
-    if (i >= pc.particleCount || particles[i].pos.w == 0.0)
+    if (i >= pc.particleCount || pc.particles.items[i].pos.w == 0.0)
     {
         return; // out of range, or pinned
     }
 
-    vec3 p = particles[i].pos.xyz;
-    for (int k = 0; k < colliderCount; ++k)
+    int n = pc.colliders.count;
+    vec3 p = pc.particles.items[i].pos.xyz;
+    for (int k = 0; k < n; ++k)
     {
-        Collider col = colliders[k];
+        Collider col = pc.colliders.items[k];
         if (col.type == 0) // plane half-space
         {
             float d = dot(p, col.a.xyz) - col.a.w;
@@ -91,7 +100,7 @@ void main()
             vec3 he = col.b.xyz + vec3(MARGIN);
             if (all(lessThan(abs(local), he)))
             {
-                vec3 pen = he - abs(local); // penetration depth per axis
+                vec3 pen = he - abs(local);
                 vec3 sgn = sign(local);
                 if (pen.x <= pen.y && pen.x <= pen.z)
                 {
@@ -124,5 +133,5 @@ void main()
             }
         }
     }
-    particles[i].pos.xyz = p;
+    pc.particles.items[i].pos.xyz = p;
 }
