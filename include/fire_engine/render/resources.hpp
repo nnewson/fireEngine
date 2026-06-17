@@ -266,6 +266,11 @@ public:
 
 private:
     BufferHandle storeBuffer(vk::raii::Buffer buf, vk::raii::DeviceMemory mem);
+    [[nodiscard]] BufferHandle createHostVisibleBuffer(vk::DeviceSize size,
+                                                       vk::BufferUsageFlags usage,
+                                                       const void* initialData = nullptr);
+    [[nodiscard]] MappedBufferSet createMappedHostVisibleBuffers(std::size_t size,
+                                                                 vk::BufferUsageFlags usage);
     [[nodiscard]] TextureHandle createFallbackTexture(FallbackTextureKind kind);
 
     const Device* device_;
@@ -313,6 +318,20 @@ private:
     void createSampler(TextureEntry& entry, const vk::SamplerCreateInfo& samplerInfo);
     void createSampledTextureSampler(TextureEntry& entry, const SamplerSettings& sampler,
                                      uint32_t mipLevels, vk::BorderColor borderColor);
+    struct Texture2DTargetDesc
+    {
+        vk::Format format{vk::Format::eUndefined};
+        vk::Extent2D extent{};
+        uint32_t mipLevels{1};
+        vk::ImageUsageFlags usage{};
+        vk::Filter filter{vk::Filter::eLinear};
+        vk::SamplerMipmapMode mipmapMode{vk::SamplerMipmapMode::eNearest};
+        float minLod{0.0f};
+        float maxLod{1.0f};
+        bool perMipViews{false};
+        bool initialShaderReadOnlyLayout{false};
+    };
+    [[nodiscard]] TextureHandle createTexture2DTarget(const Texture2DTargetDesc& desc);
     [[nodiscard]] TextureHandle createUploaded2DTexture(const void* pixels, int width, int height,
                                                         vk::Format format,
                                                         vk::DeviceSize bytesPerPixel,

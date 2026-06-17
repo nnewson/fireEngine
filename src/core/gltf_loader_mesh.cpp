@@ -311,53 +311,64 @@ std::optional<AABB> GltfLoader::meshBounds(const fastgltf::Asset& asset, const f
     return bounds;
 }
 
-Image GltfLoader::loadImage(const fastgltf::Asset& asset, std::size_t imageIndex,
-                            const std::string& baseDir)
+namespace
+{
+
+struct ImageSourceData
+{
+    std::optional<std::filesystem::path> path;
+    std::vector<std::byte> bytes;
+    std::string label;
+};
+
+ImageSourceData resolveImageSourceData(const fastgltf::Asset& asset, std::size_t imageIndex,
+                                       const std::string& baseDir)
 {
     const auto& image = asset.images[imageIndex];
+    ImageSourceData result{.label = "image[" + std::to_string(imageIndex) + "]"};
 
     if (auto* uri = std::get_if<fastgltf::sources::URI>(&image.data);
         uri != nullptr && uri->uri.isLocalPath() && !uri->uri.isDataUri() &&
         uri->fileByteOffset == 0)
     {
-        return Image::load_from_file((std::filesystem::path(baseDir) / uri->uri.fspath()).string());
+        result.path = std::filesystem::path(baseDir) / uri->uri.fspath();
+        return result;
     }
 
-    auto bytes = loadDataSourceBytes(asset, image.data, baseDir,
-                                     "image[" + std::to_string(imageIndex) + "]");
-    if (bytes.empty())
+    result.bytes = loadDataSourceBytes(asset, image.data, baseDir, result.label);
+    if (result.bytes.empty())
     {
-        throw std::runtime_error("Image data is empty for image[" + std::to_string(imageIndex) +
-                                 "]");
+        throw std::runtime_error("Image data is empty for " + result.label);
+    }
+    return result;
+}
+
+} // namespace
+
+Image GltfLoader::loadImage(const fastgltf::Asset& asset, std::size_t imageIndex,
+                            const std::string& baseDir)
+{
+    const ImageSourceData source = resolveImageSourceData(asset, imageIndex, baseDir);
+    if (source.path.has_value())
+    {
+        return Image::load_from_file(source.path->string());
     }
 
-    return Image::load_from_memory(reinterpret_cast<const uint8_t*>(bytes.data()), bytes.size(),
-                                   "image[" + std::to_string(imageIndex) + "]");
+    return Image::load_from_memory(reinterpret_cast<const uint8_t*>(source.bytes.data()),
+                                   source.bytes.size(), source.label);
 }
 
 KtxImage GltfLoader::loadKtxImage(const fastgltf::Asset& asset, std::size_t imageIndex,
                                   const std::string& baseDir)
 {
-    const auto& image = asset.images[imageIndex];
-
-    if (auto* uri = std::get_if<fastgltf::sources::URI>(&image.data);
-        uri != nullptr && uri->uri.isLocalPath() && !uri->uri.isDataUri() &&
-        uri->fileByteOffset == 0)
+    const ImageSourceData source = resolveImageSourceData(asset, imageIndex, baseDir);
+    if (source.path.has_value())
     {
-        return KtxImage::load_from_file(
-            (std::filesystem::path(baseDir) / uri->uri.fspath()).string());
+        return KtxImage::load_from_file(source.path->string());
     }
 
-    auto bytes = loadDataSourceBytes(asset, image.data, baseDir,
-                                     "image[" + std::to_string(imageIndex) + "]");
-    if (bytes.empty())
-    {
-        throw std::runtime_error("Image data is empty for image[" + std::to_string(imageIndex) +
-                                 "]");
-    }
-
-    return KtxImage::load_from_memory(reinterpret_cast<const uint8_t*>(bytes.data()), bytes.size(),
-                                      "image[" + std::to_string(imageIndex) + "]");
+    return KtxImage::load_from_memory(reinterpret_cast<const uint8_t*>(source.bytes.data()),
+                                      source.bytes.size(), source.label);
 }
 
 const Texture* GltfLoader::resolveTextureIndex(const fastgltf::Asset& asset,

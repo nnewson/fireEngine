@@ -1,4 +1,5 @@
 #include <cstddef>
+#include <utility>
 
 #include <fire_engine/core/shader_loader.hpp>
 #include <fire_engine/graphics/gpu_limits.hpp>
@@ -28,6 +29,52 @@ Pipeline::Pipeline(const Device& device, const PipelineConfig& config)
     }
     createGraphicsPipeline(config);
 }
+
+namespace
+{
+
+[[nodiscard]]
+vk::DescriptorSetLayoutBinding fragmentBinding(uint32_t binding, vk::DescriptorType type)
+{
+    return vk::DescriptorSetLayoutBinding{binding, type, 1, vk::ShaderStageFlagBits::eFragment};
+}
+
+[[nodiscard]]
+vk::DescriptorSetLayoutBinding combinedImageSamplerBinding(uint32_t binding)
+{
+    return fragmentBinding(binding, vk::DescriptorType::eCombinedImageSampler);
+}
+
+[[nodiscard]]
+PipelineConfig fullscreenConfig(std::string vertShaderPath, std::string fragShaderPath,
+                                vk::Format colourFormat)
+{
+    PipelineConfig config;
+    config.vertShaderPath = std::move(vertShaderPath);
+    config.fragShaderPath = std::move(fragShaderPath);
+    config.colourFormats = {colourFormat};
+    config.useVertexInput = false;
+    config.depthTestEnable = false;
+    config.depthWrite = false;
+    config.cullMode = vk::CullModeFlagBits::eNone;
+    return config;
+}
+
+void addFragmentPushConstant(PipelineConfig& config, uint32_t size)
+{
+    config.pushConstantRanges.emplace_back(vk::ShaderStageFlagBits::eFragment, 0, size);
+}
+
+void enableAdditiveBlend(PipelineConfig& config)
+{
+    config.blendEnable = true;
+    config.srcColourBlend = vk::BlendFactor::eOne;
+    config.dstColourBlend = vk::BlendFactor::eOne;
+    config.srcAlphaBlend = vk::BlendFactor::eOne;
+    config.dstAlphaBlend = vk::BlendFactor::eOne;
+}
+
+} // namespace
 
 void Pipeline::createBindlessDescriptorSetLayout()
 {
@@ -218,64 +265,37 @@ PipelineConfig Pipeline::selfShadowFirstConfig()
 
 PipelineConfig Pipeline::postProcessConfig(vk::Format colourFormat)
 {
-    PipelineConfig config;
-    config.vertShaderPath = "postprocess.vert.spv";
-    config.fragShaderPath = "postprocess.frag.spv";
+    PipelineConfig config =
+        fullscreenConfig("postprocess.vert.spv", "postprocess.frag.spv", colourFormat);
     config.bindings = {
-        {bindingIndex(PostProcessBinding::HdrInput), vk::DescriptorType::eCombinedImageSampler, 1,
-         vk::ShaderStageFlagBits::eFragment},
+        combinedImageSamplerBinding(bindingIndex(PostProcessBinding::HdrInput)),
         // 1: bloom mip 0 (additively composited over the tone-mapped HDR input).
-        {bindingIndex(PostProcessBinding::BloomInput), vk::DescriptorType::eCombinedImageSampler, 1,
-         vk::ShaderStageFlagBits::eFragment},
+        combinedImageSamplerBinding(bindingIndex(PostProcessBinding::BloomInput)),
     };
-    config.pushConstantRanges.emplace_back(vk::ShaderStageFlagBits::eFragment, 0,
-                                           static_cast<uint32_t>(sizeof(PostProcessPushConstants)));
-    config.colourFormats = {colourFormat};
-    config.useVertexInput = false;
-    config.depthTestEnable = false;
-    config.depthWrite = false;
-    config.cullMode = vk::CullModeFlagBits::eNone;
+    addFragmentPushConstant(config, static_cast<uint32_t>(sizeof(PostProcessPushConstants)));
     return config;
 }
 
 PipelineConfig Pipeline::taaResolveConfig(vk::Format colourFormat)
 {
-    PipelineConfig config;
-    config.vertShaderPath = "postprocess.vert.spv";
-    config.fragShaderPath = "taa.frag.spv";
+    PipelineConfig config = fullscreenConfig("postprocess.vert.spv", "taa.frag.spv", colourFormat);
     config.bindings = {
-        {bindingIndex(TaaBinding::CurrentColor), vk::DescriptorType::eCombinedImageSampler, 1,
-         vk::ShaderStageFlagBits::eFragment},
-        {bindingIndex(TaaBinding::Velocity), vk::DescriptorType::eCombinedImageSampler, 1,
-         vk::ShaderStageFlagBits::eFragment},
-        {bindingIndex(TaaBinding::History), vk::DescriptorType::eCombinedImageSampler, 1,
-         vk::ShaderStageFlagBits::eFragment},
+        combinedImageSamplerBinding(bindingIndex(TaaBinding::CurrentColor)),
+        combinedImageSamplerBinding(bindingIndex(TaaBinding::Velocity)),
+        combinedImageSamplerBinding(bindingIndex(TaaBinding::History)),
     };
-    config.pushConstantRanges.emplace_back(vk::ShaderStageFlagBits::eFragment, 0,
-                                           static_cast<uint32_t>(sizeof(TaaResolvePushConstants)));
-    config.colourFormats = {colourFormat};
-    config.useVertexInput = false;
-    config.depthTestEnable = false;
-    config.depthWrite = false;
-    config.cullMode = vk::CullModeFlagBits::eNone;
+    addFragmentPushConstant(config, static_cast<uint32_t>(sizeof(TaaResolvePushConstants)));
     return config;
 }
 
 PipelineConfig Pipeline::bloomDownsampleConfig(vk::Format colourFormat)
 {
-    PipelineConfig config;
-    config.vertShaderPath = "postprocess.vert.spv";
-    config.fragShaderPath = "bloom_downsample.frag.spv";
+    PipelineConfig config =
+        fullscreenConfig("postprocess.vert.spv", "bloom_downsample.frag.spv", colourFormat);
     config.bindings = {
-        {0, vk::DescriptorType::eCombinedImageSampler, 1, vk::ShaderStageFlagBits::eFragment},
+        combinedImageSamplerBinding(0),
     };
-    config.pushConstantRanges.emplace_back(vk::ShaderStageFlagBits::eFragment, 0,
-                                           static_cast<uint32_t>(sizeof(BloomPushConstants)));
-    config.colourFormats = {colourFormat};
-    config.useVertexInput = false;
-    config.depthTestEnable = false;
-    config.depthWrite = false;
-    config.cullMode = vk::CullModeFlagBits::eNone;
+    addFragmentPushConstant(config, static_cast<uint32_t>(sizeof(BloomPushConstants)));
     return config;
 }
 
@@ -285,39 +305,23 @@ PipelineConfig Pipeline::bloomUpsampleConfig(vk::Format colourFormat)
     config.fragShaderPath = "bloom_upsample.frag.spv";
     // Additive blend so each upsample step adds its tent contribution onto
     // the existing mip content (which was loaded via render-pass eLoad).
-    config.blendEnable = true;
-    config.srcColourBlend = vk::BlendFactor::eOne;
-    config.dstColourBlend = vk::BlendFactor::eOne;
-    config.srcAlphaBlend = vk::BlendFactor::eOne;
-    config.dstAlphaBlend = vk::BlendFactor::eOne;
+    enableAdditiveBlend(config);
     return config;
 }
 
 PipelineConfig Pipeline::particleConfig(vk::Format colourFormat)
 {
-    PipelineConfig config;
-    config.vertShaderPath = "particle.vert.spv";
-    config.fragShaderPath = "particle.frag.spv";
+    PipelineConfig config =
+        fullscreenConfig("particle.vert.spv", "particle.frag.spv", colourFormat);
     config.bindings = {
         {0, vk::DescriptorType::eStorageBuffer, 1, vk::ShaderStageFlagBits::eVertex},
         {1, vk::DescriptorType::eUniformBuffer, 1, vk::ShaderStageFlagBits::eVertex},
         // Scene depth, sampled in the fragment shader for soft-particle fade.
-        {2, vk::DescriptorType::eCombinedImageSampler, 1, vk::ShaderStageFlagBits::eFragment},
+        combinedImageSamplerBinding(2),
     };
-    config.pushConstantRanges.emplace_back(
-        vk::ShaderStageFlagBits::eFragment, 0,
-        static_cast<uint32_t>(sizeof(ParticleSoftPushConstants)));
-    config.colourFormats = {colourFormat};
-    config.useVertexInput = false;
-    config.depthTestEnable = false;
-    config.depthWrite = false;
-    config.cullMode = vk::CullModeFlagBits::eNone;
+    addFragmentPushConstant(config, static_cast<uint32_t>(sizeof(ParticleSoftPushConstants)));
     // Additive: particles add HDR glow on top of the scene (like bloomUpsample).
-    config.blendEnable = true;
-    config.srcColourBlend = vk::BlendFactor::eOne;
-    config.dstColourBlend = vk::BlendFactor::eOne;
-    config.srcAlphaBlend = vk::BlendFactor::eOne;
-    config.dstAlphaBlend = vk::BlendFactor::eOne;
+    enableAdditiveBlend(config);
     return config;
 }
 
@@ -346,70 +350,41 @@ PipelineConfig Pipeline::skyboxConfig()
 
 PipelineConfig Pipeline::environmentConvertConfig(vk::Format colourFormat)
 {
-    PipelineConfig config;
-    config.vertShaderPath = "skybox.vert.spv";
-    config.fragShaderPath = "environment_convert.frag.spv";
+    PipelineConfig config =
+        fullscreenConfig("skybox.vert.spv", "environment_convert.frag.spv", colourFormat);
     config.bindings = {
-        {0, vk::DescriptorType::eCombinedImageSampler, 1, vk::ShaderStageFlagBits::eFragment},
+        combinedImageSamplerBinding(0),
     };
-    config.pushConstantRanges.emplace_back(vk::ShaderStageFlagBits::eFragment, 0,
-                                           static_cast<uint32_t>(sizeof(EnvironmentCaptureUBO)));
-    config.colourFormats = {colourFormat};
-    config.useVertexInput = false;
-    config.depthTestEnable = false;
-    config.depthWrite = false;
-    config.cullMode = vk::CullModeFlagBits::eNone;
+    addFragmentPushConstant(config, static_cast<uint32_t>(sizeof(EnvironmentCaptureUBO)));
     return config;
 }
 
 PipelineConfig Pipeline::irradianceConvolutionConfig(vk::Format colourFormat)
 {
-    PipelineConfig config;
-    config.vertShaderPath = "skybox.vert.spv";
-    config.fragShaderPath = "irradiance_convolution.frag.spv";
+    PipelineConfig config =
+        fullscreenConfig("skybox.vert.spv", "irradiance_convolution.frag.spv", colourFormat);
     config.bindings = {
-        {0, vk::DescriptorType::eCombinedImageSampler, 1, vk::ShaderStageFlagBits::eFragment},
+        combinedImageSamplerBinding(0),
     };
-    config.pushConstantRanges.emplace_back(vk::ShaderStageFlagBits::eFragment, 0,
-                                           static_cast<uint32_t>(sizeof(EnvironmentCaptureUBO)));
-    config.colourFormats = {colourFormat};
-    config.useVertexInput = false;
-    config.depthTestEnable = false;
-    config.depthWrite = false;
-    config.cullMode = vk::CullModeFlagBits::eNone;
+    addFragmentPushConstant(config, static_cast<uint32_t>(sizeof(EnvironmentCaptureUBO)));
     return config;
 }
 
 PipelineConfig Pipeline::prefilterEnvironmentConfig(vk::Format colourFormat)
 {
-    PipelineConfig config;
-    config.vertShaderPath = "skybox.vert.spv";
-    config.fragShaderPath = "prefilter_environment.frag.spv";
+    PipelineConfig config =
+        fullscreenConfig("skybox.vert.spv", "prefilter_environment.frag.spv", colourFormat);
     config.bindings = {
-        {0, vk::DescriptorType::eCombinedImageSampler, 1, vk::ShaderStageFlagBits::eFragment},
+        combinedImageSamplerBinding(0),
     };
-    config.pushConstantRanges.emplace_back(
-        vk::ShaderStageFlagBits::eFragment, 0,
-        static_cast<uint32_t>(sizeof(EnvironmentPrefilterPushConstants)));
-    config.colourFormats = {colourFormat};
-    config.useVertexInput = false;
-    config.depthTestEnable = false;
-    config.depthWrite = false;
-    config.cullMode = vk::CullModeFlagBits::eNone;
+    addFragmentPushConstant(config,
+                            static_cast<uint32_t>(sizeof(EnvironmentPrefilterPushConstants)));
     return config;
 }
 
 PipelineConfig Pipeline::brdfIntegrationConfig(vk::Format colourFormat)
 {
-    PipelineConfig config;
-    config.vertShaderPath = "postprocess.vert.spv";
-    config.fragShaderPath = "brdf_integration.frag.spv";
-    config.colourFormats = {colourFormat};
-    config.useVertexInput = false;
-    config.depthTestEnable = false;
-    config.depthWrite = false;
-    config.cullMode = vk::CullModeFlagBits::eNone;
-    return config;
+    return fullscreenConfig("postprocess.vert.spv", "brdf_integration.frag.spv", colourFormat);
 }
 
 void Pipeline::createDescriptorSetLayout(

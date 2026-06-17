@@ -104,49 +104,61 @@ BufferHandle Resources::storeBuffer(vk::raii::Buffer buf, vk::raii::DeviceMemory
     return BufferHandle{id};
 }
 
+BufferHandle Resources::createHostVisibleBuffer(vk::DeviceSize size, vk::BufferUsageFlags usage,
+                                                const void* initialData)
+{
+    auto [buf, mem] = device_->createBuffer(size, usage,
+                                            vk::MemoryPropertyFlagBits::eHostVisible |
+                                                vk::MemoryPropertyFlagBits::eHostCoherent);
+    if (initialData != nullptr)
+    {
+        void* data = mem.mapMemory(0, size);
+        std::memcpy(data, initialData, static_cast<std::size_t>(size));
+        mem.unmapMemory();
+    }
+    return storeBuffer(std::move(buf), std::move(mem));
+}
+
+Resources::MappedBufferSet Resources::createMappedHostVisibleBuffers(std::size_t size,
+                                                                     vk::BufferUsageFlags usage)
+{
+    MappedBufferSet result;
+    for (int i = 0; i < kMaxFramesInFlight; ++i)
+    {
+        auto [buf, mem] = device_->createBuffer(static_cast<vk::DeviceSize>(size), usage,
+                                                vk::MemoryPropertyFlagBits::eHostVisible |
+                                                    vk::MemoryPropertyFlagBits::eHostCoherent);
+        result.mapped[i] = mem.mapMemory(0, static_cast<vk::DeviceSize>(size));
+        result.buffers[i] = storeBuffer(std::move(buf), std::move(mem));
+    }
+    return result;
+}
+
 // --- Buffer creation ---
 
 BufferHandle Resources::createVertexBuffer(std::span<const Vertex> vertices)
 {
-    vk::DeviceSize size = vertices.size_bytes();
-    auto [buf, mem] = device_->createBuffer(size, vk::BufferUsageFlagBits::eVertexBuffer,
-                                            vk::MemoryPropertyFlagBits::eHostVisible |
-                                                vk::MemoryPropertyFlagBits::eHostCoherent);
-    void* data = mem.mapMemory(0, size);
-    std::memcpy(data, vertices.data(), size);
-    mem.unmapMemory();
-    return storeBuffer(std::move(buf), std::move(mem));
+    return createHostVisibleBuffer(vertices.size_bytes(), vk::BufferUsageFlagBits::eVertexBuffer,
+                                   vertices.data());
 }
 
 BufferHandle Resources::createStorageBuffer(std::size_t size, const void* initialData)
 {
     // eShaderDeviceAddress: the soft-body solver chains its buffers via 64-bit
     // GPU pointers (bufferDeviceAddress) instead of descriptor sets.
-    auto [buf, mem] = device_->createBuffer(
-        size,
-        vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eShaderDeviceAddress,
-        vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
-    if (initialData != nullptr)
-    {
-        void* data = mem.mapMemory(0, size);
-        std::memcpy(data, initialData, size);
-        mem.unmapMemory();
-    }
-    return storeBuffer(std::move(buf), std::move(mem));
+    return createHostVisibleBuffer(static_cast<vk::DeviceSize>(size),
+                                   vk::BufferUsageFlagBits::eStorageBuffer |
+                                       vk::BufferUsageFlagBits::eShaderDeviceAddress,
+                                   initialData);
 }
 
 BufferHandle Resources::createStorageVertexBuffer(std::span<const Vertex> vertices)
 {
-    vk::DeviceSize size = vertices.size_bytes();
-    auto [buf, mem] = device_->createBuffer(
-        size,
-        vk::BufferUsageFlagBits::eVertexBuffer | vk::BufferUsageFlagBits::eStorageBuffer |
-            vk::BufferUsageFlagBits::eShaderDeviceAddress,
-        vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
-    void* data = mem.mapMemory(0, size);
-    std::memcpy(data, vertices.data(), size);
-    mem.unmapMemory();
-    return storeBuffer(std::move(buf), std::move(mem));
+    return createHostVisibleBuffer(vertices.size_bytes(),
+                                   vk::BufferUsageFlagBits::eVertexBuffer |
+                                       vk::BufferUsageFlagBits::eStorageBuffer |
+                                       vk::BufferUsageFlagBits::eShaderDeviceAddress,
+                                   vertices.data());
 }
 
 Resources::MappedBufferSet Resources::createMappedDeviceAddressBuffers(std::size_t size)
@@ -154,17 +166,8 @@ Resources::MappedBufferSet Resources::createMappedDeviceAddressBuffers(std::size
     // Per-frame, persistently-mapped storage buffers with a device address — for
     // the soft-body solver's per-frame collider buffer (written each frame from
     // the CPU, addressed by the compute shaders).
-    MappedBufferSet result;
-    for (int i = 0; i < kMaxFramesInFlight; ++i)
-    {
-        auto [buf, mem] = device_->createBuffer(
-            static_cast<vk::DeviceSize>(size),
-            vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eShaderDeviceAddress,
-            vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
-        result.mapped[i] = mem.mapMemory(0, static_cast<vk::DeviceSize>(size));
-        result.buffers[i] = storeBuffer(std::move(buf), std::move(mem));
-    }
-    return result;
+    return createMappedHostVisibleBuffers(size, vk::BufferUsageFlagBits::eStorageBuffer |
+                                                    vk::BufferUsageFlagBits::eShaderDeviceAddress);
 }
 
 vk::DeviceAddress Resources::bufferAddress(BufferHandle handle) const noexcept
@@ -175,26 +178,14 @@ vk::DeviceAddress Resources::bufferAddress(BufferHandle handle) const noexcept
 
 BufferHandle Resources::createIndexBuffer(std::span<const uint16_t> indices)
 {
-    vk::DeviceSize size = indices.size_bytes();
-    auto [buf, mem] = device_->createBuffer(size, vk::BufferUsageFlagBits::eIndexBuffer,
-                                            vk::MemoryPropertyFlagBits::eHostVisible |
-                                                vk::MemoryPropertyFlagBits::eHostCoherent);
-    void* data = mem.mapMemory(0, size);
-    std::memcpy(data, indices.data(), size);
-    mem.unmapMemory();
-    return storeBuffer(std::move(buf), std::move(mem));
+    return createHostVisibleBuffer(indices.size_bytes(), vk::BufferUsageFlagBits::eIndexBuffer,
+                                   indices.data());
 }
 
 BufferHandle Resources::createIndexBuffer(std::span<const uint32_t> indices)
 {
-    vk::DeviceSize size = indices.size_bytes();
-    auto [buf, mem] = device_->createBuffer(size, vk::BufferUsageFlagBits::eIndexBuffer,
-                                            vk::MemoryPropertyFlagBits::eHostVisible |
-                                                vk::MemoryPropertyFlagBits::eHostCoherent);
-    void* data = mem.mapMemory(0, size);
-    std::memcpy(data, indices.data(), size);
-    mem.unmapMemory();
-    return storeBuffer(std::move(buf), std::move(mem));
+    return createHostVisibleBuffer(indices.size_bytes(), vk::BufferUsageFlagBits::eIndexBuffer,
+                                   indices.data());
 }
 
 uint32_t Resources::allocateObjectId() noexcept
@@ -674,6 +665,58 @@ void Resources::createCubemapFaceViews(const Device& device, TextureEntry& entry
     }
 }
 
+TextureHandle Resources::createTexture2DTarget(const Texture2DTargetDesc& desc)
+{
+    TextureHandle handle;
+    TextureEntry& entry = appendTextureEntry(handle, desc.format, desc.mipLevels);
+
+    vk::ImageCreateInfo imgCi = makeImageCreateInfo(
+        {}, vk::ImageType::e2D, entry.format,
+        vk::Extent3D{.width = desc.extent.width, .height = desc.extent.height, .depth = 1},
+        desc.mipLevels, 1, desc.usage);
+    allocateImage(entry, imgCi);
+
+    if (desc.initialShaderReadOnlyLayout)
+    {
+        withOneTimeSubmit(*device_, *cmdPool_,
+                          [&](vk::CommandBuffer cmd)
+                          {
+                              vk::ImageMemoryBarrier2 toShader = makeImageMemoryBarrier(
+                                  vk::PipelineStageFlagBits2::eTopOfPipe, {},
+                                  vk::PipelineStageFlagBits2::eFragmentShader,
+                                  vk::AccessFlagBits2::eShaderRead, vk::ImageLayout::eUndefined,
+                                  vk::ImageLayout::eShaderReadOnlyOptimal, *entry.image,
+                                  makeImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0,
+                                                            desc.mipLevels, 0, 1));
+                              recordImageBarrier(cmd, toShader);
+                          });
+    }
+
+    createImageView(entry, vk::ImageViewType::e2D, vk::ImageAspectFlagBits::eColor, 0,
+                    desc.mipLevels, 0, 1);
+
+    if (desc.perMipViews)
+    {
+        entry.faceViews.reserve(desc.mipLevels);
+        for (uint32_t mipLevel = 0; mipLevel < desc.mipLevels; ++mipLevel)
+        {
+            vk::ImageViewCreateInfo mipCi = makeImageViewCreateInfo(
+                *entry.image, vk::ImageViewType::e2D, entry.format,
+                makeImageSubresourceRange(vk::ImageAspectFlagBits::eColor, mipLevel, 1, 0, 1));
+            entry.faceViews.emplace_back(device_->device(), mipCi);
+        }
+    }
+
+    vk::SamplerCreateInfo samplerCi = makeSamplerCreateInfo(
+        desc.filter, desc.filter, desc.mipmapMode, vk::SamplerAddressMode::eClampToEdge,
+        vk::SamplerAddressMode::eClampToEdge, vk::SamplerAddressMode::eClampToEdge, vk::False, 1.0f,
+        vk::False, vk::CompareOp::eAlways, desc.minLod, desc.maxLod,
+        vk::BorderColor::eFloatOpaqueBlack);
+    entry.sampler = vk::raii::Sampler(device_->device(), samplerCi);
+
+    return handle;
+}
+
 TextureHandle Resources::createTexture(const Image& image, const SamplerSettings& sampler,
                                        TextureEncoding encoding)
 {
@@ -992,100 +1035,41 @@ vk::ImageView Resources::vulkanPointShadowFaceView(TextureHandle handle, uint32_
 
 TextureHandle Resources::createOffscreenColourTarget(vk::Extent2D extent)
 {
-    TextureHandle handle;
-    TextureEntry& entry = appendTextureEntry(handle, vk::Format::eR16G16B16A16Sfloat);
-
     // TransferSrc: KHR_materials_transmission F3 blits this into the sceneColor
     // mip chain. TransferDst: the TAA resolve blits its history result back in
     // here so bloom / post sample the anti-aliased image. Sampled: post-process
     // and the TAA resolve read it. (TAA history targets reuse this same factory.)
-    vk::ImageCreateInfo imgCi = makeImageCreateInfo(
-        {}, vk::ImageType::e2D, entry.format,
-        vk::Extent3D{.width = extent.width, .height = extent.height, .depth = 1}, 1, 1,
-        vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled |
-            vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst);
-    allocateImage(entry, imgCi);
-
-    vk::ImageViewCreateInfo viewCi = makeImageViewCreateInfo(
-        *entry.image, vk::ImageViewType::e2D, entry.format,
-        makeImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1));
-    entry.view = vk::raii::ImageView(device_->device(), viewCi);
-
-    vk::SamplerCreateInfo samplerCi = makeSamplerCreateInfo(
-        vk::Filter::eLinear, vk::Filter::eLinear, vk::SamplerMipmapMode::eNearest,
-        vk::SamplerAddressMode::eClampToEdge, vk::SamplerAddressMode::eClampToEdge,
-        vk::SamplerAddressMode::eClampToEdge, vk::False, 1.0f, vk::False, vk::CompareOp::eAlways,
-        0.0f, 1.0f, vk::BorderColor::eFloatOpaqueBlack);
-    entry.sampler = vk::raii::Sampler(device_->device(), samplerCi);
-
-    return handle;
+    return createTexture2DTarget(Texture2DTargetDesc{
+        .format = vk::Format::eR16G16B16A16Sfloat,
+        .extent = extent,
+        .usage = vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled |
+                 vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst});
 }
 
 TextureHandle Resources::createVelocityTarget(vk::Extent2D extent)
 {
-    TextureHandle handle;
     // RG16F screen-space motion vectors (TAA). Must match the velocity colour
     // format in Pipeline::forwardConfig / skyboxConfig.
-    TextureEntry& entry = appendTextureEntry(handle, vk::Format::eR16G16Sfloat);
-
-    vk::ImageCreateInfo imgCi = makeImageCreateInfo(
-        {}, vk::ImageType::e2D, entry.format,
-        vk::Extent3D{.width = extent.width, .height = extent.height, .depth = 1}, 1, 1,
-        vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled);
-    allocateImage(entry, imgCi);
-
-    vk::ImageViewCreateInfo viewCi = makeImageViewCreateInfo(
-        *entry.image, vk::ImageViewType::e2D, entry.format,
-        makeImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1));
-    entry.view = vk::raii::ImageView(device_->device(), viewCi);
-
     // Nearest sampling — motion vectors must not be filtered across edges.
-    vk::SamplerCreateInfo samplerCi = makeSamplerCreateInfo(
-        vk::Filter::eNearest, vk::Filter::eNearest, vk::SamplerMipmapMode::eNearest,
-        vk::SamplerAddressMode::eClampToEdge, vk::SamplerAddressMode::eClampToEdge,
-        vk::SamplerAddressMode::eClampToEdge, vk::False, 1.0f, vk::False, vk::CompareOp::eAlways,
-        0.0f, 1.0f, vk::BorderColor::eFloatOpaqueBlack);
-    entry.sampler = vk::raii::Sampler(device_->device(), samplerCi);
-
-    return handle;
+    return createTexture2DTarget(Texture2DTargetDesc{
+        .format = vk::Format::eR16G16Sfloat,
+        .extent = extent,
+        .usage = vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled,
+        .filter = vk::Filter::eNearest});
 }
 
 TextureHandle Resources::createBloomChain(uint32_t width, uint32_t height, uint32_t mipLevels)
 {
-    TextureHandle handle;
-    TextureEntry& entry = appendTextureEntry(handle, vk::Format::eR16G16B16A16Sfloat, mipLevels);
-
-    vk::ImageCreateInfo imgCi = makeImageCreateInfo(
-        {}, vk::ImageType::e2D, entry.format,
-        vk::Extent3D{.width = width, .height = height, .depth = 1}, mipLevels, 1,
-        vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled);
-    allocateImage(entry, imgCi);
-
     // Main view spans all mips — used as the post-process bloom input via mip 0.
-    vk::ImageViewCreateInfo viewCi = makeImageViewCreateInfo(
-        *entry.image, vk::ImageViewType::e2D, entry.format,
-        makeImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, mipLevels, 0, 1));
-    entry.view = vk::raii::ImageView(device_->device(), viewCi);
-
     // Per-mip 2D views — each downsample/upsample pass binds one as
     // framebuffer attachment (write) and another as shader input (read).
-    entry.faceViews.reserve(mipLevels);
-    for (uint32_t m = 0; m < mipLevels; ++m)
-    {
-        vk::ImageViewCreateInfo mipCi = makeImageViewCreateInfo(
-            *entry.image, vk::ImageViewType::e2D, entry.format,
-            makeImageSubresourceRange(vk::ImageAspectFlagBits::eColor, m, 1, 0, 1));
-        entry.faceViews.emplace_back(device_->device(), mipCi);
-    }
-
-    vk::SamplerCreateInfo samplerCi = makeSamplerCreateInfo(
-        vk::Filter::eLinear, vk::Filter::eLinear, vk::SamplerMipmapMode::eNearest,
-        vk::SamplerAddressMode::eClampToEdge, vk::SamplerAddressMode::eClampToEdge,
-        vk::SamplerAddressMode::eClampToEdge, vk::False, 1.0f, vk::False, vk::CompareOp::eAlways,
-        0.0f, 0.0f, vk::BorderColor::eFloatOpaqueBlack);
-    entry.sampler = vk::raii::Sampler(device_->device(), samplerCi);
-
-    return handle;
+    return createTexture2DTarget(Texture2DTargetDesc{
+        .format = vk::Format::eR16G16B16A16Sfloat,
+        .extent = vk::Extent2D{.width = width, .height = height},
+        .mipLevels = mipLevels,
+        .usage = vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled,
+        .maxLod = 0.0f,
+        .perMipViews = true});
 }
 
 vk::ImageView Resources::vulkanBloomMipView(TextureHandle handle, uint32_t mipLevel) const noexcept
@@ -1095,52 +1079,26 @@ vk::ImageView Resources::vulkanBloomMipView(TextureHandle handle, uint32_t mipLe
 
 TextureHandle Resources::createSceneColorTarget(uint32_t width, uint32_t height, uint32_t mipLevels)
 {
-    TextureHandle handle;
-    TextureEntry& entry = appendTextureEntry(handle, vk::Format::eR16G16B16A16Sfloat, mipLevels);
-
     // KHR_materials_transmission F3 — receives a blit copy from the post-opaque
     // HDR target and then a vkCmdBlitImage chain for the remaining mips.
-    vk::ImageCreateInfo imgCi = makeImageCreateInfo(
-        {}, vk::ImageType::e2D, entry.format,
-        vk::Extent3D{.width = width, .height = height, .depth = 1}, mipLevels, 1,
-        vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eTransferSrc |
-            vk::ImageUsageFlagBits::eSampled);
-    allocateImage(entry, imgCi);
-
     // Initial transition Undefined → ShaderReadOnlyOptimal for ALL mips. The
     // forward descriptor set binds sceneColor at binding 20 on every draw —
     // including the non-transmissive ones in pass 1 — so the layout must
     // match what the descriptor was written with even before any capture
     // pass writes meaningful contents.
-    withOneTimeSubmit(
-        *device_, *cmdPool_,
-        [&](vk::CommandBuffer cmd)
-        {
-            vk::ImageMemoryBarrier2 toShader = makeImageMemoryBarrier(
-                vk::PipelineStageFlagBits2::eTopOfPipe, {},
-                vk::PipelineStageFlagBits2::eFragmentShader, vk::AccessFlagBits2::eShaderRead,
-                vk::ImageLayout::eUndefined, vk::ImageLayout::eShaderReadOnlyOptimal, *entry.image,
-                makeImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, mipLevels, 0, 1));
-            recordImageBarrier(cmd, toShader);
-        });
-
     // Main view spans all mips so the shader's textureLod sample picks a mip
     // from a roughness-driven LOD.
-    vk::ImageViewCreateInfo viewCi = makeImageViewCreateInfo(
-        *entry.image, vk::ImageViewType::e2D, entry.format,
-        makeImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, mipLevels, 0, 1));
-    entry.view = vk::raii::ImageView(device_->device(), viewCi);
-
     // Linear min/mag + linear mip filter so frosted-glass roughness blends
     // smoothly between mips. ClampToEdge — refraction can read off-screen.
-    vk::SamplerCreateInfo samplerCi = makeSamplerCreateInfo(
-        vk::Filter::eLinear, vk::Filter::eLinear, vk::SamplerMipmapMode::eLinear,
-        vk::SamplerAddressMode::eClampToEdge, vk::SamplerAddressMode::eClampToEdge,
-        vk::SamplerAddressMode::eClampToEdge, vk::False, 1.0f, vk::False, vk::CompareOp::eAlways,
-        0.0f, static_cast<float>(mipLevels), vk::BorderColor::eFloatOpaqueBlack);
-    entry.sampler = vk::raii::Sampler(device_->device(), samplerCi);
-
-    return handle;
+    return createTexture2DTarget(Texture2DTargetDesc{
+        .format = vk::Format::eR16G16B16A16Sfloat,
+        .extent = vk::Extent2D{.width = width, .height = height},
+        .mipLevels = mipLevels,
+        .usage = vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eTransferSrc |
+                 vk::ImageUsageFlagBits::eSampled,
+        .mipmapMode = vk::SamplerMipmapMode::eLinear,
+        .maxLod = static_cast<float>(mipLevels),
+        .initialShaderReadOnlyLayout = true});
 }
 
 void Resources::releaseTexture(TextureHandle handle)
@@ -1159,16 +1117,7 @@ void Resources::releaseTexture(TextureHandle handle)
 
 Resources::MappedBufferSet Resources::createMappedUniformBuffers(std::size_t size)
 {
-    MappedBufferSet result;
-    for (int i = 0; i < kMaxFramesInFlight; ++i)
-    {
-        auto [buf, mem] = device_->createBuffer(
-            static_cast<vk::DeviceSize>(size), vk::BufferUsageFlagBits::eUniformBuffer,
-            vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
-        result.mapped[i] = mem.mapMemory(0, static_cast<vk::DeviceSize>(size));
-        result.buffers[i] = storeBuffer(std::move(buf), std::move(mem));
-    }
-    return result;
+    return createMappedHostVisibleBuffers(size, vk::BufferUsageFlagBits::eUniformBuffer);
 }
 
 Resources::MappedBufferSet Resources::createMappedStorageBuffer(std::size_t size,
@@ -1178,17 +1127,10 @@ Resources::MappedBufferSet Resources::createMappedStorageBuffer(std::size_t size
     // Storage buffers are shared across frames — create a single buffer,
     // but fill both slots so callers can index by frame uniformly.
     // eTransferDst lets callers clear/upload via vkCmdFillBuffer / copy.
-    auto [buf, mem] = device_->createBuffer(
-        static_cast<vk::DeviceSize>(size),
-        vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst,
-        vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
-    if (initialData != nullptr)
-    {
-        void* mapped = mem.mapMemory(0, static_cast<vk::DeviceSize>(size));
-        std::memcpy(mapped, initialData, size);
-        mem.unmapMemory();
-    }
-    auto handle = storeBuffer(std::move(buf), std::move(mem));
+    auto handle = createHostVisibleBuffer(static_cast<vk::DeviceSize>(size),
+                                          vk::BufferUsageFlagBits::eStorageBuffer |
+                                              vk::BufferUsageFlagBits::eTransferDst,
+                                          initialData);
     for (int i = 0; i < kMaxFramesInFlight; ++i)
     {
         result.buffers[i] = handle;
