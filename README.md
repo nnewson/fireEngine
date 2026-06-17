@@ -31,7 +31,7 @@ I've no doubt these are all solved problems nowadays with the Unreal engine et a
 - **Scenegraph architecture** — tree of Nodes with Component variants (Camera, Animator, Mesh, Empty, **Light**, **ParticleEmitter**) that propagate transforms, an `InputState` bundle, and draw commands. Node transforms store rotation as a quaternion so orientations from glTF round-trip exactly
 - **Custom collision and physics path** — glTF `extras.Physics` can create `Static`, `Kinematic`, and `Dynamic` bodies with layer/mask filtering, authored AABB/box/sphere/capsule proxy shapes, linear velocity, mass, restitution, friction, and gravity scale. `PhysicsWorld` owns body/collider state, `SweepAndPruneBroadPhase` gathers AABB candidate pairs, `NarrowPhase` performs swept-AABB time-of-impact tests, and `SceneGraph::submitPhysics` / `SceneGraph::applyPhysics` bridge scene-authored and physics-authored transforms each frame
 - **Backend-decoupled graphics layer** — graphics classes use opaque handles (`BufferHandle`, `TextureHandle`, `DescriptorSetHandle`, `PipelineHandle`) and emit `DrawCommand` structs with no Vulkan dependencies. IBL cubemaps, BRDF LUT, shadow map, bloom chain are all owned by the render layer and referenced through the same handle types
-- **Vulkan rendering** via vulkan.hpp C++ bindings, targeting Vulkan 1.4 with **dynamic rendering** (no `VkRenderPass`/`VkFramebuffer` objects) and **synchronization2** barriers/submits throughout. Built around a **frequency-split forward descriptor layout**: set 0 holds 15 per-object/per-material bindings (frame UBO, material UBO + ten material textures, skin/morph buffers), set 1 holds 13 globals shared by every draw (light UBO, five shadow maps, debug image, compare/debug samplers, three IBL textures, sceneColor). Set 0 is allocated per object × frame; set 1 once per frame and bound at the start of each forward pass. Separate descriptor layouts exist for skybox, shadow, post-process, and bloom passes
+- **Vulkan rendering** via vulkan.hpp C++ bindings, targeting Vulkan 1.4 with **dynamic rendering** (no `VkRenderPass`/`VkFramebuffer` objects) and **synchronization2** barriers/submits throughout. Built around a **frequency-split forward descriptor layout**: set 0 holds 4 per-object vertex-stage bindings (frame UBO, skin/morph buffers), set 1 holds 13 globals shared by every draw (light UBO, five shadow maps, debug image, compare/debug samplers, three IBL textures, sceneColor), and **set 2 is bindless** — one global `sampler2D[]` texture array (indexed by texture handle) plus a global materials SSBO (indexed by a per-draw push constant). Set 0 is allocated per object × frame; sets 1 and 2 once, bound at the start of each forward pass. Separate descriptor layouts exist for skybox, shadow, post-process, and bloom passes
 - **Single source of truth for tunables** — every scalar rendering knob (light intensity, IBL strengths, shadow biases, cascade split λ, bloom strength, IBL extents, camera FOV) lives in `include/fire_engine/render/constants.hpp`. GPU data-layout limits that the Vulkan-free graphics layer also needs (frames-in-flight, joint/morph/light counts, shadow caster caps + matrix layout, cascade count) live one layer down in `include/fire_engine/graphics/gpu_limits.hpp`, which `constants.hpp` includes — so render-side code still sees every constant through one include, while graphics headers stay free of `render/`
 - **Texture mapping** via [stb_image](https://github.com/nothings/stb), including HDR equirectangular loading for the skybox; uploaded to GPU through staging buffers
 - **First-person camera** with keyboard (WASD + E/F for vertical) and mouse controls
@@ -138,23 +138,16 @@ The transient pipelines are destroyed once the bake completes; only the resultin
 
 ### Rendering Pipeline
 
-- Forward descriptor layout is split by update frequency into **set 0 (per-object, 15 bindings)** and **set 1 (forward globals, 13 bindings)**. Set 0 is rewritten only when materials change; set 1 is bound once per frame and survives pipeline transitions inside the forward bucket.
-- **Set 0 — per-object / per-material**:
+- Forward descriptor layout is split by update frequency into **set 0 (per-object, 4 bindings)**, **set 1 (forward globals, 13 bindings)**, and **set 2 (bindless materials, global)**. Set 0 is tiny per-object state; set 1 and set 2 are bound once per frame and survive pipeline transitions inside the forward bucket.
+- **Set 0 — per-object vertex-stage state**:
   - 0 frame UBO (model / view / projection + camera position)
-  - 1 Material UBO — `diffuseAlpha`, `emissiveRoughness`, `materialParams` (metallic, normalScale, alphaCutoff, occlusionStrength), `textureFlags` (base/emissive/normal/MR present), `extraFlags` (occlusion present, occlusion's UV-set, **unlit flag**), `texCoordIndices` (per-slot UV-set for base/emissive/normal/MR), `transmissionParams`, `clearcoatParams` + `clearcoatFlags` + `clearcoatTexCoords`, `volumeParams`, `attenuation`, and a `UvXform uv[10]` array (`offsetScale.xy` = UV offset, `offsetScale.zw` = UV scale, `rotation` = radians) indexed by `MaterialTextureSlot` (BaseColour, Emissive, Normal, MetallicRoughness, Occlusion, Transmission, Clearcoat, ClearcoatRoughness, ClearcoatNormal, Thickness)
-  - 2 base-colour sampler
   - 3 skin UBO (joint matrices, `mat4[64]`)
   - 4 morph UBO (metadata + weights)
   - 5 morph targets SSBO — `[positions, normals, tangents]` per target as `vec4[]`
-  - 6 emissive sampler
-  - 7 normal sampler
-  - 8 metallic-roughness sampler
-  - 9 occlusion sampler
-  - **16 transmission sampler (KHR_materials_transmission)**
-  - **17 clearcoat factor sampler (KHR_materials_clearcoat)**
-  - **18 clearcoat roughness sampler (KHR_materials_clearcoat)**
-  - **19 clearcoat normal sampler (KHR_materials_clearcoat)**
-  - **21 thickness sampler (KHR_materials_volume)**
+  - (bindings 1, 2 are intentional gaps — the old Material UBO + base-colour sampler, now bindless)
+- **Set 2 — bindless materials** (global, bound once per forward pass):
+  - 0 `sampler2D textures[]` — one global combined-image-sampler array (capacity `kMaxBindlessTextures` = 512), indexed by `TextureHandle`; partially-bound + update-after-bind, written as 2D material textures load
+  - 1 `materials[]` SSBO — an array of the material record (`diffuseAlpha`, `emissiveRoughness`, `materialParams`, `textureFlags`, `extraFlags`/**unlit flag**, `texCoordIndices`, `transmissionParams`, `clearcoatParams`/`clearcoatFlags`/`clearcoatTexCoords`, `volumeParams`, `attenuation`, `UvXform uv[10]`, and a per-slot bindless `textureIndex[]`), indexed by the per-draw `ForwardPushConstants::materialIndex`. The shader reads `materials[pc.materialIndex]` and samples `textures[material.textureIndex[slot]]`.
 - **Set 1 — forward globals** (renumbered locally within the set):
   - 0 Light UBO — `cascadeViewProj[4]`, `cascadeSplits`, IBL params, shadow bias/filter params, environment params, `lightCount`, and `LightData lights[MAX_LIGHTS]` (per-light position/direction/colour/cone in std140-aligned `vec4`s)
   - 1 cascaded shadow map sampled image (`texture2DArray`, 4 layers)
@@ -170,7 +163,7 @@ The transient pipelines are destroyed once the bake completes; only the resultin
   - 11 BRDF integration LUT (2D)
   - **12 captured scene-colour mip chain for screen-space transmission/refraction**
 
-  On swapchain resize, only the `kMaxFramesInFlight` set-1 descriptors need rewriting (sceneColor, post-process targets, and any future recreated globals) via `Descriptors::updateGlobalDescriptors`; per-object set-0 descriptors are untouched.
+  On swapchain resize, only the `kMaxFramesInFlight` set-1 descriptors need rewriting (sceneColor, post-process targets, and any future recreated globals) via `Descriptors::updateGlobalDescriptors`; per-object set-0 and the global set-2 bindless descriptors are untouched.
 - Separate descriptor layouts for the skybox (SkyboxUBO + samplerCube + LightUBO), shadow (ShadowUBO with `lightViewProj[]` + SkinUBO + MorphUBO + MorphTargets SSBO + first self-shadow depth/sampler, plus `ShadowPushConstants` on the vertex/fragment stages), post-process (HDR sampler at 0 + bloom mip 0 sampler at 1, plus `PostProcessPushConstants { float bloomStrength }`), and bloom-down / bloom-up (single input mip sampler + `BloomPushConstants` on the fragment stage)
 - Three forward pipeline variants share the shader + binding layout but differ in cull mode, blend, and depth-write state:
   - **opaque** (cull back, no blend, depth write) — OPAQUE and MASK materials with `doubleSided=false`

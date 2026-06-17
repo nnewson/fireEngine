@@ -104,8 +104,8 @@ void FireEngine::addFloorPlane()
 
 void FireEngine::addParticleFountain()
 {
-    // Demo GPU particle fountain (Roadmap Milestone B), gated behind the -p flag:
-    // a warm upward emitter just above the floor. Component defaults give the
+    // Demo GPU particle fountain, gated behind the -p flag: a warm upward emitter
+    // just above the floor. Component defaults give the
     // fountain look; only the position is set here. The renderer's ParticleSystem
     // gathers and simulates it each frame.
     auto fountainNode = std::make_unique<Node>("ParticleFountain");
@@ -155,7 +155,7 @@ void buildUvSphere(Geometry& geo, float radius, uint32_t stacks, uint32_t slices
 
 void FireEngine::addClothDemo()
 {
-    // Roadmap #2. A world-space unpinned cloth sheet falls and drapes over a
+    // A world-space unpinned cloth sheet falls and drapes over a
     // sphere (a Static physics body whose collider the solver gathers), pooling on
     // the ground plane (added in mainLoop). The solver writes the cloth's storage
     // vertex buffer each frame; it renders through the normal forward/shadow path.

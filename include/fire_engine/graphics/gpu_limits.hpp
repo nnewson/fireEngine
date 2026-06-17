@@ -52,6 +52,23 @@ inline constexpr int kShadowSpotMatrixBase = 4;
 inline constexpr int kShadowPointMatrixBase = kShadowSpotMatrixBase + kMaxSpotShadowCasters;
 inline constexpr int kShadowTotalMatrixCount = kShadowPointMatrixBase + 6 * kMaxPointShadowCasters;
 
+// Bindless material textures: capacity of the global combined-image-sampler
+// array (forward set 2). Indexed directly by TextureHandle value, so it caps the
+// total number of textures Resources can allocate. Partially-bound, so unused /
+// non-2D slots (cubemaps, shadow/render targets) cost nothing.
+//
+// Sized under the device's maxPerStageDescriptorUpdateAfterBindSamplers (1024 on
+// this MoltenVK), which counts *all* combined-image-samplers across every set in
+// the pipeline layout — the array plus the set-1 IBL/sceneColor samplers must stay
+// under it. 512 leaves ample headroom; bump toward ~1000 if a scene needs it.
+inline constexpr uint32_t kMaxBindlessTextures = 512;
+
+// Bindless materials: capacity of the global materials[] SSBO (forward set 2,
+// binding 1), indexed by the per-draw ForwardPushConstants::materialIndex. Each
+// distinct material registered with Resources takes one slot. Bump if a scene
+// exceeds it.
+inline constexpr uint32_t kMaxMaterials = 256;
+
 // Particle system pool sizing. The GPU particle pool holds
 // kMaxParticleEmitters * kMaxParticlesPerEmitter particles; each active emitter
 // owns a contiguous slice (emitterIndex = particleIndex / kMaxParticlesPerEmitter).

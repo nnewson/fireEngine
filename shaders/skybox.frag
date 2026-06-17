@@ -23,8 +23,8 @@ layout(binding = 2) uniform LightUBO {
 layout(location = 0) in vec2 fragUv;
 
 layout(location = 0) out vec4 outColor;
-// TAA velocity attachment. v1: the skybox writes zero motion (treated as
-// static); camera-rotation reprojection of the background is a follow-up.
+// TAA velocity attachment. The skybox writes zero motion (treated as static);
+// camera-rotation reprojection of the background is a possible follow-up.
 layout(location = 1) out vec2 outVelocity;
 
 void main() {

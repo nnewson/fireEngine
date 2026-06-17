@@ -19,7 +19,7 @@ namespace fire_engine
 class Device;
 class Swapchain;
 
-// Renderer-owned GPU particle system (Roadmap Milestone B). Owns a persistent
+// Renderer-owned GPU particle system. Owns a persistent
 // particle pool SSBO partitioned per emitter, simulates it with compute each
 // frame, and renders it as instanced additive billboards into the HDR target.
 // Structured like PostProcessing / Transmission. Emitters come from

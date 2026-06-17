@@ -160,6 +160,34 @@ TEST_CASE("MaterialBinding.MissingTextureHandlesPackAsNull", "[MaterialBinding]"
     }
 }
 
+TEST_CASE("MaterialBinding.AbsentBindlessTextureIndicesAreZero", "[MaterialBinding]")
+{
+    // With no textures, every bindless index packs as 0 (don't-care: the matching
+    // present-flag is 0, so the shader never reads it).
+    const MaterialUBO ubo = toMaterialUBO(Material{});
+    for (std::size_t i = 0; i < materialTextureSlotCount; ++i)
+    {
+        CHECK(ubo.textureIndex[i] == 0);
+    }
+}
+
+TEST_CASE("MaterialBinding.BindlessTextureIndexComesFromTheSlotHandle", "[MaterialBinding]")
+{
+    // toMaterialUBO writes each slot's bindless index from its texture handle, and
+    // only for the slots that carry a texture. A default Texture has handle ==
+    // NullTexture, which round-trips through the int32 index as its bit pattern.
+    Texture tex;
+    Material mat;
+    mat.texture(Slot::Normal).texture = &tex;
+
+    const MaterialUBO ubo = toMaterialUBO(mat);
+    const auto expected = static_cast<int32_t>(static_cast<uint32_t>(tex.handle()));
+    CHECK(ubo.textureIndex[slotIndex(Slot::Normal)] == expected);
+    // Untouched slots stay 0.
+    CHECK(ubo.textureIndex[slotIndex(Slot::BaseColour)] == 0);
+    CHECK(ubo.textureIndex[slotIndex(Slot::Emissive)] == 0);
+}
+
 TEST_CASE("Material.TransmissionBlockRoundTrip", "[Material]")
 {
     Material mat;

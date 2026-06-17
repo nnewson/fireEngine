@@ -213,8 +213,20 @@ void Device::createLogicalDevice()
     // bufferDeviceAddress (core 1.2): the soft-body solver passes its buffers to
     // compute as 64-bit GPU pointers (GL_EXT_buffer_reference) instead of
     // descriptor sets.
+    //
+    // descriptorIndexing (core 1.2): bindless materials. The forward shader indexes
+    // one global sampler2D[] texture array and a global materials[] SSBO, so the
+    // array must allow runtime/non-uniform indexing, partially-bound slots (the
+    // array is sparse — indexed by texture handle), and update-after-bind (textures
+    // are written into the array as they load, after the set is first bound).
     vk::PhysicalDeviceVulkan12Features features12{};
     features12.bufferDeviceAddress = vk::True;
+    features12.descriptorIndexing = vk::True;
+    features12.runtimeDescriptorArray = vk::True;
+    features12.shaderSampledImageArrayNonUniformIndexing = vk::True;
+    features12.descriptorBindingSampledImageUpdateAfterBind = vk::True;
+    features12.descriptorBindingPartiallyBound = vk::True;
+    features12.descriptorBindingVariableDescriptorCount = vk::True;
     features13.pNext = &features12;
 
     // Shadow mapping uses sampler2DShadow (hardware PCF), which requires

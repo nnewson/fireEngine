@@ -1,6 +1,6 @@
 #version 450
 
-// Instanced billboard particle vertex shader (Roadmap Milestone B). One instance
+// Instanced billboard particle vertex shader. One instance
 // per pool slot; the quad is generated from gl_VertexIndex (6 verts = 2 tris) and
 // faced toward the camera using the view matrix's world-space right/up axes.
 

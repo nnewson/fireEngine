@@ -560,6 +560,10 @@ void Renderer::recordDrawBucket(vk::CommandBuffer cmd, const std::vector<DrawCom
                 cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
                                        resources_.vulkanPipelineLayout(dc.pipeline), 1, globalSet,
                                        {});
+                // Set 2 — bindless materials (global texture array + materials SSBO).
+                cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
+                                       resources_.vulkanPipelineLayout(dc.pipeline), 2,
+                                       resources_.bindlessDescriptorSet(), {});
             }
             lastBoundPipeline = dc.pipeline;
         }
@@ -579,6 +583,7 @@ void Renderer::recordDrawBucket(vk::CommandBuffer cmd, const std::vector<DrawCom
         {
             ForwardPushConstants pc{};
             pc.selfShadowSlot = dc.selfShadowSlot;
+            pc.materialIndex = dc.materialIndex;
             cmd.pushConstants<ForwardPushConstants>(resources_.vulkanPipelineLayout(dc.pipeline),
                                                     vk::ShaderStageFlagBits::eFragment, 0, pc);
         }

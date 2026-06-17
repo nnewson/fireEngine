@@ -3,6 +3,10 @@
 // attached) need this — we use it for the shadow map array which is bound
 // as a sampledImage so all shadow maps can share one comparison sampler.
 #extension GL_EXT_samplerless_texture_functions : require
+// Bindless material textures: a runtime-sized global combined-image-sampler array
+// (forward set 2) indexed per-slot by the material's textureIndex[]. The index is
+// dynamically uniform (one material per draw), so plain indexing is sufficient.
+#extension GL_EXT_nonuniform_qualifier : require
 
 layout(binding = 0) uniform UBO {
     mat4 model;
@@ -34,7 +38,7 @@ const int SLOT_CLEARCOAT_ROUGHNESS = 7;
 const int SLOT_CLEARCOAT_NORMAL = 8;
 const int SLOT_THICKNESS = 9;
 
-layout(binding = 1) uniform MaterialUBO {
+struct MaterialData {
     vec4 diffuseAlpha;
     vec4 emissiveRoughness;
     vec4 materialParams;
@@ -64,30 +68,40 @@ layout(binding = 1) uniform MaterialUBO {
     // the spec says +infinity — see Object::toMaterialUBO).
     vec4 attenuation;
     UvXform uv[10];
-} material;
+    // Bindless index into the global `textures[]` array per material texture slot
+    // (packed as 3 ivec4s; matTex(SLOT_*) unpacks). Valid only where the slot's
+    // present-flag is set. Matches MaterialUBO::textureIndex in render/ubo.hpp.
+    ivec4 textureIndex[3];
+};
 
-layout(binding = 2) uniform sampler2D texSampler;
+// Declared before the materials SSBO / matTex below, which reference pc.materialIndex.
+layout(push_constant) uniform ForwardPushConstants {
+    int selfShadowSlot;
+    uint materialIndex; // index into the global materials[] SSBO for this draw
+} pc;
 
-layout(binding = 6) uniform sampler2D emissiveMap;
-layout(binding = 7) uniform sampler2D normalMap;
-layout(binding = 8) uniform sampler2D metallicRoughnessMap;
-layout(binding = 9) uniform sampler2D occlusionMap;
-layout(binding = 16) uniform sampler2D transmissionMap;
-layout(binding = 17) uniform sampler2D clearcoatMap;
-layout(binding = 18) uniform sampler2D clearcoatRoughnessMap;
-layout(binding = 19) uniform sampler2D clearcoatNormalMap;
+// Global materials SSBO (forward set 2, binding 1), indexed per-draw by the push
+// constant. `material` aliases this draw's entry so the existing material.* reads
+// are unchanged. std430 layout matches the std140 C++ MaterialUBO here because
+// every member is 16-byte aligned (vec4 / ivec4 / UvXform / ivec4[]).
+layout(std430, set = 2, binding = 1) readonly buffer Materials {
+    MaterialData materials[];
+};
+#define material materials[pc.materialIndex]
+
+// Bindless material texture array (forward set 2). Indexed by matTex(slot).
+layout(set = 2, binding = 0) uniform sampler2D textures[];
+
+// Unpack the per-slot bindless texture index from the packed ivec4[3].
+int matTex(int slot) { return material.textureIndex[slot >> 2][slot & 3]; }
+
 // KHR_materials_transmission F3 — captured post-opaque scene colour with mip
 // chain. Transmissive draws sample this at a screen-space UV displaced by
 // the refracted ray; roughness drives the mip level for frosted-glass blur.
 layout(set = 1, binding = 12) uniform sampler2D sceneColorMap;
-// KHR_materials_volume — thickness texture (G channel multiplies the volume
-// thicknessFactor). Drives both the refracted exit point and the Beer-Lambert
-// path length.
-layout(binding = 21) uniform sampler2D thicknessMap;
-// Shadow images bound as plain textures so one comparison sampler can be
-// reused across CSM, spot, and point maps (Apple's per-stage sampler limit is
-// 16). Combined samplers are constructed at use time via the GLSL sampler*()
-// constructors.
+// Shadow images bound as plain textures so one hardware-PCF comparison sampler is
+// reused across CSM, spot, and point maps. Combined samplers are constructed at
+// use time via the GLSL sampler*() constructors.
 layout(set = 1, binding = 1) uniform texture2DArray shadowMapTex;
 layout(set = 1, binding = 4) uniform texture2DArray spotShadowMapTex;
 layout(set = 1, binding = 5) uniform textureCubeArray pointShadowMapTex;
@@ -133,10 +147,6 @@ layout(set = 1, binding = 0) uniform LightUBO {
     int  _pad2;
     LightData lights[MAX_LIGHTS];
 } light;
-
-layout(push_constant) uniform ForwardPushConstants {
-    int selfShadowSlot;
-} pc;
 
 layout(location = 0) in vec3 fragColor;
 layout(location = 1) in vec3 fragNormal;
@@ -375,7 +385,7 @@ void main() {
         vec2 uvNormal = applyUvTransform(pickUv(material.texCoordIndices.z),
                                          material.uv[SLOT_NORMAL].offsetScale,
                                          material.uv[SLOT_NORMAL].rotation);
-        vec3 mapNormal = texture(normalMap, uvNormal).rgb * 2.0 - 1.0;
+        vec3 mapNormal = texture(textures[matTex(SLOT_NORMAL)], uvNormal).rgb * 2.0 - 1.0;
         mapNormal.xy *= material.materialParams.y;
         N = normalize(fragTBN * mapNormal);
     } else {
@@ -415,7 +425,7 @@ void main() {
         vec2 uvBase = applyUvTransform(pickUv(material.texCoordIndices.x),
                                        material.uv[SLOT_BASE_COLOUR].offsetScale,
                                        material.uv[SLOT_BASE_COLOUR].rotation);
-        texColor = texture(texSampler, uvBase);
+        texColor = texture(textures[matTex(SLOT_BASE_COLOUR)], uvBase);
     }
     vec3 baseColor = material.diffuseAlpha.rgb * fragColor * texColor.rgb;
 
@@ -445,7 +455,7 @@ void main() {
         vec2 uvMr = applyUvTransform(pickUv(material.texCoordIndices.w),
                                      material.uv[SLOT_METALLIC_ROUGHNESS].offsetScale,
                                      material.uv[SLOT_METALLIC_ROUGHNESS].rotation);
-        vec4 mrSample = texture(metallicRoughnessMap, uvMr);
+        vec4 mrSample = texture(textures[matTex(SLOT_METALLIC_ROUGHNESS)], uvMr);
         roughness *= mrSample.g;
         metallic *= mrSample.b;
     }
@@ -465,13 +475,13 @@ void main() {
         vec2 ccUv = applyUvTransform(pickUv(int(material.clearcoatTexCoords.x)),
                                      material.uv[SLOT_CLEARCOAT].offsetScale,
                                      material.uv[SLOT_CLEARCOAT].rotation);
-        clearcoat *= texture(clearcoatMap, ccUv).r;
+        clearcoat *= texture(textures[matTex(SLOT_CLEARCOAT)], ccUv).r;
     }
     if (material.clearcoatFlags.y > 0.5) {
         vec2 ccRuv = applyUvTransform(pickUv(int(material.clearcoatTexCoords.y)),
                                       material.uv[SLOT_CLEARCOAT_ROUGHNESS].offsetScale,
                                       material.uv[SLOT_CLEARCOAT_ROUGHNESS].rotation);
-        ccRough *= texture(clearcoatRoughnessMap, ccRuv).g;
+        ccRough *= texture(textures[matTex(SLOT_CLEARCOAT_ROUGHNESS)], ccRuv).g;
     }
     ccRough = clamp(ccRough, 0.04, 1.0);
     float ccAlpha = ccRough * ccRough;
@@ -481,7 +491,7 @@ void main() {
         vec2 ccNuv = applyUvTransform(pickUv(int(material.clearcoatTexCoords.z)),
                                       material.uv[SLOT_CLEARCOAT_NORMAL].offsetScale,
                                       material.uv[SLOT_CLEARCOAT_NORMAL].rotation);
-        vec3 cnSamp = texture(clearcoatNormalMap, ccNuv).rgb * 2.0 - 1.0;
+        vec3 cnSamp = texture(textures[matTex(SLOT_CLEARCOAT_NORMAL)], ccNuv).rgb * 2.0 - 1.0;
         cnSamp.xy *= ccNormalScale;
         N_cc = normalize(fragTBN * cnSamp);
         // Match the base-normal back-face flip (N_cc inherits the already-
@@ -687,7 +697,7 @@ void main() {
         vec2 uvOcc = applyUvTransform(pickUv(material.extraFlags.y),
                                       material.uv[SLOT_OCCLUSION].offsetScale,
                                       material.uv[SLOT_OCCLUSION].rotation);
-        float sampled = texture(occlusionMap, uvOcc).r;
+        float sampled = texture(textures[matTex(SLOT_OCCLUSION)], uvOcc).r;
         ao = mix(1.0, sampled, material.materialParams.w);
     }
 
@@ -706,7 +716,7 @@ void main() {
         vec2 uvEm = applyUvTransform(pickUv(material.texCoordIndices.y),
                                      material.uv[SLOT_EMISSIVE].offsetScale,
                                      material.uv[SLOT_EMISSIVE].rotation);
-        emissiveTerm *= texture(emissiveMap, uvEm).rgb;
+        emissiveTerm *= texture(textures[matTex(SLOT_EMISSIVE)], uvEm).rgb;
     }
 
     // KHR_materials_transmission (F2 — IBL-faked refraction). Per glTF spec,
@@ -719,7 +729,7 @@ void main() {
         vec2 uvTrans = applyUvTransform(pickUv(int(material.transmissionParams.z)),
                                         material.uv[SLOT_TRANSMISSION].offsetScale,
                                         material.uv[SLOT_TRANSMISSION].rotation);
-        transmission *= texture(transmissionMap, uvTrans).r;
+        transmission *= texture(textures[matTex(SLOT_TRANSMISSION)], uvTrans).r;
     }
 
     vec3 transmittedLight = vec3(0.0);
@@ -736,7 +746,7 @@ void main() {
             vec2 uvThick = applyUvTransform(pickUv(int(material.volumeParams.z)),
                                             material.uv[SLOT_THICKNESS].offsetScale,
                                             material.uv[SLOT_THICKNESS].rotation);
-            thickness *= texture(thicknessMap, uvThick).g;
+            thickness *= texture(textures[matTex(SLOT_THICKNESS)], uvThick).g;
         }
         vec3 modelScale = vec3(length(ubo.model[0].xyz),
                                length(ubo.model[1].xyz),

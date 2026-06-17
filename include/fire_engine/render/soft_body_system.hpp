@@ -32,7 +32,7 @@ struct ClothSimParams
     float wind[3]{0.0f, 0.0f, 0.0f};
 };
 
-// Renderer-owned GPU soft-body (cloth) solver (Roadmap #2). Owns the XPBD compute
+// Renderer-owned GPU soft-body (cloth) solver. Owns the XPBD compute
 // pipelines and, per registered cloth, the particle + constraint buffers. Each
 // frame `recordSolve` runs the substep loop (predict → per-colour distance solve
 // → collide → finalize) writing solved positions + normals into the cloth's

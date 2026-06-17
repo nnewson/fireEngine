@@ -1,7 +1,5 @@
 #pragma once
 
-#include <array>
-#include <cstddef>
 #include <cstdint>
 
 #include <fire_engine/graphics/material.hpp>
@@ -21,10 +19,9 @@ enum class ForwardBinding : std::uint32_t
     NormalTexture = 7,
     MetallicRoughnessTexture = 8,
     OcclusionTexture = 9,
-    // Shadow images are bound as plain sampled images (no sampler attached) so
-    // a single comparison sampler can be reused across CSM, spot and point
-    // shadow maps. Combining each into its own CombinedImageSampler would blow
-    // past Apple's 16-samplers-per-stage limit.
+    // Shadow images are bound as plain sampled images (no sampler attached) so a
+    // single hardware-PCF comparison sampler is reused across CSM, spot and point
+    // shadow maps — one comparison sampler object instead of one per map.
     ShadowMap = 10,
     Light = 11,
     IrradianceMap = 12,
@@ -71,6 +68,17 @@ enum class ForwardGlobalBinding : std::uint32_t
     SceneColour = 12,
 };
 
+// Bindless materials live on the forward pipeline's set 2 — bound once per frame,
+// shared by every forward draw and indexed in-shader. Textures is the global
+// combined-image-sampler array (indexed by TextureHandle value); Materials is the
+// global materials SSBO (indexed by the per-draw ForwardPushConstants::materialIndex).
+// Keep the GLSL `layout(set = 2, binding = N)` declarations in shader.frag in lockstep.
+enum class BindlessBinding : std::uint32_t
+{
+    Textures = 0,
+    Materials = 1,
+};
+
 enum class ShadowBinding : std::uint32_t
 {
     Shadow = 0,
@@ -103,28 +111,10 @@ enum class TaaBinding : std::uint32_t
     History = 2,
 };
 
-// MaterialTextureSlot, materialTextureSlotCount and slotIndex() live in
-// graphics/material.hpp (the slots a material owns). This header keeps only the
-// render-layer concern: mapping each slot to its descriptor ForwardBinding.
-struct MaterialTextureBinding
-{
-    MaterialTextureSlot slot;
-    ForwardBinding binding;
-};
-
-inline constexpr std::array<MaterialTextureBinding, materialTextureSlotCount>
-    materialTextureBindings{{
-        {MaterialTextureSlot::BaseColour, ForwardBinding::BaseColourTexture},
-        {MaterialTextureSlot::Emissive, ForwardBinding::EmissiveTexture},
-        {MaterialTextureSlot::Normal, ForwardBinding::NormalTexture},
-        {MaterialTextureSlot::MetallicRoughness, ForwardBinding::MetallicRoughnessTexture},
-        {MaterialTextureSlot::Occlusion, ForwardBinding::OcclusionTexture},
-        {MaterialTextureSlot::Transmission, ForwardBinding::TransmissionTexture},
-        {MaterialTextureSlot::Clearcoat, ForwardBinding::ClearcoatTexture},
-        {MaterialTextureSlot::ClearcoatRoughness, ForwardBinding::ClearcoatRoughnessTexture},
-        {MaterialTextureSlot::ClearcoatNormal, ForwardBinding::ClearcoatNormalTexture},
-        {MaterialTextureSlot::Thickness, ForwardBinding::ThicknessTexture},
-    }};
+// Material textures are bindless now (BindlessBinding::Textures, forward set 2),
+// indexed by MaterialUBO::textureIndex — there's no longer a per-slot mapping to a
+// fixed set-0 descriptor binding. MaterialTextureSlot / slotIndex() live in
+// graphics/material.hpp (the slots a material owns).
 
 [[nodiscard]]
 constexpr std::uint32_t bindingIndex(ForwardBinding binding) noexcept
@@ -134,6 +124,12 @@ constexpr std::uint32_t bindingIndex(ForwardBinding binding) noexcept
 
 [[nodiscard]]
 constexpr std::uint32_t bindingIndex(ForwardGlobalBinding binding) noexcept
+{
+    return static_cast<std::uint32_t>(binding);
+}
+
+[[nodiscard]]
+constexpr std::uint32_t bindingIndex(BindlessBinding binding) noexcept
 {
     return static_cast<std::uint32_t>(binding);
 }

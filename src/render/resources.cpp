@@ -7,6 +7,7 @@
 
 #include <fire_engine/graphics/image.hpp>
 #include <fire_engine/graphics/ktx_image.hpp>
+#include <fire_engine/graphics/material_binding.hpp>
 #include <fire_engine/graphics/vertex.hpp>
 #include <fire_engine/render/device.hpp>
 #include <fire_engine/render/pipeline.hpp>
@@ -19,6 +20,55 @@ Resources::Resources(const Device& device, const Pipeline& pipeline)
     : device_(&device),
       descriptors_(device, pipeline, *this)
 {
+    // Bindless materials set 2: one update-after-bind pool + one set, allocated from
+    // the forward pipeline's bindless layout. registerBindlessTexture writes 2D
+    // material textures into binding 0; registerMaterial fills the materials SSBO
+    // bound at binding 1.
+    if (pipeline.hasBindlessDescriptorSetLayout())
+    {
+        const std::array<vk::DescriptorPoolSize, 2> bindlessSizes{{
+            {vk::DescriptorType::eCombinedImageSampler, kMaxBindlessTextures},
+            {vk::DescriptorType::eStorageBuffer, 1},
+        }};
+        const vk::DescriptorPoolCreateInfo bindlessPoolCi{
+            .flags = vk::DescriptorPoolCreateFlagBits::eUpdateAfterBind |
+                     vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet,
+            .maxSets = 1,
+            .poolSizeCount = static_cast<uint32_t>(bindlessSizes.size()),
+            .pPoolSizes = bindlessSizes.data(),
+        };
+        bindlessPool_ = vk::raii::DescriptorPool(device.device(), bindlessPoolCi);
+
+        const vk::DescriptorSetLayout layout = pipeline.bindlessDescriptorSetLayout();
+        const vk::DescriptorSetAllocateInfo ai{
+            .descriptorPool = *bindlessPool_,
+            .descriptorSetCount = 1,
+            .pSetLayouts = &layout,
+        };
+        bindlessSet_ = std::move(device.device().allocateDescriptorSets(ai).front());
+
+        // Global materials[] SSBO: one persistently-mapped host-visible buffer,
+        // written per material on first registerMaterial. Bound once here.
+        const std::size_t materialBytes = kMaxMaterials * sizeof(MaterialUBO);
+        auto [matBuf, matMem] = device.createBuffer(
+            static_cast<vk::DeviceSize>(materialBytes), vk::BufferUsageFlagBits::eStorageBuffer,
+            vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
+        materialMapped_ = matMem.mapMemory(0, static_cast<vk::DeviceSize>(materialBytes));
+        std::memset(materialMapped_, 0, materialBytes);
+        materialBuffer_ = storeBuffer(std::move(matBuf), std::move(matMem));
+
+        const vk::DescriptorBufferInfo matInfo{vulkanBuffer(materialBuffer_), 0,
+                                               static_cast<vk::DeviceSize>(materialBytes)};
+        const vk::WriteDescriptorSet matWrite{
+            .dstSet = *bindlessSet_,
+            .dstBinding = bindingIndex(BindlessBinding::Materials),
+            .descriptorCount = 1,
+            .descriptorType = vk::DescriptorType::eStorageBuffer,
+            .pBufferInfo = &matInfo,
+        };
+        device.device().updateDescriptorSets(matWrite, {});
+    }
+
     vk::CommandPoolCreateInfo poolCi{
         .flags = vk::CommandPoolCreateFlagBits::eResetCommandBuffer,
         .queueFamilyIndex = device.graphicsFamily(),
@@ -72,11 +122,10 @@ BufferHandle Resources::createStorageBuffer(std::size_t size, const void* initia
 {
     // eShaderDeviceAddress: the soft-body solver chains its buffers via 64-bit
     // GPU pointers (bufferDeviceAddress) instead of descriptor sets.
-    auto [buf, mem] = device_->createBuffer(size,
-                                            vk::BufferUsageFlagBits::eStorageBuffer |
-                                                vk::BufferUsageFlagBits::eShaderDeviceAddress,
-                                            vk::MemoryPropertyFlagBits::eHostVisible |
-                                                vk::MemoryPropertyFlagBits::eHostCoherent);
+    auto [buf, mem] = device_->createBuffer(
+        size,
+        vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eShaderDeviceAddress,
+        vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
     if (initialData != nullptr)
     {
         void* data = mem.mapMemory(0, size);
@@ -108,11 +157,10 @@ Resources::MappedBufferSet Resources::createMappedDeviceAddressBuffers(std::size
     MappedBufferSet result;
     for (int i = 0; i < kMaxFramesInFlight; ++i)
     {
-        auto [buf, mem] = device_->createBuffer(static_cast<vk::DeviceSize>(size),
-                                                vk::BufferUsageFlagBits::eStorageBuffer |
-                                                    vk::BufferUsageFlagBits::eShaderDeviceAddress,
-                                                vk::MemoryPropertyFlagBits::eHostVisible |
-                                                    vk::MemoryPropertyFlagBits::eHostCoherent);
+        auto [buf, mem] = device_->createBuffer(
+            static_cast<vk::DeviceSize>(size),
+            vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eShaderDeviceAddress,
+            vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
         result.mapped[i] = mem.mapMemory(0, static_cast<vk::DeviceSize>(size));
         result.buffers[i] = storeBuffer(std::move(buf), std::move(mem));
     }
@@ -121,8 +169,8 @@ Resources::MappedBufferSet Resources::createMappedDeviceAddressBuffers(std::size
 
 vk::DeviceAddress Resources::bufferAddress(BufferHandle handle) const noexcept
 {
-    return device_->device().getBufferAddress(vk::BufferDeviceAddressInfo{.buffer =
-                                                                              vulkanBuffer(handle)});
+    return device_->device().getBufferAddress(
+        vk::BufferDeviceAddressInfo{.buffer = vulkanBuffer(handle)});
 }
 
 BufferHandle Resources::createIndexBuffer(std::span<const uint16_t> indices)
@@ -455,6 +503,50 @@ Resources::TextureEntry& Resources::appendTextureEntry(TextureHandle& handle, vk
     return entry;
 }
 
+void Resources::registerBindlessTexture(TextureHandle handle)
+{
+    if (!static_cast<bool>(*bindlessSet_))
+    {
+        return; // no forward pipeline / bindless set (e.g. headless contexts)
+    }
+    const TextureEntry& entry = textures_[static_cast<uint32_t>(handle)];
+    const vk::DescriptorImageInfo info{*entry.sampler, *entry.view,
+                                       vk::ImageLayout::eShaderReadOnlyOptimal};
+    const vk::WriteDescriptorSet write{
+        .dstSet = *bindlessSet_,
+        .dstBinding = bindingIndex(BindlessBinding::Textures),
+        .dstArrayElement = static_cast<uint32_t>(handle),
+        .descriptorCount = 1,
+        .descriptorType = vk::DescriptorType::eCombinedImageSampler,
+        .pImageInfo = &info,
+    };
+    device_->device().updateDescriptorSets(write, {});
+}
+
+uint32_t Resources::registerMaterial(const Material& material)
+{
+    if (materialMapped_ == nullptr)
+    {
+        return 0; // no bindless set (e.g. headless contexts)
+    }
+    if (auto it = materialIndices_.find(&material); it != materialIndices_.end())
+    {
+        return it->second;
+    }
+    if (materialCount_ >= kMaxMaterials)
+    {
+        throw std::runtime_error("Bindless material SSBO capacity (kMaxMaterials) exceeded");
+    }
+
+    const uint32_t index = materialCount_++;
+    const MaterialUBO ubo = toMaterialUBO(material);
+    std::memcpy(static_cast<char*>(materialMapped_) +
+                    static_cast<std::size_t>(index) * sizeof(MaterialUBO),
+                &ubo, sizeof(MaterialUBO));
+    materialIndices_.emplace(&material, index);
+    return index;
+}
+
 void Resources::allocateImage(TextureEntry& entry, const vk::ImageCreateInfo& imageInfo)
 {
     entry.image = vk::raii::Image(device_->device(), imageInfo);
@@ -561,6 +653,7 @@ TextureHandle Resources::createUploaded2DTexture(const void* pixels, int width, 
     createImageView(entry, vk::ImageViewType::e2D, vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1);
     createSampledTextureSampler(entry, sampler, 1, borderColor);
 
+    registerBindlessTexture(handle);
     return handle;
 }
 
@@ -659,6 +752,7 @@ TextureHandle Resources::createTexture(KtxImage&& image, const SamplerSettings& 
                     entry.mipLevels, 0, 1);
     createSampledTextureSampler(entry, sampler, entry.mipLevels, vk::BorderColor::eIntOpaqueBlack);
 
+    registerBindlessTexture(handle);
     return handle;
 }
 

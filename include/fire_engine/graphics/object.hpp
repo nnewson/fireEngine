@@ -68,9 +68,7 @@ private:
         const Material* defaultMaterial{nullptr};
         const Material* activeMaterial{nullptr};
         std::vector<const Material*> variantMaterials;
-        std::array<bool, kMaxFramesInFlight> descriptorDirty{false, false};
 
-        std::array<MappedMemory, kMaxFramesInFlight> materialMapped{};
         std::array<MappedMemory, kMaxFramesInFlight> skinMapped{};
         std::array<MappedMemory, kMaxFramesInFlight> morphUboMapped{};
         std::array<MappedMemory, kMaxFramesInFlight> shadowMapped{};
@@ -80,8 +78,6 @@ private:
                                                                            NullDescriptorSet};
     };
 
-    static void applyMaterialTextures(GeometryDescriptorInfo& geoInfo, const Material& mat,
-                                      Resources& resources);
     [[nodiscard]] Bounds3 computeShadowBounds(const std::vector<Mat4>& jointMatrices, bool hasSkin,
                                               const Mat4& world) const noexcept;
 

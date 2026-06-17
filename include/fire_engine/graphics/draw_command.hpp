@@ -46,6 +46,8 @@ struct DrawCommand
     uint32_t objectId{0};
     bool hasSkin{false};
     int selfShadowSlot{-1};
+    // Index into the global bindless materials[] SSBO for this draw's material.
+    uint32_t materialIndex{0};
     Bounds3 shadowBounds{};
     Mat4 selfShadowViewProj{Mat4::identity()};
 };

@@ -11,16 +11,9 @@ namespace fire_engine
 namespace
 {
 
-[[nodiscard]]
-TextureHandle materialTexture(const GeometryDescriptorInfo& geometry,
-                              MaterialTextureSlot slot) noexcept
-{
-    return geometry.materialTextures[slotIndex(slot)];
-}
-
 // Thin wrappers around vk::WriteDescriptorSet{...} so the long write arrays in
-// createObjectDescriptors / createShadowDescriptors / updateObjectGeometryTextures
-// read as one line per binding instead of five.
+// createObjectDescriptors / createShadowDescriptors read as one line per binding
+// instead of five.
 [[nodiscard]]
 vk::WriteDescriptorSet writeBuffer(vk::DescriptorSet set, uint32_t binding, vk::DescriptorType type,
                                    const vk::DescriptorBufferInfo& info) noexcept
@@ -150,12 +143,10 @@ ObjectDescriptorResult Descriptors::createObjectDescriptors(const ObjectDescript
     auto numGeometries = static_cast<uint32_t>(req.geometries.size());
     uint32_t totalSets = numGeometries * kMaxFramesInFlight;
 
-    std::array<vk::DescriptorPoolSize, 3> poolSizes = {{
-        // 4 uniform buffers per set: frame UBO, material UBO, skin UBO, morph UBO.
-        {vk::DescriptorType::eUniformBuffer, totalSets * 4},
-        // 10 combined samplers per set: baseColor, emissive, normal, mr,
-        // occlusion, transmission, clearcoat ×3, thickness.
-        {vk::DescriptorType::eCombinedImageSampler, totalSets * 10},
+    std::array<vk::DescriptorPoolSize, 2> poolSizes = {{
+        // 3 uniform buffers per set: frame UBO, skin UBO, morph UBO. Material data
+        // (textures + scalars) is fully bindless now (global set 2).
+        {vk::DescriptorType::eUniformBuffer, totalSets * 3},
         {vk::DescriptorType::eStorageBuffer, totalSets},
     }};
     auto& poolEntry = createDescriptorPool(poolSizes, totalSets);
@@ -172,18 +163,6 @@ ObjectDescriptorResult Descriptors::createObjectDescriptors(const ObjectDescript
             {
                 vk::DescriptorBufferInfo uboBufInfo = makeDescriptorBufferInfo(
                     resources_->vulkanBuffer(req.uniformBufs[i]), sizeof(UniformBufferObject));
-                vk::DescriptorBufferInfo matBufInfo = makeDescriptorBufferInfo(
-                    resources_->vulkanBuffer(geo.materialBufs[i]), sizeof(MaterialUBO));
-                auto materialImageInfo = [&](MaterialTextureSlot slot)
-                {
-                    const TextureHandle texture = materialTexture(geo, slot);
-                    return makeDescriptorImageInfo(resources_->vulkanSampler(texture),
-                                                   resources_->vulkanImageView(texture),
-                                                   vk::ImageLayout::eShaderReadOnlyOptimal);
-                };
-
-                vk::DescriptorImageInfo texInfo =
-                    materialImageInfo(MaterialTextureSlot::BaseColour);
                 vk::DescriptorBufferInfo skinBufInfo = makeDescriptorBufferInfo(
                     resources_->vulkanBuffer(geo.skinBufs[i]), sizeof(SkinUBO));
                 vk::DescriptorBufferInfo morphUboBufInfo = makeDescriptorBufferInfo(
@@ -195,53 +174,16 @@ ObjectDescriptorResult Descriptors::createObjectDescriptors(const ObjectDescript
                 vk::DescriptorBufferInfo morphSsboBufInfo =
                     makeDescriptorBufferInfo(resources_->vulkanBuffer(geo.morphSsbo), ssboSize);
 
-                vk::DescriptorImageInfo emissiveTexInfo =
-                    materialImageInfo(MaterialTextureSlot::Emissive);
-                vk::DescriptorImageInfo normalTexInfo =
-                    materialImageInfo(MaterialTextureSlot::Normal);
-                vk::DescriptorImageInfo mrTexInfo =
-                    materialImageInfo(MaterialTextureSlot::MetallicRoughness);
-                vk::DescriptorImageInfo occTexInfo =
-                    materialImageInfo(MaterialTextureSlot::Occlusion);
-                vk::DescriptorImageInfo transTexInfo =
-                    materialImageInfo(MaterialTextureSlot::Transmission);
-                vk::DescriptorImageInfo ccTexInfo =
-                    materialImageInfo(MaterialTextureSlot::Clearcoat);
-                vk::DescriptorImageInfo ccRoughTexInfo =
-                    materialImageInfo(MaterialTextureSlot::ClearcoatRoughness);
-                vk::DescriptorImageInfo ccNormalTexInfo =
-                    materialImageInfo(MaterialTextureSlot::ClearcoatNormal);
-                vk::DescriptorImageInfo thicknessTexInfo =
-                    materialImageInfo(MaterialTextureSlot::Thickness);
                 constexpr auto kUbo = vk::DescriptorType::eUniformBuffer;
                 constexpr auto kSsbo = vk::DescriptorType::eStorageBuffer;
-                constexpr auto kCis = vk::DescriptorType::eCombinedImageSampler;
-                std::array<vk::WriteDescriptorSet, 15> writes = {{
+                // Material data is bindless (global set 2); set 0 carries only the
+                // per-object vertex-stage UBOs + morph SSBO now.
+                std::array<vk::WriteDescriptorSet, 4> writes = {{
                     writeBuffer(set, bindingIndex(ForwardBinding::Frame), kUbo, uboBufInfo),
-                    writeBuffer(set, bindingIndex(ForwardBinding::Material), kUbo, matBufInfo),
-                    writeImage(set, bindingIndex(ForwardBinding::BaseColourTexture), kCis, texInfo),
                     writeBuffer(set, bindingIndex(ForwardBinding::Skin), kUbo, skinBufInfo),
                     writeBuffer(set, bindingIndex(ForwardBinding::Morph), kUbo, morphUboBufInfo),
                     writeBuffer(set, bindingIndex(ForwardBinding::MorphTargets), kSsbo,
                                 morphSsboBufInfo),
-                    writeImage(set, bindingIndex(ForwardBinding::EmissiveTexture), kCis,
-                               emissiveTexInfo),
-                    writeImage(set, bindingIndex(ForwardBinding::NormalTexture), kCis,
-                               normalTexInfo),
-                    writeImage(set, bindingIndex(ForwardBinding::MetallicRoughnessTexture), kCis,
-                               mrTexInfo),
-                    writeImage(set, bindingIndex(ForwardBinding::OcclusionTexture), kCis,
-                               occTexInfo),
-                    writeImage(set, bindingIndex(ForwardBinding::TransmissionTexture), kCis,
-                               transTexInfo),
-                    writeImage(set, bindingIndex(ForwardBinding::ClearcoatTexture), kCis,
-                               ccTexInfo),
-                    writeImage(set, bindingIndex(ForwardBinding::ClearcoatRoughnessTexture), kCis,
-                               ccRoughTexInfo),
-                    writeImage(set, bindingIndex(ForwardBinding::ClearcoatNormalTexture), kCis,
-                               ccNormalTexInfo),
-                    writeImage(set, bindingIndex(ForwardBinding::ThicknessTexture), kCis,
-                               thicknessTexInfo),
                 }};
                 device_->device().updateDescriptorSets(writes, {});
             });
@@ -338,49 +280,6 @@ void Descriptors::updateGlobalDescriptors(
     {
         writeGlobalBindings(vulkanDescriptorSet(sets[i]), req, i);
     }
-}
-
-void Descriptors::updateObjectGeometryTextures(DescriptorSetHandle set,
-                                               const GeometryDescriptorInfo& geo)
-{
-    auto materialImageInfo = [&](MaterialTextureSlot slot)
-    {
-        const TextureHandle texture = materialTexture(geo, slot);
-        return makeDescriptorImageInfo(resources_->vulkanSampler(texture),
-                                       resources_->vulkanImageView(texture),
-                                       vk::ImageLayout::eShaderReadOnlyOptimal);
-    };
-
-    vk::DescriptorImageInfo texInfo = materialImageInfo(MaterialTextureSlot::BaseColour);
-    vk::DescriptorImageInfo emissiveTexInfo = materialImageInfo(MaterialTextureSlot::Emissive);
-    vk::DescriptorImageInfo normalTexInfo = materialImageInfo(MaterialTextureSlot::Normal);
-    vk::DescriptorImageInfo mrTexInfo = materialImageInfo(MaterialTextureSlot::MetallicRoughness);
-    vk::DescriptorImageInfo occTexInfo = materialImageInfo(MaterialTextureSlot::Occlusion);
-    vk::DescriptorImageInfo transTexInfo = materialImageInfo(MaterialTextureSlot::Transmission);
-    vk::DescriptorImageInfo ccTexInfo = materialImageInfo(MaterialTextureSlot::Clearcoat);
-    vk::DescriptorImageInfo ccRoughTexInfo =
-        materialImageInfo(MaterialTextureSlot::ClearcoatRoughness);
-    vk::DescriptorImageInfo ccNormalTexInfo =
-        materialImageInfo(MaterialTextureSlot::ClearcoatNormal);
-    vk::DescriptorImageInfo thicknessTexInfo = materialImageInfo(MaterialTextureSlot::Thickness);
-
-    const vk::DescriptorSet dstSet = descriptorSetTable_[static_cast<uint32_t>(set)];
-    constexpr auto kCis = vk::DescriptorType::eCombinedImageSampler;
-    std::array<vk::WriteDescriptorSet, 10> writes = {{
-        writeImage(dstSet, bindingIndex(ForwardBinding::BaseColourTexture), kCis, texInfo),
-        writeImage(dstSet, bindingIndex(ForwardBinding::EmissiveTexture), kCis, emissiveTexInfo),
-        writeImage(dstSet, bindingIndex(ForwardBinding::NormalTexture), kCis, normalTexInfo),
-        writeImage(dstSet, bindingIndex(ForwardBinding::MetallicRoughnessTexture), kCis, mrTexInfo),
-        writeImage(dstSet, bindingIndex(ForwardBinding::OcclusionTexture), kCis, occTexInfo),
-        writeImage(dstSet, bindingIndex(ForwardBinding::TransmissionTexture), kCis, transTexInfo),
-        writeImage(dstSet, bindingIndex(ForwardBinding::ClearcoatTexture), kCis, ccTexInfo),
-        writeImage(dstSet, bindingIndex(ForwardBinding::ClearcoatRoughnessTexture), kCis,
-                   ccRoughTexInfo),
-        writeImage(dstSet, bindingIndex(ForwardBinding::ClearcoatNormalTexture), kCis,
-                   ccNormalTexInfo),
-        writeImage(dstSet, bindingIndex(ForwardBinding::ThicknessTexture), kCis, thicknessTexInfo),
-    }};
-    device_->device().updateDescriptorSets(writes, {});
 }
 
 ShadowDescriptorResult Descriptors::createShadowDescriptors(const ShadowDescriptorRequest& req)

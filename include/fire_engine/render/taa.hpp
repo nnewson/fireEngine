@@ -12,7 +12,7 @@ namespace fire_engine
 class Device;
 class Swapchain;
 
-// Temporal anti-aliasing subsystem (Roadmap: AA). Owns the screen-space velocity
+// Temporal anti-aliasing subsystem. Owns the screen-space velocity
 // (motion-vector) target written by the forward pass as a second colour
 // attachment, plus the resolve: two ping-pong history targets and a fullscreen
 // pass that reprojects the previous frame's accumulation along the velocity

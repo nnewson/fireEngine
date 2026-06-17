@@ -17,12 +17,15 @@ TEST_CASE("PipelineConfig.ForwardConfigBindingsSplitBetweenSets", "[PipelineConf
     using fire_engine::ForwardGlobalBinding;
     auto config = Pipeline::forwardConfig();
 
-    // Set 0 — per-object / per-material bindings: frame, material, skin,
-    // morph UBO + SSBO, base + 9 material textures (10 total).
-    CHECK(config.bindings.size() == 15u);
+    // Set 0 — per-object vertex-stage UBOs/SSBO only now: frame, skin, morph UBO +
+    // morph-targets SSBO (4 total). Material data (textures + scalars) is fully
+    // bindless (set 2).
+    CHECK(config.bindings.size() == 4u);
     // Set 1 — forward globals: light UBO + 5 shadow maps + debug image + 2
     // standalone samplers + 3 IBL textures + sceneColor.
     CHECK(config.globalBindings.size() == 13u);
+    // Set 2 — bindless materials (texture array + materials SSBO).
+    CHECK(config.bindlessSet);
 
     auto hasObjectBinding = [&](ForwardBinding binding)
     {
@@ -36,12 +39,14 @@ TEST_CASE("PipelineConfig.ForwardConfigBindingsSplitBetweenSets", "[PipelineConf
                            { return entry.binding == bindingIndex(binding); });
     };
 
-    // Per-object set 0 bindings.
-    CHECK(hasObjectBinding(ForwardBinding::TransmissionTexture));
-    CHECK(hasObjectBinding(ForwardBinding::ClearcoatTexture));
-    CHECK(hasObjectBinding(ForwardBinding::ClearcoatRoughnessTexture));
-    CHECK(hasObjectBinding(ForwardBinding::ClearcoatNormalTexture));
-    CHECK(hasObjectBinding(ForwardBinding::ThicknessTexture));
+    // Per-object set 0 bindings (material UBO + textures are no longer here).
+    CHECK(hasObjectBinding(ForwardBinding::Frame));
+    CHECK(hasObjectBinding(ForwardBinding::Skin));
+    CHECK(hasObjectBinding(ForwardBinding::Morph));
+    CHECK(hasObjectBinding(ForwardBinding::MorphTargets));
+    CHECK_FALSE(hasObjectBinding(ForwardBinding::Material));
+    CHECK_FALSE(hasObjectBinding(ForwardBinding::BaseColourTexture));
+    CHECK_FALSE(hasObjectBinding(ForwardBinding::ThicknessTexture));
 
     // Forward globals set 1 bindings.
     CHECK(hasGlobalBinding(ForwardGlobalBinding::Light));

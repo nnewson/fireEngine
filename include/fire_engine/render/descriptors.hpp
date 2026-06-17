@@ -27,14 +27,10 @@ struct MappedBufferSet
 
 struct GeometryDescriptorInfo
 {
-    std::array<BufferHandle, kMaxFramesInFlight> materialBufs{NullBuffer, NullBuffer};
     std::array<BufferHandle, kMaxFramesInFlight> skinBufs{NullBuffer, NullBuffer};
     std::array<BufferHandle, kMaxFramesInFlight> morphUboBufs{NullBuffer, NullBuffer};
     BufferHandle morphSsbo{NullBuffer};
     std::size_t morphSsboSize{0};
-    std::array<TextureHandle, materialTextureSlotCount> materialTextures{
-        NullTexture, NullTexture, NullTexture, NullTexture, NullTexture,
-        NullTexture, NullTexture, NullTexture, NullTexture, NullTexture};
 };
 
 struct ObjectDescriptorRequest
@@ -101,8 +97,6 @@ public:
 
     [[nodiscard]] ObjectDescriptorResult
     createObjectDescriptors(const ObjectDescriptorRequest& req);
-    void updateObjectGeometryTextures(DescriptorSetHandle set,
-                                      const GeometryDescriptorInfo& geometry);
     [[nodiscard]] ShadowDescriptorResult
     createShadowDescriptors(const ShadowDescriptorRequest& req);
 

@@ -1,6 +1,7 @@
 #include <cstddef>
 
 #include <fire_engine/core/shader_loader.hpp>
+#include <fire_engine/graphics/gpu_limits.hpp>
 #include <fire_engine/graphics/vertex.hpp>
 #include <fire_engine/render/descriptor_bindings.hpp>
 #include <fire_engine/render/pipeline.hpp>
@@ -21,7 +22,45 @@ Pipeline::Pipeline(const Device& device, const PipelineConfig& config)
         };
         globalDescSetLayout_ = vk::raii::DescriptorSetLayout(*device_, ci);
     }
+    if (config.bindlessSet)
+    {
+        createBindlessDescriptorSetLayout();
+    }
     createGraphicsPipeline(config);
+}
+
+void Pipeline::createBindlessDescriptorSetLayout()
+{
+    // Binding 0: a partially-bound, update-after-bind combined-image-sampler array
+    // indexed in-shader by texture handle (partially-bound lets the array be sparse;
+    // update-after-bind lets Resources write a texture into a slot after the set has
+    // already been bound for earlier frames). Binding 1: the global materials[]
+    // SSBO, indexed by the per-draw material index.
+    const std::array<vk::DescriptorSetLayoutBinding, 2> bindings{{
+        {bindingIndex(BindlessBinding::Textures), vk::DescriptorType::eCombinedImageSampler,
+         kMaxBindlessTextures, vk::ShaderStageFlagBits::eFragment},
+        {bindingIndex(BindlessBinding::Materials), vk::DescriptorType::eStorageBuffer, 1,
+         vk::ShaderStageFlagBits::eFragment},
+    }};
+    const std::array<vk::DescriptorBindingFlags, 2> bindingFlags{
+        // Textures: sparse + written as textures load (after the set is bound).
+        vk::DescriptorBindingFlagBits::ePartiallyBound |
+            vk::DescriptorBindingFlagBits::eUpdateAfterBind,
+        // Materials SSBO: written once at startup before the set is ever bound, so
+        // it needs no binding flags (no update-after-bind feature dependency).
+        vk::DescriptorBindingFlags{},
+    };
+    const vk::DescriptorSetLayoutBindingFlagsCreateInfo flagsInfo{
+        .bindingCount = static_cast<uint32_t>(bindingFlags.size()),
+        .pBindingFlags = bindingFlags.data(),
+    };
+    const vk::DescriptorSetLayoutCreateInfo ci{
+        .pNext = &flagsInfo,
+        .flags = vk::DescriptorSetLayoutCreateFlagBits::eUpdateAfterBindPool,
+        .bindingCount = static_cast<uint32_t>(bindings.size()),
+        .pBindings = bindings.data(),
+    };
+    bindlessDescSetLayout_ = vk::raii::DescriptorSetLayout(*device_, ci);
 }
 
 PipelineConfig Pipeline::forwardConfig()
@@ -30,12 +69,6 @@ PipelineConfig Pipeline::forwardConfig()
     {
         return vk::DescriptorSetLayoutBinding{bindingIndex(binding),
                                               vk::DescriptorType::eUniformBuffer, 1, stages};
-    };
-    auto sampler = [](ForwardBinding binding)
-    {
-        return vk::DescriptorSetLayoutBinding{bindingIndex(binding),
-                                              vk::DescriptorType::eCombinedImageSampler, 1,
-                                              vk::ShaderStageFlagBits::eFragment};
     };
     auto globalSampler = [](ForwardGlobalBinding binding)
     {
@@ -58,26 +91,19 @@ PipelineConfig Pipeline::forwardConfig()
     PipelineConfig config;
     config.vertShaderPath = "shader.vert.spv";
     config.fragShaderPath = "shader.frag.spv";
-    // Set 0 — per-object / per-material. Shared globals (light, shadow maps,
-    // IBL, sceneColor) live on set 1 below.
+    // Set 0 — per-object vertex-stage UBOs/SSBO only. Material data (textures +
+    // scalars) is fully bindless now: textures in the set-2 array, scalars in the
+    // set-2 materials SSBO indexed by push constant. Shared globals (light, shadow
+    // maps, IBL, sceneColor) live on set 1 below. Bindings 1 + 2 (old Material UBO
+    // and BaseColourTexture) are intentional gaps — gaps are legal and avoid
+    // renumbering Skin/Morph/MorphTargets.
     config.bindings = {
         uniform(ForwardBinding::Frame,
                 vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment),
-        uniform(ForwardBinding::Material, vk::ShaderStageFlagBits::eFragment),
-        sampler(ForwardBinding::BaseColourTexture),
         uniform(ForwardBinding::Skin, vk::ShaderStageFlagBits::eVertex),
         uniform(ForwardBinding::Morph, vk::ShaderStageFlagBits::eVertex),
         {bindingIndex(ForwardBinding::MorphTargets), vk::DescriptorType::eStorageBuffer, 1,
          vk::ShaderStageFlagBits::eVertex},
-        sampler(ForwardBinding::EmissiveTexture),
-        sampler(ForwardBinding::NormalTexture),
-        sampler(ForwardBinding::MetallicRoughnessTexture),
-        sampler(ForwardBinding::OcclusionTexture),
-        sampler(ForwardBinding::TransmissionTexture),
-        sampler(ForwardBinding::ClearcoatTexture),
-        sampler(ForwardBinding::ClearcoatRoughnessTexture),
-        sampler(ForwardBinding::ClearcoatNormalTexture),
-        sampler(ForwardBinding::ThicknessTexture),
     };
     // Set 1 — forward globals. Bound once per frame in Renderer; survives
     // pipeline transitions within the forward bucket. See ForwardGlobalBinding
@@ -99,6 +125,8 @@ PipelineConfig Pipeline::forwardConfig()
         globalSampler(ForwardGlobalBinding::BrdfLut),
         globalSampler(ForwardGlobalBinding::SceneColour),
     };
+    // Set 2 — bindless material textures + materials SSBO, indexed in-shader.
+    config.bindlessSet = true;
     config.pushConstantRanges.emplace_back(vk::ShaderStageFlagBits::eFragment, 0,
                                            static_cast<uint32_t>(sizeof(ForwardPushConstants)));
     // Forward target: HDR offscreen colour + RG16F motion vectors (TAA) + shared
@@ -196,7 +224,7 @@ PipelineConfig Pipeline::postProcessConfig(vk::Format colourFormat)
     config.bindings = {
         {bindingIndex(PostProcessBinding::HdrInput), vk::DescriptorType::eCombinedImageSampler, 1,
          vk::ShaderStageFlagBits::eFragment},
-        // 1: bloom mip 0 — added by Stage 6.
+        // 1: bloom mip 0 (additively composited over the tone-mapped HDR input).
         {bindingIndex(PostProcessBinding::BloomInput), vk::DescriptorType::eCombinedImageSampler, 1,
          vk::ShaderStageFlagBits::eFragment},
     };
@@ -616,11 +644,22 @@ void Pipeline::createPipelineLayout(const PipelineConfig& config)
     // setLayouts[0] = per-object set 0, always present. setLayouts[1] = forward
     // globals set 1, only when the config declared globalBindings (forward
     // pipelines opt in; skybox / post-process / shadow / IBL precompute don't).
-    const bool hasGlobal = static_cast<bool>(*globalDescSetLayout_);
-    std::array<vk::DescriptorSetLayout, 2> setLayouts{
-        *descSetLayout_, hasGlobal ? *globalDescSetLayout_ : vk::DescriptorSetLayout{}};
+    // setLayouts[2] = bindless materials set 2, only when the config opted in
+    // (forward pipelines). Sets must be contiguous: a forward pipeline always has
+    // set 1 too, so the order is set0, set1, set2.
+    std::array<vk::DescriptorSetLayout, 3> setLayouts{};
+    uint32_t setCount = 1;
+    setLayouts[0] = *descSetLayout_;
+    if (static_cast<bool>(*globalDescSetLayout_))
+    {
+        setLayouts[setCount++] = *globalDescSetLayout_;
+    }
+    if (static_cast<bool>(*bindlessDescSetLayout_))
+    {
+        setLayouts[setCount++] = *bindlessDescSetLayout_;
+    }
     vk::PipelineLayoutCreateInfo plci{
-        .setLayoutCount = hasGlobal ? 2u : 1u,
+        .setLayoutCount = setCount,
         .pSetLayouts = setLayouts.data(),
         .pushConstantRangeCount = static_cast<uint32_t>(config.pushConstantRanges.size()),
         .pPushConstantRanges = config.pushConstantRanges.data(),

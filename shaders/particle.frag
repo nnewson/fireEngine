@@ -1,6 +1,6 @@
 #version 450
 
-// Particle billboard fragment shader (Roadmap Milestone B). Soft round sprite,
+// Particle billboard fragment shader. Soft round sprite,
 // additively blended into the HDR target so bloom picks up the glow. Soft
 // particles: fades the sprite out as it approaches scene geometry (sampled
 // scene depth) so there is no hard clip edge at intersections.

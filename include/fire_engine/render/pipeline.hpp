@@ -15,14 +15,19 @@ struct PipelineConfig
 {
     std::string vertShaderPath;
     std::string fragShaderPath;
-    // Set 0 — per-object / per-material bindings, allocated once per object
-    // and rewritten only when materials change.
+    // Set 0 — per-object vertex-stage bindings (frame / skin / morph UBOs + morph
+    // SSBO), allocated per object. Material data is bindless (set 2).
     std::vector<vk::DescriptorSetLayoutBinding> bindings;
     // Set 1 — forward-pipeline globals (light UBO, shadow maps, IBL, scene
     // colour). Allocated once per frame, bound once per forward pass. Empty
     // for pipelines that don't need a second descriptor set (skybox,
     // post-process, shadow, environment precompute).
     std::vector<vk::DescriptorSetLayoutBinding> globalBindings;
+    // Set 2 — bindless materials: one global combined-image-sampler array
+    // (textures) + the global materials SSBO, shared by every forward draw and
+    // indexed in-shader. Opt-in (forward pipelines only); created with
+    // partially-bound + update-after-bind binding flags.
+    bool bindlessSet{false};
     std::vector<vk::PushConstantRange> pushConstantRanges;
     // Dynamic-rendering attachment formats: the pipeline is created with a
     // VkPipelineRenderingCreateInfo built from these (no VkRenderPass).
@@ -68,6 +73,16 @@ public:
     [[nodiscard]] bool hasGlobalDescriptorSetLayout() const noexcept
     {
         return static_cast<bool>(*globalDescSetLayout_);
+    }
+    // Set 2 layout (bindless materials). nullptr unless the config opted in via
+    // bindlessSet. Resources allocates + writes the actual set from this layout.
+    [[nodiscard]] vk::DescriptorSetLayout bindlessDescriptorSetLayout() const noexcept
+    {
+        return *bindlessDescSetLayout_;
+    }
+    [[nodiscard]] bool hasBindlessDescriptorSetLayout() const noexcept
+    {
+        return static_cast<bool>(*bindlessDescSetLayout_);
     }
     [[nodiscard]] vk::PipelineLayout pipelineLayout() const noexcept
     {
@@ -167,7 +182,7 @@ public:
     // (gl_VertexIndex builds the quad, gl_InstanceIndex reads the pool SSBO at
     // binding 0; frame UBO at binding 1). Additive blend into the HDR target,
     // depth test/write off (occlusion + soft fade are done in-shader against
-    // sampled scene depth — Stage 4).
+    // sampled scene depth).
     [[nodiscard]] static PipelineConfig particleConfig(vk::Format colourFormat);
 
 private:
@@ -179,9 +194,12 @@ private:
                        vk::raii::ShaderModule& fragMod) const;
     void createPipelineLayout(const PipelineConfig& config);
 
+    void createBindlessDescriptorSetLayout();
+
     const vk::raii::Device* device_{nullptr};
     vk::raii::DescriptorSetLayout descSetLayout_{nullptr};
     vk::raii::DescriptorSetLayout globalDescSetLayout_{nullptr};
+    vk::raii::DescriptorSetLayout bindlessDescSetLayout_{nullptr};
     vk::raii::PipelineLayout pipelineLayout_{nullptr};
     vk::raii::Pipeline pipeline_{nullptr};
 };

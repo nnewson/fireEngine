@@ -83,6 +83,11 @@ struct MaterialUBO
     // KHR_texture_transform per material texture slot. Indexed by
     // MaterialTextureSlot enum order (BaseColour..Thickness, 0..9).
     alignas(16) UvXform uv[10]{};
+    // Bindless texture index per material texture slot (= the texture's
+    // TextureHandle value, i.e. its slot in the global set-2 textures[] array).
+    // Packed as 3 ivec4s (10 slots used) to match the shader's ivec4[3]; read only
+    // where the slot's present-flag is set, 0 otherwise.
+    alignas(16) int32_t textureIndex[12]{};
 };
 
 struct SkinUBO
@@ -220,7 +225,8 @@ struct ShadowPushConstants
 struct ForwardPushConstants
 {
     alignas(4) int selfShadowSlot{-1};
-    int _pad0{0};
+    // Index into the global materials[] SSBO (bindless) for this draw.
+    uint32_t materialIndex{0};
     int _pad1{0};
     int _pad2{0};
 };

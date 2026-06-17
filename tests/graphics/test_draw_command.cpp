@@ -182,6 +182,7 @@ TEST_CASE("DrawCommand.CopyPreservesAllFields", "[DrawCommand]")
     DrawCommand original{BufferHandle{1}, BufferHandle{2}, 36, DescriptorSetHandle{4},
                          PipelineHandle{5}};
     original.indexType = DrawIndexType::UInt32;
+    original.materialIndex = 7u;
     DrawCommand copy = original;
     CHECK(copy.vertexBuffer == original.vertexBuffer);
     CHECK(copy.indexBuffer == original.indexBuffer);
@@ -189,4 +190,12 @@ TEST_CASE("DrawCommand.CopyPreservesAllFields", "[DrawCommand]")
     CHECK(copy.indexType == original.indexType);
     CHECK(copy.descriptorSet == original.descriptorSet);
     CHECK(copy.pipeline == original.pipeline);
+    CHECK(copy.materialIndex == original.materialIndex);
+}
+
+TEST_CASE("DrawCommand.MaterialIndexDefaultsToZero", "[DrawCommand]")
+{
+    // Bindless material index — drives ForwardPushConstants::materialIndex per draw.
+    DrawCommand cmd;
+    CHECK(cmd.materialIndex == 0u);
 }

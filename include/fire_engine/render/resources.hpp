@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <span>
+#include <unordered_map>
 #include <vector>
 
 #include <vulkan/vulkan_raii.hpp>
@@ -20,6 +21,7 @@ namespace fire_engine
 class Device;
 class Image;
 class KtxImage;
+class Material;
 class Pipeline;
 class Vertex;
 
@@ -171,6 +173,28 @@ public:
         return descriptors_;
     }
 
+    // --- Bindless materials (forward set 2) ---
+
+    // Write a 2D sampled texture into the global bindless array at array index ==
+    // its handle value (the array is partially-bound, so non-2D handles just leave
+    // gaps). Called from the 2D material-texture creation paths. update-after-bind
+    // makes this safe even after the set has been bound in earlier frames.
+    void registerBindlessTexture(TextureHandle handle);
+
+    // The single global bindless descriptor set (forward set 2), bound once per
+    // forward pass. Null until the owning forward pipeline declared a bindless set.
+    [[nodiscard]] vk::DescriptorSet bindlessDescriptorSet() const noexcept
+    {
+        return static_cast<bool>(*bindlessSet_) ? *bindlessSet_ : vk::DescriptorSet{};
+    }
+
+    // Assign (or look up) a material's slot in the global materials[] SSBO, writing
+    // its packed MaterialUBO on first registration. Deduplicated by Material
+    // identity; idempotent, so draw setup can call it every frame cheaply. The
+    // returned index goes into ForwardPushConstants::materialIndex. Returns 0 when
+    // there's no bindless set (headless contexts).
+    [[nodiscard]] uint32_t registerMaterial(const Material& material);
+
     // --- Shared light UBO (bound to every forward descriptor set) ---
 
     void lightBuffers(const std::array<BufferHandle, kMaxFramesInFlight>& bufs) noexcept
@@ -246,6 +270,20 @@ private:
 
     const Device* device_;
     Descriptors descriptors_;
+
+    // Global bindless material set (forward set 2): one update-after-bind pool, one
+    // set, allocated from the forward pipeline's bindless layout. Empty when the
+    // pipeline declared no bindless set.
+    vk::raii::DescriptorPool bindlessPool_{nullptr};
+    vk::raii::DescriptorSet bindlessSet_{nullptr};
+    // Global materials[] SSBO (forward set 2, binding 1): one persistently-mapped
+    // host-visible buffer, written per material on first registration. Material
+    // identity → slot index. Immutable per slot once written, so shared across
+    // frames without double-buffering.
+    BufferHandle materialBuffer_{NullBuffer};
+    void* materialMapped_{nullptr};
+    uint32_t materialCount_{0};
+    std::unordered_map<const Material*, uint32_t> materialIndices_;
 
     vk::raii::CommandPool cmdPool_{nullptr};
 

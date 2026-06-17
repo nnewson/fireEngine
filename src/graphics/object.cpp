@@ -19,32 +19,6 @@ namespace
 {
 
 [[nodiscard]]
-Resources::FallbackTextureKind fallbackForSlot(MaterialTextureSlot slot) noexcept
-{
-    using Kind = Resources::FallbackTextureKind;
-    switch (slot)
-    {
-    case MaterialTextureSlot::BaseColour:
-    case MaterialTextureSlot::Clearcoat:
-    case MaterialTextureSlot::ClearcoatRoughness:
-    case MaterialTextureSlot::Thickness:
-        return Kind::BaseColour;
-    case MaterialTextureSlot::Emissive:
-        return Kind::Emissive;
-    case MaterialTextureSlot::Normal:
-    case MaterialTextureSlot::ClearcoatNormal:
-        return Kind::Normal;
-    case MaterialTextureSlot::MetallicRoughness:
-        return Kind::MetallicRoughness;
-    case MaterialTextureSlot::Occlusion:
-    case MaterialTextureSlot::Transmission:
-        return Kind::Occlusion;
-    }
-
-    return Kind::BaseColour;
-}
-
-[[nodiscard]]
 std::vector<float> packMorphTargetDeltas(const Geometry& geometry)
 {
     const auto numTargets = geometry.morphTargetCount();
@@ -171,15 +145,8 @@ ObjectDescriptorRequest Object::createForwardBindings(Resources& resources)
     {
         GeometryDescriptorInfo geoInfo;
 
-        // Material buffers
-        MaterialUBO matUbo = toMaterialUBO(*binding.activeMaterial);
-        auto matSet = resources.createMappedUniformBuffers(sizeof(MaterialUBO));
-        for (int i = 0; i < kMaxFramesInFlight; ++i)
-        {
-            binding.materialMapped[i] = matSet.mapped[i];
-            geoInfo.materialBufs[i] = matSet.buffers[i];
-            std::memcpy(matSet.mapped[i], &matUbo, sizeof(matUbo));
-        }
+        // Material data (textures + scalars) is bindless now (global set 2);
+        // registered lazily in buildDrawCommands. No per-object material UBO.
 
         // Skin buffers
         SkinUBO skinUbo{};
@@ -226,8 +193,8 @@ ObjectDescriptorRequest Object::createForwardBindings(Resources& resources)
             geoInfo.morphSsboSize = ssboSize;
         }
 
-        // Texture handle — use a 1x1 white dummy when material has no texture
-        applyMaterialTextures(geoInfo, *binding.activeMaterial, resources);
+        // Material textures are bindless now (registered in the global set-2 array
+        // at creation); the per-object set 0 carries only UBOs + the morph SSBO.
 
         req.geometries.push_back(geoInfo);
     }
@@ -298,7 +265,6 @@ void Object::activeVariant(std::optional<std::size_t> variantIndex)
         }
 
         binding.activeMaterial = nextMaterial;
-        binding.descriptorDirty.fill(true);
     }
 }
 
@@ -333,20 +299,6 @@ bool Object::wouldChangeVariant(std::optional<std::size_t> variantIndex) const n
     }
 
     return false;
-}
-
-void Object::applyMaterialTextures(GeometryDescriptorInfo& geoInfo, const Material& mat,
-                                   Resources& resources)
-{
-    geoInfo.materialTextures = materialTextureHandles(mat);
-    for (const MaterialTextureBinding& binding : materialTextureBindings)
-    {
-        TextureHandle& handle = geoInfo.materialTextures[slotIndex(binding.slot)];
-        if (handle == NullTexture)
-        {
-            handle = resources.fallbackTexture(fallbackForSlot(binding.slot));
-        }
-    }
 }
 
 void Object::updateSkin()
@@ -444,18 +396,9 @@ void Object::writeForwardUniforms(const FrameInfo& frame, const Mat4& world,
 
     for (auto& binding : bindings_)
     {
-        MaterialUBO matUbo = toMaterialUBO(*binding.activeMaterial);
-        std::memcpy(binding.materialMapped[frame.currentFrame], &matUbo, sizeof(matUbo));
-
-        if (binding.descriptorDirty[frame.currentFrame] && resources_ != nullptr)
-        {
-            GeometryDescriptorInfo geoInfo;
-            applyMaterialTextures(geoInfo, *binding.activeMaterial, *resources_);
-            resources_->descriptors().updateObjectGeometryTextures(
-                binding.descSets[frame.currentFrame], geoInfo);
-            binding.descriptorDirty[frame.currentFrame] = false;
-        }
-
+        // Material data is bindless (global set 2 materials[] SSBO); a draw selects
+        // its material by index (buildDrawCommands → registerMaterial), so a variant
+        // switch is just a different index — nothing to write per object here.
         auto numTargets = binding.geometry->morphTargetCount();
         MorphUBO morphUbo{};
         if (numTargets > 0 && !morphWeights_.empty())
@@ -533,6 +476,9 @@ std::vector<DrawCommand> Object::buildDrawCommands(const FrameInfo& frame, const
         cmd.objectId = objectId_;
         cmd.hasSkin = hasSkin;
         cmd.shadowBounds = shadowBounds;
+        // Bindless material index (idempotent registration — first sight assigns a
+        // slot in the global materials[] SSBO; cached thereafter).
+        cmd.materialIndex = resources_ != nullptr ? resources_->registerMaterial(mat) : 0;
         // KHR_materials_transmission F3: defer this draw to the second forward
         // sub-pass so its fragment shader can sample the post-opaque HDR
         // target via screen-space refraction.

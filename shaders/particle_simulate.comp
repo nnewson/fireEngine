@@ -1,6 +1,6 @@
 #version 450
 
-// GPU particle simulation (Roadmap Milestone B). One invocation per pool slot:
+// GPU particle simulation. One invocation per pool slot:
 // ages live particles and integrates them under gravity; respawns dead slots at
 // their emitter up to a per-frame spawn budget claimed via an atomic counter.
 // The pool is partitioned per emitter (emitterIndex = i / particlesPerEmitter).

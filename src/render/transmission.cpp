@@ -30,6 +30,10 @@ void recordTransmissionDrawBucket(vk::CommandBuffer cmd, std::span<const DrawCom
             // switch that might have used a set-1-incompatible layout.
             cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
                                    resources.vulkanPipelineLayout(dc.pipeline), 1, globalSet, {});
+            // Set 2 — bindless materials (forward shader indexes it for every draw).
+            cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
+                                   resources.vulkanPipelineLayout(dc.pipeline), 2,
+                                   resources.bindlessDescriptorSet(), {});
             lastBoundPipeline = dc.pipeline;
         }
         if (dc.vertexBuffer != NullBuffer)
@@ -46,6 +50,7 @@ void recordTransmissionDrawBucket(vk::CommandBuffer cmd, std::span<const DrawCom
                                resources.vulkanPipelineLayout(dc.pipeline), 0, descriptorSet, {});
         ForwardPushConstants pc{};
         pc.selfShadowSlot = dc.selfShadowSlot;
+        pc.materialIndex = dc.materialIndex;
         cmd.pushConstants<ForwardPushConstants>(resources.vulkanPipelineLayout(dc.pipeline),
                                                 vk::ShaderStageFlagBits::eFragment, 0, pc);
         cmd.drawIndexed(dc.indexCount, 1, 0, 0, 0);
@@ -292,8 +297,8 @@ void Transmission::recordForwardTransmissionPass(vk::CommandBuffer cmd,
                                                       .baseArrayLayer = 0,
                                                       .layerCount = 1},
     };
-    cmd.pipelineBarrier2(
-        vk::DependencyInfo{.imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &velocityToAttach});
+    cmd.pipelineBarrier2(vk::DependencyInfo{.imageMemoryBarrierCount = 1,
+                                            .pImageMemoryBarriers = &velocityToAttach});
 
     // Depth is still DepthStencilAttachmentOptimal from the forward pass; HDR +
     // velocity are loaded (loadOp Load) and rendered on top.
@@ -358,9 +363,9 @@ void Transmission::recordForwardTransmissionPass(vk::CommandBuffer cmd,
                                                       .layerCount = 1},
     };
     std::array<vk::ImageMemoryBarrier2, 2> barriers{toShaderRead, velocityToShaderRead};
-    cmd.pipelineBarrier2(vk::DependencyInfo{
-        .imageMemoryBarrierCount = static_cast<uint32_t>(barriers.size()),
-        .pImageMemoryBarriers = barriers.data()});
+    cmd.pipelineBarrier2(
+        vk::DependencyInfo{.imageMemoryBarrierCount = static_cast<uint32_t>(barriers.size()),
+                           .pImageMemoryBarriers = barriers.data()});
 }
 
 } // namespace fire_engine

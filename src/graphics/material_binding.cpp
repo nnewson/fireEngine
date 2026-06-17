@@ -74,10 +74,16 @@ MaterialUBO toMaterialUBO(const Material& mat)
     ubo.texCoordIndices[2] = mat.texture(Slot::Normal).texCoord;
     ubo.texCoordIndices[3] = mat.texture(Slot::MetallicRoughness).texCoord;
 
-    // Pack every slot's KHR_texture_transform, indexed by MaterialTextureSlot.
+    // Pack every slot's KHR_texture_transform + bindless texture index, indexed by
+    // MaterialTextureSlot. The index is the texture's handle value (its slot in the
+    // global set-2 textures[] array); 0 when the slot has no texture (read only
+    // where the matching present-flag is set, so the value is don't-care there).
     for (std::size_t i = 0; i < materialTextureSlotCount; ++i)
     {
-        writeUv(ubo.uv[i], mat.texture(static_cast<Slot>(i)).transform);
+        const TextureSlot& slot = mat.texture(static_cast<Slot>(i));
+        writeUv(ubo.uv[i], slot.transform);
+        ubo.textureIndex[i] =
+            slot.has() ? static_cast<int32_t>(static_cast<uint32_t>(slot.texture->handle())) : 0;
     }
 
     // Optional extension blocks: value_or({}) reproduces the old always-present
