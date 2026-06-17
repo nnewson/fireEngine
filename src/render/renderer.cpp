@@ -690,7 +690,14 @@ void Renderer::drawFrame(Window& display, SceneGraph& scene, Vec3 cameraPosition
 
     // Soft-body (cloth) solve runs first: it writes solved positions + normals
     // into the cloth vertex buffers that the shadow + forward passes then read.
-    softBody_.recordSolve(cmd, dt, currentFrame_, clothColliders_);
+    const ClothSimParams clothParams{
+        .substeps = static_cast<uint32_t>(std::max(1, tunables_.clothSubsteps)),
+        .compliance = tunables_.clothCompliance,
+        .damping = tunables_.clothDamping,
+        .gravity = tunables_.clothGravity,
+        .wind = {tunables_.clothWind[0], tunables_.clothWind[1], tunables_.clothWind[2]},
+    };
+    softBody_.recordSolve(cmd, dt, currentFrame_, clothColliders_, clothParams);
 
     // Per-frame camera matrices. The forward pass rasterises with jitteredProj_
     // (TAA sub-pixel jitter); currentViewProj_ is jitter-free so motion vectors

@@ -34,6 +34,7 @@ layout(std140, binding = 3) uniform Colliders {
 
 layout(push_constant) uniform Push {
     vec4 gravity;
+    vec4 wind;
     float dt;
     uint particleCount;
     uint rangeBegin;
@@ -41,7 +42,7 @@ layout(push_constant) uniform Push {
     float damping;
     uint resX;
     uint resZ;
-    uint pad;
+    float compliance;
 } pc;
 
 // Rotate v by quaternion q (xyz = vector part, w = scalar).

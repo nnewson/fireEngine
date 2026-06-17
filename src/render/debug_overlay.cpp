@@ -153,6 +153,16 @@ void DebugOverlay::buildUi(const FrameStats& stats, RenderTunables& tunables)
         ImGui::SliderFloat("Size", &tunables.particleSizeScale, 0.1f, 4.0f);
     }
 
+    if (ImGui::CollapsingHeader("Cloth (-c)"))
+    {
+        ImGui::SliderInt("Substeps", &tunables.clothSubsteps, 1, 40);
+        // Compliance is inverse stiffness; the small range keeps it usable.
+        ImGui::SliderFloat("Compliance", &tunables.clothCompliance, 0.0f, 0.002f, "%.5f");
+        ImGui::SliderFloat("Damping", &tunables.clothDamping, 0.8f, 1.0f);
+        ImGui::SliderFloat("Gravity", &tunables.clothGravity, -20.0f, 0.0f);
+        ImGui::SliderFloat3("Wind", tunables.clothWind, -10.0f, 10.0f);
+    }
+
     ImGui::End();
 }
 

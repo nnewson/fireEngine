@@ -14,11 +14,7 @@ namespace fire_engine
 namespace
 {
 
-// XPBD: substepping (many small steps, one constraint pass each) is more stable
-// than iterating a single large step. Tunable via the overlay in a later stage.
-constexpr uint32_t kSubsteps = 20;
-constexpr float kGravity = -9.8f;
-constexpr float kDamping = 0.99f;
+// XPBD substepping, solver tunables, etc. now come from ClothSimParams (overlay).
 constexpr float kMaxFrameDt = 1.0f / 30.0f; // clamp to avoid blow-ups on a hitch
 constexpr uint32_t kMaxCloths = 8;
 constexpr uint32_t kLocalSize = 64;
@@ -47,15 +43,16 @@ struct ConstraintGpu
 // Shared push block (mirrors the `Push` block in the cloth_*.comp shaders).
 struct ClothPush
 {
-    float gravity[4]{0.0f, kGravity, 0.0f, 0.0f};
+    float gravity[4]{0.0f, -9.8f, 0.0f, 0.0f};
+    float wind[4]{0.0f, 0.0f, 0.0f, 0.0f};
     float dt{0.0f};
     uint32_t particleCount{0};
     uint32_t rangeBegin{0};
     uint32_t rangeEnd{0};
-    float damping{kDamping};
+    float damping{0.99f};
     uint32_t resX{0};
     uint32_t resZ{0};
-    uint32_t pad{0};
+    float compliance{0.0f};
 };
 
 // std140 collider UBO mirroring the `Colliders` block in cloth_collide.comp.
@@ -198,15 +195,17 @@ void SoftBodySystem::addCloth(const ClothMesh& mesh, BufferHandle vertexBuffer)
 }
 
 void SoftBodySystem::recordSolve(vk::CommandBuffer cmd, float dt, uint32_t frameIndex,
-                                 std::span<const ClothCollider> colliders) const
+                                 std::span<const ClothCollider> colliders,
+                                 const ClothSimParams& params) const
 {
     if (cloths_.empty())
     {
         return;
     }
 
+    const uint32_t substeps = std::max(1u, params.substeps);
     const float frameDt = std::min(std::max(dt, 0.0f), kMaxFrameDt);
-    const float subDt = frameDt / static_cast<float>(kSubsteps);
+    const float subDt = frameDt / static_cast<float>(substeps);
     if (subDt <= 0.0f)
     {
         return;
@@ -239,15 +238,23 @@ void SoftBodySystem::recordSolve(vk::CommandBuffer cmd, float dt, uint32_t frame
         const uint32_t particleGroups = groups(c.particleCount);
 
         ClothPush push;
+        push.gravity[0] = 0.0f;
+        push.gravity[1] = params.gravity;
+        push.gravity[2] = 0.0f;
+        push.wind[0] = params.wind[0];
+        push.wind[1] = params.wind[1];
+        push.wind[2] = params.wind[2];
         push.dt = subDt;
         push.particleCount = c.particleCount;
+        push.damping = params.damping;
+        push.compliance = params.compliance;
         push.resX = c.resX;
         push.resZ = c.resZ;
 
         const uint32_t numColours =
             c.colourRanges.empty() ? 0u : static_cast<uint32_t>(c.colourRanges.size() - 1);
 
-        for (uint32_t s = 0; s < kSubsteps; ++s)
+        for (uint32_t s = 0; s < substeps; ++s)
         {
             cmd.bindPipeline(vk::PipelineBindPoint::eCompute, predict_.pipeline());
             cmd.pushConstants<ClothPush>(predict_.pipelineLayout(),

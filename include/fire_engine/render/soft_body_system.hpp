@@ -18,6 +18,18 @@ namespace fire_engine
 
 class Device;
 
+// Live solver parameters (overlay-tunable). gravity/wind are accelerations
+// applied in the predict step; compliance is the global XPBD distance-constraint
+// softness; substeps trades cost for stability.
+struct ClothSimParams
+{
+    uint32_t substeps{20};
+    float compliance{0.0f};
+    float damping{0.99f};
+    float gravity{-9.8f};
+    float wind[3]{0.0f, 0.0f, 0.0f};
+};
+
 // Renderer-owned GPU soft-body (cloth) solver (Roadmap #2). Owns the XPBD compute
 // pipelines and, per registered cloth, the particle + constraint buffers and a
 // descriptor set. Each frame `recordSolve` runs the substep loop (predict →
@@ -54,7 +66,7 @@ public:
     // barrier on each render vertex buffer. Uploads `colliders` into this frame's
     // collider UBO first. Recorded before the shadow pass.
     void recordSolve(vk::CommandBuffer cmd, float dt, uint32_t frameIndex,
-                     std::span<const ClothCollider> colliders) const;
+                     std::span<const ClothCollider> colliders, const ClothSimParams& params) const;
 
     static constexpr uint32_t kMaxClothColliders = 16;
 

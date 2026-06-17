@@ -17,6 +17,7 @@ layout(std430, binding = 0) buffer Particles { Particle particles[]; };
 
 layout(push_constant) uniform Push {
     vec4 gravity;        // xyz acceleration
+    vec4 wind;           // xyz acceleration
     float dt;            // substep dt
     uint particleCount;
     uint rangeBegin;     // (solve only)
@@ -24,7 +25,7 @@ layout(push_constant) uniform Push {
     float damping;
     uint resX;
     uint resZ;
-    uint pad;
+    float compliance;    // (solve only)
 } pc;
 
 void main()
@@ -40,7 +41,7 @@ void main()
     {
         vec3 vel = (p.pos.xyz - p.prev.xyz) / pc.dt * pc.damping; // 0 on the first substep
         p.prev = p.pos;
-        vel += pc.gravity.xyz * pc.dt;
+        vel += (pc.gravity.xyz + pc.wind.xyz) * pc.dt;
         p.pos = vec4(p.pos.xyz + vel * pc.dt, p.pos.w);
         p.vel = vec4(vel, 0.0);
     }

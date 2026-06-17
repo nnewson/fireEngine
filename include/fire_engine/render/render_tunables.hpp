@@ -45,6 +45,13 @@ struct RenderTunables
     float particleRateScale{1.0f};
     float particleLifetimeScale{1.0f};
     float particleSizeScale{1.0f};
+
+    // Soft-body / cloth solver (defaults mirror the solver's former constants).
+    int clothSubsteps{20};
+    float clothCompliance{0.0f}; // XPBD compliance: 0 = rigid, higher = softer
+    float clothDamping{0.99f};
+    float clothGravity{-9.8f}; // world-Y acceleration
+    float clothWind[3]{0.0f, 0.0f, 0.0f};
 };
 
 } // namespace fire_engine
