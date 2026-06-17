@@ -204,7 +204,7 @@ void FireEngine::addClothDemo()
 
     clothGeometry_ = std::make_unique<Geometry>();
     clothGeometry_->vertices(std::move(cloth.vertices));
-    clothGeometry_->indices(std::move(cloth.indices));
+    clothGeometry_->indices(cloth.indices); // copy: addCloth still needs the indices
     clothGeometry_->material(&mat);
     clothGeometry_->storageVertices(true);
     clothGeometry_->load(renderer_->resources());
@@ -227,8 +227,16 @@ void FireEngine::loadScene(std::string_view scene_path)
     // Load glTF scene (CLI arg overrides default)
     constexpr std::string_view default_scene = "RiggedSimple/RiggedSimple.gltf";
     std::string_view path = scene_path.empty() ? default_scene : scene_path;
-    Node* activeCamera =
-        GltfLoader::loadScene(std::string(path), scene_, renderer_->resources(), assets_, physics_);
+    std::vector<GltfLoader::ClothRegistration> clothRegistrations;
+    Node* activeCamera = GltfLoader::loadScene(std::string(path), scene_, renderer_->resources(),
+                                               assets_, physics_, &clothRegistrations);
+
+    // Register any glTF `extras.Cloth` meshes with the soft-body solver. The
+    // geometry (Assets-owned) keeps its storage vertex buffer; the solver writes it.
+    for (auto& reg : clothRegistrations)
+    {
+        renderer_->addCloth(reg.mesh, reg.geometry->vertexBuffer());
+    }
 
     if (activeCamera != nullptr)
     {

@@ -39,26 +39,29 @@ struct ConstraintGpu
     float compliance;
 };
 
-// Shared push block (mirrors the `Push` block in the cloth_*.comp shaders).
-// Mirrors the push block in the cloth_*.comp shaders. The four leading 64-bit
-// device addresses are the buffer_reference pointers (8 bytes each).
+// Shared push block, mirroring the `Push` block in the cloth_*.comp shaders. The
+// two vec4s lead so they land at 16-byte-aligned offsets; then the seven 64-bit
+// buffer_reference pointers (8 bytes each, the first aligned at offset 32); then
+// the scalars. 112 bytes total.
 struct ClothPush
 {
+    float gravity[4]{0.0f, -9.8f, 0.0f, 0.0f};
+    float wind[4]{0.0f, 0.0f, 0.0f, 0.0f};
     vk::DeviceAddress particles{0};
     vk::DeviceAddress constraints{0};
     vk::DeviceAddress verts{0};
     vk::DeviceAddress colliders{0};
-    float gravity[4]{0.0f, -9.8f, 0.0f, 0.0f};
-    float wind[4]{0.0f, 0.0f, 0.0f, 0.0f};
+    vk::DeviceAddress indices{0};
+    vk::DeviceAddress adjOffsets{0};
+    vk::DeviceAddress adjTris{0};
     float dt{0.0f};
     uint32_t particleCount{0};
     uint32_t rangeBegin{0};
     uint32_t rangeEnd{0};
     float damping{0.99f};
-    uint32_t resX{0};
-    uint32_t resZ{0};
-    float compliance{0.0f};
+    float complianceScale{1.0f};
 };
+static_assert(sizeof(ClothPush) == 112, "ClothPush must match the std430 shader push layout");
 
 // std430 collider buffer mirroring the `Colliders` buffer_reference in the
 // shaders. ClothCollider is 64 bytes; count is padded to 16 before the array.
@@ -133,13 +136,23 @@ void SoftBodySystem::addCloth(const ClothMesh& mesh, BufferHandle vertexBuffer)
     cloth.verts = vertexBuffer;
     cloth.particleCount = count;
     cloth.colourRanges = mesh.colourRanges;
-    cloth.resX = mesh.resX;
-    cloth.resZ = mesh.resZ;
+
+    // Index list + CSR normal adjacency: constant per cloth, read by the finalize
+    // pass to recompute per-vertex normals from the current particle positions.
+    cloth.indices = resources_->createStorageBuffer(mesh.indices.size() * sizeof(uint32_t),
+                                                    mesh.indices.data());
+    cloth.adjOffsets = resources_->createStorageBuffer(
+        mesh.normalAdjOffsets.size() * sizeof(uint32_t), mesh.normalAdjOffsets.data());
+    cloth.adjTris = resources_->createStorageBuffer(mesh.normalAdjTris.size() * sizeof(uint32_t),
+                                                    mesh.normalAdjTris.data());
 
     // Cache the GPU pointers the solver pushes each dispatch (bufferDeviceAddress).
     cloth.particlesAddr = resources_->bufferAddress(cloth.particles);
     cloth.constraintsAddr = resources_->bufferAddress(cloth.constraints);
     cloth.vertsAddr = resources_->bufferAddress(cloth.verts);
+    cloth.indicesAddr = resources_->bufferAddress(cloth.indices);
+    cloth.adjOffsetsAddr = resources_->bufferAddress(cloth.adjOffsets);
+    cloth.adjTrisAddr = resources_->bufferAddress(cloth.adjTris);
 
     cloths_.push_back(std::move(cloth));
 }
@@ -190,6 +203,9 @@ void SoftBodySystem::recordSolve(vk::CommandBuffer cmd, float dt, uint32_t frame
         push.constraints = c.constraintsAddr;
         push.verts = c.vertsAddr;
         push.colliders = colliderAddrs_[frameIndex];
+        push.indices = c.indicesAddr;
+        push.adjOffsets = c.adjOffsetsAddr;
+        push.adjTris = c.adjTrisAddr;
         push.gravity[0] = 0.0f;
         push.gravity[1] = params.gravity;
         push.gravity[2] = 0.0f;
@@ -199,9 +215,7 @@ void SoftBodySystem::recordSolve(vk::CommandBuffer cmd, float dt, uint32_t frame
         push.dt = subDt;
         push.particleCount = c.particleCount;
         push.damping = params.damping;
-        push.compliance = params.compliance;
-        push.resX = c.resX;
-        push.resZ = c.resZ;
+        push.complianceScale = params.complianceScale;
 
         const uint32_t numColours =
             c.colourRanges.empty() ? 0u : static_cast<uint32_t>(c.colourRanges.size() - 1);

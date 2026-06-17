@@ -26,6 +26,7 @@
 
 using fire_engine::AlphaMode;
 using fire_engine::ClearcoatParams;
+using fire_engine::ClothMeshParams;
 using fire_engine::GltfLoader;
 using fire_engine::Mat4;
 using fire_engine::Material;
@@ -225,6 +226,16 @@ static std::optional<GltfLoader::PhysicsConfig> nodeExtrasPhysicsFromJson(std::s
     simdjson::dom::object extras;
     CHECK(doc.get_object().get(extras) == simdjson::SUCCESS);
     return GltfLoader::nodeExtrasPhysics(&extras);
+}
+
+static std::optional<ClothMeshParams> nodeExtrasClothFromJson(std::string_view json)
+{
+    simdjson::dom::parser parser;
+    simdjson::padded_string padded{std::string{json}};
+    auto doc = parser.parse(padded);
+    simdjson::dom::object extras;
+    CHECK(doc.get_object().get(extras) == simdjson::SUCCESS);
+    return GltfLoader::nodeExtrasCloth(&extras);
 }
 
 // Applies a fastgltf matrix to a Node's Transform via decomposition,
@@ -558,6 +569,52 @@ TEST_CASE("GltfNodeExtras.VelocityWithWrongCountThrows", "[GltfNodeExtras]")
                     std::runtime_error);
     CHECK_THROWS_AS(nodeExtrasPhysicsFromJson(R"({"Physics":{"Velocity":[1.0,0.0,0.0,0.0]}})"),
                     std::runtime_error);
+}
+
+TEST_CASE("GltfNodeExtras.MissingClothIsIgnored", "[GltfNodeExtras]")
+{
+    auto config = nodeExtrasClothFromJson(R"({"Physics":{"BodyType":"Static"}})");
+    CHECK_FALSE(config.has_value());
+}
+
+TEST_CASE("GltfNodeExtras.ClothFieldsAreParsed", "[GltfNodeExtras]")
+{
+    auto config = nodeExtrasClothFromJson(
+        R"({"Cloth":{"Pin":"TopEdge","Compliance":0.001,"BendCompliance":0.0002}})");
+
+    REQUIRE(config.has_value());
+    CHECK(config->pin == ClothMeshParams::Pin::TopEdge);
+    CHECK(config->structuralCompliance == Catch::Approx(0.001f).margin(1e-7f));
+    CHECK(config->bendCompliance == Catch::Approx(0.0002f).margin(1e-7f));
+}
+
+TEST_CASE("GltfNodeExtras.ClothDefaultsWhenFieldsOmitted", "[GltfNodeExtras]")
+{
+    auto config = nodeExtrasClothFromJson(R"({"Cloth":{}})");
+
+    REQUIRE(config.has_value());
+    CHECK(config->pin == ClothMeshParams::Pin::None);
+    CHECK(config->structuralCompliance == Catch::Approx(0.0f).margin(1e-7f));
+    // Bend defaults to the soft authored value, not zero.
+    CHECK(config->bendCompliance > 0.0f);
+}
+
+TEST_CASE("GltfNodeExtras.ClothPinValuesParse", "[GltfNodeExtras]")
+{
+    CHECK(nodeExtrasClothFromJson(R"({"Cloth":{"Pin":"None"}})")->pin ==
+          ClothMeshParams::Pin::None);
+    CHECK(nodeExtrasClothFromJson(R"({"Cloth":{"Pin":"TopCorners"}})")->pin ==
+          ClothMeshParams::Pin::TopCorners);
+}
+
+TEST_CASE("GltfNodeExtras.InvalidClothObjectThrows", "[GltfNodeExtras]")
+{
+    CHECK_THROWS_AS(nodeExtrasClothFromJson(R"({"Cloth":true})"), std::runtime_error);
+}
+
+TEST_CASE("GltfNodeExtras.InvalidClothPinThrows", "[GltfNodeExtras]")
+{
+    CHECK_THROWS_AS(nodeExtrasClothFromJson(R"({"Cloth":{"Pin":"Middle"}})"), std::runtime_error);
 }
 
 TEST_CASE("GltfNodeExtras.NonNumericVelocityThrows", "[GltfNodeExtras]")

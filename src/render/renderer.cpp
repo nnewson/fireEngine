@@ -692,7 +692,7 @@ void Renderer::drawFrame(Window& display, SceneGraph& scene, Vec3 cameraPosition
     // into the cloth vertex buffers that the shadow + forward passes then read.
     const ClothSimParams clothParams{
         .substeps = static_cast<uint32_t>(std::max(1, tunables_.clothSubsteps)),
-        .compliance = tunables_.clothCompliance,
+        .complianceScale = tunables_.clothComplianceScale,
         .damping = tunables_.clothDamping,
         .gravity = tunables_.clothGravity,
         .wind = {tunables_.clothWind[0], tunables_.clothWind[1], tunables_.clothWind[2]},

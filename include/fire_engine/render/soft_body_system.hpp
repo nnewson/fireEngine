@@ -19,12 +19,14 @@ namespace fire_engine
 class Device;
 
 // Live solver parameters (overlay-tunable). gravity/wind are accelerations
-// applied in the predict step; compliance is the global XPBD distance-constraint
-// softness; substeps trades cost for stability.
+// applied in the predict step; complianceScale is a global multiplier on every
+// constraint's authored (per-type) compliance, so 1.0 keeps the authored
+// stiffness and the slider softens/stiffens the whole cloth; substeps trades cost
+// for stability.
 struct ClothSimParams
 {
     uint32_t substeps{20};
-    float compliance{0.0f};
+    float complianceScale{1.0f};
     float damping{0.99f};
     float gravity{-9.8f};
     float wind[3]{0.0f, 0.0f, 0.0f};
@@ -76,14 +78,18 @@ private:
         BufferHandle particles{NullBuffer};
         BufferHandle constraints{NullBuffer};
         BufferHandle verts{NullBuffer};
+        BufferHandle indices{NullBuffer};    // triangle list (for normal recompute)
+        BufferHandle adjOffsets{NullBuffer}; // CSR per-vertex normal adjacency
+        BufferHandle adjTris{NullBuffer};
         // GPU pointers (bufferDeviceAddress) of the above, pushed to the solver.
         vk::DeviceAddress particlesAddr{0};
         vk::DeviceAddress constraintsAddr{0};
         vk::DeviceAddress vertsAddr{0};
+        vk::DeviceAddress indicesAddr{0};
+        vk::DeviceAddress adjOffsetsAddr{0};
+        vk::DeviceAddress adjTrisAddr{0};
         uint32_t particleCount{0};
         std::vector<uint32_t> colourRanges;
-        uint32_t resX{0};
-        uint32_t resZ{0};
     };
 
     Resources* resources_{nullptr};

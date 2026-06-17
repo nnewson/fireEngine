@@ -314,12 +314,15 @@ Node& GltfLoader::attachCamera(Node& node, Node*& activeCamera)
 // ---------------------------------------------------------------------------
 
 Node* GltfLoader::loadScene(const std::string& path, SceneGraph& scene, Resources& resources,
-                            Assets& assets, PhysicsWorld& physics)
+                            Assets& assets, PhysicsWorld& physics,
+                            std::vector<ClothRegistration>* clothRegistrations)
 {
     auto gltfPath = std::filesystem::path(path);
     std::unordered_set<std::size_t> controllableNodeIndices;
     std::unordered_map<std::size_t, PhysicsConfig> physicsNodeConfigs;
-    auto result = parseAsset(gltfPath, &controllableNodeIndices, &physicsNodeConfigs);
+    std::unordered_map<std::size_t, ClothMeshParams> clothNodeConfigs;
+    auto result = parseAsset(gltfPath, &controllableNodeIndices, &physicsNodeConfigs,
+                             clothRegistrations != nullptr ? &clothNodeConfigs : nullptr);
     auto& asset = result.get();
 
     // fastgltf stores extensionsRequired in a pmr-allocated string vector.
@@ -333,6 +336,34 @@ Node* GltfLoader::loadScene(const std::string& path, SceneGraph& scene, Resource
     ensureSupportedExtensions(requiredViews);
 
     presizeAssets(asset, assets);
+
+    // Cloth nodes: resolve each to its mesh's first-primitive geometry index and
+    // flag that geometry for a storage vertex buffer *before* the graph build loads
+    // it (so the solver can write it in place). The registration is filled in after
+    // the build, once the geometry's CPU vertices/indices + GPU buffer exist.
+    auto firstGeometryIndex = [&asset](std::size_t meshIndex)
+    {
+        std::size_t geoIdx = 0;
+        for (std::size_t m = 0; m < meshIndex; ++m)
+        {
+            geoIdx += asset.meshes[m].primitives.size();
+        }
+        return geoIdx;
+    };
+    std::vector<std::pair<std::size_t, ClothMeshParams>> clothGeometries; // (geoIdx, params)
+    for (const auto& [nodeIndex, params] : clothNodeConfigs)
+    {
+        const auto& gltfNode = asset.nodes[nodeIndex];
+        if (!gltfNode.meshIndex.has_value())
+        {
+            std::clog << "glTF: node '" << nodeName(asset, gltfNode)
+                      << "' has Cloth extras but no mesh; ignoring.\n";
+            continue;
+        }
+        const std::size_t geoIdx = firstGeometryIndex(gltfNode.meshIndex.value());
+        assets.geometry(geoIdx).storageVertices(true);
+        clothGeometries.emplace_back(geoIdx, params);
+    }
 
     std::size_t sceneIndex = asset.defaultScene.has_value() ? asset.defaultScene.value() : 0;
     if (sceneIndex >= asset.scenes.size())
@@ -369,6 +400,17 @@ Node* GltfLoader::loadScene(const std::string& path, SceneGraph& scene, Resource
 
     // Resolve skins after the full scene graph is built
     applySkins(asset, nodeMap, meshMap, assets);
+
+    // Build a cloth from each flagged geometry now that it's loaded (CPU vertices +
+    // indices retained, storage vertex buffer allocated). The caller registers
+    // these with the soft-body solver.
+    for (const auto& [geoIdx, params] : clothGeometries)
+    {
+        const Geometry& geometry = assets.geometry(geoIdx);
+        ClothRegistration reg{makeClothFromMesh(geometry.vertices(), geometry.indices(), params),
+                              &assets.geometry(geoIdx)};
+        clothRegistrations->push_back(std::move(reg));
+    }
 
     return activeCamera;
 }

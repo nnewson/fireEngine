@@ -156,8 +156,9 @@ void DebugOverlay::buildUi(const FrameStats& stats, RenderTunables& tunables)
     if (ImGui::CollapsingHeader("Cloth"))
     {
         ImGui::SliderInt("Substeps", &tunables.clothSubsteps, 1, 40);
-        // Compliance is inverse stiffness; the small range keeps it usable.
-        ImGui::SliderFloat("Compliance", &tunables.clothCompliance, 0.0f, 0.002f, "%.5f");
+        // Global multiplier on each constraint's authored (per-type) compliance:
+        // 1.0 = as authored, lower = stiffer, higher = softer.
+        ImGui::SliderFloat("Compliance x", &tunables.clothComplianceScale, 0.0f, 8.0f, "%.2f");
         ImGui::SliderFloat("Damping", &tunables.clothDamping, 0.8f, 1.0f);
         ImGui::SliderFloat("Gravity", &tunables.clothGravity, -20.0f, 0.0f);
         ImGui::SliderFloat3("Wind", tunables.clothWind, -10.0f, 10.0f);

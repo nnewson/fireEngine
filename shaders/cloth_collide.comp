@@ -36,22 +36,28 @@ layout(buffer_reference, std430) buffer Particles { Particle items[]; };
 layout(buffer_reference, std430) buffer Constraints { Constraint items[]; };
 layout(buffer_reference, std430) buffer Verts { float values[]; };
 layout(buffer_reference, std430) buffer Colliders { int count; Collider items[]; };
+layout(buffer_reference, std430) buffer Indices { uint items[]; };
+layout(buffer_reference, std430) buffer AdjOffsets { uint items[]; };
+layout(buffer_reference, std430) buffer AdjTris { uint items[]; };
 
+// vec4s first so they sit at 16-byte-aligned offsets, then the 64-bit buffer
+// pointers, then scalars. Matches the C++ ClothPush byte layout exactly.
 layout(push_constant) uniform Push {
+    vec4 gravity;
+    vec4 wind;
     Particles particles;
     Constraints constraints;
     Verts verts;
     Colliders colliders;
-    vec4 gravity;
-    vec4 wind;
+    Indices indices;
+    AdjOffsets adjOffsets;
+    AdjTris adjTris;
     float dt;
     uint particleCount;
     uint rangeBegin;
     uint rangeEnd;
     float damping;
-    uint resX;
-    uint resZ;
-    float compliance;
+    float complianceScale;
 } pc;
 
 vec3 qRotate(vec4 q, vec3 v)

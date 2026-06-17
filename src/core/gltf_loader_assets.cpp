@@ -79,6 +79,7 @@ struct ExtrasParseState
 {
     std::unordered_set<std::size_t>* controllableNodeIndices{nullptr};
     std::unordered_map<std::size_t, GltfLoader::PhysicsConfig>* physicsNodeConfigs{nullptr};
+    std::unordered_map<std::size_t, ClothMeshParams>* clothNodeConfigs{nullptr};
 };
 } // namespace
 
@@ -136,6 +137,15 @@ void parseNodeExtras(simdjson::dom::object* extras, std::size_t objectIndex,
             state->physicsNodeConfigs->insert_or_assign(objectIndex, physics.value());
         }
     }
+
+    if (state->clothNodeConfigs != nullptr)
+    {
+        auto cloth = GltfLoader::nodeExtrasCloth(extras);
+        if (cloth.has_value())
+        {
+            state->clothNodeConfigs->insert_or_assign(objectIndex, cloth.value());
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -145,11 +155,14 @@ void parseNodeExtras(simdjson::dom::object* extras, std::size_t objectIndex,
 namespace
 {
 
-class PhysicsExtrasReader
+// Reads typed scalar/vector fields out of a node-extras object (`extras.Physics`
+// or `extras.Cloth`), throwing a section-prefixed error on a type mismatch.
+class ExtrasReader
 {
 public:
-    explicit PhysicsExtrasReader(simdjson::dom::object& object) noexcept
-        : object_{object}
+    ExtrasReader(simdjson::dom::object& object, std::string_view section) noexcept
+        : object_{object},
+          section_{section}
     {
     }
 
@@ -165,7 +178,7 @@ public:
         double value = 0.0;
         if (element.get(value) != simdjson::SUCCESS)
         {
-            throw std::runtime_error("glTF Physics " + std::string(label) + " must be a number");
+            throw std::runtime_error(prefix(label) + " must be a number");
         }
         return static_cast<float>(value);
     }
@@ -183,8 +196,7 @@ public:
         if (element.get(value) != simdjson::SUCCESS ||
             value > std::numeric_limits<std::uint32_t>::max())
         {
-            throw std::runtime_error("glTF Physics " + std::string(label) +
-                                     " must be an unsigned 32-bit integer");
+            throw std::runtime_error(prefix(label) + " must be an unsigned 32-bit integer");
         }
         return static_cast<std::uint32_t>(value);
     }
@@ -200,8 +212,7 @@ public:
         simdjson::dom::array array;
         if (element.get_array().get(array) != simdjson::SUCCESS)
         {
-            throw std::runtime_error("glTF Physics " + std::string(label) +
-                                     " must be an array of three numbers");
+            throw std::runtime_error(prefix(label) + " must be an array of three numbers");
         }
 
         std::array<float, 3> values{};
@@ -210,15 +221,13 @@ public:
         {
             if (i >= values.size())
             {
-                throw std::runtime_error("glTF Physics " + std::string(label) +
-                                         " must contain exactly three numbers");
+                throw std::runtime_error(prefix(label) + " must contain exactly three numbers");
             }
 
             double value = 0.0;
             if (valueElement.get(value) != simdjson::SUCCESS)
             {
-                throw std::runtime_error("glTF Physics " + std::string(label) +
-                                         " must contain only numbers");
+                throw std::runtime_error(prefix(label) + " must contain only numbers");
             }
             values[i] = static_cast<float>(value);
             ++i;
@@ -226,15 +235,20 @@ public:
 
         if (i != values.size())
         {
-            throw std::runtime_error("glTF Physics " + std::string(label) +
-                                     " must contain exactly three numbers");
+            throw std::runtime_error(prefix(label) + " must contain exactly three numbers");
         }
 
         return {values[0], values[1], values[2]};
     }
 
 private:
+    [[nodiscard]] std::string prefix(std::string_view label) const
+    {
+        return "glTF " + std::string(section_) + " " + std::string(label);
+    }
+
     simdjson::dom::object& object_;
+    std::string_view section_;
 };
 
 } // namespace
@@ -270,7 +284,7 @@ GltfLoader::nodeExtrasPhysics(simdjson::dom::object* extras)
         throw std::runtime_error("glTF Physics extras must be an object");
     }
 
-    const PhysicsExtrasReader reader{physicsObject};
+    const ExtrasReader reader{physicsObject, "Physics"};
     PhysicsConfig config;
     auto bodyTypeElement = physicsObject.at_key("BodyType");
     if (bodyTypeElement.error() != simdjson::NO_SUCH_FIELD)
@@ -340,16 +354,72 @@ GltfLoader::nodeExtrasPhysics(simdjson::dom::object* extras)
     return config;
 }
 
+std::optional<ClothMeshParams> GltfLoader::nodeExtrasCloth(simdjson::dom::object* extras)
+{
+    if (extras == nullptr)
+    {
+        return std::nullopt;
+    }
+
+    simdjson::dom::object clothObject;
+    auto clothElement = extras->at_key("Cloth");
+    if (clothElement.error() == simdjson::NO_SUCH_FIELD)
+    {
+        return std::nullopt;
+    }
+    if (clothElement.get_object().get(clothObject) != simdjson::SUCCESS)
+    {
+        throw std::runtime_error("glTF Cloth extras must be an object");
+    }
+
+    const ExtrasReader reader{clothObject, "Cloth"};
+    ClothMeshParams params;
+    params.structuralCompliance =
+        reader.readFloat("Compliance", params.structuralCompliance, "Compliance");
+    params.bendCompliance =
+        reader.readFloat("BendCompliance", params.bendCompliance, "BendCompliance");
+
+    auto pinElement = clothObject.at_key("Pin");
+    if (pinElement.error() != simdjson::NO_SUCH_FIELD)
+    {
+        std::string_view pin;
+        if (pinElement.get(pin) != simdjson::SUCCESS)
+        {
+            throw std::runtime_error("glTF Cloth Pin must be a string");
+        }
+        if (pin == "None")
+        {
+            params.pin = ClothMeshParams::Pin::None;
+        }
+        else if (pin == "TopCorners")
+        {
+            params.pin = ClothMeshParams::Pin::TopCorners;
+        }
+        else if (pin == "TopEdge")
+        {
+            params.pin = ClothMeshParams::Pin::TopEdge;
+        }
+        else
+        {
+            throw std::runtime_error("glTF Cloth Pin must be None, TopCorners, or TopEdge");
+        }
+    }
+
+    return params;
+}
+
 fastgltf::Expected<fastgltf::Asset>
 GltfLoader::parseAsset(const std::filesystem::path& gltfPath,
                        std::unordered_set<std::size_t>* controllableNodeIndices,
-                       std::unordered_map<std::size_t, PhysicsConfig>* physicsNodeConfigs)
+                       std::unordered_map<std::size_t, PhysicsConfig>* physicsNodeConfigs,
+                       std::unordered_map<std::size_t, ClothMeshParams>* clothNodeConfigs)
 {
     // fastgltf only parses extension data when the extension is enabled here.
     // Without the opt-in, extension fields silently stay at their defaults.
     fastgltf::Parser parser(supportedExtensionMask());
-    ExtrasParseState extrasState{controllableNodeIndices, physicsNodeConfigs};
-    if (controllableNodeIndices != nullptr || physicsNodeConfigs != nullptr)
+    ExtrasParseState extrasState{controllableNodeIndices, physicsNodeConfigs, clothNodeConfigs};
+    if (controllableNodeIndices != nullptr || physicsNodeConfigs != nullptr ||
+        clothNodeConfigs != nullptr)
     {
         if (controllableNodeIndices != nullptr)
         {
@@ -358,6 +428,10 @@ GltfLoader::parseAsset(const std::filesystem::path& gltfPath,
         if (physicsNodeConfigs != nullptr)
         {
             physicsNodeConfigs->clear();
+        }
+        if (clothNodeConfigs != nullptr)
+        {
+            clothNodeConfigs->clear();
         }
         parser.setUserPointer(&extrasState);
         parser.setExtrasParseCallback(&parseNodeExtras);

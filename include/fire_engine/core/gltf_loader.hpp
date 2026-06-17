@@ -15,6 +15,7 @@
 #include <fire_engine/animation/animation.hpp>
 #include <fire_engine/collision/collider.hpp>
 #include <fire_engine/core/tangent_generator.hpp>
+#include <fire_engine/graphics/cloth.hpp>
 #include <fire_engine/graphics/image.hpp>
 #include <fire_engine/math/mat4.hpp>
 #include <fire_engine/math/vec3.hpp>
@@ -49,10 +50,24 @@ class GltfLoader
 public:
     GltfLoader() = delete;
 
+    // A cloth authored on a glTF node via `extras.Cloth`. The loader builds the
+    // node's mesh as a simulated cloth (storage vertex buffer) and hands one of
+    // these back per cloth node so the caller can register it with the solver —
+    // `geometry` is the (Assets-owned) loaded geometry whose vertex buffer the
+    // solver writes; `mesh` is the CPU cloth built from it.
+    struct ClothRegistration
+    {
+        ClothMesh mesh;
+        Geometry* geometry{nullptr};
+    };
+
     // Returns the first imported glTF camera node, or nullptr when the scene
-    // has no authored camera. The node owns an engine Camera component.
+    // has no authored camera. The node owns an engine Camera component. When
+    // `clothRegistrations` is non-null, any `extras.Cloth` nodes are appended for
+    // the caller to register with the soft-body solver.
     static Node* loadScene(const std::string& path, SceneGraph& scene, Resources& resources,
-                           Assets& assets, PhysicsWorld& physics);
+                           Assets& assets, PhysicsWorld& physics,
+                           std::vector<ClothRegistration>* clothRegistrations = nullptr);
 
     // Synthesises per-vertex normals from a triangle mesh when the source
     // glTF lacks the NORMAL attribute. Smooth (area-weighted accumulate-and-
@@ -102,13 +117,20 @@ public:
     [[nodiscard]]
     static std::optional<PhysicsConfig> nodeExtrasPhysics(simdjson::dom::object* extras);
 
+    // `extras.Cloth` authoring parameters. Compliance/BendCompliance are numbers;
+    // Pin is one of "None" / "TopCorners" / "TopEdge". Returns nullopt when the
+    // node carries no Cloth extras.
+    [[nodiscard]]
+    static std::optional<ClothMeshParams> nodeExtrasCloth(simdjson::dom::object* extras);
+
 private:
     // Asset parsing and setup
     [[nodiscard]]
     static fastgltf::Expected<fastgltf::Asset>
     parseAsset(const std::filesystem::path& gltfPath,
                std::unordered_set<std::size_t>* controllableNodeIndices = nullptr,
-               std::unordered_map<std::size_t, PhysicsConfig>* physicsNodeConfigs = nullptr);
+               std::unordered_map<std::size_t, PhysicsConfig>* physicsNodeConfigs = nullptr,
+               std::unordered_map<std::size_t, ClothMeshParams>* clothNodeConfigs = nullptr);
 
     static void presizeAssets(const fastgltf::Asset& asset, Assets& assets);
 
