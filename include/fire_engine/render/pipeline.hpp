@@ -197,6 +197,7 @@ private:
     void createBindlessDescriptorSetLayout();
 
     const vk::raii::Device* device_{nullptr};
+    const vk::raii::PipelineCache* pipelineCache_{nullptr};
     vk::raii::DescriptorSetLayout descSetLayout_{nullptr};
     vk::raii::DescriptorSetLayout globalDescSetLayout_{nullptr};
     vk::raii::DescriptorSetLayout bindlessDescSetLayout_{nullptr};

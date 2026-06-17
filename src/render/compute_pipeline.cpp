@@ -42,7 +42,7 @@ ComputePipeline::ComputePipeline(const Device& device, const ComputePipelineConf
         .stage = stage,
         .layout = *pipelineLayout_,
     };
-    pipeline_ = vk::raii::Pipeline(*device_, nullptr, cpci);
+    pipeline_ = vk::raii::Pipeline(*device_, device.pipelineCache(), cpci);
 }
 
 vk::BufferMemoryBarrier2 makeBufferMemoryBarrier(vk::PipelineStageFlags2 srcStage,

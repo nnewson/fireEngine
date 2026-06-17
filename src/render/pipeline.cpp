@@ -12,7 +12,8 @@ namespace fire_engine
 {
 
 Pipeline::Pipeline(const Device& device, const PipelineConfig& config)
-    : device_(&device.device())
+    : device_(&device.device()),
+      pipelineCache_(&device.pipelineCache())
 {
     createDescriptorSetLayout(config.bindings);
     if (!config.globalBindings.empty())
@@ -580,7 +581,7 @@ void Pipeline::createGraphicsPipeline(const PipelineConfig& config)
         .subpass = 0,
     };
 
-    pipeline_ = vk::raii::Pipeline(*device_, nullptr, pci);
+    pipeline_ = vk::raii::Pipeline(*device_, *pipelineCache_, pci);
 }
 
 std::array<vk::PipelineShaderStageCreateInfo, 2>

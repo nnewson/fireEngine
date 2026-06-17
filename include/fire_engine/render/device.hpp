@@ -37,6 +37,13 @@ public:
     {
         return device_;
     }
+    // One shared pipeline cache fed to every graphics/compute pipeline creation
+    // (forward, IBL precompute, post/bloom/shadow/particle/cloth). Lets the
+    // driver dedupe compilation work and warms pipeline recreation on resize.
+    [[nodiscard]] const vk::raii::PipelineCache& pipelineCache() const noexcept
+    {
+        return pipelineCache_;
+    }
     [[nodiscard]] const vk::raii::Queue& graphicsQueue() const noexcept
     {
         return graphicsQueue_;
@@ -65,6 +72,7 @@ private:
     void createSurface(const Window& window);
     void pickPhysicalDevice();
     void createLogicalDevice();
+    void createPipelineCache();
 
     [[nodiscard]] bool isDeviceSuitable(const vk::raii::PhysicalDevice& d);
     [[nodiscard]] std::pair<std::optional<uint32_t>, std::optional<uint32_t>>
@@ -76,6 +84,7 @@ private:
     vk::raii::SurfaceKHR surface_{nullptr};
     vk::raii::PhysicalDevice physDevice_{nullptr};
     vk::raii::Device device_{nullptr};
+    vk::raii::PipelineCache pipelineCache_{nullptr};
     vk::raii::Queue graphicsQueue_{nullptr};
     vk::raii::Queue presentQueue_{nullptr};
     uint32_t graphicsFamily_{0};

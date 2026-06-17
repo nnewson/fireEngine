@@ -27,6 +27,7 @@ Device::Device(const Window& window)
     createSurface(window);
     pickPhysicalDevice();
     createLogicalDevice();
+    createPipelineCache();
 }
 
 void Device::createInstance()
@@ -248,6 +249,15 @@ void Device::createLogicalDevice()
     device_ = vk::raii::Device(physDevice_, ci);
     graphicsQueue_ = device_.getQueue(graphicsFamily_, 0);
     presentQueue_ = device_.getQueue(presentFamily_, 0);
+}
+
+void Device::createPipelineCache()
+{
+    // Empty (cold) cache shared by all pipeline creation. Not seeded from disk
+    // yet, so it pays off within a run — repeated/recreated pipelines (swapchain
+    // resize) reuse the driver's compiled artifacts.
+    constexpr vk::PipelineCacheCreateInfo ci{};
+    pipelineCache_ = vk::raii::PipelineCache(device_, ci);
 }
 
 uint32_t Device::findMemoryType(uint32_t filter, vk::MemoryPropertyFlags props) const
