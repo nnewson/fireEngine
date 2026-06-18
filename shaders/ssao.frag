@@ -67,12 +67,13 @@ float contactShadow(vec3 viewPos, vec3 n)
     float stepLen = len / float(steps);
     vec3 rayStep = L * stepLen;
     // bias: step off the surface so a near-coplanar sample (e.g. the floor under
-    // the feet) doesn't self-occlude. thickness: the occluder-depth WINDOW — an
-    // occluder counts only if it sits just in front of the ray. Using the full
-    // march length here was the bug: it treated any foreground within `len` (a
-    // hand far in front of the floor) as an occluder, casting floating shadows.
-    float bias = stepLen;
-    float thickness = stepLen * 2.0;
+    // the feet) doesn't self-occlude. thickness: the occluder-depth WINDOW. The
+    // comparison below is only in view-space Z, so scale the window by the ray's
+    // Z movement rather than the full 3D step length; otherwise grazing rays get
+    // an over-wide depth window and leave thin contact streaks.
+    float zStep = max(abs(rayStep.z), 1e-4);
+    float bias = zStep;
+    float thickness = zStep * 2.0;
     vec3 p = viewPos + L * bias;
     for (int i = 0; i < steps; ++i)
     {

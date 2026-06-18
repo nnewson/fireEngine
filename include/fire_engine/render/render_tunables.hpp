@@ -50,10 +50,9 @@ struct RenderTunables
     float ssaoBias{kSsaoBias};
     float ssaoIntensity{kSsaoIntensity};
     float ssaoPower{kSsaoPower};
-    // Contact shadows default OFF: they're a subtle fill for the CSM's contact gap
-    // and trade screen-space "hair" artifacts for marginal benefit when the CSM is
-    // already tight. Opt in via the overlay.
-    bool contactShadowsEnabled{false};
+
+    // Contact shadows.
+    bool contactShadowsEnabled{true};
     float contactShadowLength{kContactShadowLength};
     // View-space-Z step at which contact shadows fade out near silhouettes
     // (kills the screen-space "hair"). Higher = guard only the sharpest edges.
