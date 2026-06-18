@@ -308,4 +308,38 @@ static_assert(sizeof(ParticleFrameUBO) % 16 == 0, "ParticleFrameUBO must be std1
 static_assert(offsetof(ParticleFrameUBO, emitters) == 144,
               "emitter array must follow the 16-aligned header (2x mat4 + 16-byte scalars)");
 
+// Per-frame SSAO UBO (binding 1 of the SSAO pass). The fragment shader
+// reconstructs view-space position + normal from depth + `proj` (no matrix
+// inverse: the projection terms unproject analytically), then samples the
+// hemisphere `kernel` scaled by `radius`. Mirrors SsaoUBO in shaders/ssao.frag.
+struct SsaoUBO
+{
+    // The jittered projection the depth prepass rendered with — its elements
+    // unproject depth → view space and reproject kernel samples → screen.
+    Mat4 proj;
+    // Hemisphere samples (xyz, w unused), tangent-space (+Z = surface normal).
+    alignas(16) float kernel[kSsaoKernelSize][4]{};
+    // x = radius, y = bias, z = intensity (0 disables AO), w = power.
+    alignas(16) float params[4]{};
+    // x = contact-shadow length (view units), y = contact step count,
+    // z = sun-enabled (>0.5), w unused.
+    alignas(16) float contact[4]{};
+    // Sun direction in view space (xyz), for the contact-shadow ray-march.
+    alignas(16) float sunViewDir[4]{};
+    // x = width, y = height, z = 1/width, w = 1/height (full-res AO target).
+    alignas(16) float screen[4]{};
+};
+
+static_assert(sizeof(SsaoUBO) % 16 == 0, "SsaoUBO must be std140 16-aligned");
+
+// Push constant for the bilateral AO blur. texelSize steps the taps; projC/projD
+// (= proj[2][2] / proj[3][2]) linearise depth so the edge-stop weight uses
+// view-space Z. Mirrors the Push block in shaders/ssao_blur.frag.
+struct SsaoBlurPushConstants
+{
+    alignas(8) float texelSize[2]{0.0f, 0.0f};
+    alignas(4) float projC{0.0f};
+    alignas(4) float projD{0.0f};
+};
+
 } // namespace fire_engine

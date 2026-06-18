@@ -23,6 +23,7 @@
 #include <fire_engine/render/resources.hpp>
 #include <fire_engine/render/shadows.hpp>
 #include <fire_engine/render/soft_body_system.hpp>
+#include <fire_engine/render/ssao.hpp>
 #include <fire_engine/render/swapchain.hpp>
 #include <fire_engine/render/taa.hpp>
 #include <fire_engine/render/transmission.hpp>
@@ -187,6 +188,12 @@ private:
     [[nodiscard]] DrawBuckets collectDrawCommands(vk::CommandBuffer cmd, SceneGraph& scene,
                                                   Vec3 cameraPosition, Vec3 cameraTarget);
     void recordShadowPass(vk::CommandBuffer cmd, const DrawBuckets& buckets);
+    // Depth-only prepass over the opaque bucket, before the forward pass, so the
+    // shared depth buffer is filled for SSAO and the forward pass gets early-Z.
+    void recordDepthPrepass(vk::CommandBuffer cmd, const DrawBuckets& buckets);
+    // SSAO + contact-shadow pass (after the prepass): writes the AO target the
+    // forward shader samples to modulate ambient / sun visibility.
+    void recordSsaoPass(vk::CommandBuffer cmd);
     void recordForwardPass(vk::CommandBuffer cmd, const DrawBuckets& buckets);
     void recordTransmissionPass(vk::CommandBuffer cmd, const DrawBuckets& buckets);
     void recordParticlePass(vk::CommandBuffer cmd);
@@ -218,6 +225,7 @@ private:
     Pipeline pipelineOpaque_;
     Pipeline pipelineBlend_;
     Pipeline skyboxPipeline_;
+    Pipeline depthPrepassPipeline_;
     Frame frame_;
     Resources resources_;
     PostProcessing postProcessing_;
@@ -225,6 +233,7 @@ private:
     Shadows shadows_;
     ParticleSystem particles_;
     Taa taa_;
+    Ssao ssao_;
     SoftBodySystem softBody_;
     GpuProfiler profiler_;
     DebugOverlay overlay_;
@@ -234,6 +243,7 @@ private:
     PipelineHandle forwardOpaqueHandle_{NullPipeline};
     PipelineHandle forwardBlendHandle_{NullPipeline};
     PipelineHandle skyboxPipelineHandle_{NullPipeline};
+    PipelineHandle depthPrepassHandle_{NullPipeline};
     TextureHandle skyboxCubemapHandle_{NullTexture};
     TextureHandle irradianceCubemapHandle_{NullTexture};
     TextureHandle prefilteredCubemapHandle_{NullTexture};

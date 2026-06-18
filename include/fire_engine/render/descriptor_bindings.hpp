@@ -66,6 +66,8 @@ enum class ForwardGlobalBinding : std::uint32_t
     PrefilteredMap = 10,
     BrdfLut = 11,
     SceneColour = 12,
+    // Screen-space AO + contact term (R8), sampled to modulate ambient/sun.
+    SsaoMap = 13,
 };
 
 // Bindless materials live on the forward pipeline's set 2 — bound once per frame,

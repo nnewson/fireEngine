@@ -43,6 +43,7 @@ struct GlobalDescriptorRequest
     TextureHandle prefilteredMap{NullTexture};
     TextureHandle brdfLut{NullTexture};
     TextureHandle sceneColor{NullTexture};
+    TextureHandle ssaoMap{NullTexture};
 };
 
 class Descriptors

@@ -113,6 +113,28 @@ inline constexpr float kBloomStrength = 0.04f;
 inline constexpr float kParticleSoftFadeRange = 0.5f;
 
 // ---------------------------------------------------------------------------
+// SSAO + contact shadows — screen-space, reconstructed from the depth prepass.
+// ---------------------------------------------------------------------------
+
+// View-space hemisphere sampling radius (world units). Scene-scale dependent;
+// 0.5 suits the sample assets (~1–3 unit models).
+inline constexpr float kSsaoRadius = 0.5f;
+// Depth bias (view units) added before the occlusion compare to avoid self-
+// occlusion acne on near-flat surfaces.
+inline constexpr float kSsaoBias = 0.025f;
+// Occlusion strength multiplier and contrast power applied to the raw AO.
+inline constexpr float kSsaoIntensity = 1.0f;
+inline constexpr float kSsaoPower = 2.0f;
+// Contact shadows (screen-space ray-march toward the sun): march length in view
+// units and step count. Catches short-range contact the CSM misses.
+inline constexpr float kContactShadowLength = 0.5f;
+inline constexpr int kContactShadowSteps = 16;
+// Depth-silhouette edge-guard threshold (view-space Z step, in world units) at
+// which contact shadows fade to lit — suppresses the screen-space "hair" the
+// ray-march leaves at object silhouettes. The smoothstep spans ±50% of this.
+inline constexpr float kContactEdgeThreshold = 0.1f;
+
+// ---------------------------------------------------------------------------
 // Temporal anti-aliasing — sub-pixel jitter + velocity-reprojected history.
 // ---------------------------------------------------------------------------
 

@@ -80,7 +80,7 @@ void DebugOverlay::buildUi(const FrameStats& stats, RenderTunables& tunables)
     }
 
     static constexpr std::array<const char*, kProfilePassCount> kPassNames{
-        "Shadow", "Forward", "Transmission", "TAA", "Particles", "Bloom", "Post"};
+        "Shadow", "Depth", "SSAO", "Forward", "Transmission", "TAA", "Particles", "Bloom", "Post"};
 
     ImGui::Begin("Fire Engine - Debug");
 
@@ -128,8 +128,8 @@ void DebugOverlay::buildUi(const FrameStats& stats, RenderTunables& tunables)
 
     if (ImGui::CollapsingHeader("Debug view", ImGuiTreeNodeFlags_DefaultOpen))
     {
-        static constexpr const char* kViews[] = {"None",   "Normals",      "N·L",
-                                                 "Shadow", "Shadow depth", "Velocity"};
+        static constexpr const char* kViews[] = {"None",         "Normals",  "N·L", "Shadow",
+                                                 "Shadow depth", "Velocity", "SSAO"};
         int view = static_cast<int>(tunables.debugView);
         if (ImGui::Combo("View", &view, kViews, IM_ARRAYSIZE(kViews)))
         {
@@ -144,6 +144,24 @@ void DebugOverlay::buildUi(const FrameStats& stats, RenderTunables& tunables)
         ImGui::SliderFloat("Diffuse IBL", &tunables.diffuseIbl, 0.0f, 2.0f);
         ImGui::SliderFloat("Specular IBL", &tunables.specularIbl, 0.0f, 2.0f);
         ImGui::SliderFloat("Sun intensity", &tunables.directionalIntensityScale, 0.0f, 4.0f);
+    }
+
+    if (ImGui::CollapsingHeader("SSAO / contact shadows"))
+    {
+        ImGui::Checkbox("SSAO", &tunables.ssaoEnabled);
+        ImGui::BeginDisabled(!tunables.ssaoEnabled);
+        ImGui::SliderFloat("Radius", &tunables.ssaoRadius, 0.05f, 2.0f, "%.2f");
+        ImGui::SliderFloat("Bias", &tunables.ssaoBias, 0.0f, 0.1f, "%.3f");
+        ImGui::SliderFloat("Intensity", &tunables.ssaoIntensity, 0.0f, 3.0f, "%.2f");
+        ImGui::SliderFloat("Power", &tunables.ssaoPower, 0.5f, 4.0f, "%.2f");
+        ImGui::EndDisabled();
+        ImGui::Checkbox("Contact shadows", &tunables.contactShadowsEnabled);
+        ImGui::BeginDisabled(!tunables.contactShadowsEnabled);
+        ImGui::SliderFloat("Contact length", &tunables.contactShadowLength, 0.05f, 2.0f, "%.2f");
+        // Edge guard: fades contact shadows out at depth silhouettes (kills the
+        // screen-space "hair"). Lower = guard more aggressively.
+        ImGui::SliderFloat("Contact edge", &tunables.contactEdgeThreshold, 0.02f, 0.5f, "%.3f");
+        ImGui::EndDisabled();
     }
 
     if (ImGui::CollapsingHeader("Particles"))

@@ -75,6 +75,28 @@ void enableAdditiveBlend(PipelineConfig& config)
     config.dstAlphaBlend = vk::BlendFactor::eOne;
 }
 
+// The per-object set 0 shared by the forward pipeline and the depth prepass:
+// frame / skin / morph UBOs + morph-targets SSBO, all vertex-stage (Frame is
+// also fragment-visible for the forward shader). Pushed inline per draw
+// (VK_KHR_push_descriptor) by pushForwardObjectDescriptors.
+[[nodiscard]]
+std::vector<vk::DescriptorSetLayoutBinding> perObjectSet0Bindings()
+{
+    auto uniform = [](ForwardBinding binding, vk::ShaderStageFlags stages)
+    {
+        return vk::DescriptorSetLayoutBinding{bindingIndex(binding),
+                                              vk::DescriptorType::eUniformBuffer, 1, stages};
+    };
+    return {
+        uniform(ForwardBinding::Frame,
+                vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment),
+        uniform(ForwardBinding::Skin, vk::ShaderStageFlagBits::eVertex),
+        uniform(ForwardBinding::Morph, vk::ShaderStageFlagBits::eVertex),
+        {bindingIndex(ForwardBinding::MorphTargets), vk::DescriptorType::eStorageBuffer, 1,
+         vk::ShaderStageFlagBits::eVertex},
+    };
+}
+
 } // namespace
 
 void Pipeline::createBindlessDescriptorSetLayout()
@@ -113,11 +135,6 @@ void Pipeline::createBindlessDescriptorSetLayout()
 
 PipelineConfig Pipeline::forwardConfig()
 {
-    auto uniform = [](ForwardBinding binding, vk::ShaderStageFlags stages)
-    {
-        return vk::DescriptorSetLayoutBinding{bindingIndex(binding),
-                                              vk::DescriptorType::eUniformBuffer, 1, stages};
-    };
     auto globalSampler = [](ForwardGlobalBinding binding)
     {
         return vk::DescriptorSetLayoutBinding{bindingIndex(binding),
@@ -145,14 +162,7 @@ PipelineConfig Pipeline::forwardConfig()
     // maps, IBL, sceneColor) live on set 1 below. Bindings 1 + 2 (old Material UBO
     // and BaseColourTexture) are intentional gaps — gaps are legal and avoid
     // renumbering Skin/Morph/MorphTargets.
-    config.bindings = {
-        uniform(ForwardBinding::Frame,
-                vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment),
-        uniform(ForwardBinding::Skin, vk::ShaderStageFlagBits::eVertex),
-        uniform(ForwardBinding::Morph, vk::ShaderStageFlagBits::eVertex),
-        {bindingIndex(ForwardBinding::MorphTargets), vk::DescriptorType::eStorageBuffer, 1,
-         vk::ShaderStageFlagBits::eVertex},
-    };
+    config.bindings = perObjectSet0Bindings();
     // Set 1 — forward globals. Bound once per frame in Renderer; survives
     // pipeline transitions within the forward bucket. See ForwardGlobalBinding
     // enum for the canonical numbering.
@@ -172,6 +182,7 @@ PipelineConfig Pipeline::forwardConfig()
         globalSampler(ForwardGlobalBinding::PrefilteredMap),
         globalSampler(ForwardGlobalBinding::BrdfLut),
         globalSampler(ForwardGlobalBinding::SceneColour),
+        globalSampler(ForwardGlobalBinding::SsaoMap),
     };
     // Set 0 is pushed inline per draw (VK_KHR_push_descriptor) — no per-object
     // descriptor-set allocation. forwardBlendConfig inherits this (it copies
@@ -185,9 +196,34 @@ PipelineConfig Pipeline::forwardConfig()
     // D32 depth. The velocity format must match Resources::createVelocityTarget.
     config.colourFormats = {vk::Format::eR16G16B16A16Sfloat, vk::Format::eR16G16Sfloat};
     config.depthFormat = vk::Format::eD32Sfloat;
+    // A depth prepass fills the shared depth buffer first, so the forward pass
+    // loads it (loadOp Load in the renderer) and tests LESS_OR_EQUAL — equal
+    // depths (the common case, same vertex shader) must pass, not be rejected.
+    config.depthCompare = vk::CompareOp::eLessOrEqual;
     // Cull mode is dynamic so this one pipeline covers both single-sided
     // (cull back) and double-sided (cull none) materials; the renderer sets it
     // per draw from DrawCommand::doubleSided.
+    config.dynamicCullMode = true;
+    return config;
+}
+
+PipelineConfig Pipeline::depthPrepassConfig()
+{
+    PipelineConfig config;
+    // Reuse the forward vertex shader verbatim so the prepass depth matches the
+    // forward pass bit-for-bit (gl_Position is marked invariant in shader.vert).
+    config.vertShaderPath = "shader.vert.spv";
+    config.fragShaderPath = "depth_prepass.frag.spv";
+    // Same per-object push-descriptor set 0 as forward (frame/skin/morph + morph
+    // SSBO) so pushForwardObjectDescriptors works unchanged; no globals/bindless.
+    config.bindings = perObjectSet0Bindings();
+    config.pushDescriptorSet0 = true;
+    // Depth-only: no colour attachments. depthFormat matches the shared D32.
+    config.depthFormat = vk::Format::eD32Sfloat;
+    config.depthWrite = true;
+    config.depthCompare = vk::CompareOp::eLess;
+    // Cull per draw like the forward opaque pipeline (double-sided => no cull) so
+    // double-sided geometry writes the same depth the forward pass will test.
     config.dynamicCullMode = true;
     return config;
 }
@@ -296,6 +332,30 @@ PipelineConfig Pipeline::taaResolveConfig(vk::Format colourFormat)
         combinedImageSamplerBinding(bindingIndex(TaaBinding::History)),
     };
     addFragmentPushConstant(config, static_cast<uint32_t>(sizeof(TaaResolvePushConstants)));
+    return config;
+}
+
+PipelineConfig Pipeline::ssaoConfig(vk::Format colourFormat)
+{
+    PipelineConfig config = fullscreenConfig("postprocess.vert.spv", "ssao.frag.spv", colourFormat);
+    config.bindings = {
+        // Binding 0: scene depth (sampled). Binding 1: per-frame SsaoUBO.
+        combinedImageSamplerBinding(0),
+        {1, vk::DescriptorType::eUniformBuffer, 1, vk::ShaderStageFlagBits::eFragment},
+    };
+    return config;
+}
+
+PipelineConfig Pipeline::ssaoBlurConfig(vk::Format colourFormat)
+{
+    PipelineConfig config =
+        fullscreenConfig("postprocess.vert.spv", "ssao_blur.frag.spv", colourFormat);
+    config.bindings = {
+        // Binding 0: raw AO. Binding 1: scene depth (for the bilateral edge-stop).
+        combinedImageSamplerBinding(0),
+        combinedImageSamplerBinding(1),
+    };
+    addFragmentPushConstant(config, static_cast<uint32_t>(sizeof(SsaoBlurPushConstants)));
     return config;
 }
 

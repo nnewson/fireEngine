@@ -279,12 +279,13 @@ void Descriptors::writeGlobalBindings(vk::DescriptorSet set, const GlobalDescrip
     const vk::DescriptorImageInfo prefilteredInfo = combinedSampler(req.prefilteredMap);
     const vk::DescriptorImageInfo brdfLutInfo = combinedSampler(req.brdfLut);
     const vk::DescriptorImageInfo sceneColorInfo = combinedSampler(req.sceneColor);
+    const vk::DescriptorImageInfo ssaoInfo = combinedSampler(req.ssaoMap);
 
     constexpr auto kUbo = vk::DescriptorType::eUniformBuffer;
     constexpr auto kCis = vk::DescriptorType::eCombinedImageSampler;
     constexpr auto kSi = vk::DescriptorType::eSampledImage;
     constexpr auto kSamp = vk::DescriptorType::eSampler;
-    std::array<vk::WriteDescriptorSet, 13> writes = {{
+    std::array<vk::WriteDescriptorSet, 14> writes = {{
         writeBuffer(set, bindingIndex(ForwardGlobalBinding::Light), kUbo, lightBufInfo),
         writeImage(set, bindingIndex(ForwardGlobalBinding::ShadowMap), kSi, shadowMapInfo),
         writeImage(set, bindingIndex(ForwardGlobalBinding::WorldShadowMap), kSi,
@@ -303,6 +304,7 @@ void Descriptors::writeGlobalBindings(vk::DescriptorSet set, const GlobalDescrip
         writeImage(set, bindingIndex(ForwardGlobalBinding::PrefilteredMap), kCis, prefilteredInfo),
         writeImage(set, bindingIndex(ForwardGlobalBinding::BrdfLut), kCis, brdfLutInfo),
         writeImage(set, bindingIndex(ForwardGlobalBinding::SceneColour), kCis, sceneColorInfo),
+        writeImage(set, bindingIndex(ForwardGlobalBinding::SsaoMap), kCis, ssaoInfo),
     }};
     device_->device().updateDescriptorSets(writes, {});
 }
@@ -311,11 +313,11 @@ std::array<DescriptorSetHandle, kMaxFramesInFlight>
 Descriptors::createGlobalDescriptors(const GlobalDescriptorRequest& req)
 {
     // One global set per frame-in-flight. Pool sizes are exact per the
-    // ForwardGlobalBinding enum: 1 UBO + 4 CIS (IBL ×3 + sceneColor) + 6 SI
+    // ForwardGlobalBinding enum: 1 UBO + 5 CIS (IBL ×3 + sceneColor + ssao) + 6 SI
     // (shadow maps ×5 + debug colour) + 2 plain samplers (compare + debug).
     std::array<vk::DescriptorPoolSize, 4> poolSizes = {{
         {vk::DescriptorType::eUniformBuffer, kMaxFramesInFlight},
-        {vk::DescriptorType::eCombinedImageSampler, kMaxFramesInFlight * 4},
+        {vk::DescriptorType::eCombinedImageSampler, kMaxFramesInFlight * 5},
         {vk::DescriptorType::eSampledImage, kMaxFramesInFlight * 6},
         {vk::DescriptorType::eSampler, kMaxFramesInFlight * 2},
     }};

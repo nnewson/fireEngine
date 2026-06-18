@@ -154,6 +154,7 @@ Renderer::Renderer(const Window& window, std::string environmentPath, RendererDe
       pipelineOpaque_(device_, Pipeline::forwardConfig()),
       pipelineBlend_(device_, Pipeline::forwardBlendConfig()),
       skyboxPipeline_(device_, Pipeline::skyboxConfig()),
+      depthPrepassPipeline_(device_, Pipeline::depthPrepassConfig()),
       frame_(device_, swapchain_),
       resources_(device_, pipelineOpaque_),
       postProcessing_(device_, swapchain_, resources_),
@@ -161,6 +162,7 @@ Renderer::Renderer(const Window& window, std::string environmentPath, RendererDe
       shadows_(device_, resources_),
       particles_(device_, swapchain_, resources_, postProcessing_.offscreenColourTarget()),
       taa_(device_, swapchain_, resources_, postProcessing_.offscreenColourTarget()),
+      ssao_(device_, swapchain_, resources_),
       softBody_(device_, resources_),
       profiler_(device_),
       overlay_(device_, swapchain_, window, debug.overlayVisible),
@@ -176,12 +178,17 @@ Renderer::Renderer(const Window& window, std::string environmentPath, RendererDe
     transmission_.recreate(postProcessing_.offscreenColourTarget(), taa_.velocityTarget());
     // Bind the now-created scene-depth image into the particle render set.
     particles_.recreate(postProcessing_.offscreenColourTarget());
+    // Create the AO target + bind scene depth into the SSAO set (depth exists now).
+    ssao_.recreate();
+    resources_.sharedTextures().ssaoMap = ssao_.aoTarget();
     forwardOpaqueHandle_ =
         resources_.registerPipeline(pipelineOpaque_.pipeline(), pipelineOpaque_.pipelineLayout());
     forwardBlendHandle_ =
         resources_.registerPipeline(pipelineBlend_.pipeline(), pipelineBlend_.pipelineLayout());
     skyboxPipelineHandle_ =
         resources_.registerPipeline(skyboxPipeline_.pipeline(), skyboxPipeline_.pipelineLayout());
+    depthPrepassHandle_ = resources_.registerPipeline(depthPrepassPipeline_.pipeline(),
+                                                      depthPrepassPipeline_.pipelineLayout());
     skyboxUbo_ = resources_.createMappedUniformBuffers(sizeof(SkyboxUBO));
     std::array<uint16_t, 3> skyboxIndices{0, 1, 2};
     skyboxIndexBuffer_ = resources_.createIndexBuffer(skyboxIndices);
@@ -225,6 +232,7 @@ GlobalDescriptorRequest Renderer::buildGlobalDescriptorRequest() const
         .prefilteredMap = shared.prefilteredMap,
         .brdfLut = shared.brdfLut,
         .sceneColor = shared.sceneColor,
+        .ssaoMap = shared.ssaoMap,
     };
 }
 
@@ -603,6 +611,64 @@ void Renderer::recordDrawBucket(vk::CommandBuffer cmd, const std::vector<DrawCom
     }
 }
 
+void Renderer::recordDepthPrepass(vk::CommandBuffer cmd, const DrawBuckets& buckets)
+{
+    const auto extent = swapchain_.extent();
+    vk::Rect2D renderArea{.offset = vk::Offset2D{.x = 0, .y = 0}, .extent = extent};
+
+    // Depth rests in DepthStencilReadOnlyOptimal between frames (last frame's
+    // particle pass left it sampled) or Undefined on the first frame; we clear +
+    // overwrite, so discard via Undefined into the depth-attachment layout.
+    forwardImageBarrier(cmd, swapchain_.depthImage(), vk::ImageAspectFlagBits::eDepth,
+                        vk::ImageLayout::eUndefined,
+                        vk::ImageLayout::eDepthStencilAttachmentOptimal,
+                        vk::PipelineStageFlagBits2::eLateFragmentTests, {},
+                        vk::PipelineStageFlagBits2::eEarlyFragmentTests,
+                        vk::AccessFlagBits2::eDepthStencilAttachmentWrite);
+
+    const vk::ClearValue depthClear{.depthStencil =
+                                        vk::ClearDepthStencilValue{.depth = 1.0f, .stencil = 0}};
+    vk::RenderingAttachmentInfo depth{
+        .imageView = swapchain_.depthView(),
+        .imageLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal,
+        .loadOp = vk::AttachmentLoadOp::eClear,
+        .storeOp = vk::AttachmentStoreOp::eStore,
+        .clearValue = depthClear,
+    };
+    cmd.beginRendering(makeRenderingInfo(renderArea, {}, &depth));
+    cmd.setViewport(0, makeFullViewport(extent));
+    cmd.setScissor(0, renderArea);
+
+    const vk::PipelineLayout layout = resources_.vulkanPipelineLayout(depthPrepassHandle_);
+    cmd.bindPipeline(vk::PipelineBindPoint::eGraphics,
+                     resources_.vulkanPipeline(depthPrepassHandle_));
+    for (const auto& dc : buckets.opaque)
+    {
+        // buckets.opaque also carries the skybox (fullscreen triangle, no depth /
+        // no per-object set 0) — only real forward-opaque geometry belongs here.
+        if (dc.pipeline != forwardOpaqueHandle_)
+        {
+            continue;
+        }
+        cmd.setCullMode(dc.doubleSided ? vk::CullModeFlagBits::eNone : vk::CullModeFlagBits::eBack);
+        if (dc.vertexBuffer != NullBuffer)
+        {
+            cmd.bindVertexBuffers(0, resources_.vulkanBuffer(dc.vertexBuffer), {vk::DeviceSize{0}});
+        }
+        vk::IndexType indexType =
+            dc.indexType == DrawIndexType::UInt32 ? vk::IndexType::eUint32 : vk::IndexType::eUint16;
+        cmd.bindIndexBuffer(resources_.vulkanBuffer(dc.indexBuffer), 0, indexType);
+        pushForwardObjectDescriptors(cmd, resources_, layout, dc);
+        cmd.drawIndexed(dc.indexCount, 1, 0, 0, 0);
+    }
+    cmd.endRendering();
+}
+
+void Renderer::recordSsaoPass(vk::CommandBuffer cmd)
+{
+    ssao_.recordPass(cmd, currentFrame_);
+}
+
 void Renderer::recordForwardPass(vk::CommandBuffer cmd, const DrawBuckets& buckets)
 {
     beginForwardRendering(cmd);
@@ -752,6 +818,19 @@ void Renderer::drawFrame(Window& display, SceneGraph& scene, Vec3 cameraPosition
     recordShadowPass(cmd, buckets);
     profiler_.end(cmd, currentFrame_, ProfilePass::Shadow);
 
+    profiler_.begin(cmd, currentFrame_, ProfilePass::DepthPrepass);
+    recordDepthPrepass(cmd, buckets);
+    profiler_.end(cmd, currentFrame_, ProfilePass::DepthPrepass);
+
+    // SSAO + contact shadows from the prepass depth; the forward pass samples the
+    // AO target. Sun direction is rotated into view space for contact shadows.
+    profiler_.begin(cmd, currentFrame_, ProfilePass::Ssao);
+    const Vec4 sunView = view_ * Vec4{directionalLightDir_.x(), directionalLightDir_.y(),
+                                      directionalLightDir_.z(), 0.0f};
+    ssao_.update(jitteredProj_, static_cast<Vec3>(sunView), tunables_, currentFrame_);
+    recordSsaoPass(cmd);
+    profiler_.end(cmd, currentFrame_, ProfilePass::Ssao);
+
     profiler_.begin(cmd, currentFrame_, ProfilePass::Forward);
     recordForwardPass(cmd, buckets);
     profiler_.end(cmd, currentFrame_, ProfilePass::Forward);
@@ -861,18 +940,22 @@ void Renderer::beginForwardRendering(vk::CommandBuffer cmd)
                         vk::PipelineStageFlagBits2::eFragmentShader, {},
                         vk::PipelineStageFlagBits2::eColorAttachmentOutput,
                         vk::AccessFlagBits2::eColorAttachmentWrite);
+    // The depth prepass already filled this buffer (and left it in the
+    // attachment layout); the forward pass loads it (loadOp Load below), so keep
+    // the layout and order the prepass depth writes before the forward depth
+    // test/write (write-after-write hazard, same image).
     forwardImageBarrier(cmd, depthImage, vk::ImageAspectFlagBits::eDepth,
-                        vk::ImageLayout::eUndefined,
                         vk::ImageLayout::eDepthStencilAttachmentOptimal,
-                        vk::PipelineStageFlagBits2::eLateFragmentTests, {},
+                        vk::ImageLayout::eDepthStencilAttachmentOptimal,
+                        vk::PipelineStageFlagBits2::eLateFragmentTests,
+                        vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
                         vk::PipelineStageFlagBits2::eEarlyFragmentTests,
-                        vk::AccessFlagBits2::eDepthStencilAttachmentWrite);
+                        vk::AccessFlagBits2::eDepthStencilAttachmentWrite |
+                            vk::AccessFlagBits2::eDepthStencilAttachmentRead);
 
     const vk::ClearValue colourClear{
         .color = vk::ClearColorValue{.float32 = {{0.02f, 0.02f, 0.02f, 1.0f}}}};
     const vk::ClearValue velocityClear{.color = vk::ClearColorValue{.float32 = {{0.0f, 0.0f}}}};
-    const vk::ClearValue depthClear{.depthStencil =
-                                        vk::ClearDepthStencilValue{.depth = 1.0f, .stencil = 0}};
     std::array<vk::RenderingAttachmentInfo, 2> colours{
         vk::RenderingAttachmentInfo{
             .imageView = resources_.vulkanImageView(postProcessing_.offscreenColourTarget()),
@@ -889,12 +972,12 @@ void Renderer::beginForwardRendering(vk::CommandBuffer cmd)
             .clearValue = velocityClear,
         },
     };
+    // Load the depth the prepass wrote (forward tests LESS_OR_EQUAL against it).
     vk::RenderingAttachmentInfo depth{
         .imageView = swapchain_.depthView(),
         .imageLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal,
-        .loadOp = vk::AttachmentLoadOp::eClear,
+        .loadOp = vk::AttachmentLoadOp::eLoad,
         .storeOp = vk::AttachmentStoreOp::eStore,
-        .clearValue = depthClear,
     };
     cmd.beginRendering(makeRenderingInfo(renderArea, colours, &depth));
 
@@ -1042,6 +1125,8 @@ void Renderer::recreateSwapchain(const Window& display)
     transmission_.recreate(postProcessing_.offscreenColourTarget(), taa_.velocityTarget());
     particles_.recreate(postProcessing_.offscreenColourTarget());
     taa_.recreate(postProcessing_.offscreenColourTarget());
+    ssao_.recreate();
+    resources_.sharedTextures().ssaoMap = ssao_.aoTarget();
     // Rewrite the forward-globals (set 1) descriptors so they reference the
     // sampler/view from the freshly recreated sceneColor target (and any
     // other recreated shared texture) instead of the destroyed ones.

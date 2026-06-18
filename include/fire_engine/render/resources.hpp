@@ -133,6 +133,11 @@ public:
     // sampler so velocities aren't blended across silhouettes.
     [[nodiscard]] TextureHandle createVelocityTarget(vk::Extent2D extent);
 
+    // Allocates an R8_UNORM screen-space AO target (SSAO + contact term), usable
+    // as a colour attachment (SSAO pass) and a sampled texture (forward shader).
+    // Linear-filter sampler so the forward sampling smooths the AO.
+    [[nodiscard]] TextureHandle createSsaoTarget(vk::Extent2D extent);
+
     // Multi-mip 2D HDR target used by the bloom downsample/upsample chain.
     // Per-mip 2D views are created for framebuffer attachment + shader input.
     [[nodiscard]] TextureHandle createBloomChain(uint32_t width, uint32_t height,
@@ -224,6 +229,9 @@ public:
         // KHR_materials_transmission F3 — captured post-opaque scene-colour
         // mip chain. Bound at forward descriptor binding 20.
         TextureHandle sceneColor{NullTexture};
+        // Screen-space AO + contact term (R8), written by the SSAO pass and
+        // sampled in the forward shader to modulate ambient.
+        TextureHandle ssaoMap{NullTexture};
     };
 
     [[nodiscard]] SharedTextures& sharedTextures() noexcept

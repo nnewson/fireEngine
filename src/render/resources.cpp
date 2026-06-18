@@ -1058,6 +1058,18 @@ TextureHandle Resources::createVelocityTarget(vk::Extent2D extent)
         .filter = vk::Filter::eNearest});
 }
 
+TextureHandle Resources::createSsaoTarget(vk::Extent2D extent)
+{
+    // R8G8_UNORM: R = ambient occlusion, G = contact-shadow term. ColorAttachment
+    // (SSAO pass writes it) + Sampled (forward shader reads it). Linear filter so
+    // the forward sampling softens it. Must match Pipeline::ssaoConfig's format.
+    return createTexture2DTarget(Texture2DTargetDesc{
+        .format = vk::Format::eR8G8Unorm,
+        .extent = extent,
+        .usage = vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled,
+        .filter = vk::Filter::eLinear});
+}
+
 TextureHandle Resources::createBloomChain(uint32_t width, uint32_t height, uint32_t mipLevels)
 {
     // Main view spans all mips — used as the post-process bloom input via mip 0.

@@ -143,6 +143,14 @@ public:
     // descriptor bindings.
     [[nodiscard]] static PipelineConfig brdfIntegrationConfig(vk::Format colourFormat);
 
+    // Factory producing the PipelineConfig for the camera depth prepass: reuses
+    // the forward vertex shader (shader.vert, skin/morph aware) with an empty
+    // fragment shader, writing only depth into the shared D32 buffer before the
+    // forward pass. Same push-descriptor set 0 as the forward pipeline so the
+    // shared pushForwardObjectDescriptors works; cull mode dynamic (per draw).
+    // The forward pass then loads this depth with a LESS_OR_EQUAL test.
+    [[nodiscard]] static PipelineConfig depthPrepassConfig();
+
     // Factory producing the PipelineConfig for a depth-only shadow pipeline.
     // Writes only depth into an offscreen D32_SFLOAT attachment (no colour
     // attachment). Uses front-face culling and depth bias to eliminate
@@ -172,6 +180,17 @@ public:
     // previous-frame history, writing the resolved colour into a history target.
     // No vertex input, no depth.
     [[nodiscard]] static PipelineConfig taaResolveConfig(vk::Format colourFormat);
+
+    // Factory producing the PipelineConfig for the SSAO + contact-shadow pass.
+    // Fullscreen triangle (postprocess.vert) sampling scene depth (binding 0) +
+    // an SsaoUBO (binding 1), writing the R8 AO target. No vertex input, no depth.
+    [[nodiscard]] static PipelineConfig ssaoConfig(vk::Format colourFormat);
+
+    // Factory for the bilateral AO blur pass. Fullscreen triangle sampling the
+    // raw AO target (binding 0) + scene depth (binding 1), writing the smoothed
+    // R8G8 AO. Push constant carries texel size + the proj terms for depth
+    // linearisation. No vertex input, no depth.
+    [[nodiscard]] static PipelineConfig ssaoBlurConfig(vk::Format colourFormat);
 
     // Bloom downsample: fullscreen triangle, samples one input mip, writes
     // the next coarser mip. Push constant carries inverse-input-resolution

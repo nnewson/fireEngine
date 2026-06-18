@@ -20,6 +20,8 @@ class Device;
 enum class ProfilePass : uint32_t
 {
     Shadow,
+    DepthPrepass,
+    Ssao,
     Forward,
     Transmission,
     Taa,

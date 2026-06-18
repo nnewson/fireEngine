@@ -22,8 +22,8 @@ TEST_CASE("PipelineConfig.ForwardConfigBindingsSplitBetweenSets", "[PipelineConf
     // bindless (set 2).
     CHECK(config.bindings.size() == 4u);
     // Set 1 — forward globals: light UBO + 5 shadow maps + debug image + 2
-    // standalone samplers + 3 IBL textures + sceneColor.
-    CHECK(config.globalBindings.size() == 13u);
+    // standalone samplers + 3 IBL textures + sceneColor + ssao.
+    CHECK(config.globalBindings.size() == 14u);
     // Set 2 — bindless materials (texture array + materials SSBO).
     CHECK(config.bindlessSet);
 
@@ -62,6 +62,7 @@ TEST_CASE("PipelineConfig.ForwardConfigBindingsSplitBetweenSets", "[PipelineConf
     CHECK(hasGlobalBinding(ForwardGlobalBinding::WorldShadowMap));
     CHECK(hasGlobalBinding(ForwardGlobalBinding::SelfShadowMap));
     CHECK(hasGlobalBinding(ForwardGlobalBinding::ShadowMap));
+    CHECK(hasGlobalBinding(ForwardGlobalBinding::SsaoMap));
 }
 
 TEST_CASE("PipelineConfig.ForwardConfigIncludesSelfShadowPushConstant", "[PipelineConfig]")

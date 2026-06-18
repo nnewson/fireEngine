@@ -57,6 +57,12 @@ layout(location = 8) out vec2 fragTexCoord1;
 layout(location = 9) out vec4 fragCurClip;
 layout(location = 10) out vec4 fragPrevClip;
 
+// The depth prepass reuses this exact vertex shader (depth-only) and the forward
+// pass loads that depth with a LESS_OR_EQUAL test. Mark gl_Position invariant so
+// both pipelines compute bit-identical clip positions — otherwise per-pipeline
+// optimisation could shift a vertex by 1 ULP and punch holes in the forward pass.
+invariant gl_Position;
+
 void main() {
     vec3 pos = inPos;
     vec3 normal = inNormal;

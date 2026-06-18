@@ -99,6 +99,9 @@ int matTex(int slot) { return material.textureIndex[slot >> 2][slot & 3]; }
 // chain. Transmissive draws sample this at a screen-space UV displaced by
 // the refracted ray; roughness drives the mip level for frosted-glass blur.
 layout(set = 1, binding = 12) uniform sampler2D sceneColorMap;
+// Screen-space AO + contact term (R = ambient occlusion, G = contact shadow),
+// from the SSAO pass. Sampled at the fragment's screen UV to modulate ambient.
+layout(set = 1, binding = 13) uniform sampler2D ssaoMap;
 // Shadow images bound as plain textures so one hardware-PCF comparison sampler is
 // reused across CSM, spot, and point maps. Combined samplers are constructed at
 // use time via the GLSL sampler*() constructors.
@@ -507,6 +510,11 @@ void main() {
     vec3 directSpecular = vec3(0.0);
     float primaryDirectionalVisibility = 1.0;
     float primaryDirectionalNdotL = 0.0;
+    // Screen-space AO + contact term (R = ambient occlusion, G = contact shadow),
+    // sampled once at the fragment's screen UV. .g attenuates the direct sun
+    // inside the loop; .r modulates ambient below. Full-res target, so the pixel
+    // coord maps straight to the texel.
+    vec2 ssaoSample = textureLod(ssaoMap, gl_FragCoord.xy / vec2(textureSize(ssaoMap, 0)), 0.0).rg;
     for (int i = 0; i < light.lightCount && i < MAX_LIGHTS; ++i) {
         LightData L = light.lights[i];
         int type = int(L.position.w);
@@ -625,9 +633,13 @@ void main() {
                 }
             }
             primaryDirectionalVisibility = shadow;
-            diffuseContrib *= shadow;
-            specularContrib *= shadow;
-            cc_contrib *= shadow;
+            // Contact shadows (screen-space) further occlude the *direct* sun,
+            // catching short-range contact the CSM misses. Ambient keeps the pure
+            // CSM visibility above. ssaoSample.g is 1.0 when contact is disabled.
+            float directShadow = shadow * ssaoSample.g;
+            diffuseContrib *= directShadow;
+            specularContrib *= directShadow;
+            cc_contrib *= directShadow;
         }
 
         directDiffuse += diffuseContrib;
@@ -700,6 +712,13 @@ void main() {
         float sampled = texture(textures[matTex(SLOT_OCCLUSION)], uvOcc).r;
         ao = mix(1.0, sampled, material.materialParams.w);
     }
+
+    // Screen-space AO (R, sampled above) folds into the ambient occlusion term.
+    if (light.environmentParams.z > 5.5 && light.environmentParams.z < 6.5) {
+        outColor = vec4(vec3(ssaoSample.r), alpha);
+        return;
+    }
+    ao *= ssaoSample.r;
 
     float environmentShadow = mix(1.0, primaryDirectionalVisibility, light.environmentParams.y);
     vec3 diffuseAmbientTerm = diffuseIbl * ao * environmentShadow;

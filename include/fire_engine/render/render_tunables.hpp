@@ -18,6 +18,8 @@ enum class DebugView : int
     // Visualises the TAA motion-vector attachment (abs screen-space velocity,
     // scaled). Sanity check for the motion vectors before the resolve consumes them.
     Velocity = 5,
+    // Raw SSAO + contact term (grayscale), before it modulates ambient.
+    Ssao = 6,
 };
 
 // Live, runtime-editable render parameters surfaced by the debug overlay. Seeded
@@ -40,6 +42,22 @@ struct RenderTunables
     float diffuseIbl{kDiffuseIblStrength};
     float specularIbl{kSpecularIblStrength};
     float directionalIntensityScale{1.0f}; // multiplies the primary directional light
+
+    // SSAO + contact shadows (screen-space, from the depth prepass). When
+    // ssaoEnabled is false the pass still runs but writes AO = 1 (no darkening).
+    bool ssaoEnabled{true};
+    float ssaoRadius{kSsaoRadius};
+    float ssaoBias{kSsaoBias};
+    float ssaoIntensity{kSsaoIntensity};
+    float ssaoPower{kSsaoPower};
+    // Contact shadows default OFF: they're a subtle fill for the CSM's contact gap
+    // and trade screen-space "hair" artifacts for marginal benefit when the CSM is
+    // already tight. Opt in via the overlay.
+    bool contactShadowsEnabled{false};
+    float contactShadowLength{kContactShadowLength};
+    // View-space-Z step at which contact shadows fade out near silhouettes
+    // (kills the screen-space "hair"). Higher = guard only the sharpest edges.
+    float contactEdgeThreshold{kContactEdgeThreshold};
 
     // Particles — scales applied to every gathered emitter before the sim.
     float particleRateScale{1.0f};

@@ -63,6 +63,7 @@ add_library(fireengine SHARED
     src/render/resources.cpp
     src/render/shadows.cpp
     src/render/soft_body_system.cpp
+    src/render/ssao.cpp
     src/render/swapchain.cpp
     src/render/taa.cpp
     src/render/transmission.cpp
@@ -124,6 +125,9 @@ set(SHADER_SOURCES
     shaders/shadow.vert
     shaders/shadow.frag
     shaders/self_shadow_second.frag
+    shaders/depth_prepass.frag
+    shaders/ssao.frag
+    shaders/ssao_blur.frag
     shaders/postprocess.vert
     shaders/postprocess.frag
     shaders/taa.frag

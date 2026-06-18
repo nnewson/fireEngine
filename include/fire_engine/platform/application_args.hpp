@@ -92,6 +92,11 @@ struct ApplicationArgs
             args.debug.view = DebugView::Velocity;
             continue;
         }
+        if (arg == "--debug-ssao")
+        {
+            args.debug.view = DebugView::Ssao;
+            continue;
+        }
         if (arg == "--no-shadows")
         {
             args.debug.noShadows = true;

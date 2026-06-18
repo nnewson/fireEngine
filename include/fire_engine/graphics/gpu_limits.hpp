@@ -75,4 +75,9 @@ inline constexpr uint32_t kMaxMaterials = 256;
 inline constexpr int kMaxParticleEmitters = 4;
 inline constexpr int kMaxParticlesPerEmitter = 4096;
 
+// SSAO hemisphere kernel size. Mirrored by the kernel[] array in SsaoUBO and the
+// matching loop bound in ssao.frag — keep all three in lockstep. TAA denoises the
+// per-pixel rotation noise, so a modest count suffices.
+inline constexpr uint32_t kSsaoKernelSize = 16;
+
 } // namespace fire_engine
