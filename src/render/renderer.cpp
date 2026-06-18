@@ -207,7 +207,7 @@ Renderer::Renderer(const Window& window, std::string environmentPath, RendererDe
     globalDescSets_ =
         resources_.descriptors().createGlobalDescriptors(buildGlobalDescriptorRequest());
 
-    imagesInFlight_.assign(swapchain_.images().size(), vk::Fence{});
+    imageTimelineValue_.assign(swapchain_.images().size(), 0);
 }
 
 GlobalDescriptorRequest Renderer::buildGlobalDescriptorRequest() const
@@ -689,7 +689,8 @@ void Renderer::drawFrame(Window& display, SceneGraph& scene, Vec3 cameraPosition
     }
 
     // Read back the GPU timings written a ring-cycle ago into this slot (the
-    // acquire fence guarantees that frame completed) and the wall-clock CPU time.
+    // acquire timeline-wait guarantees that frame completed) and the wall-clock
+    // CPU time.
     profiler_.resolve(currentFrame_, stats_);
     stats_.cpuFrameMs = dt * 1000.0f;
 
@@ -795,7 +796,9 @@ std::optional<uint32_t> Renderer::acquireNextImage(Window& display)
 {
     auto& dev = device_.device();
 
-    (void)dev.waitForFences(frame_.inFlightFence(currentFrame_), vk::True, UINT64_MAX);
+    // Wait until the last submit that used this frame-in-flight slot finished, so
+    // its command buffer + per-frame UBOs are safe to overwrite.
+    waitTimeline(frameTimelineValue_[currentFrame_]);
 
     auto [acquireResult, imageIndex] = (*dev).acquireNextImageKHR(
         swapchain_.swapchain(), UINT64_MAX, frame_.imageAvailable(currentFrame_));
@@ -809,15 +812,25 @@ std::optional<uint32_t> Renderer::acquireNextImage(Window& display)
         throw std::runtime_error("failed to acquire swap chain image");
     }
 
-    vk::Fence currentFrameFence = frame_.inFlightFence(currentFrame_);
-    if (imagesInFlight_[imageIndex])
-    {
-        (void)dev.waitForFences(imagesInFlight_[imageIndex], vk::True, UINT64_MAX);
-    }
-
-    dev.resetFences(currentFrameFence);
-    imagesInFlight_[imageIndex] = currentFrameFence;
+    // Wait until any earlier frame still rendering to this swapchain image is done
+    // (matters when swapchain image count != frames in flight).
+    waitTimeline(imageTimelineValue_[imageIndex]);
     return imageIndex;
+}
+
+void Renderer::waitTimeline(uint64_t value) const
+{
+    if (value == 0)
+    {
+        return;
+    }
+    vk::Semaphore sem = frame_.timeline();
+    vk::SemaphoreWaitInfo wi{
+        .semaphoreCount = 1,
+        .pSemaphores = &sem,
+        .pValues = &value,
+    };
+    (void)device_.device().waitSemaphores(wi, UINT64_MAX);
 }
 
 void Renderer::beginForwardRendering(vk::CommandBuffer cmd)
@@ -932,21 +945,29 @@ void Renderer::submitAndPresent(Window& display, vk::CommandBuffer cmd, uint32_t
         .semaphore = imageAvail,
         .stageMask = vk::PipelineStageFlagBits2::eColorAttachmentOutput,
     };
-    vk::SemaphoreSubmitInfo signalInfo{
-        .semaphore = renderDone,
-        .stageMask = vk::PipelineStageFlagBits2::eColorAttachmentOutput,
-    };
+    // Signal both: the binary renderDone (present waits on it) and the timeline at
+    // the next monotonic value (CPU frame pacing waits on it). The timeline signal
+    // is all-commands so its value only advances once the whole frame is done.
+    const uint64_t signalValue = ++timelineValue_;
+    const std::array<vk::SemaphoreSubmitInfo, 2> signalInfos{{
+        {.semaphore = renderDone, .stageMask = vk::PipelineStageFlagBits2::eColorAttachmentOutput},
+        {.semaphore = frame_.timeline(),
+         .value = signalValue,
+         .stageMask = vk::PipelineStageFlagBits2::eAllCommands},
+    }};
     vk::CommandBufferSubmitInfo cmdInfo{.commandBuffer = cmd};
     vk::SubmitInfo2 si{
         .waitSemaphoreInfoCount = 1,
         .pWaitSemaphoreInfos = &waitInfo,
         .commandBufferInfoCount = 1,
         .pCommandBufferInfos = &cmdInfo,
-        .signalSemaphoreInfoCount = 1,
-        .pSignalSemaphoreInfos = &signalInfo,
+        .signalSemaphoreInfoCount = static_cast<uint32_t>(signalInfos.size()),
+        .pSignalSemaphoreInfos = signalInfos.data(),
     };
 
-    device_.graphicsQueue().submit2(si, frame_.inFlightFence(currentFrame_));
+    device_.graphicsQueue().submit2(si);
+    frameTimelineValue_[currentFrame_] = signalValue;
+    imageTimelineValue_[imageIndex] = signalValue;
 
     auto swapchain = swapchain_.swapchain();
     vk::PresentInfoKHR pi{
@@ -1027,7 +1048,7 @@ void Renderer::recreateSwapchain(const Window& display)
     resources_.descriptors().updateGlobalDescriptors(globalDescSets_,
                                                      buildGlobalDescriptorRequest());
     frame_.createRenderFinishedSemaphores(swapchain_.images().size());
-    imagesInFlight_.assign(swapchain_.images().size(), vk::Fence{});
+    imageTimelineValue_.assign(swapchain_.images().size(), 0);
 }
 
 } // namespace fire_engine

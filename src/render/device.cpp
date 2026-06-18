@@ -227,6 +227,11 @@ void Device::createLogicalDevice()
     vk::PhysicalDeviceVulkan12Features features12{};
     features12.bufferDeviceAddress = vk::True;
     features12.descriptorIndexing = vk::True;
+    // timelineSemaphore (core 1.2): frame pacing uses one monotonic timeline
+    // semaphore for CPU↔GPU sync instead of per-frame binary fences. The
+    // swapchain acquire/present semaphores stay binary (WSI doesn't accept
+    // timeline semaphores).
+    features12.timelineSemaphore = vk::True;
     features12.runtimeDescriptorArray = vk::True;
     features12.shaderSampledImageArrayNonUniformIndexing = vk::True;
     features12.descriptorBindingSampledImageUpdateAfterBind = vk::True;

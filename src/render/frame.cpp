@@ -39,17 +39,14 @@ void Frame::createCommandBuffers()
 
 void Frame::createSyncObjects()
 {
+    // imageAvail (acquire signal) and renderDone (present wait) stay binary —
+    // the WSI acquire/present path doesn't accept timeline semaphores.
     vk::SemaphoreCreateInfo sci{};
-    vk::FenceCreateInfo fci{
-        .flags = vk::FenceCreateFlagBits::eSignaled,
-    };
 
     imageAvail_.reserve(kMaxFramesInFlight);
-    inFlight_.reserve(kMaxFramesInFlight);
     for (int i = 0; i < kMaxFramesInFlight; ++i)
     {
         imageAvail_.emplace_back(*device_, sci);
-        inFlight_.emplace_back(*device_, fci);
     }
 
     renderDone_.reserve(swapchainImageCount_);
@@ -57,6 +54,14 @@ void Frame::createSyncObjects()
     {
         renderDone_.emplace_back(*device_, sci);
     }
+
+    // One monotonic timeline semaphore (initial value 0) for frame pacing.
+    vk::SemaphoreTypeCreateInfo typeInfo{
+        .semaphoreType = vk::SemaphoreType::eTimeline,
+        .initialValue = 0,
+    };
+    vk::SemaphoreCreateInfo timelineCi{.pNext = &typeInfo};
+    timeline_ = vk::raii::Semaphore(*device_, timelineCi);
 }
 
 void Frame::destroyRenderFinishedSemaphores()

@@ -36,9 +36,11 @@ public:
         return *renderDone_[imageIndex];
     }
 
-    [[nodiscard]] vk::Fence inFlightFence(uint32_t index) const noexcept
+    // Single monotonic timeline semaphore driving CPU↔GPU frame pacing (replaces
+    // the per-frame in-flight fences). Created once; survives swapchain resize.
+    [[nodiscard]] vk::Semaphore timeline() const noexcept
     {
-        return *inFlight_[index];
+        return *timeline_;
     }
 
     [[nodiscard]] vk::CommandPool commandPool() const noexcept
@@ -63,7 +65,7 @@ private:
 
     std::vector<vk::raii::Semaphore> imageAvail_;
     std::vector<vk::raii::Semaphore> renderDone_;
-    std::vector<vk::raii::Fence> inFlight_;
+    vk::raii::Semaphore timeline_{nullptr};
 };
 
 } // namespace fire_engine

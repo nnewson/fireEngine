@@ -199,6 +199,9 @@ private:
     // releaseTexture/createTexture cycle has invalidated the old samplers.
     [[nodiscard]] GlobalDescriptorRequest buildGlobalDescriptorRequest() const;
     [[nodiscard]] std::optional<uint32_t> acquireNextImage(Window& display);
+    // Blocks the CPU until the frame-pacing timeline semaphore reaches `value`
+    // (no-op for value 0 — nothing has been submitted for that slot/image yet).
+    void waitTimeline(uint64_t value) const;
     void beginForwardRendering(vk::CommandBuffer cmd);
     void endForwardRendering(vk::CommandBuffer cmd);
     // Final ColorAttachmentOptimal → PresentSrcKHR transition, recorded after the
@@ -248,7 +251,15 @@ private:
     int activeSpotCasters_{0};
     int activePointCasters_{0};
     std::array<PointShadowCaster, kMaxPointShadowCasters> pointCasters_{};
-    std::vector<vk::Fence> imagesInFlight_{};
+    // Timeline-semaphore frame pacing. timelineValue_ is the last value signalled;
+    // frameTimelineValue_[slot] is the value the last submit using that
+    // frame-in-flight slot signalled (gate cmd-buffer / per-frame-UBO reuse);
+    // imageTimelineValue_[image] is the value the last submit that rendered to a
+    // swapchain image signalled (gate image reuse when image count != frames in
+    // flight). Replaces the inFlight fences + imagesInFlight fence tracking.
+    uint64_t timelineValue_{0};
+    std::array<uint64_t, kMaxFramesInFlight> frameTimelineValue_{};
+    std::vector<uint64_t> imageTimelineValue_{};
     uint32_t currentFrame_{0};
     // Per-frame camera matrices (set at the top of drawFrame). view_ + jitteredProj_
     // drive rasterisation; currentViewProj_/previousViewProj_ are jitter-free for
