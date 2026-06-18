@@ -580,16 +580,24 @@ void Renderer::recordDrawBucket(vk::CommandBuffer cmd, const std::vector<DrawCom
             dc.indexType == DrawIndexType::UInt32 ? vk::IndexType::eUint32 : vk::IndexType::eUint16;
         cmd.bindIndexBuffer(resources_.vulkanBuffer(dc.indexBuffer), 0, indexType);
 
-        vk::DescriptorSet ds = resources_.vulkanDescriptorSet(dc.descriptorSet);
-        cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
-                               resources_.vulkanPipelineLayout(dc.pipeline), 0, ds, {});
         if (isForwardPipeline)
         {
+            // Forward set 0 is pushed inline (VK_KHR_push_descriptor) — no
+            // per-object descriptor set — plus the per-draw push constants.
+            // Skybox (also in this bucket) keeps its allocated set 0.
+            pushForwardObjectDescriptors(cmd, resources_,
+                                         resources_.vulkanPipelineLayout(dc.pipeline), dc);
             ForwardPushConstants pc{};
             pc.selfShadowSlot = dc.selfShadowSlot;
             pc.materialIndex = dc.materialIndex;
             cmd.pushConstants<ForwardPushConstants>(resources_.vulkanPipelineLayout(dc.pipeline),
                                                     vk::ShaderStageFlagBits::eFragment, 0, pc);
+        }
+        else
+        {
+            vk::DescriptorSet ds = resources_.vulkanDescriptorSet(dc.descriptorSet);
+            cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
+                                   resources_.vulkanPipelineLayout(dc.pipeline), 0, ds, {});
         }
         cmd.drawIndexed(dc.indexCount, 1, 0, 0, 0);
     }

@@ -62,9 +62,10 @@ void recordShadowDrawBucket(vk::CommandBuffer cmd, const std::vector<DrawCommand
             dc.indexType == DrawIndexType::UInt32 ? vk::IndexType::eUint32 : vk::IndexType::eUint16;
         cmd.bindIndexBuffer(resources.vulkanBuffer(dc.indexBuffer), 0, indexType);
 
-        vk::DescriptorSet ds = resources.vulkanDescriptorSet(dc.descriptorSet);
-        cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
-                               resources.vulkanPipelineLayout(pipelineHandle), 0, ds, {});
+        // Shadow set 0 is pushed inline (VK_KHR_push_descriptor) — no allocated
+        // per-object descriptor set, mirroring the forward pass.
+        pushShadowObjectDescriptors(cmd, resources, resources.vulkanPipelineLayout(pipelineHandle),
+                                    dc);
         cmd.drawIndexed(dc.indexCount, 1, 0, 0, 0);
     }
 }
@@ -108,7 +109,6 @@ Shadows::Shadows(const Device& device, Resources& resources)
     pointShadowMapHandle_ =
         resources_->createPointShadowMap(kPointShadowMapExtent, kMaxPointShadowCasters);
 
-    resources_->descriptors().shadowDescriptorSetLayout(shadowPipeline_.descriptorSetLayout());
     auto& shared = resources_->sharedTextures();
     shared.shadowMap = shadowMapHandle_;
     shared.worldShadowMap = worldShadowMapHandle_;

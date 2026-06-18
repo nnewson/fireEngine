@@ -1,5 +1,6 @@
 #include <fire_engine/render/descriptors.hpp>
 
+#include <fire_engine/graphics/draw_command.hpp>
 #include <fire_engine/render/device.hpp>
 #include <fire_engine/render/pipeline.hpp>
 #include <fire_engine/render/resources.hpp>
@@ -11,9 +12,8 @@ namespace fire_engine
 namespace
 {
 
-// Thin wrappers around vk::WriteDescriptorSet{...} so the long write arrays in
-// createObjectDescriptors / createShadowDescriptors read as one line per binding
-// instead of five.
+// Thin wrappers around vk::WriteDescriptorSet{...} so the long write array in
+// writeGlobalBindings reads as one line per binding instead of five.
 [[nodiscard]]
 vk::WriteDescriptorSet writeBuffer(vk::DescriptorSet set, uint32_t binding, vk::DescriptorType type,
                                    const vk::DescriptorBufferInfo& info) noexcept
@@ -138,58 +138,109 @@ Descriptors::buildFrameSets(std::span<const vk::DescriptorPoolSize> poolSizes,
     return allocateFrameSets(poolEntry, layout, writeFrame);
 }
 
-ObjectDescriptorResult Descriptors::createObjectDescriptors(const ObjectDescriptorRequest& req)
+void pushForwardObjectDescriptors(vk::CommandBuffer cmd, const Resources& resources,
+                                  vk::PipelineLayout layout, const DrawCommand& dc)
 {
-    auto numGeometries = static_cast<uint32_t>(req.geometries.size());
-    uint32_t totalSets = numGeometries * kMaxFramesInFlight;
+    // Forward set 0 is a push-descriptor layout: write the four per-object
+    // vertex-stage buffers (frame/skin/morph UBOs + morph-targets SSBO) inline,
+    // no allocated set. Material data is bindless (global set 2); WholeSize works
+    // because each buffer was created exactly sized.
+    const vk::DescriptorBufferInfo frameInfo{
+        .buffer = resources.vulkanBuffer(dc.frameUbo), .offset = 0, .range = vk::WholeSize};
+    const vk::DescriptorBufferInfo skinInfo{
+        .buffer = resources.vulkanBuffer(dc.skinUbo), .offset = 0, .range = vk::WholeSize};
+    const vk::DescriptorBufferInfo morphInfo{
+        .buffer = resources.vulkanBuffer(dc.morphUbo), .offset = 0, .range = vk::WholeSize};
+    const vk::DescriptorBufferInfo morphSsboInfo{
+        .buffer = resources.vulkanBuffer(dc.morphSsbo), .offset = 0, .range = vk::WholeSize};
 
-    std::array<vk::DescriptorPoolSize, 2> poolSizes = {{
-        // 3 uniform buffers per set: frame UBO, skin UBO, morph UBO. Material data
-        // (textures + scalars) is fully bindless now (global set 2).
-        {vk::DescriptorType::eUniformBuffer, totalSets * 3},
-        {vk::DescriptorType::eStorageBuffer, totalSets},
+    constexpr auto kUbo = vk::DescriptorType::eUniformBuffer;
+    constexpr auto kSsbo = vk::DescriptorType::eStorageBuffer;
+    const std::array<vk::WriteDescriptorSet, 4> writes{{
+        {.dstBinding = bindingIndex(ForwardBinding::Frame),
+         .descriptorCount = 1,
+         .descriptorType = kUbo,
+         .pBufferInfo = &frameInfo},
+        {.dstBinding = bindingIndex(ForwardBinding::Skin),
+         .descriptorCount = 1,
+         .descriptorType = kUbo,
+         .pBufferInfo = &skinInfo},
+        {.dstBinding = bindingIndex(ForwardBinding::Morph),
+         .descriptorCount = 1,
+         .descriptorType = kUbo,
+         .pBufferInfo = &morphInfo},
+        {.dstBinding = bindingIndex(ForwardBinding::MorphTargets),
+         .descriptorCount = 1,
+         .descriptorType = kSsbo,
+         .pBufferInfo = &morphSsboInfo},
     }};
-    auto& poolEntry = createDescriptorPool(poolSizes, totalSets);
+    // Core 1.4 entry point (vkCmdPushDescriptorSet) — the vcpkg loader exports
+    // this, not the KHR-suffixed alias. Validity comes from the enabled
+    // VK_KHR_push_descriptor extension plus the 1.4 device.
+    cmd.pushDescriptorSet(vk::PipelineBindPoint::eGraphics, layout, 0, writes);
+}
 
-    ObjectDescriptorResult result;
-    result.descSets.resize(numGeometries);
+void pushShadowObjectDescriptors(vk::CommandBuffer cmd, const Resources& resources,
+                                 vk::PipelineLayout layout, const DrawCommand& dc)
+{
+    // Shadow set 0 is a push-descriptor layout. Bindings 0..3 are per-object
+    // vertex-stage buffers (ShadowUBO + skin/morph UBOs + morph SSBO); each was
+    // created exactly sized, so WholeSize is correct. The shadow draw reuses the
+    // forward skin/morph/morphSsbo handles carried on the DrawCommand.
+    const vk::DescriptorBufferInfo shadowInfo{
+        .buffer = resources.vulkanBuffer(dc.shadowUbo), .offset = 0, .range = vk::WholeSize};
+    const vk::DescriptorBufferInfo skinInfo{
+        .buffer = resources.vulkanBuffer(dc.skinUbo), .offset = 0, .range = vk::WholeSize};
+    const vk::DescriptorBufferInfo morphInfo{
+        .buffer = resources.vulkanBuffer(dc.morphUbo), .offset = 0, .range = vk::WholeSize};
+    const vk::DescriptorBufferInfo morphSsboInfo{
+        .buffer = resources.vulkanBuffer(dc.morphSsbo), .offset = 0, .range = vk::WholeSize};
 
-    for (uint32_t g = 0; g < numGeometries; ++g)
-    {
-        const auto& geo = req.geometries[g];
-        result.descSets[g] = allocateFrameSets(
-            poolEntry, pipeline_->descriptorSetLayout(),
-            [&](vk::DescriptorSet set, int i)
-            {
-                vk::DescriptorBufferInfo uboBufInfo = makeDescriptorBufferInfo(
-                    resources_->vulkanBuffer(req.uniformBufs[i]), sizeof(UniformBufferObject));
-                vk::DescriptorBufferInfo skinBufInfo = makeDescriptorBufferInfo(
-                    resources_->vulkanBuffer(geo.skinBufs[i]), sizeof(SkinUBO));
-                vk::DescriptorBufferInfo morphUboBufInfo = makeDescriptorBufferInfo(
-                    resources_->vulkanBuffer(geo.morphUboBufs[i]), sizeof(MorphUBO));
+    // Bindings 4/5 are the shared self-shadow first-depth image + sampler —
+    // global resources (same for every shadow draw), only sampled by the second
+    // self-shadow pass. The first/regular passes declare them but never read
+    // them, so pushing them here is harmless (validation only checks layout for
+    // descriptors a shader statically uses).
+    const vk::DescriptorImageInfo selfShadowFirstInfo{
+        .sampler = {},
+        .imageView = resources.vulkanImageView(resources.sharedTextures().selfShadowFirstMap),
+        .imageLayout = vk::ImageLayout::eDepthStencilReadOnlyOptimal};
+    const vk::DescriptorImageInfo selfShadowSamplerInfo{.sampler =
+                                                            resources.vulkanShadowDebugSampler(),
+                                                        .imageView = {},
+                                                        .imageLayout = vk::ImageLayout::eUndefined};
 
-                vk::DeviceSize ssboSize = geo.morphSsboSize > 0
-                                              ? static_cast<vk::DeviceSize>(geo.morphSsboSize)
-                                              : sizeof(float) * 4;
-                vk::DescriptorBufferInfo morphSsboBufInfo =
-                    makeDescriptorBufferInfo(resources_->vulkanBuffer(geo.morphSsbo), ssboSize);
-
-                constexpr auto kUbo = vk::DescriptorType::eUniformBuffer;
-                constexpr auto kSsbo = vk::DescriptorType::eStorageBuffer;
-                // Material data is bindless (global set 2); set 0 carries only the
-                // per-object vertex-stage UBOs + morph SSBO now.
-                std::array<vk::WriteDescriptorSet, 4> writes = {{
-                    writeBuffer(set, bindingIndex(ForwardBinding::Frame), kUbo, uboBufInfo),
-                    writeBuffer(set, bindingIndex(ForwardBinding::Skin), kUbo, skinBufInfo),
-                    writeBuffer(set, bindingIndex(ForwardBinding::Morph), kUbo, morphUboBufInfo),
-                    writeBuffer(set, bindingIndex(ForwardBinding::MorphTargets), kSsbo,
-                                morphSsboBufInfo),
-                }};
-                device_->device().updateDescriptorSets(writes, {});
-            });
-    }
-
-    return result;
+    constexpr auto kUbo = vk::DescriptorType::eUniformBuffer;
+    constexpr auto kSsbo = vk::DescriptorType::eStorageBuffer;
+    constexpr auto kSi = vk::DescriptorType::eSampledImage;
+    constexpr auto kSamp = vk::DescriptorType::eSampler;
+    const std::array<vk::WriteDescriptorSet, 6> writes{{
+        {.dstBinding = bindingIndex(ShadowBinding::Shadow),
+         .descriptorCount = 1,
+         .descriptorType = kUbo,
+         .pBufferInfo = &shadowInfo},
+        {.dstBinding = bindingIndex(ShadowBinding::Skin),
+         .descriptorCount = 1,
+         .descriptorType = kUbo,
+         .pBufferInfo = &skinInfo},
+        {.dstBinding = bindingIndex(ShadowBinding::Morph),
+         .descriptorCount = 1,
+         .descriptorType = kUbo,
+         .pBufferInfo = &morphInfo},
+        {.dstBinding = bindingIndex(ShadowBinding::MorphTargets),
+         .descriptorCount = 1,
+         .descriptorType = kSsbo,
+         .pBufferInfo = &morphSsboInfo},
+        {.dstBinding = bindingIndex(ShadowBinding::SelfShadowFirstMap),
+         .descriptorCount = 1,
+         .descriptorType = kSi,
+         .pImageInfo = &selfShadowFirstInfo},
+        {.dstBinding = bindingIndex(ShadowBinding::SelfShadowDepthSampler),
+         .descriptorCount = 1,
+         .descriptorType = kSamp,
+         .pImageInfo = &selfShadowSamplerInfo},
+    }};
+    cmd.pushDescriptorSet(vk::PipelineBindPoint::eGraphics, layout, 0, writes);
 }
 
 void Descriptors::writeGlobalBindings(vk::DescriptorSet set, const GlobalDescriptorRequest& req,
@@ -280,69 +331,6 @@ void Descriptors::updateGlobalDescriptors(
     {
         writeGlobalBindings(vulkanDescriptorSet(sets[i]), req, i);
     }
-}
-
-ShadowDescriptorResult Descriptors::createShadowDescriptors(const ShadowDescriptorRequest& req)
-{
-    auto numGeometries = static_cast<uint32_t>(req.geometries.size());
-    uint32_t totalSets = numGeometries * kMaxFramesInFlight;
-
-    std::array<vk::DescriptorPoolSize, 4> poolSizes = {{
-        {vk::DescriptorType::eUniformBuffer, totalSets * 3},
-        {vk::DescriptorType::eStorageBuffer, totalSets},
-        {vk::DescriptorType::eSampledImage, totalSets},
-        {vk::DescriptorType::eSampler, totalSets},
-    }};
-    auto& poolEntry = createDescriptorPool(poolSizes, totalSets);
-
-    ShadowDescriptorResult result;
-    result.descSets.resize(numGeometries);
-
-    for (uint32_t g = 0; g < numGeometries; ++g)
-    {
-        const auto& geo = req.geometries[g];
-        result.descSets[g] = allocateFrameSets(
-            poolEntry, shadowDescLayout_,
-            [&](vk::DescriptorSet set, int i)
-            {
-                vk::DescriptorBufferInfo shadowUboInfo = makeDescriptorBufferInfo(
-                    resources_->vulkanBuffer(geo.shadowUboBufs[i]), sizeof(ShadowUBO));
-                vk::DescriptorBufferInfo skinBufInfo = makeDescriptorBufferInfo(
-                    resources_->vulkanBuffer(geo.skinBufs[i]), sizeof(SkinUBO));
-                vk::DescriptorBufferInfo morphUboBufInfo = makeDescriptorBufferInfo(
-                    resources_->vulkanBuffer(geo.morphUboBufs[i]), sizeof(MorphUBO));
-                vk::DeviceSize ssboSize = geo.morphSsboSize > 0
-                                              ? static_cast<vk::DeviceSize>(geo.morphSsboSize)
-                                              : sizeof(float) * 4;
-                vk::DescriptorBufferInfo morphSsboInfo =
-                    makeDescriptorBufferInfo(resources_->vulkanBuffer(geo.morphSsbo), ssboSize);
-                vk::DescriptorImageInfo selfShadowFirstInfo = makeDescriptorImageInfo(
-                    {},
-                    resources_->vulkanImageView(resources_->sharedTextures().selfShadowFirstMap),
-                    vk::ImageLayout::eDepthStencilReadOnlyOptimal);
-                vk::DescriptorImageInfo selfShadowSamplerInfo = makeDescriptorImageInfo(
-                    resources_->vulkanShadowDebugSampler(), {}, vk::ImageLayout::eUndefined);
-
-                constexpr auto kUbo = vk::DescriptorType::eUniformBuffer;
-                constexpr auto kSsbo = vk::DescriptorType::eStorageBuffer;
-                constexpr auto kSi = vk::DescriptorType::eSampledImage;
-                constexpr auto kSamp = vk::DescriptorType::eSampler;
-                std::array<vk::WriteDescriptorSet, 6> writes = {{
-                    writeBuffer(set, bindingIndex(ShadowBinding::Shadow), kUbo, shadowUboInfo),
-                    writeBuffer(set, bindingIndex(ShadowBinding::Skin), kUbo, skinBufInfo),
-                    writeBuffer(set, bindingIndex(ShadowBinding::Morph), kUbo, morphUboBufInfo),
-                    writeBuffer(set, bindingIndex(ShadowBinding::MorphTargets), kSsbo,
-                                morphSsboInfo),
-                    writeImage(set, bindingIndex(ShadowBinding::SelfShadowFirstMap), kSi,
-                               selfShadowFirstInfo),
-                    writeImage(set, bindingIndex(ShadowBinding::SelfShadowDepthSampler), kSamp,
-                               selfShadowSamplerInfo),
-                }};
-                device_->device().updateDescriptorSets(writes, {});
-            });
-    }
-
-    return result;
 }
 
 std::array<DescriptorSetHandle, kMaxFramesInFlight>

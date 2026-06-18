@@ -36,7 +36,19 @@ struct DrawCommand
     BufferHandle indexBuffer{NullBuffer};
     uint32_t indexCount{0};
     DrawIndexType indexType{DrawIndexType::UInt16};
+    // Set 0 for skybox draws (an allocated descriptor set). Forward, transmissive,
+    // and shadow draws leave this null and instead carry the per-object buffers
+    // below, which the renderer pushes inline via VK_KHR_push_descriptor.
     DescriptorSetHandle descriptorSet{NullDescriptorSet};
+    // Forward set-0 push buffers: frame/skin/morph UBOs + morph-targets SSBO.
+    BufferHandle frameUbo{NullBuffer};
+    BufferHandle skinUbo{NullBuffer};
+    BufferHandle morphUbo{NullBuffer};
+    BufferHandle morphSsbo{NullBuffer};
+    // Shadow set-0 push buffer (binding 0): per-object ShadowUBO. Shadow draws
+    // reuse skin/morph/morphSsbo above; the shared self-shadow image+sampler
+    // (bindings 4/5) are global, pushed from Resources by the shadow pass.
+    BufferHandle shadowUbo{NullBuffer};
     PipelineHandle pipeline{NullPipeline};
     float sortDepth{0.0f};
     // KHR_materials_transmission F3: when true, this draw must run AFTER

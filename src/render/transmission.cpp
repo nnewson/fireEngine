@@ -5,6 +5,7 @@
 #include <bit>
 #include <limits>
 
+#include <fire_engine/render/descriptors.hpp>
 #include <fire_engine/render/render_target.hpp>
 #include <fire_engine/render/ubo.hpp>
 #include <fire_engine/render/viewport.hpp>
@@ -49,9 +50,10 @@ void recordTransmissionDrawBucket(vk::CommandBuffer cmd, std::span<const DrawCom
             dc.indexType == DrawIndexType::UInt32 ? vk::IndexType::eUint32 : vk::IndexType::eUint16;
         cmd.bindIndexBuffer(resources.vulkanBuffer(dc.indexBuffer), 0, indexType);
 
-        vk::DescriptorSet descriptorSet = resources.vulkanDescriptorSet(dc.descriptorSet);
-        cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
-                               resources.vulkanPipelineLayout(dc.pipeline), 0, descriptorSet, {});
+        // Forward set 0 pushed inline (VK_KHR_push_descriptor); transmissive draws
+        // are always the merged opaque/double-sided forward pipeline.
+        pushForwardObjectDescriptors(cmd, resources, resources.vulkanPipelineLayout(dc.pipeline),
+                                     dc);
         ForwardPushConstants pc{};
         pc.selfShadowSlot = dc.selfShadowSlot;
         pc.materialIndex = dc.materialIndex;

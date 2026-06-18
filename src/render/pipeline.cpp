@@ -15,7 +15,7 @@ Pipeline::Pipeline(const Device& device, const PipelineConfig& config)
     : device_(&device.device()),
       pipelineCache_(&device.pipelineCache())
 {
-    createDescriptorSetLayout(config.bindings);
+    createDescriptorSetLayout(config.bindings, config.pushDescriptorSet0);
     if (!config.globalBindings.empty())
     {
         vk::DescriptorSetLayoutCreateInfo ci{
@@ -173,6 +173,10 @@ PipelineConfig Pipeline::forwardConfig()
         globalSampler(ForwardGlobalBinding::BrdfLut),
         globalSampler(ForwardGlobalBinding::SceneColour),
     };
+    // Set 0 is pushed inline per draw (VK_KHR_push_descriptor) — no per-object
+    // descriptor-set allocation. forwardBlendConfig inherits this (it copies
+    // forwardConfig), so blend draws push their set 0 too.
+    config.pushDescriptorSet0 = true;
     // Set 2 — bindless material textures + materials SSBO, indexed in-shader.
     config.bindlessSet = true;
     config.pushConstantRanges.emplace_back(vk::ShaderStageFlagBits::eFragment, 0,
@@ -223,6 +227,12 @@ PipelineConfig Pipeline::shadowConfig()
         {bindingIndex(ShadowBinding::SelfShadowDepthSampler), vk::DescriptorType::eSampler, 1,
          vk::ShaderStageFlagBits::eFragment},
     };
+    // Set 0 is pushed inline per draw (VK_KHR_push_descriptor) — no per-object
+    // descriptor-set allocation, mirroring the forward pass. The per-object
+    // ShadowUBO/skin/morph buffers and the shared self-shadow image+sampler are
+    // pushed by pushShadowObjectDescriptors. selfShadowFirst/Second inherit this
+    // (they copy shadowConfig).
+    config.pushDescriptorSet0 = true;
     // matrixIndex picks lightViewProj[] in the vertex stage. lightPosRange is
     // consumed by the fragment shader's point-shadow branch (linear distance
     // depth), so the push constant must be visible to both stages.
@@ -389,9 +399,13 @@ PipelineConfig Pipeline::brdfIntegrationConfig(vk::Format colourFormat)
 }
 
 void Pipeline::createDescriptorSetLayout(
-    const std::vector<vk::DescriptorSetLayoutBinding>& bindings)
+    const std::vector<vk::DescriptorSetLayoutBinding>& bindings, bool pushDescriptor)
 {
     vk::DescriptorSetLayoutCreateInfo ci{
+        // A push-descriptor set 0 is written inline with vkCmdPushDescriptorSetKHR
+        // at draw time; it is never allocated from a pool.
+        .flags = pushDescriptor ? vk::DescriptorSetLayoutCreateFlagBits::ePushDescriptorKHR
+                                : vk::DescriptorSetLayoutCreateFlags{},
         .bindingCount = static_cast<uint32_t>(bindings.size()),
         .pBindings = bindings.data(),
     };

@@ -81,12 +81,6 @@ public:
     // --- Mapped buffer sets (per-frame, for UBOs and SSBOs) ---
 
     using MappedBufferSet = fire_engine::MappedBufferSet;
-    using GeometryDescriptorInfo = fire_engine::GeometryDescriptorInfo;
-    using ObjectDescriptorRequest = fire_engine::ObjectDescriptorRequest;
-    using ObjectDescriptorResult = fire_engine::ObjectDescriptorResult;
-    using ShadowGeometryDescriptorInfo = fire_engine::ShadowGeometryDescriptorInfo;
-    using ShadowDescriptorRequest = fire_engine::ShadowDescriptorRequest;
-    using ShadowDescriptorResult = fire_engine::ShadowDescriptorResult;
 
     [[nodiscard]] MappedBufferSet createMappedUniformBuffers(std::size_t size);
     [[nodiscard]] MappedBufferSet createMappedStorageBuffer(std::size_t size,

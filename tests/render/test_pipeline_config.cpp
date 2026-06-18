@@ -89,6 +89,20 @@ TEST_CASE("PipelineConfig.ForwardConfigUsesDynamicCullMode", "[PipelineConfig]")
     CHECK(blend.blendEnable);
 }
 
+TEST_CASE("PipelineConfig.ForwardConfigPushesSet0", "[PipelineConfig]")
+{
+    // Per-object set 0 (UBOs + morph SSBO) is a push-descriptor layout — pushed
+    // inline per draw, never allocated. The forward pass (blend inherits it) and
+    // the shadow pass (self-shadow first/second inherit it) both push. Skybox
+    // keeps a regular allocated set-0 layout.
+    CHECK(Pipeline::forwardConfig().pushDescriptorSet0);
+    CHECK(Pipeline::forwardBlendConfig().pushDescriptorSet0);
+    CHECK(Pipeline::shadowConfig().pushDescriptorSet0);
+    CHECK(Pipeline::selfShadowFirstConfig().pushDescriptorSet0);
+    CHECK(Pipeline::selfShadowSecondConfig().pushDescriptorSet0);
+    CHECK_FALSE(Pipeline::skyboxConfig().pushDescriptorSet0);
+}
+
 TEST_CASE("PipelineConfig.ShadowConfigCullsFrontFaces", "[PipelineConfig]")
 {
     auto config = Pipeline::shadowConfig();

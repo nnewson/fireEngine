@@ -18,6 +18,11 @@ struct PipelineConfig
     // Set 0 — per-object vertex-stage bindings (frame / skin / morph UBOs + morph
     // SSBO), allocated per object. Material data is bindless (set 2).
     std::vector<vk::DescriptorSetLayoutBinding> bindings;
+    // When true, set 0 is created as a push-descriptor layout
+    // (VK_KHR_push_descriptor): its buffers are pushed inline at draw time
+    // rather than allocated as a per-object descriptor set. Forward pipelines
+    // only — such a layout cannot be used to allocate descriptor sets.
+    bool pushDescriptorSet0{false};
     // Set 1 — forward-pipeline globals (light UBO, shadow maps, IBL, scene
     // colour). Allocated once per frame, bound once per forward pass. Empty
     // for pipelines that don't need a second descriptor set (skybox,
@@ -186,7 +191,8 @@ public:
     [[nodiscard]] static PipelineConfig particleConfig(vk::Format colourFormat);
 
 private:
-    void createDescriptorSetLayout(const std::vector<vk::DescriptorSetLayoutBinding>& bindings);
+    void createDescriptorSetLayout(const std::vector<vk::DescriptorSetLayoutBinding>& bindings,
+                                   bool pushDescriptor);
     void createGraphicsPipeline(const PipelineConfig& config);
 
     [[nodiscard]] std::array<vk::PipelineShaderStageCreateInfo, 2>

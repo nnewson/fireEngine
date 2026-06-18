@@ -17,8 +17,6 @@ class Geometry;
 class Material;
 class Resources;
 class Skin;
-struct GeometryDescriptorInfo;
-struct ObjectDescriptorRequest;
 
 class Object
 {
@@ -72,19 +70,27 @@ private:
         std::array<MappedMemory, kMaxFramesInFlight> skinMapped{};
         std::array<MappedMemory, kMaxFramesInFlight> morphUboMapped{};
         std::array<MappedMemory, kMaxFramesInFlight> shadowMapped{};
-        std::array<DescriptorSetHandle, kMaxFramesInFlight> descSets{NullDescriptorSet,
-                                                                     NullDescriptorSet};
-        std::array<DescriptorSetHandle, kMaxFramesInFlight> shadowDescSets{NullDescriptorSet,
-                                                                           NullDescriptorSet};
+        // Forward set-0 buffer handles (pushed inline per draw — no descriptor
+        // set). Frame UBO is object-wide (Object::uniformBufs_); these are
+        // per-geometry.
+        std::array<BufferHandle, kMaxFramesInFlight> skinBufs{NullBuffer, NullBuffer};
+        std::array<BufferHandle, kMaxFramesInFlight> morphUboBufs{NullBuffer, NullBuffer};
+        BufferHandle morphSsbo{NullBuffer};
+        // Per-object ShadowUBO buffer handles (shadow set-0 binding 0, pushed
+        // inline per draw — no descriptor set). skin/morph/morphSsbo above are
+        // reused for the shadow draw.
+        std::array<BufferHandle, kMaxFramesInFlight> shadowBufs{NullBuffer, NullBuffer};
     };
 
     [[nodiscard]] Bounds3 computeShadowBounds(const std::vector<Mat4>& jointMatrices, bool hasSkin,
                                               const Mat4& world) const noexcept;
 
-    // load() phases: forward (set 0) descriptors return the per-geometry buffer
-    // handles in the request; shadow descriptors reuse those buffers.
-    [[nodiscard]] ObjectDescriptorRequest createForwardBindings(Resources& resources);
-    void createShadowBindings(Resources& resources, const ObjectDescriptorRequest& req);
+    // load() phases: createForwardBindings allocates the per-geometry vertex-stage
+    // buffers; createShadowBindings allocates the per-object ShadowUBO buffers.
+    // Both forward and shadow set 0 are pushed inline per draw (no descriptor
+    // sets); the shadow draw reuses the forward skin/morph/morphSsbo buffers.
+    void createForwardBindings(Resources& resources);
+    void createShadowBindings(Resources& resources);
 
     // render() phases: write the per-frame UBOs (shared/skin/material/morph),
     // write the shadow UBO, then assemble forward + shadow draw commands.
@@ -101,6 +107,8 @@ private:
     uint32_t objectId_{0};
 
     std::array<MappedMemory, kMaxFramesInFlight> uniformMapped_{};
+    // Shared frame UBO buffer handles (pushed as forward set-0 binding 0 per draw).
+    std::array<BufferHandle, kMaxFramesInFlight> uniformBufs_{NullBuffer, NullBuffer};
 
     std::vector<GeometryBindings> bindings_;
 };

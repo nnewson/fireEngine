@@ -19,6 +19,10 @@ constexpr std::array validationLayers{"VK_LAYER_KHRONOS_validation"};
 constexpr std::array deviceExtensions{
     VK_KHR_SWAPCHAIN_EXTENSION_NAME,
     "VK_KHR_portability_subset", // required on macOS/MoltenVK
+    // Per-object forward set 0 is pushed inline (vkCmdPushDescriptorSetKHR)
+    // instead of allocating a descriptor set per object/frame. Core in 1.4;
+    // enabled as an extension here. MoltenVK advertises it (pushDescriptor=true).
+    VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME,
 };
 
 Device::Device(const Window& window)

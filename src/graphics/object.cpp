@@ -122,29 +122,23 @@ void Object::load(Resources& resources)
         objectId_ = resources.allocateObjectId();
     }
 
-    const ObjectDescriptorRequest req = createForwardBindings(resources);
-    createShadowBindings(resources, req);
+    createForwardBindings(resources);
+    createShadowBindings(resources);
 }
 
-ObjectDescriptorRequest Object::createForwardBindings(Resources& resources)
+void Object::createForwardBindings(Resources& resources)
 {
-    // Create shared uniform buffers (model/view/proj)
+    // Shared per-object UBO (model/view/proj), pushed as forward set-0 binding 0
+    // per draw via VK_KHR_push_descriptor — no per-object descriptor set.
     auto uniformSet = resources.createMappedUniformBuffers(sizeof(UniformBufferObject));
     for (int i = 0; i < kMaxFramesInFlight; ++i)
     {
         uniformMapped_[i] = uniformSet.mapped[i];
-    }
-
-    Resources::ObjectDescriptorRequest req;
-    for (int i = 0; i < kMaxFramesInFlight; ++i)
-    {
-        req.uniformBufs[i] = uniformSet.buffers[i];
+        uniformBufs_[i] = uniformSet.buffers[i];
     }
 
     for (auto& binding : bindings_)
     {
-        GeometryDescriptorInfo geoInfo;
-
         // Material data (textures + scalars) is bindless now (global set 2);
         // registered lazily in buildDrawCommands. No per-object material UBO.
 
@@ -158,7 +152,7 @@ ObjectDescriptorRequest Object::createForwardBindings(Resources& resources)
         for (int i = 0; i < kMaxFramesInFlight; ++i)
         {
             binding.skinMapped[i] = skinSet.mapped[i];
-            geoInfo.skinBufs[i] = skinSet.buffers[i];
+            binding.skinBufs[i] = skinSet.buffers[i];
             std::memcpy(skinSet.mapped[i], &skinUbo, sizeof(skinUbo));
         }
 
@@ -168,58 +162,40 @@ ObjectDescriptorRequest Object::createForwardBindings(Resources& resources)
         for (int i = 0; i < kMaxFramesInFlight; ++i)
         {
             binding.morphUboMapped[i] = morphUboSet.mapped[i];
-            geoInfo.morphUboBufs[i] = morphUboSet.buffers[i];
+            binding.morphUboBufs[i] = morphUboSet.buffers[i];
             std::memcpy(morphUboSet.mapped[i], &morphUbo, sizeof(morphUbo));
         }
 
-        // Morph SSBO
+        // Morph SSBO (exactly sized; the push descriptor binds it WholeSize). A
+        // minimal dummy keeps the binding valid for geometry without morph
+        // targets.
         auto numTargets = binding.geometry->morphTargetCount();
         auto numVerts = binding.geometry->vertices().size();
-
         if (numTargets == 0 || numVerts == 0)
         {
-            // Minimal dummy SSBO
             float zeros[4] = {0.0f, 0.0f, 0.0f, 0.0f};
             auto ssboSet = resources.createMappedStorageBuffer(sizeof(zeros), zeros);
-            geoInfo.morphSsbo = ssboSet.buffers[0];
-            geoInfo.morphSsboSize = 0;
+            binding.morphSsbo = ssboSet.buffers[0];
         }
         else
         {
             std::vector<float> ssboData = packMorphTargetDeltas(*binding.geometry);
             const std::size_t ssboSize = ssboData.size() * sizeof(float);
             auto ssboSet = resources.createMappedStorageBuffer(ssboSize, ssboData.data());
-            geoInfo.morphSsbo = ssboSet.buffers[0];
-            geoInfo.morphSsboSize = ssboSize;
+            binding.morphSsbo = ssboSet.buffers[0];
         }
-
-        // Material textures are bindless now (registered in the global set-2 array
-        // at creation); the per-object set 0 carries only UBOs + the morph SSBO.
-
-        req.geometries.push_back(geoInfo);
     }
-
-    auto descResult = resources.descriptors().createObjectDescriptors(req);
-    for (std::size_t g = 0; g < bindings_.size(); ++g)
-    {
-        bindings_[g].descSets = descResult.descSets[g];
-    }
-
-    return req;
 }
 
-void Object::createShadowBindings(Resources& resources, const ObjectDescriptorRequest& req)
+void Object::createShadowBindings(Resources& resources)
 {
-    // Shadow descriptor sets reuse the forward skin / morph / morphSsbo
-    // buffers allocated above — no duplicate uploads — plus a new per-geometry
-    // ShadowUBO buffer carrying model + per-cascade lightViewProj[4] + hasSkin.
-    Resources::ShadowDescriptorRequest shadowReq;
-    shadowReq.geometries.reserve(bindings_.size());
-    for (std::size_t g = 0; g < bindings_.size(); ++g)
+    // Per-object ShadowUBO (model + per-cascade lightViewProj[4] + hasSkin),
+    // pushed as shadow set-0 binding 0 per draw. The skin / morph / morphSsbo
+    // buffers allocated by createForwardBindings are reused for the shadow draw —
+    // no duplicate uploads — and the shared self-shadow image+sampler (bindings
+    // 4/5) are pushed from Resources by the shadow pass.
+    for (auto& binding : bindings_)
     {
-        auto& binding = bindings_[g];
-        Resources::ShadowGeometryDescriptorInfo shadowInfo;
-
         ShadowUBO initialShadow{};
         initialShadow.model = Mat4::identity();
         for (Mat4& m : initialShadow.lightViewProj)
@@ -230,21 +206,9 @@ void Object::createShadowBindings(Resources& resources, const ObjectDescriptorRe
         for (int i = 0; i < kMaxFramesInFlight; ++i)
         {
             binding.shadowMapped[i] = shadowSet.mapped[i];
-            shadowInfo.shadowUboBufs[i] = shadowSet.buffers[i];
+            binding.shadowBufs[i] = shadowSet.buffers[i];
             std::memcpy(shadowSet.mapped[i], &initialShadow, sizeof(initialShadow));
-            shadowInfo.skinBufs[i] = req.geometries[g].skinBufs[i];
-            shadowInfo.morphUboBufs[i] = req.geometries[g].morphUboBufs[i];
         }
-        shadowInfo.morphSsbo = req.geometries[g].morphSsbo;
-        shadowInfo.morphSsboSize = req.geometries[g].morphSsboSize;
-
-        shadowReq.geometries.push_back(shadowInfo);
-    }
-
-    auto shadowDescResult = resources.descriptors().createShadowDescriptors(shadowReq);
-    for (std::size_t g = 0; g < bindings_.size(); ++g)
-    {
-        bindings_[g].shadowDescSets = shadowDescResult.descSets[g];
     }
 }
 
@@ -462,7 +426,12 @@ std::vector<DrawCommand> Object::buildDrawCommands(const FrameInfo& frame, const
         cmd.indexBuffer = binding.geometry->indexBuffer();
         cmd.indexCount = binding.geometry->indexCount();
         cmd.indexType = binding.geometry->indexType();
-        cmd.descriptorSet = binding.descSets[frame.currentFrame];
+        // Forward set 0 is pushed inline at draw time, not bound — carry the
+        // buffer handles instead of a descriptor set.
+        cmd.frameUbo = uniformBufs_[frame.currentFrame];
+        cmd.skinUbo = binding.skinBufs[frame.currentFrame];
+        cmd.morphUbo = binding.morphUboBufs[frame.currentFrame];
+        cmd.morphSsbo = binding.morphSsbo;
         cmd.pipeline = pipe;
         cmd.doubleSided = mat.doubleSided();
         cmd.sortDepth = depth;
@@ -481,7 +450,7 @@ std::vector<DrawCommand> Object::buildDrawCommands(const FrameInfo& frame, const
         commands.push_back(cmd);
 
         if (binding.geometry->castsShadow() && frame.shadowPipeline != NullPipeline &&
-            binding.shadowDescSets[frame.currentFrame] != NullDescriptorSet)
+            binding.shadowBufs[frame.currentFrame] != NullBuffer)
         {
             DrawCommand shadowCmd = cmd;
             const Geometry* shadowGeometry =
@@ -491,7 +460,9 @@ std::vector<DrawCommand> Object::buildDrawCommands(const FrameInfo& frame, const
             shadowCmd.indexCount = shadowGeometry->indexCount();
             shadowCmd.indexType = shadowGeometry->indexType();
             shadowCmd.pipeline = frame.shadowPipeline;
-            shadowCmd.descriptorSet = binding.shadowDescSets[frame.currentFrame];
+            // Shadow set 0 is pushed inline per draw: the ShadowUBO here plus the
+            // skin/morph/morphSsbo handles copied from the forward cmd above.
+            shadowCmd.shadowUbo = binding.shadowBufs[frame.currentFrame];
             shadowCmd.sortDepth = 0.0f;
             commands.push_back(shadowCmd);
         }

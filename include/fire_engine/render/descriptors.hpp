@@ -18,32 +18,12 @@ namespace fire_engine
 class Device;
 class Pipeline;
 class Resources;
+struct DrawCommand;
 
 struct MappedBufferSet
 {
     std::array<BufferHandle, kMaxFramesInFlight> buffers{NullBuffer, NullBuffer};
     std::array<MappedMemory, kMaxFramesInFlight> mapped{};
-};
-
-struct GeometryDescriptorInfo
-{
-    std::array<BufferHandle, kMaxFramesInFlight> skinBufs{NullBuffer, NullBuffer};
-    std::array<BufferHandle, kMaxFramesInFlight> morphUboBufs{NullBuffer, NullBuffer};
-    BufferHandle morphSsbo{NullBuffer};
-    std::size_t morphSsboSize{0};
-};
-
-struct ObjectDescriptorRequest
-{
-    std::array<BufferHandle, kMaxFramesInFlight> uniformBufs{NullBuffer, NullBuffer};
-    // Shadow maps, IBL textures, light UBO, and sceneColor live on the
-    // forward globals descriptor (set 1) — see GlobalDescriptorRequest above.
-    std::vector<GeometryDescriptorInfo> geometries;
-};
-
-struct ObjectDescriptorResult
-{
-    std::vector<std::array<DescriptorSetHandle, kMaxFramesInFlight>> descSets;
 };
 
 // Per-frame globals for the forward pipeline's set 1 — bound once at the
@@ -65,25 +45,6 @@ struct GlobalDescriptorRequest
     TextureHandle sceneColor{NullTexture};
 };
 
-struct ShadowGeometryDescriptorInfo
-{
-    std::array<BufferHandle, kMaxFramesInFlight> shadowUboBufs{NullBuffer, NullBuffer};
-    std::array<BufferHandle, kMaxFramesInFlight> skinBufs{NullBuffer, NullBuffer};
-    std::array<BufferHandle, kMaxFramesInFlight> morphUboBufs{NullBuffer, NullBuffer};
-    BufferHandle morphSsbo{NullBuffer};
-    std::size_t morphSsboSize{0};
-};
-
-struct ShadowDescriptorRequest
-{
-    std::vector<ShadowGeometryDescriptorInfo> geometries;
-};
-
-struct ShadowDescriptorResult
-{
-    std::vector<std::array<DescriptorSetHandle, kMaxFramesInFlight>> descSets;
-};
-
 class Descriptors
 {
 public:
@@ -94,11 +55,6 @@ public:
     Descriptors& operator=(const Descriptors&) = delete;
     Descriptors(Descriptors&&) noexcept = default;
     Descriptors& operator=(Descriptors&&) noexcept = default;
-
-    [[nodiscard]] ObjectDescriptorResult
-    createObjectDescriptors(const ObjectDescriptorRequest& req);
-    [[nodiscard]] ShadowDescriptorResult
-    createShadowDescriptors(const ShadowDescriptorRequest& req);
 
     // Allocates kMaxFramesInFlight descriptor sets for the forward
     // pipeline's set 1 layout and writes every global binding (light UBO,
@@ -113,16 +69,6 @@ public:
     // set allocation is untouched.
     void updateGlobalDescriptors(const std::array<DescriptorSetHandle, kMaxFramesInFlight>& sets,
                                  const GlobalDescriptorRequest& req);
-
-    void shadowDescriptorSetLayout(vk::DescriptorSetLayout layout) noexcept
-    {
-        shadowDescLayout_ = layout;
-    }
-
-    [[nodiscard]] vk::DescriptorSetLayout shadowDescriptorSetLayout() const noexcept
-    {
-        return shadowDescLayout_;
-    }
 
     [[nodiscard]] std::array<DescriptorSetHandle, kMaxFramesInFlight>
     createSingleUboDescriptors(vk::DescriptorSetLayout layout, const MappedBufferSet& ubo,
@@ -222,7 +168,22 @@ private:
     const Resources* resources_{nullptr};
     std::vector<DescriptorPoolEntry> descriptorPools_{};
     std::vector<vk::DescriptorSet> descriptorSetTable_{};
-    vk::DescriptorSetLayout shadowDescLayout_{};
 };
+
+// Pushes a forward draw's per-object set 0 (frame/skin/morph UBOs + morph SSBO)
+// inline via VK_KHR_push_descriptor — no allocated descriptor set. Shared by the
+// forward pass and the transmission pass; the buffer handles come off the
+// DrawCommand. `layout` is the draw's pipeline layout (set 0 is a push layout).
+void pushForwardObjectDescriptors(vk::CommandBuffer cmd, const Resources& resources,
+                                  vk::PipelineLayout layout, const DrawCommand& dc);
+
+// Pushes a shadow draw's per-object set 0 inline via VK_KHR_push_descriptor — no
+// allocated descriptor set. Bindings 0..3 are the per-object ShadowUBO + the
+// skin/morph UBOs + morph SSBO carried on the DrawCommand; bindings 4/5 are the
+// shared self-shadow first-depth image + sampler, read straight from Resources
+// (global, identical for every shadow draw). `layout` is the shadow pipeline
+// layout (set 0 is a push layout).
+void pushShadowObjectDescriptors(vk::CommandBuffer cmd, const Resources& resources,
+                                 vk::PipelineLayout layout, const DrawCommand& dc);
 
 } // namespace fire_engine
