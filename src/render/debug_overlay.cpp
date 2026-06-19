@@ -80,7 +80,8 @@ void DebugOverlay::buildUi(const FrameStats& stats, RenderTunables& tunables)
     }
 
     static constexpr std::array<const char*, kProfilePassCount> kPassNames{
-        "Shadow", "Depth", "SSAO", "Forward", "Transmission", "TAA", "Particles", "Bloom", "Post"};
+        "Shadow", "Depth",     "SSAO",  "Forward", "Transmission",
+        "TAA",    "Particles", "Debug", "Bloom",   "Post"};
 
     ImGui::Begin("Fire Engine - Debug");
 
@@ -162,6 +163,14 @@ void DebugOverlay::buildUi(const FrameStats& stats, RenderTunables& tunables)
         // screen-space "hair"). Lower = guard more aggressively.
         ImGui::SliderFloat("Contact edge", &tunables.contactEdgeThreshold, 0.02f, 0.5f, "%.3f");
         ImGui::EndDisabled();
+    }
+
+    if (ImGui::CollapsingHeader("Physics debug"))
+    {
+        ImGui::Checkbox("Broadphase AABBs", &tunables.debugDrawAabbs);
+        ImGui::Checkbox("Collider shapes", &tunables.debugDrawColliders);
+        ImGui::Checkbox("Contacts", &tunables.debugDrawContacts);
+        ImGui::Checkbox("Depth-tested (off = x-ray)", &tunables.debugDepthTest);
     }
 
     if (ImGui::CollapsingHeader("Particles"))

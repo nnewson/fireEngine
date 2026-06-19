@@ -112,6 +112,11 @@ struct ApplicationArgs
             args.debug.overlayVisible = true;
             continue;
         }
+        if (arg == "--debug-physics")
+        {
+            args.debug.physicsDebug = true;
+            continue;
+        }
         if (positionalCount < 2)
         {
             positional[positionalCount++] = arg;

@@ -332,6 +332,13 @@ struct SsaoUBO
 
 static_assert(sizeof(SsaoUBO) % 16 == 0, "SsaoUBO must be std140 16-aligned");
 
+// Push constant for the physics debug-line pipeline: the jitter-free
+// view-projection that transforms world-space line endpoints to clip space.
+struct DebugLinePushConstants
+{
+    Mat4 viewProj;
+};
+
 // Push constant for the bilateral AO blur. texelSize steps the taps; projC/projD
 // (= proj[2][2] / proj[3][2]) linearise depth so the edge-stop weight uses
 // view-space Z. Mirrors the Push block in shaders/ssao_blur.frag.

@@ -39,6 +39,9 @@ struct PipelineConfig
     std::vector<vk::Format> colourFormats;
     vk::Format depthFormat{vk::Format::eUndefined};
     bool useVertexInput{true};
+    // Primitive topology. Defaults to triangle list; the debug-line pipeline sets
+    // eLineList. Reuses the standard Vertex input description either way.
+    vk::PrimitiveTopology topology{vk::PrimitiveTopology::eTriangleList};
     bool depthTestEnable{true};
     bool depthWrite{true};
     vk::CompareOp depthCompare{vk::CompareOp::eLess};
@@ -53,6 +56,10 @@ struct PipelineConfig
     // the static cullMode above is ignored — the renderer sets cull mode per
     // draw. Lets opaque + double-sided geometry share one forward pipeline.
     bool dynamicCullMode{false};
+    // When true the pipeline declares VK_DYNAMIC_STATE_DEPTH_TEST_ENABLE (EDS,
+    // core 1.3) and the renderer toggles depth testing per draw — lets the debug
+    // line pass switch between x-ray (test off) and depth-tested at runtime.
+    bool dynamicDepthTest{false};
     bool depthBiasEnable{false};
     float depthBiasConstant{0.0f};
     float depthBiasSlope{0.0f};
@@ -208,6 +215,13 @@ public:
     // depth test/write off (occlusion + soft fade are done in-shader against
     // sampled scene depth).
     [[nodiscard]] static PipelineConfig particleConfig(vk::Format colourFormat);
+
+    // Factory for the physics debug-line pipeline. Line-list topology over the
+    // standard Vertex input (reuses position_ + colour_), drawn into the HDR
+    // target + shared D32 depth. Depth test is a dynamic state (x-ray vs
+    // depth-tested), depth-write off, no blend. Push constant: a view-projection
+    // matrix. colourFormat is the HDR format.
+    [[nodiscard]] static PipelineConfig debugLineConfig(vk::Format colourFormat);
 
 private:
     void createDescriptorSetLayout(const std::vector<vk::DescriptorSetLayoutBinding>& bindings,

@@ -163,6 +163,7 @@ Renderer::Renderer(const Window& window, std::string environmentPath, RendererDe
       particles_(device_, swapchain_, resources_, postProcessing_.offscreenColourTarget()),
       taa_(device_, swapchain_, resources_, postProcessing_.offscreenColourTarget()),
       ssao_(device_, swapchain_, resources_),
+      debugDraw_(device_, swapchain_, resources_),
       softBody_(device_, resources_),
       profiler_(device_),
       overlay_(device_, swapchain_, window, debug.overlayVisible),
@@ -173,6 +174,9 @@ Renderer::Renderer(const Window& window, std::string environmentPath, RendererDe
     tunables_.taaEnabled = debug.taa;
     tunables_.debugView = debug.view;
     tunables_.noShadows = debug.noShadows;
+    tunables_.debugDrawAabbs = debug.physicsDebug;
+    tunables_.debugDrawColliders = debug.physicsDebug;
+    tunables_.debugDrawContacts = debug.physicsDebug;
 
     swapchain_.createDepthResources(device_);
     transmission_.recreate(postProcessing_.offscreenColourTarget(), taa_.velocityTarget());
@@ -669,6 +673,16 @@ void Renderer::recordSsaoPass(vk::CommandBuffer cmd)
     ssao_.recordPass(cmd, currentFrame_);
 }
 
+void Renderer::recordDebugDrawPass(vk::CommandBuffer cmd)
+{
+    if (!physicsDebugWanted())
+    {
+        return;
+    }
+    debugDraw_.record(cmd, postProcessing_.offscreenColourTarget(), currentViewProj_, physicsDebug_,
+                      tunables_, currentFrame_);
+}
+
 void Renderer::recordForwardPass(vk::CommandBuffer cmd, const DrawBuckets& buckets)
 {
     beginForwardRendering(cmd);
@@ -851,6 +865,10 @@ void Renderer::drawFrame(Window& display, SceneGraph& scene, Vec3 cameraPosition
     profiler_.begin(cmd, currentFrame_, ProfilePass::Particles);
     recordParticlePass(cmd);
     profiler_.end(cmd, currentFrame_, ProfilePass::Particles);
+
+    profiler_.begin(cmd, currentFrame_, ProfilePass::DebugDraw);
+    recordDebugDrawPass(cmd);
+    profiler_.end(cmd, currentFrame_, ProfilePass::DebugDraw);
 
     recordPostProcessing(cmd, *imageIndex);
     // Post-process leaves the swap image in ColorAttachmentOptimal; the overlay

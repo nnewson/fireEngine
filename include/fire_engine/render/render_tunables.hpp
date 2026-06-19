@@ -37,6 +37,13 @@ struct RenderTunables
     DebugView debugView{DebugView::None};
     bool noShadows{false};
 
+    // Physics debug draw (wireframes into the scene). debugDepthTest off = x-ray
+    // (drawn over geometry); on = occluded by the scene.
+    bool debugDrawAabbs{false};
+    bool debugDrawColliders{false};
+    bool debugDrawContacts{false};
+    bool debugDepthTest{false};
+
     // Lighting / post.
     float bloomStrength{kBloomStrength};
     float diffuseIbl{kDiffuseIblStrength};

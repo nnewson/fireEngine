@@ -83,6 +83,9 @@ public:
     using MappedBufferSet = fire_engine::MappedBufferSet;
 
     [[nodiscard]] MappedBufferSet createMappedUniformBuffers(std::size_t size);
+    // Per-frame, persistently-mapped host-visible vertex buffers for dynamic
+    // CPU-built geometry (e.g. the physics debug-line endpoints).
+    [[nodiscard]] MappedBufferSet createMappedVertexBuffers(std::size_t size);
     [[nodiscard]] MappedBufferSet createMappedStorageBuffer(std::size_t size,
                                                             const void* initialData);
     // Single persistent host-visible storage buffer with initial contents. Used

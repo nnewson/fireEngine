@@ -396,6 +396,28 @@ PipelineConfig Pipeline::particleConfig(vk::Format colourFormat)
     return config;
 }
 
+PipelineConfig Pipeline::debugLineConfig(vk::Format colourFormat)
+{
+    PipelineConfig config;
+    config.vertShaderPath = "debug_line.vert.spv";
+    config.fragShaderPath = "debug_line.frag.spv";
+    config.useVertexInput = true; // reuses the Vertex input description (pos + colour)
+    config.topology = vk::PrimitiveTopology::eLineList;
+    // Draw into the HDR target + shared depth. Depth test is dynamic (x-ray vs
+    // depth-tested); start disabled (x-ray). Never write depth.
+    config.colourFormats = {colourFormat};
+    config.depthFormat = vk::Format::eD32Sfloat;
+    config.depthTestEnable = false;
+    config.dynamicDepthTest = true;
+    config.depthWrite = false;
+    config.depthCompare = vk::CompareOp::eLessOrEqual;
+    config.cullMode = vk::CullModeFlagBits::eNone;
+    // Push constant: the view-projection matrix (vertex stage).
+    config.pushConstantRanges.emplace_back(vk::ShaderStageFlagBits::eVertex, 0,
+                                           static_cast<uint32_t>(sizeof(DebugLinePushConstants)));
+    return config;
+}
+
 PipelineConfig Pipeline::skyboxConfig()
 {
     PipelineConfig config;
@@ -545,7 +567,7 @@ void Pipeline::createGraphicsPipeline(const PipelineConfig& config)
     }
 
     vk::PipelineInputAssemblyStateCreateInfo inputAsm{
-        .topology = vk::PrimitiveTopology::eTriangleList,
+        .topology = config.topology,
     };
 
     vk::PipelineViewportStateCreateInfo vpState{
@@ -561,6 +583,13 @@ void Pipeline::createGraphicsPipeline(const PipelineConfig& config)
     if (config.dynamicCullMode)
     {
         dynamicStates.push_back(vk::DynamicState::eCullMode);
+    }
+    // Depth-test enable is core-1.3 dynamic state; the debug-line pass toggles it
+    // per draw for x-ray vs depth-tested wireframes (config.depthTestEnable is the
+    // initial value, overridden by the renderer).
+    if (config.dynamicDepthTest)
+    {
+        dynamicStates.push_back(vk::DynamicState::eDepthTestEnable);
     }
     vk::PipelineDynamicStateCreateInfo dynamicState{
         .dynamicStateCount = static_cast<uint32_t>(dynamicStates.size()),

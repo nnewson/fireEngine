@@ -12,6 +12,7 @@
 #include <fire_engine/math/mat4.hpp>
 #include <fire_engine/math/vec3.hpp>
 #include <fire_engine/render/constants.hpp>
+#include <fire_engine/render/debug_draw.hpp>
 #include <fire_engine/render/debug_overlay.hpp>
 #include <fire_engine/render/device.hpp>
 #include <fire_engine/render/frame.hpp>
@@ -50,6 +51,10 @@ struct RendererDebug
     // Start with the ImGui debug overlay visible (--overlay). Off by default so
     // normal runs and screenshots are unaffected; toggled at runtime with F1.
     bool overlayVisible{false};
+    // Start with physics debug wireframes on (--debug-physics): broadphase AABBs,
+    // collider shapes, and contacts. Off by default; toggled per-category in the
+    // overlay's "Physics debug" panel.
+    bool physicsDebug{false};
 };
 
 class Renderer
@@ -117,6 +122,20 @@ public:
     void setClothColliders(std::span<const ClothCollider> colliders)
     {
         clothColliders_.assign(colliders.begin(), colliders.end());
+    }
+
+    // Physics debug-draw data, pushed by the app each frame (only when wanted).
+    void setPhysicsDebug(PhysicsDebugData data)
+    {
+        physicsDebug_ = std::move(data);
+    }
+
+    // True when any physics debug-draw category is enabled — the app uses this to
+    // skip gathering debug data when nothing will be drawn.
+    [[nodiscard]] bool physicsDebugWanted() const noexcept
+    {
+        return tunables_.debugDrawAabbs || tunables_.debugDrawColliders ||
+               tunables_.debugDrawContacts;
     }
 
     [[nodiscard]] Resources& resources() noexcept
@@ -194,6 +213,8 @@ private:
     // SSAO + contact-shadow pass (after the prepass): writes the AO target the
     // forward shader samples to modulate ambient / sun visibility.
     void recordSsaoPass(vk::CommandBuffer cmd);
+    // Physics debug wireframes into the HDR target, after particles / before post.
+    void recordDebugDrawPass(vk::CommandBuffer cmd);
     void recordForwardPass(vk::CommandBuffer cmd, const DrawBuckets& buckets);
     void recordTransmissionPass(vk::CommandBuffer cmd, const DrawBuckets& buckets);
     void recordParticlePass(vk::CommandBuffer cmd);
@@ -234,12 +255,14 @@ private:
     ParticleSystem particles_;
     Taa taa_;
     Ssao ssao_;
+    DebugDraw debugDraw_;
     SoftBodySystem softBody_;
     GpuProfiler profiler_;
     DebugOverlay overlay_;
     FrameStats stats_{};
     RenderTunables tunables_{};
     std::vector<ClothCollider> clothColliders_;
+    PhysicsDebugData physicsDebug_;
     PipelineHandle forwardOpaqueHandle_{NullPipeline};
     PipelineHandle forwardBlendHandle_{NullPipeline};
     PipelineHandle skyboxPipelineHandle_{NullPipeline};

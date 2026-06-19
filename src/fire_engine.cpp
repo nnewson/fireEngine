@@ -312,9 +312,16 @@ void FireEngine::mainLoop()
         scene_.applyPhysics(physics_);
 
         // World colliders for the cloth solver: physics bodies + the ground plane.
-        auto clothColliders = physics_.gatherColliders();
-        clothColliders.push_back(makePlaneCollider(Vec3{0.0f, 1.0f, 0.0f}, 0.0f));
-        renderer_->setClothColliders(clothColliders);
+        auto colliders = physics_.gatherColliders();
+        // Physics debug draw uses the authored shapes (pre-plane); only gather the
+        // rest of the debug data when a debug-draw category is enabled.
+        if (renderer_->physicsDebugWanted())
+        {
+            renderer_->setPhysicsDebug(PhysicsDebugData{physics_.debugColliderBounds(), colliders,
+                                                        physics_.debugContacts()});
+        }
+        colliders.push_back(makePlaneCollider(Vec3{0.0f, 1.0f, 0.0f}, 0.0f));
+        renderer_->setClothColliders(colliders);
 
         renderer_->drawFrame(*window_, scene_, camera_->worldPosition(), camera_->worldTarget(),
                              dt);

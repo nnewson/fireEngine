@@ -122,6 +122,8 @@ void PhysicsWorld::step(float fixedDt)
     broadPhase_.update();
 
     auto frameContacts = contacts();
+    // Snapshot for debug draw before applyResponses advances bodies to the TOI.
+    captureDebugContacts(frameContacts);
     if (applyResponses(frameContacts))
     {
         resetResolvedColliders();
@@ -129,6 +131,42 @@ void PhysicsWorld::step(float fixedDt)
     }
 
     capturePreviousPositions();
+}
+
+void PhysicsWorld::captureDebugContacts(const std::vector<SolverContact>& contacts)
+{
+    debugContacts_.clear();
+    debugContacts_.reserve(contacts.size());
+    for (const SolverContact& contact : contacts)
+    {
+        // Approximate the contact point as the moving body advanced to the time
+        // of impact (no real manifold yet — see DebugContact). Fall back to the
+        // target body's position when only the target moved.
+        Vec3 point{};
+        if (contact.moving != nullptr)
+        {
+            point = contact.moving->previousPosition + frameDelta(*contact.moving) * contact.toi;
+        }
+        else if (contact.target != nullptr)
+        {
+            point = contact.target->transform.position();
+        }
+        debugContacts_.push_back(DebugContact{point, contact.normal});
+    }
+}
+
+std::vector<AABB> PhysicsWorld::debugColliderBounds() const
+{
+    std::vector<AABB> bounds;
+    bounds.reserve(colliders_.size());
+    for (const ColliderEntry& entry : colliders_)
+    {
+        if (entry.active)
+        {
+            bounds.push_back(entry.collider.worldBounds());
+        }
+    }
+    return bounds;
 }
 
 bool PhysicsWorld::valid(PhysicsBodyHandle handle) const noexcept

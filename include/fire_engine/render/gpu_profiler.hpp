@@ -26,6 +26,7 @@ enum class ProfilePass : uint32_t
     Transmission,
     Taa,
     Particles,
+    DebugDraw,
     Bloom,
     Post,
     Count

@@ -1132,6 +1132,13 @@ Resources::MappedBufferSet Resources::createMappedUniformBuffers(std::size_t siz
     return createMappedHostVisibleBuffers(size, vk::BufferUsageFlagBits::eUniformBuffer);
 }
 
+Resources::MappedBufferSet Resources::createMappedVertexBuffers(std::size_t size)
+{
+    // Per-frame, persistently-mapped host-visible vertex buffers for dynamic
+    // CPU-built geometry (the physics debug-line endpoints, rewritten each frame).
+    return createMappedHostVisibleBuffers(size, vk::BufferUsageFlagBits::eVertexBuffer);
+}
+
 Resources::MappedBufferSet Resources::createMappedStorageBuffer(std::size_t size,
                                                                 const void* initialData)
 {

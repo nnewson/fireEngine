@@ -48,6 +48,7 @@ add_library(fireengine SHARED
     src/physics/physics_body.cpp
     src/physics/physics_world.cpp
     src/render/compute_pipeline.cpp
+    src/render/debug_draw.cpp
     src/render/debug_overlay.cpp
     src/render/device.cpp
     src/render/descriptors.cpp
@@ -128,6 +129,8 @@ set(SHADER_SOURCES
     shaders/depth_prepass.frag
     shaders/ssao.frag
     shaders/ssao_blur.frag
+    shaders/debug_line.vert
+    shaders/debug_line.frag
     shaders/postprocess.vert
     shaders/postprocess.frag
     shaders/taa.frag
@@ -180,6 +183,7 @@ add_executable(test_fire_engine
     tests/collision/test_narrow_phase.cpp
     tests/physics/test_physics_world.cpp
     tests/physics/test_physics_handle.cpp
+    tests/physics/test_physics_determinism.cpp
     tests/math/test_mat4.cpp
     tests/math/test_quaternion.cpp
     tests/math/test_vec2.cpp
