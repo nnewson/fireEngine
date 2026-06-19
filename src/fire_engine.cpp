@@ -34,6 +34,8 @@ FireEngine::FireEngine()
 
 FireEngine::~FireEngine()
 {
+    renderer_.reset();
+    window_.reset();
     System::destroy();
 }
 

@@ -136,22 +136,14 @@ void PhysicsWorld::step(float fixedDt)
 void PhysicsWorld::captureDebugContacts(const std::vector<SolverContact>& contacts)
 {
     debugContacts_.clear();
-    debugContacts_.reserve(contacts.size());
     for (const SolverContact& contact : contacts)
     {
-        // Approximate the contact point as the moving body advanced to the time
-        // of impact (no real manifold yet — see DebugContact). Fall back to the
-        // target body's position when only the target moved.
-        Vec3 point{};
-        if (contact.moving != nullptr)
+        // Real manifold points + normal (target -> moving) from the narrowphase.
+        for (int i = 0; i < contact.manifold.count; ++i)
         {
-            point = contact.moving->previousPosition + frameDelta(*contact.moving) * contact.toi;
+            debugContacts_.push_back(
+                DebugContact{contact.manifold.points[i].position, contact.manifold.normal});
         }
-        else if (contact.target != nullptr)
-        {
-            point = contact.target->transform.position();
-        }
-        debugContacts_.push_back(DebugContact{point, contact.normal});
     }
 }
 
@@ -210,6 +202,39 @@ namespace
 
 } // namespace
 
+WorldShape PhysicsWorld::worldShape(const ColliderEntry& entry) const
+{
+    // Identity when the owner is missing (shouldn't happen for active colliders).
+    const BodyEntry* owner = findBody(entry.body);
+    const Mat4 world = owner != nullptr ? owner->transform.world() : Mat4::identity();
+    const Quaternion rot = owner != nullptr ? owner->transform.rotation() : Quaternion::identity();
+    const Vec3 s = matrixScale(world);
+    const float uniform = std::max({s.x(), s.y(), s.z()});
+
+    if (const auto* sphere = std::get_if<SphereShape>(&entry.shape))
+    {
+        return WorldSphere{transformPoint(world, sphere->center), sphere->radius * uniform};
+    }
+    if (const auto* box = std::get_if<BoxShape>(&entry.shape))
+    {
+        return WorldBox{transformPoint(world, box->center),
+                        Vec3{box->halfExtents.x() * s.x(), box->halfExtents.y() * s.y(),
+                             box->halfExtents.z() * s.z()},
+                        rot};
+    }
+    if (const auto* capsule = std::get_if<CapsuleShape>(&entry.shape))
+    {
+        const Vec3 c = capsule->center;
+        const Vec3 p0 = transformPoint(world, Vec3{c.x(), c.y() - capsule->halfHeight, c.z()});
+        const Vec3 p1 = transformPoint(world, Vec3{c.x(), c.y() + capsule->halfHeight, c.z()});
+        return WorldCapsule{p0, p1, capsule->radius * uniform};
+    }
+    const auto& aabb = std::get<AabbShape>(entry.shape);
+    const Vec3 he = aabb.bounds.extent() * 0.5f;
+    return WorldBox{transformPoint(world, aabb.bounds.center()),
+                    Vec3{he.x() * s.x(), he.y() * s.y(), he.z() * s.z()}, rot};
+}
+
 std::vector<ClothCollider> PhysicsWorld::gatherColliders() const
 {
     std::vector<ClothCollider> out;
@@ -217,48 +242,29 @@ std::vector<ClothCollider> PhysicsWorld::gatherColliders() const
 
     for (const ColliderEntry& entry : colliders_)
     {
-        if (!entry.active)
+        if (!entry.active || findBody(entry.body) == nullptr)
         {
             continue;
         }
-        const BodyEntry* owner = findBody(entry.body);
-        if (owner == nullptr)
-        {
-            continue;
-        }
-
-        const Mat4 world = owner->transform.world();
-        const Quaternion rot = owner->transform.rotation();
-        const Vec3 s = matrixScale(world);
-        const float uniform = std::max({s.x(), s.y(), s.z()});
-
-        if (const auto* sphere = std::get_if<SphereShape>(&entry.shape))
-        {
-            out.push_back(makeSphereCollider(transformPoint(world, sphere->center),
-                                             sphere->radius * uniform));
-        }
-        else if (const auto* box = std::get_if<BoxShape>(&entry.shape))
-        {
-            out.push_back(
-                makeBoxCollider(transformPoint(world, box->center),
-                                Vec3{box->halfExtents.x() * s.x(), box->halfExtents.y() * s.y(),
-                                     box->halfExtents.z() * s.z()},
-                                rot));
-        }
-        else if (const auto* capsule = std::get_if<CapsuleShape>(&entry.shape))
-        {
-            const Vec3 c = capsule->center;
-            const Vec3 p0 = transformPoint(world, Vec3{c.x(), c.y() - capsule->halfHeight, c.z()});
-            const Vec3 p1 = transformPoint(world, Vec3{c.x(), c.y() + capsule->halfHeight, c.z()});
-            out.push_back(makeCapsuleCollider(p0, p1, capsule->radius * uniform));
-        }
-        else if (const auto* aabb = std::get_if<AabbShape>(&entry.shape))
-        {
-            const Vec3 he = aabb->bounds.extent() * 0.5f;
-            out.push_back(makeBoxCollider(transformPoint(world, aabb->bounds.center()),
-                                          Vec3{he.x() * s.x(), he.y() * s.y(), he.z() * s.z()},
-                                          rot));
-        }
+        // Reuse the shared world-space composition, then encode as a ClothCollider.
+        std::visit(
+            [&out](const auto& shape)
+            {
+                using T = std::decay_t<decltype(shape)>;
+                if constexpr (std::is_same_v<T, WorldSphere>)
+                {
+                    out.push_back(makeSphereCollider(shape.center, shape.radius));
+                }
+                else if constexpr (std::is_same_v<T, WorldBox>)
+                {
+                    out.push_back(makeBoxCollider(shape.center, shape.halfExtents, shape.orientation));
+                }
+                else // WorldCapsule
+                {
+                    out.push_back(makeCapsuleCollider(shape.p0, shape.p1, shape.radius));
+                }
+            },
+            worldShape(entry));
     }
 
     return out;
@@ -528,58 +534,87 @@ std::optional<PhysicsWorld::SolverContact> PhysicsWorld::contactForPair(const Co
         return std::nullopt;
     }
 
-    auto contact = narrowPhase_.sweptAabb(candidate->movingCollider->collider,
-                                          candidate->targetCollider->collider);
-    if (!contact.has_value())
+    // Shape-specific manifold in world space. The normal points target -> moving,
+    // i.e. the direction to push the moving body out of penetration.
+    const WorldShape movingShape = worldShape(*candidate->movingCollider);
+    const WorldShape targetShape = worldShape(*candidate->targetCollider);
+    auto manifold = narrowPhase_.collide(movingShape, targetShape);
+    if (!manifold.has_value() || manifold->count == 0)
     {
         return std::nullopt;
     }
 
-    const Vec3 relativeDelta = frameDelta(*candidate->moving) - frameDelta(*candidate->target);
-    if (Vec3::dotProduct(relativeDelta, contact->normal) >= 0.0f)
-    {
-        return std::nullopt;
-    }
+    return SolverContact{*manifold,         candidate->moving,         candidate->target,
+                         candidate->movingCollider, candidate->targetCollider};
+}
 
-    return SolverContact{contact->toi,      contact->normal,           candidate->moving,
-                         candidate->target, candidate->movingCollider, candidate->targetCollider};
+float PhysicsWorld::pushWeight(const BodyEntry* body) noexcept
+{
+    if (body == nullptr)
+    {
+        return 0.0f;
+    }
+    switch (body->body.type())
+    {
+    case PhysicsBodyType::Dynamic:
+        return body->body.inverseMass();
+    case PhysicsBodyType::Kinematic:
+        return 1.0f; // scene-driven, but still slides out of penetration
+    case PhysicsBodyType::Static:
+    default:
+        return 0.0f;
+    }
 }
 
 bool PhysicsWorld::applyResponses(std::vector<SolverContact>& contacts)
 {
-    std::ranges::sort(contacts, [](const SolverContact& lhs, const SolverContact& rhs)
-                      { return lhs.toi < rhs.toi; });
-
+    // Discrete, penetration-based response (P1): push the bodies apart along the
+    // manifold normal split by push weight, then reflect each dynamic body's
+    // velocity. No iterations / friction / restitution-by-impulse — that's the
+    // P2 sequential-impulse solver. Pairs are processed in the deterministic
+    // broadphase order (no sort), so the determinism harness still holds.
     bool resolved = false;
     for (const SolverContact& contact : contacts)
     {
-        const bool movingHadFrameDelta =
-            contact.moving != nullptr && movedThisFrame(*contact.moving);
-        if (movingHadFrameDelta)
+        const Vec3 n = contact.manifold.normal; // target -> moving
+        const float pen = contact.manifold.maxPenetration();
+        if (pen <= 0.0f)
         {
-            if (contact.moving->body.type() == PhysicsBodyType::Kinematic)
-            {
-                slideFrameMovement(*contact.moving, contact.toi, contact.normal);
-            }
-            else
-            {
-                moveToFrameTime(*contact.moving, contact.toi);
-            }
-            resolved = true;
+            continue;
         }
 
-        if (contact.target != nullptr &&
-            contact.target->body.type() == PhysicsBodyType::Kinematic &&
-            movedThisFrame(*contact.target))
+        const float wMoving = pushWeight(contact.moving);
+        const float wTarget = pushWeight(contact.target);
+        const float wSum = wMoving + wTarget;
+        if (wSum <= 0.0f)
         {
-            slideFrameMovement(*contact.target, contact.toi, contact.normal * -1.0f);
-            resolved = true;
+            continue; // both immovable
         }
 
-        if (movingHadFrameDelta && contact.moving->body.type() == PhysicsBodyType::Dynamic)
+        const float correction = pen / wSum;
+        if (wMoving > 0.0f && contact.moving != nullptr)
         {
-            contact.moving->body.reflectLinearVelocity(contact.normal);
+            contact.moving->transform.position(contact.moving->transform.position() +
+                                               n * (correction * wMoving));
+            contact.moving->transform.update(Mat4::identity());
         }
+        if (wTarget > 0.0f && contact.target != nullptr)
+        {
+            contact.target->transform.position(contact.target->transform.position() -
+                                               n * (correction * wTarget));
+            contact.target->transform.update(Mat4::identity());
+        }
+
+        // Reflect the approaching velocity of each dynamic body about the normal.
+        if (contact.moving != nullptr && contact.moving->body.type() == PhysicsBodyType::Dynamic)
+        {
+            contact.moving->body.reflectLinearVelocity(n);
+        }
+        if (contact.target != nullptr && contact.target->body.type() == PhysicsBodyType::Dynamic)
+        {
+            contact.target->body.reflectLinearVelocity(n * -1.0f);
+        }
+        resolved = true;
     }
 
     return resolved;
@@ -589,37 +624,6 @@ bool PhysicsWorld::movable(const BodyEntry& body) noexcept
 {
     return body.body.type() == PhysicsBodyType::Dynamic ||
            body.body.type() == PhysicsBodyType::Kinematic;
-}
-
-bool PhysicsWorld::movedThisFrame(const BodyEntry& body) noexcept
-{
-    return frameDelta(body).magnitudeSquared() > float_epsilon * float_epsilon;
-}
-
-Vec3 PhysicsWorld::frameDelta(const BodyEntry& body) noexcept
-{
-    return body.transform.position() - body.previousPosition;
-}
-
-void PhysicsWorld::moveToFrameTime(BodyEntry& body, float toi) noexcept
-{
-    body.transform.position(body.previousPosition + frameDelta(body) * toi);
-    body.transform.update(Mat4::identity());
-}
-
-void PhysicsWorld::slideFrameMovement(BodyEntry& body, float toi, Vec3 normal) noexcept
-{
-    const Vec3 delta = frameDelta(body);
-    const float blocked = Vec3::dotProduct(delta, normal);
-    if (blocked >= 0.0f)
-    {
-        return;
-    }
-
-    const Vec3 tangentDelta = delta - normal * blocked;
-    const Vec3 resolvedDelta = delta * toi + tangentDelta * (1.0f - toi);
-    body.transform.position(body.previousPosition + resolvedDelta);
-    body.transform.update(Mat4::identity());
 }
 
 } // namespace fire_engine

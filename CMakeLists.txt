@@ -23,6 +23,7 @@ include(cmake/fireengine_imgui.cmake)
 add_library(fireengine SHARED
     src/animation/animation.cpp
     src/collision/collider.cpp
+    src/collision/geometry.cpp
     src/collision/sweep_and_prune_broad_phase.cpp
     src/collision/narrow_phase.cpp
     src/core/gltf_loader.cpp
@@ -179,6 +180,7 @@ enable_testing()
 
 add_executable(test_fire_engine
     tests/collision/test_aabb.cpp
+    tests/collision/test_geometry.cpp
     tests/collision/test_sweep_and_prune_broad_phase.cpp
     tests/collision/test_narrow_phase.cpp
     tests/physics/test_physics_world.cpp

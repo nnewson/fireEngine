@@ -131,8 +131,7 @@ private:
 
     struct SolverContact
     {
-        float toi{0.0f};
-        Vec3 normal{};
+        ContactManifold manifold; // normal points target -> moving; push moving out
         BodyEntry* moving{nullptr};
         BodyEntry* target{nullptr};
         ColliderEntry* movingCollider{nullptr};
@@ -174,6 +173,11 @@ private:
     [[nodiscard]]
     AABB localBounds(const ColliderShape& shape) const noexcept;
 
+    // Compose a collider's authored shape with its body's world transform into a
+    // neutral world-space shape for the narrowphase (and gatherColliders).
+    [[nodiscard]]
+    WorldShape worldShape(const ColliderEntry& entry) const;
+
     void updateCollider(ColliderEntry& collider);
     void resetCollider(ColliderEntry& collider);
     void updateColliders();
@@ -199,14 +203,10 @@ private:
     [[nodiscard]]
     static bool movable(const BodyEntry& body) noexcept;
 
+    // Positional-correction weight: 0 for static (immovable), the inverse mass for
+    // dynamic, and a nominal 1 for kinematic (so it slides out of penetration).
     [[nodiscard]]
-    static bool movedThisFrame(const BodyEntry& body) noexcept;
-
-    [[nodiscard]]
-    static Vec3 frameDelta(const BodyEntry& body) noexcept;
-
-    void moveToFrameTime(BodyEntry& body, float toi) noexcept;
-    void slideFrameMovement(BodyEntry& body, float toi, Vec3 normal) noexcept;
+    static float pushWeight(const BodyEntry* body) noexcept;
 };
 
 } // namespace fire_engine

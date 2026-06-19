@@ -151,6 +151,26 @@ public:
         return *this;
     }
 
+    // Conjugate ({-x,-y,-z,w}). For a unit quaternion this is also its inverse —
+    // the rotation that undoes this one (used to map world vectors into a body's
+    // local frame).
+    [[nodiscard]]
+    constexpr Quaternion conjugate() const noexcept
+    {
+        return {-x_, -y_, -z_, w_};
+    }
+
+    // Rotate a vector by this (unit) quaternion:
+    //   v' = v + 2w·(u×v) + 2·u×(u×v),  u = (x,y,z).
+    // Cheaper and matrix-free vs building toMat4(); equivalent for unit quats.
+    [[nodiscard]]
+    constexpr Vec3 rotate(const Vec3& v) const noexcept
+    {
+        const Vec3 u{x_, y_, z_};
+        const Vec3 t = Vec3::crossProduct(u, v) * 2.0f;
+        return v + t * w_ + Vec3::crossProduct(u, t);
+    }
+
     // Shortest-arc rotation that maps `from` onto `to`. Inputs are assumed
     // to be unit-length; the formula degenerates if they are not. Handles
     // the antiparallel case by rotating 180° about an axis orthogonal to

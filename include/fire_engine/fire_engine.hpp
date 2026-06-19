@@ -24,6 +24,11 @@ public:
     explicit FireEngine();
     ~FireEngine();
 
+    FireEngine(const FireEngine&) = delete;
+    FireEngine& operator=(const FireEngine&) = delete;
+    FireEngine(FireEngine&&) noexcept = delete;
+    FireEngine& operator=(FireEngine&&) noexcept = delete;
+
     void run(size_t width, size_t height, std::string_view app_name,
              std::string_view scene_path = "", std::string_view skybox_path = "",
              bool addFloor = false, bool addParticles = false, bool addCloth = false,

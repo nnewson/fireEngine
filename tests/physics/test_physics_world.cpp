@@ -115,10 +115,18 @@ TEST_CASE("PhysicsWorld.DynamicBodyIntegratesVelocityOnStep", "[PhysicsWorld]")
     CHECK(transform->position() == Vec3(1.0f, 0.0f, -0.5f));
 }
 
-TEST_CASE("PhysicsWorld.DynamicBodyReflectsAndStopsAtStaticContact", "[PhysicsWorld]")
+TEST_CASE("PhysicsWorld.DynamicBodyReflectsAndPushesOutOfStaticContact", "[PhysicsWorld]")
 {
+    // P1 discrete response: the body integrates, the shape-specific narrowphase
+    // reports the penetration, then it is pushed out along the contact normal and
+    // its velocity is reflected (default restitution 1). Unit colliders span the
+    // body origin + (0.5,0.5,0.5); the dynamic box at x=1.8 moving +x integrates to
+    // 2.8 and overlaps the static box at x=3 by 0.8, so it is pushed back to exactly
+    // touching (body x=2.0) and the +x velocity flips to -x. (Fast movers that would
+    // tunnel in one step are a deferred CCD/speculative-contact concern.)
     PhysicsWorld physics;
-    auto dynamic = createBox(physics, PhysicsBodyType::Dynamic, {}, {4.0f, 0.0f, 0.0f});
+    auto dynamic =
+        createBox(physics, PhysicsBodyType::Dynamic, {1.8f, 0.0f, 0.0f}, {1.0f, 0.0f, 0.0f});
     createBox(physics, PhysicsBodyType::Static, {3.0f, 0.0f, 0.0f});
 
     physics.step(1.0f);
@@ -126,26 +134,31 @@ TEST_CASE("PhysicsWorld.DynamicBodyReflectsAndStopsAtStaticContact", "[PhysicsWo
     auto transform = physics.bodyTransform(dynamic);
     REQUIRE(transform.has_value());
     REQUIRE(physics.body(dynamic) != nullptr);
-    CHECK(transform->position() == Vec3(2.0f, 0.0f, 0.0f));
-    CHECK(physics.body(dynamic)->linearVelocity() == Vec3(-4.0f, 0.0f, 0.0f));
+    CHECK(transform->position().approxEqual(Vec3(2.0f, 0.0f, 0.0f), 1e-5f));
+    CHECK(physics.body(dynamic)->linearVelocity().approxEqual(Vec3(-1.0f, 0.0f, 0.0f), 1e-5f));
 }
 
-TEST_CASE("PhysicsWorld.KinematicBodySlidesAtStaticContact", "[PhysicsWorld]")
+TEST_CASE("PhysicsWorld.KinematicBodyPushesOutOfStaticContact", "[PhysicsWorld]")
 {
+    // A kinematic body does not integrate velocity, but it still resolves out of
+    // any penetration along the minimum-overlap axis (pushWeight 1). Placed at
+    // x=2.7 it overlaps the static box (x=3) by 0.8 in x while only touching in the
+    // perpendicular axes, so it is pushed back to body x=2.0; the perpendicular
+    // z=0.2 offset is preserved — the discrete analogue of the old "slide".
     PhysicsWorld physics;
     auto kinematic = createBox(physics, PhysicsBodyType::Kinematic, {});
     createBox(physics, PhysicsBodyType::Static, {3.0f, 0.0f, 0.0f});
 
     auto transform = physics.bodyTransform(kinematic);
     REQUIRE(transform.has_value());
-    transform->position({4.0f, 1.0f, 0.0f});
+    transform->position({2.7f, 0.0f, 0.2f});
     physics.setBodyTransform(kinematic, transform.value());
 
     physics.step(1.0f);
 
     auto resolved = physics.bodyTransform(kinematic);
     REQUIRE(resolved.has_value());
-    CHECK(resolved->position() == Vec3(2.0f, 1.0f, 0.0f));
+    CHECK(resolved->position().approxEqual(Vec3(2.0f, 0.0f, 0.2f), 1e-5f));
 }
 
 TEST_CASE("SceneGraphPhysicsSync.KinematicNodesPushAndDynamicNodesPullTransforms",
@@ -197,13 +210,15 @@ TEST_CASE("SceneGraphPhysicsSync.KinematicResolutionPullsBackToNode", "[SceneGra
 
     createBox(physics, PhysicsBodyType::Static, {3.0f, 0.0f, 0.0f});
 
-    paddle->transform().position({4.0f, 1.0f, 0.0f});
+    paddle->transform().position({2.7f, 0.0f, 0.2f});
     scene.update(InputState{});
     scene.submitPhysics(physics);
     physics.step(1.0f);
     scene.applyPhysics(physics);
 
-    CHECK(paddle->transform().position() == Vec3(2.0f, 1.0f, 0.0f));
+    // Kinematic penetration push-out pulls back onto the node (see
+    // KinematicBodyPushesOutOfStaticContact): x corrected to 2.0, z preserved.
+    CHECK(paddle->transform().position().approxEqual(Vec3(2.0f, 0.0f, 0.2f), 1e-5f));
 }
 
 TEST_CASE("PhysicsWorld.GatherCollidersComposesWorldSphere", "[PhysicsWorld]")

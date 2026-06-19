@@ -373,3 +373,23 @@ TEST_CASE("QuaternionFromVectors.ResultIsUnitMagnitude", "[QuaternionFromVectors
     Quaternion q = Quaternion::fromVectors(from, to);
     CHECK(q.magnitude() == Catch::Approx(1.0f).margin(kEps));
 }
+
+TEST_CASE("Quaternion.ConjugateAndRotate", "[Quaternion]")
+{
+    // 90° about Z maps +x → +y.
+    const float h = std::sqrt(0.5f);
+    const Quaternion qz{0.0f, 0.0f, h, h};
+    CHECK(qz.rotate(Vec3{1.0f, 0.0f, 0.0f}).approxEqual(Vec3{0.0f, 1.0f, 0.0f}, 1e-5f));
+
+    // Conjugate is {-x,-y,-z,w} and undoes the rotation for a unit quaternion.
+    const Quaternion c = qz.conjugate();
+    CHECK(c.x() == Catch::Approx(0.0f).margin(1e-6f));
+    CHECK(c.z() == Catch::Approx(-h).margin(1e-6f));
+    CHECK(c.w() == Catch::Approx(h).margin(1e-6f));
+    CHECK(c.rotate(qz.rotate(Vec3{1.0f, 2.0f, 3.0f})).approxEqual(Vec3{1.0f, 2.0f, 3.0f}, 1e-5f));
+
+    // rotate() agrees with the toMat4() path.
+    const Vec3 v{0.3f, -0.7f, 1.1f};
+    const Vec4 m = qz.toMat4() * Vec4{v.x(), v.y(), v.z(), 0.0f};
+    CHECK(qz.rotate(v).approxEqual(Vec3{m.x(), m.y(), m.z()}, 1e-5f));
+}

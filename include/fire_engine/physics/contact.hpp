@@ -1,34 +1,18 @@
 #pragma once
 
-#include <vector>
-
 #include <fire_engine/math/vec3.hpp>
-#include <fire_engine/physics/physics_handle.hpp>
 
 namespace fire_engine
 {
 
-struct Contact
-{
-    PhysicsBodyHandle firstBody;
-    PhysicsBodyHandle secondBody;
-    PhysicsColliderHandle firstCollider;
-    PhysicsColliderHandle secondCollider;
-    float toi{0.0f};
-    Vec3 normal{};
-};
+// (The earlier handle-based Contact / ContactManifold stubs were never populated
+// and have been removed — the real geometry manifold lives in
+// collision/contact_manifold.hpp. This header now carries only DebugContact.)
 
-struct ContactManifold
-{
-    PhysicsBodyHandle firstBody;
-    PhysicsBodyHandle secondBody;
-    std::vector<Contact> contacts;
-};
-
-// Lightweight per-step contact record for debug visualisation only. The current
-// swept-AABB narrowphase has no real contact manifold, so `point` is an
-// approximation (the moving body's position advanced to the time of impact); it
-// sharpens once P1 lands shape-specific manifolds. Vulkan-free.
+// Lightweight per-step contact record for debug visualisation only. Now sourced
+// from the shape-specific `ContactManifold` (one `DebugContact` per manifold
+// point, with the manifold normal); captured before `applyResponses` advances
+// bodies. Read-only — it does not affect the simulation. Vulkan-free.
 struct DebugContact
 {
     Vec3 point{};
