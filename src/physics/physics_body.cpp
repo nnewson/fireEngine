@@ -24,10 +24,4 @@ void PhysicsBody::mass(float mass) noexcept
     inverseMass_ = type_ == PhysicsBodyType::Dynamic && mass_ > 0.0f ? 1.0f / mass_ : 0.0f;
 }
 
-void PhysicsBody::reflectLinearVelocity(Vec3 normal) noexcept
-{
-    const float restitution = std::max(material_.restitution, 0.0f);
-    linearVelocity_ -= normal * ((1.0f + restitution) * Vec3::dotProduct(linearVelocity_, normal));
-}
-
 } // namespace fire_engine

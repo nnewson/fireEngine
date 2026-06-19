@@ -118,7 +118,7 @@ TEST_CASE("Determinism.GoldenHash", "[Determinism]")
     // Behaviour tripwire: this hash captures the exact end-state of buildScene
     // after kSteps. It changes whenever the solver math changes — update it
     // INTENTIONALLY (and review why) when that happens, never reflexively.
-    constexpr std::uint64_t kGoldenHash = 0x0d76ce4c4dc7463cULL;
+    constexpr std::uint64_t kGoldenHash = 0x8b75e76a93b3b357ULL;
 
     PhysicsWorld world;
     const auto handles = buildScene(world);

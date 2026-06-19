@@ -1,12 +1,16 @@
 #include <fire_engine/physics/physics_world.hpp>
 
 #include <algorithm>
+#include <cmath>
+#include <cstdint>
 #include <type_traits>
+#include <utility>
 #include <variant>
 
 #include <fire_engine/math/constants.hpp>
 #include <fire_engine/math/mat4.hpp>
 #include <fire_engine/math/vec4.hpp>
+#include <fire_engine/physics/physics_constants.hpp>
 
 namespace fire_engine
 {
@@ -104,6 +108,8 @@ void PhysicsWorld::step(float fixedDt)
         return;
     }
 
+    // Integrate velocity only (gravity); positions advance after the velocity
+    // solve so contact impulses are applied before the bodies move.
     for (BodyEntry& entry : bodies_)
     {
         if (!entry.active || entry.body.type() != PhysicsBodyType::Dynamic)
@@ -114,17 +120,16 @@ void PhysicsWorld::step(float fixedDt)
         Vec3 velocity = entry.body.linearVelocity();
         velocity += gravity_ * entry.body.gravityScale() * fixedDt;
         entry.body.linearVelocity(velocity);
-        entry.transform.position(entry.transform.position() + velocity * fixedDt);
-        entry.transform.update(Mat4::identity());
     }
 
     updateColliders();
     broadPhase_.update();
 
     auto frameContacts = contacts();
-    // Snapshot for debug draw before applyResponses advances bodies to the TOI.
+    // Snapshot for debug draw before the solver advances bodies.
     captureDebugContacts(frameContacts);
-    if (applyResponses(frameContacts))
+
+    if (solveAndIntegrate(frameContacts, fixedDt))
     {
         resetResolvedColliders();
         broadPhase_.rebuild();
@@ -257,7 +262,8 @@ std::vector<ClothCollider> PhysicsWorld::gatherColliders() const
                 }
                 else if constexpr (std::is_same_v<T, WorldBox>)
                 {
-                    out.push_back(makeBoxCollider(shape.center, shape.halfExtents, shape.orientation));
+                    out.push_back(
+                        makeBoxCollider(shape.center, shape.halfExtents, shape.orientation));
                 }
                 else // WorldCapsule
                 {
@@ -544,20 +550,21 @@ std::optional<PhysicsWorld::SolverContact> PhysicsWorld::contactForPair(const Co
         return std::nullopt;
     }
 
-    return SolverContact{*manifold,         candidate->moving,         candidate->target,
-                         candidate->movingCollider, candidate->targetCollider};
+    return SolverContact{*manifold, candidate->moving, candidate->target, candidate->movingCollider,
+                         candidate->targetCollider};
 }
 
-float PhysicsWorld::pushWeight(const BodyEntry* body) noexcept
+float PhysicsWorld::velocityInvMass(const BodyEntry& body) noexcept
 {
-    if (body == nullptr)
-    {
-        return 0.0f;
-    }
-    switch (body->body.type())
+    return body.body.type() == PhysicsBodyType::Dynamic ? body.body.inverseMass() : 0.0f;
+}
+
+float PhysicsWorld::positionWeight(const BodyEntry& body) noexcept
+{
+    switch (body.body.type())
     {
     case PhysicsBodyType::Dynamic:
-        return body->body.inverseMass();
+        return body.body.inverseMass();
     case PhysicsBodyType::Kinematic:
         return 1.0f; // scene-driven, but still slides out of penetration
     case PhysicsBodyType::Static:
@@ -566,58 +573,110 @@ float PhysicsWorld::pushWeight(const BodyEntry* body) noexcept
     }
 }
 
-bool PhysicsWorld::applyResponses(std::vector<SolverContact>& contacts)
+namespace
 {
-    // Discrete, penetration-based response (P1): push the bodies apart along the
-    // manifold normal split by push weight, then reflect each dynamic body's
-    // velocity. No iterations / friction / restitution-by-impulse — that's the
-    // P2 sequential-impulse solver. Pairs are processed in the deterministic
-    // broadphase order (no sort), so the determinism harness still holds.
-    bool resolved = false;
+
+[[nodiscard]] std::uint64_t pairKey(PhysicsColliderHandle a, PhysicsColliderHandle b) noexcept
+{
+    std::uint32_t lo = a.value();
+    std::uint32_t hi = b.value();
+    if (lo > hi)
+    {
+        std::swap(lo, hi);
+    }
+    return (static_cast<std::uint64_t>(hi) << 32) | static_cast<std::uint64_t>(lo);
+}
+
+} // namespace
+
+bool PhysicsWorld::solveAndIntegrate(const std::vector<SolverContact>& contacts, float dt)
+{
+    // Flat solver-body view, indexed 1:1 with bodies_ (insertion order → stable
+    // and deterministic). Static/Kinematic carry invMass 0 so contact impulses
+    // never shove a scene-driven body; positionWeight still lets Kinematic slide
+    // out of penetration in the split-impulse pass.
+    std::vector<SolverBody> solverBodies(bodies_.size());
+    for (std::size_t i = 0; i < bodies_.size(); ++i)
+    {
+        const BodyEntry& entry = bodies_[i];
+        solverBodies[i].velocity = entry.body.linearVelocity();
+        solverBodies[i].position = entry.transform.position();
+        solverBodies[i].invMass = entry.active ? velocityInvMass(entry) : 0.0f;
+        solverBodies[i].positionWeight = entry.active ? positionWeight(entry) : 0.0f;
+    }
+
+    const BodyEntry* base = bodies_.data();
+    std::vector<SolverContactInput> inputs;
+    inputs.reserve(contacts.size());
     for (const SolverContact& contact : contacts)
     {
-        const Vec3 n = contact.manifold.normal; // target -> moving
-        const float pen = contact.manifold.maxPenetration();
-        if (pen <= 0.0f)
+        SolverContactInput in;
+        in.bodyA = static_cast<int>(contact.moving - base);
+        in.bodyB = static_cast<int>(contact.target - base);
+        in.normal = contact.manifold.normal;
+        in.pointCount = contact.manifold.count;
+        for (int p = 0; p < contact.manifold.count; ++p)
+        {
+            const auto pi = static_cast<std::size_t>(p);
+            in.points[pi] = contact.manifold.points[pi].position;
+            in.penetration[pi] = contact.manifold.points[pi].penetration;
+        }
+        const PhysicsMaterial ma = contact.moving->body.material();
+        const PhysicsMaterial mb = contact.target->body.material();
+        in.restitution = std::max(ma.restitution, mb.restitution);
+        in.friction = std::sqrt(std::max(ma.friction, 0.0f) * std::max(mb.friction, 0.0f));
+        in.key = pairKey(contact.movingCollider->handle, contact.targetCollider->handle);
+        inputs.push_back(in);
+    }
+
+    // Velocity (impulse) solve.
+    if (!inputs.empty())
+    {
+        solver_.prepare(solverBodies, inputs, dt);
+        solver_.warmStart(solverBodies);
+        for (int i = 0; i < kVelocityIterations; ++i)
+        {
+            solver_.solveVelocity(solverBodies);
+        }
+    }
+
+    // Write solved velocities back and integrate positions with them (Dynamic).
+    for (std::size_t i = 0; i < bodies_.size(); ++i)
+    {
+        BodyEntry& entry = bodies_[i];
+        if (!entry.active || entry.body.type() != PhysicsBodyType::Dynamic)
         {
             continue;
         }
-
-        const float wMoving = pushWeight(contact.moving);
-        const float wTarget = pushWeight(contact.target);
-        const float wSum = wMoving + wTarget;
-        if (wSum <= 0.0f)
-        {
-            continue; // both immovable
-        }
-
-        const float correction = pen / wSum;
-        if (wMoving > 0.0f && contact.moving != nullptr)
-        {
-            contact.moving->transform.position(contact.moving->transform.position() +
-                                               n * (correction * wMoving));
-            contact.moving->transform.update(Mat4::identity());
-        }
-        if (wTarget > 0.0f && contact.target != nullptr)
-        {
-            contact.target->transform.position(contact.target->transform.position() -
-                                               n * (correction * wTarget));
-            contact.target->transform.update(Mat4::identity());
-        }
-
-        // Reflect the approaching velocity of each dynamic body about the normal.
-        if (contact.moving != nullptr && contact.moving->body.type() == PhysicsBodyType::Dynamic)
-        {
-            contact.moving->body.reflectLinearVelocity(n);
-        }
-        if (contact.target != nullptr && contact.target->body.type() == PhysicsBodyType::Dynamic)
-        {
-            contact.target->body.reflectLinearVelocity(n * -1.0f);
-        }
-        resolved = true;
+        entry.body.linearVelocity(solverBodies[i].velocity);
+        solverBodies[i].position += solverBodies[i].velocity * dt;
     }
 
-    return resolved;
+    // Split-impulse positional correction (may also nudge Kinematic bodies).
+    if (!inputs.empty())
+    {
+        solver_.solvePosition(solverBodies);
+        solver_.store();
+    }
+
+    // Write final positions back (everything but Static).
+    bool moved = false;
+    for (std::size_t i = 0; i < bodies_.size(); ++i)
+    {
+        BodyEntry& entry = bodies_[i];
+        if (!entry.active || entry.body.type() == PhysicsBodyType::Static)
+        {
+            continue;
+        }
+        if (entry.transform.position() != solverBodies[i].position)
+        {
+            entry.transform.position(solverBodies[i].position);
+            entry.transform.update(Mat4::identity());
+            moved = true;
+        }
+    }
+
+    return moved;
 }
 
 bool PhysicsWorld::movable(const BodyEntry& body) noexcept

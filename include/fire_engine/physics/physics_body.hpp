@@ -90,8 +90,6 @@ public:
         material_ = material;
     }
 
-    void reflectLinearVelocity(Vec3 normal) noexcept;
-
 private:
     PhysicsBodyType type_{PhysicsBodyType::Static};
     Vec3 linearVelocity_{};

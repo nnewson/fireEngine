@@ -13,6 +13,7 @@
 #include <fire_engine/graphics/cloth.hpp>
 #include <fire_engine/physics/collider_shape.hpp>
 #include <fire_engine/physics/contact.hpp>
+#include <fire_engine/physics/contact_solver.hpp>
 #include <fire_engine/physics/physics_body.hpp>
 #include <fire_engine/physics/physics_handle.hpp>
 #include <fire_engine/scene/transform.hpp>
@@ -151,6 +152,7 @@ private:
     std::unordered_map<const Collider*, std::size_t> colliderIndexByPointer_;
     SweepAndPruneBroadPhase broadPhase_;
     NarrowPhase narrowPhase_;
+    ContactSolver solver_;
     Vec3 gravity_{0.0f, -9.81f, 0.0f};
     // Contacts from the most recent step(), kept for debug visualisation only.
     std::vector<DebugContact> debugContacts_;
@@ -187,8 +189,8 @@ private:
     [[nodiscard]]
     std::vector<SolverContact> contacts();
 
-    // Rebuild debugContacts_ from this step's solver contacts (approximate point
-    // at time-of-impact + normal), before applyResponses mutates positions.
+    // Rebuild debugContacts_ from this step's solver contacts (real manifold
+    // points + normal), before the solver mutates positions.
     void captureDebugContacts(const std::vector<SolverContact>& contacts);
 
     [[nodiscard]]
@@ -197,16 +199,25 @@ private:
     [[nodiscard]]
     std::optional<ContactCandidate> contactCandidateForPair(const CollisionPair& pair);
 
-    [[nodiscard]]
-    bool applyResponses(std::vector<SolverContact>& contacts);
+    // Integrate constrained velocities + positions for this step: build the solver
+    // views from the frame's contacts, run the sequential-impulse velocity solve,
+    // integrate positions, then the split-impulse penetration correction, writing
+    // the results back onto the bodies. Returns true if any body moved.
+    bool solveAndIntegrate(const std::vector<SolverContact>& contacts, float dt);
 
     [[nodiscard]]
     static bool movable(const BodyEntry& body) noexcept;
 
-    // Positional-correction weight: 0 for static (immovable), the inverse mass for
-    // dynamic, and a nominal 1 for kinematic (so it slides out of penetration).
+    // Velocity-pass inverse mass: the body's inverse mass for Dynamic, 0 for
+    // Static/Kinematic (contact impulses never shove a scene-driven body).
     [[nodiscard]]
-    static float pushWeight(const BodyEntry* body) noexcept;
+    static float velocityInvMass(const BodyEntry& body) noexcept;
+
+    // Split-impulse positional-correction weight: 0 for static (immovable), the
+    // inverse mass for dynamic, a nominal 1 for kinematic (so it slides out of
+    // penetration).
+    [[nodiscard]]
+    static float positionWeight(const BodyEntry& body) noexcept;
 };
 
 } // namespace fire_engine
