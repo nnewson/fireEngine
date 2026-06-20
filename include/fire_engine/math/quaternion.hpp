@@ -171,6 +171,43 @@ public:
         return v + t * w_ + Vec3::crossProduct(u, t);
     }
 
+    // Hamilton product (composition of rotations: apply `rhs`, then `*this`).
+    [[nodiscard]]
+    constexpr Quaternion operator*(const Quaternion& rhs) const noexcept
+    {
+        return {
+            w_ * rhs.x_ + x_ * rhs.w_ + y_ * rhs.z_ - z_ * rhs.y_,
+            w_ * rhs.y_ - x_ * rhs.z_ + y_ * rhs.w_ + z_ * rhs.x_,
+            w_ * rhs.z_ + x_ * rhs.y_ - y_ * rhs.x_ + z_ * rhs.w_,
+            w_ * rhs.w_ - x_ * rhs.x_ - y_ * rhs.y_ - z_ * rhs.z_,
+        };
+    }
+
+    // Advance this orientation by an angular velocity `omega` (rad/s) over `dt`
+    // using the exponential map: build the incremental rotation Δq from the
+    // rotation vector ω·dt, then return normalise(Δq · this). Stable for large
+    // steps and unconditionally re-normalised.
+    [[nodiscard]]
+    Quaternion integrate(const Vec3& omega, float dt) const noexcept
+    {
+        const Vec3 rotation = omega * dt; // rotation vector this step
+        const float angle = rotation.magnitude();
+        Quaternion delta;
+        if (angle < float_epsilon)
+        {
+            // Small angle: Δq ≈ {0.5·ω·dt, 1}, normalised below.
+            delta = Quaternion{rotation.x() * 0.5f, rotation.y() * 0.5f, rotation.z() * 0.5f, 1.0f};
+        }
+        else
+        {
+            const float half = angle * 0.5f;
+            const float s = std::sin(half) / angle; // sin(half) applied to axis = rotation/angle
+            delta =
+                Quaternion{rotation.x() * s, rotation.y() * s, rotation.z() * s, std::cos(half)};
+        }
+        return Quaternion::normalise(delta * *this);
+    }
+
     // Shortest-arc rotation that maps `from` onto `to`. Inputs are assumed
     // to be unit-length; the formula degenerates if they are not. Handles
     // the antiparallel case by rotating 180° about an axis orthogonal to

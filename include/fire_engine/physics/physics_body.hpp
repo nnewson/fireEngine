@@ -70,6 +70,20 @@ public:
         return inverseMass_;
     }
 
+    // Inverse inertia in the body's local (principal) frame — diagonal, since all
+    // current shapes have a diagonal inertia tensor. Zero components mean infinite
+    // inertia (no angular response): the default, and what Static/Kinematic keep.
+    // Set by PhysicsWorld::createCollider once the shape + mass are known.
+    [[nodiscard]]
+    Vec3 inverseInertiaLocal() const noexcept
+    {
+        return inverseInertiaLocal_;
+    }
+    void inverseInertiaLocal(Vec3 inverseInertiaLocal) noexcept
+    {
+        inverseInertiaLocal_ = inverseInertiaLocal;
+    }
+
     [[nodiscard]]
     float gravityScale() const noexcept
     {
@@ -96,6 +110,7 @@ private:
     Vec3 angularVelocity_{};
     float mass_{1.0f};
     float inverseMass_{0.0f};
+    Vec3 inverseInertiaLocal_{};
     float gravityScale_{1.0f};
     PhysicsMaterial material_{};
 };

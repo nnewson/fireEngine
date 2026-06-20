@@ -2,6 +2,7 @@
 #include <fire_engine/scene/scene_graph.hpp>
 
 #include <array>
+#include <cmath>
 #include <cstddef>
 
 #include <catch2/catch_approx.hpp>
@@ -19,6 +20,8 @@ using fire_engine::PhysicsBodyType;
 using fire_engine::PhysicsColliderHandle;
 using fire_engine::PhysicsMaterial;
 using fire_engine::PhysicsWorld;
+using fire_engine::pi;
+using fire_engine::Quaternion;
 using fire_engine::SceneGraph;
 using fire_engine::SphereShape;
 using fire_engine::Vec3;
@@ -268,6 +271,103 @@ TEST_CASE("PhysicsWorld.StackOfBoxesSettlesAndStaysStill", "[PhysicsWorld]")
     CHECK(y0 == Catch::Approx(1.0f).margin(0.1f));
     CHECK(y1 > y0);
     CHECK(y2 > y1);
+}
+
+TEST_CASE("PhysicsWorld.BoxDroppedFlatRestsFlatAndStill", "[PhysicsWorld]")
+{
+    // A box dropped flat onto the floor has symmetric contacts → no net torque, so
+    // it settles flat (orientation ≈ identity) and comes fully to rest. This guards
+    // resting stability with the angular solver active.
+    PhysicsWorld physics;
+
+    PhysicsBodyDesc floor;
+    floor.type = PhysicsBodyType::Static;
+    floor.material = PhysicsMaterial{.restitution = 0.0f, .friction = 0.5f};
+    const auto floorBody = physics.createBody(floor);
+    [[maybe_unused]] const auto floorCollider = physics.createCollider(
+        floorBody, ColliderDesc{.shape = BoxShape{.halfExtents = {10.0f, 0.5f, 10.0f}}});
+
+    PhysicsBodyDesc box;
+    box.type = PhysicsBodyType::Dynamic;
+    box.gravityScale = 1.0f;
+    box.position = {0.0f, 2.0f, 0.0f}; // bottom at 1.5, floor top 0.5 → falls 1.0
+    box.material = PhysicsMaterial{.restitution = 0.0f, .friction = 0.5f};
+    const auto boxBody = physics.createBody(box);
+    [[maybe_unused]] const auto boxCollider = physics.createCollider(
+        boxBody, ColliderDesc{.shape = BoxShape{.halfExtents = {0.5f, 0.5f, 0.5f}}});
+
+    for (int i = 0; i < 240; ++i)
+    {
+        physics.step(1.0f / 60.0f);
+    }
+
+    const auto t = physics.bodyTransform(boxBody);
+    REQUIRE(t.has_value());
+    CHECK(t->position().y() == Catch::Approx(1.0f).margin(0.05f)); // resting on the floor
+    CHECK(t->rotation().rotate(Vec3{0.0f, 1.0f, 0.0f}).approxEqual(Vec3{0.0f, 1.0f, 0.0f}, 0.02f));
+    CHECK(physics.body(boxBody)->angularVelocity().approxEqual(Vec3{0.0f, 0.0f, 0.0f}, 0.05f));
+    CHECK(physics.body(boxBody)->linearVelocity().approxEqual(Vec3{0.0f, 0.0f, 0.0f}, 0.05f));
+}
+
+TEST_CASE("PhysicsWorld.TallTiltedBoxTopplesOntoItsSide", "[PhysicsWorld]")
+{
+    // A tall box tilted past its balance angle topples onto its long side: its local
+    // +y axis ends up horizontal, and it comes to rest. The headline P3 behaviour.
+    PhysicsWorld physics;
+
+    PhysicsBodyDesc floor;
+    floor.type = PhysicsBodyType::Static;
+    floor.material = PhysicsMaterial{.restitution = 0.0f, .friction = 0.6f};
+    const auto floorBody = physics.createBody(floor);
+    [[maybe_unused]] const auto floorCollider = physics.createCollider(
+        floorBody, ColliderDesc{.shape = BoxShape{.halfExtents = {10.0f, 0.5f, 10.0f}}});
+
+    // Tall box (half-extents 0.3 × 1.0 × 0.3): topple angle ≈ atan(0.3/1.0) ≈ 16.7°;
+    // a 30° tilt is safely past it.
+    const float angle = 30.0f * pi / 180.0f;
+    PhysicsBodyDesc box;
+    box.type = PhysicsBodyType::Dynamic;
+    box.gravityScale = 1.0f;
+    box.position = {0.0f, 2.0f, 0.0f};
+    box.rotation = Quaternion{0.0f, 0.0f, std::sin(angle * 0.5f), std::cos(angle * 0.5f)};
+    box.material = PhysicsMaterial{.restitution = 0.0f, .friction = 0.6f};
+    const auto boxBody = physics.createBody(box);
+    [[maybe_unused]] const auto boxCollider = physics.createCollider(
+        boxBody, ColliderDesc{.shape = BoxShape{.halfExtents = {0.3f, 1.0f, 0.3f}}});
+
+    for (int i = 0; i < 360; ++i)
+    {
+        physics.step(1.0f / 60.0f);
+    }
+
+    const auto t = physics.bodyTransform(boxBody);
+    REQUIRE(t.has_value());
+    const Vec3 up = t->rotation().rotate(Vec3{0.0f, 1.0f, 0.0f});
+    CHECK(std::abs(up.y()) < 0.2f); // local +y is now ~horizontal → toppled onto its side
+    CHECK(physics.body(boxBody)->angularVelocity().approxEqual(Vec3{0.0f, 0.0f, 0.0f}, 0.1f));
+}
+
+TEST_CASE("PhysicsWorld.FreeBodyConservesAngularVelocityAndIntegratesOrientation", "[PhysicsWorld]")
+{
+    // A dynamic body with no contacts and a seeded angular velocity keeps that
+    // angular velocity (no torque) and its orientation advances accordingly —
+    // π/2 rad/s about Y for 1 s is a 90° turn, which maps +x → -z.
+    PhysicsWorld physics;
+    PhysicsBodyDesc desc;
+    desc.type = PhysicsBodyType::Dynamic;
+    desc.gravityScale = 0.0f;
+    desc.angularVelocity = {0.0f, pi * 0.5f, 0.0f};
+    const auto body = physics.createBody(desc);
+
+    for (int i = 0; i < 60; ++i)
+    {
+        physics.step(1.0f / 60.0f);
+    }
+
+    REQUIRE(physics.body(body) != nullptr);
+    CHECK(physics.body(body)->angularVelocity().approxEqual(Vec3{0.0f, pi * 0.5f, 0.0f}, 1e-5f));
+    const Quaternion r = physics.bodyTransform(body)->rotation();
+    CHECK(r.rotate(Vec3{1.0f, 0.0f, 0.0f}).approxEqual(Vec3{0.0f, 0.0f, -1.0f}, 1e-3f));
 }
 
 TEST_CASE("PhysicsWorld.FastBulletDoesNotTunnelThroughThinWall", "[PhysicsWorld]")

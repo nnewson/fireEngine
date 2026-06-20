@@ -16,13 +16,30 @@ namespace
     return Vec3::dotProduct(a, b);
 }
 
-// Effective inverse mass along a unit direction for a two-body constraint.
-// Linear only: the contribution is just invMassA + invMassB. Returns 0 (an
-// inert row) when both bodies are immovable, so the caller can skip it safely.
-[[nodiscard]] float effectiveMass(float invMassA, float invMassB) noexcept
+[[nodiscard]] Vec3 cross(const Vec3& a, const Vec3& b) noexcept
 {
-    const float sum = invMassA + invMassB;
-    return sum > 0.0f ? 1.0f / sum : 0.0f;
+    return Vec3::crossProduct(a, b);
+}
+
+// Effective mass for a constraint along unit `dir` with lever arms rA/rB and world
+// inverse inertias: k = invMassA + invMassB + (rA×d)·IA⁻¹(rA×d) + (rB×d)·IB⁻¹(rB×d).
+// The angular terms vanish for a centred contact, reproducing the linear case.
+[[nodiscard]] float angularEffectiveMass(float invMassA, float invMassB, const Vec3& rA,
+                                         const Vec3& rB, const Vec3& dir, const Mat3& iA,
+                                         const Mat3& iB) noexcept
+{
+    const Vec3 raxd = cross(rA, dir);
+    const Vec3 rbxd = cross(rB, dir);
+    const float k = invMassA + invMassB + dot(raxd, iA * raxd) + dot(rbxd, iB * rbxd);
+    return k > 0.0f ? 1.0f / k : 0.0f;
+}
+
+// Relative velocity at the contact point, including each body's angular term ω×r.
+[[nodiscard]] Vec3 relativeVelocity(const SolverBody& a, const SolverBody& b, const Vec3& rA,
+                                    const Vec3& rB) noexcept
+{
+    return (a.velocity + cross(a.angularVelocity, rA)) -
+           (b.velocity + cross(b.angularVelocity, rB));
 }
 
 // Orthonormal tangent basis spanning the contact plane of `n` (assumed unit).
@@ -48,11 +65,23 @@ void ContactSolver::prepare(const std::vector<SolverBody>& bodies,
     dt_ = dt;
     points_.clear();
     pseudoVelocity_.assign(bodies.size(), Vec3{});
+    pseudoAngularVelocity_.assign(bodies.size(), Vec3{});
+
+    // World inverse inertia per body: R · diag(invI_local) · Rᵀ (zero matrix for
+    // bodies with infinite inertia, so they pick up no angular response).
+    invInertiaWorld_.assign(bodies.size(), Mat3{});
+    for (std::size_t i = 0; i < bodies.size(); ++i)
+    {
+        const Mat3 r = Mat3::fromQuaternion(bodies[i].orientation);
+        invInertiaWorld_[i] = r * Mat3::diagonal(bodies[i].inverseInertiaLocal) * r.transpose();
+    }
 
     for (const SolverContactInput& contact : contacts)
     {
         const SolverBody& bodyA = bodies[static_cast<std::size_t>(contact.bodyA)];
         const SolverBody& bodyB = bodies[static_cast<std::size_t>(contact.bodyB)];
+        const Mat3& iA = invInertiaWorld_[static_cast<std::size_t>(contact.bodyA)];
+        const Mat3& iB = invInertiaWorld_[static_cast<std::size_t>(contact.bodyB)];
 
         Vec3 tangent1;
         Vec3 tangent2;
@@ -71,13 +100,19 @@ void ContactSolver::prepare(const std::vector<SolverBody>& bodies,
             cp.tangent1 = tangent1;
             cp.tangent2 = tangent2;
             cp.point = contact.points[static_cast<std::size_t>(i)];
+            cp.rA = cp.point - bodyA.position;
+            cp.rB = cp.point - bodyB.position;
             cp.penetration = contact.penetration[static_cast<std::size_t>(i)];
             cp.friction = contact.friction;
 
-            cp.normalMass = effectiveMass(cp.invMassA, cp.invMassB);
-            cp.posNormalMass = effectiveMass(cp.posWeightA, cp.posWeightB);
-            cp.tangentMass1 = cp.normalMass;
-            cp.tangentMass2 = cp.normalMass;
+            cp.normalMass =
+                angularEffectiveMass(cp.invMassA, cp.invMassB, cp.rA, cp.rB, cp.normal, iA, iB);
+            cp.tangentMass1 =
+                angularEffectiveMass(cp.invMassA, cp.invMassB, cp.rA, cp.rB, tangent1, iA, iB);
+            cp.tangentMass2 =
+                angularEffectiveMass(cp.invMassA, cp.invMassB, cp.rA, cp.rB, tangent2, iA, iB);
+            cp.posNormalMass =
+                angularEffectiveMass(cp.posWeightA, cp.posWeightB, cp.rA, cp.rB, cp.normal, iA, iB);
             cp.key = contact.key;
 
             if (cp.penetration < 0.0f)
@@ -92,8 +127,9 @@ void ContactSolver::prepare(const std::vector<SolverBody>& bodies,
             {
                 // Restitution as a target separating speed, suppressed below the
                 // resting threshold so settling stacks do not buzz. vRelNormal < 0
-                // means the bodies are approaching.
-                const float vRelNormal = dot(bodyA.velocity - bodyB.velocity, cp.normal);
+                // means the bodies are approaching (angular term included).
+                const float vRelNormal =
+                    dot(relativeVelocity(bodyA, bodyB, cp.rA, cp.rB), cp.normal);
                 cp.normalBias =
                     vRelNormal < -kRestitutionThreshold ? -contact.restitution * vRelNormal : 0.0f;
             }
@@ -132,10 +168,16 @@ void ContactSolver::warmStart(std::vector<SolverBody>& bodies) const
 {
     for (const ConstraintPoint& cp : points_)
     {
+        SolverBody& a = bodies[static_cast<std::size_t>(cp.a)];
+        SolverBody& b = bodies[static_cast<std::size_t>(cp.b)];
         const Vec3 impulse = cp.normal * cp.normalImpulse + cp.tangent1 * cp.tangentImpulse1 +
                              cp.tangent2 * cp.tangentImpulse2;
-        bodies[static_cast<std::size_t>(cp.a)].velocity += impulse * cp.invMassA;
-        bodies[static_cast<std::size_t>(cp.b)].velocity -= impulse * cp.invMassB;
+        a.velocity += impulse * cp.invMassA;
+        a.angularVelocity +=
+            invInertiaWorld_[static_cast<std::size_t>(cp.a)] * cross(cp.rA, impulse);
+        b.velocity -= impulse * cp.invMassB;
+        b.angularVelocity -=
+            invInertiaWorld_[static_cast<std::size_t>(cp.b)] * cross(cp.rB, impulse);
     }
 }
 
@@ -143,40 +185,48 @@ void ContactSolver::solveVelocity(std::vector<SolverBody>& bodies)
 {
     // Friction first (clamped against the accumulated normal impulse from the
     // previous iteration), then the normal constraint — the standard ordering
-    // that keeps the friction cone consistent.
+    // that keeps the friction cone consistent. Each impulse updates both linear
+    // and angular velocity (lever arm rA/rB through the world inverse inertia).
     for (ConstraintPoint& cp : points_)
     {
         SolverBody& a = bodies[static_cast<std::size_t>(cp.a)];
         SolverBody& b = bodies[static_cast<std::size_t>(cp.b)];
+        const Mat3& iA = invInertiaWorld_[static_cast<std::size_t>(cp.a)];
+        const Mat3& iB = invInertiaWorld_[static_cast<std::size_t>(cp.b)];
+
+        auto applyImpulse = [&](const Vec3& impulse)
+        {
+            a.velocity += impulse * cp.invMassA;
+            a.angularVelocity += iA * cross(cp.rA, impulse);
+            b.velocity -= impulse * cp.invMassB;
+            b.angularVelocity -= iB * cross(cp.rB, impulse);
+        };
 
         if (cp.friction > 0.0f && cp.normalImpulse > 0.0f)
         {
             const float maxFriction = cp.friction * cp.normalImpulse;
 
-            const float vt1 = dot(a.velocity - b.velocity, cp.tangent1);
+            const float vt1 = dot(relativeVelocity(a, b, cp.rA, cp.rB), cp.tangent1);
             float lambda1 = -cp.tangentMass1 * vt1;
             const float old1 = cp.tangentImpulse1;
             cp.tangentImpulse1 = std::clamp(old1 + lambda1, -maxFriction, maxFriction);
             lambda1 = cp.tangentImpulse1 - old1;
-            a.velocity += cp.tangent1 * (lambda1 * cp.invMassA);
-            b.velocity -= cp.tangent1 * (lambda1 * cp.invMassB);
+            applyImpulse(cp.tangent1 * lambda1);
 
-            const float vt2 = dot(a.velocity - b.velocity, cp.tangent2);
+            const float vt2 = dot(relativeVelocity(a, b, cp.rA, cp.rB), cp.tangent2);
             float lambda2 = -cp.tangentMass2 * vt2;
             const float old2 = cp.tangentImpulse2;
             cp.tangentImpulse2 = std::clamp(old2 + lambda2, -maxFriction, maxFriction);
             lambda2 = cp.tangentImpulse2 - old2;
-            a.velocity += cp.tangent2 * (lambda2 * cp.invMassA);
-            b.velocity -= cp.tangent2 * (lambda2 * cp.invMassB);
+            applyImpulse(cp.tangent2 * lambda2);
         }
 
-        const float vn = dot(a.velocity - b.velocity, cp.normal);
+        const float vn = dot(relativeVelocity(a, b, cp.rA, cp.rB), cp.normal);
         float lambda = -cp.normalMass * (vn - cp.normalBias);
         const float oldImpulse = cp.normalImpulse;
         cp.normalImpulse = std::max(oldImpulse + lambda, 0.0f);
         lambda = cp.normalImpulse - oldImpulse;
-        a.velocity += cp.normal * (lambda * cp.invMassA);
-        b.velocity -= cp.normal * (lambda * cp.invMassB);
+        applyImpulse(cp.normal * lambda);
     }
 }
 
@@ -188,32 +238,44 @@ void ContactSolver::solvePosition(std::vector<SolverBody>& bodies)
     }
 
     std::ranges::fill(pseudoVelocity_, Vec3{});
+    std::ranges::fill(pseudoAngularVelocity_, Vec3{});
 
     for (int iteration = 0; iteration < kPositionIterations; ++iteration)
     {
         for (ConstraintPoint& cp : points_)
         {
+            const auto a = static_cast<std::size_t>(cp.a);
+            const auto b = static_cast<std::size_t>(cp.b);
+
             // Desired separation speed: remove a fraction of the penetration that
             // exceeds the slop. dt cancels against the position update below.
             const float correction =
                 kBaumgarte * std::max(cp.penetration - kLinearSlop, 0.0f) / dt_;
 
-            const float prv = dot(pseudoVelocity_[static_cast<std::size_t>(cp.a)] -
-                                      pseudoVelocity_[static_cast<std::size_t>(cp.b)],
-                                  cp.normal);
-            float lambda = -cp.posNormalMass * (prv - correction);
+            // Pseudo relative-normal velocity includes a pseudo-angular term, so the
+            // correction can rotate a body out of penetration as well as translate it.
+            const Vec3 prvVec = (pseudoVelocity_[a] + cross(pseudoAngularVelocity_[a], cp.rA)) -
+                                (pseudoVelocity_[b] + cross(pseudoAngularVelocity_[b], cp.rB));
+            float lambda = -cp.posNormalMass * (dot(prvVec, cp.normal) - correction);
             const float oldImpulse = cp.pseudoImpulse;
             cp.pseudoImpulse = std::max(oldImpulse + lambda, 0.0f);
             lambda = cp.pseudoImpulse - oldImpulse;
 
-            pseudoVelocity_[static_cast<std::size_t>(cp.a)] += cp.normal * (lambda * cp.posWeightA);
-            pseudoVelocity_[static_cast<std::size_t>(cp.b)] -= cp.normal * (lambda * cp.posWeightB);
+            const Vec3 p = cp.normal * lambda;
+            pseudoVelocity_[a] += p * cp.posWeightA;
+            pseudoAngularVelocity_[a] += invInertiaWorld_[a] * cross(cp.rA, p);
+            pseudoVelocity_[b] -= p * cp.posWeightB;
+            pseudoAngularVelocity_[b] -= invInertiaWorld_[b] * cross(cp.rB, p);
         }
     }
 
     for (std::size_t i = 0; i < bodies.size(); ++i)
     {
         bodies[i].position += pseudoVelocity_[i] * dt_;
+        if (pseudoAngularVelocity_[i].magnitudeSquared() > 0.0f)
+        {
+            bodies[i].orientation = bodies[i].orientation.integrate(pseudoAngularVelocity_[i], dt_);
+        }
     }
 }
 

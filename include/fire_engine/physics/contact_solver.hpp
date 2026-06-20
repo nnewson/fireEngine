@@ -6,31 +6,38 @@
 #include <vector>
 
 #include <fire_engine/collision/contact_manifold.hpp>
+#include <fire_engine/math/mat3.hpp>
+#include <fire_engine/math/quaternion.hpp>
 #include <fire_engine/math/vec3.hpp>
 
 namespace fire_engine
 {
 
-// Linear sequential-impulse contact solver (P2). Resolves a set of contact
-// manifolds into corrected velocities (normal + friction impulses) and a
-// split-impulse positional correction for penetration. Linear only — no inertia
-// tensors or lever-arm terms (that is P3); the effective mass of a contact is
-// just 1 / (invMassA + invMassB).
+// Sequential-impulse contact solver (P2 + P3). Resolves a set of contact manifolds
+// into corrected linear + angular velocities (normal + friction impulses with
+// lever-arm torque) and a split-impulse positional/orientation correction for
+// penetration. Effective mass per contact is
+//   invMassA + invMassB + (rA×d)·IA⁻¹(rA×d) + (rB×d)·IB⁻¹(rB×d),
+// the angular terms vanishing for a centred contact (reproducing the P2 linear case).
 //
 // The solver is deliberately decoupled from PhysicsWorld: it operates on a flat
 // SolverBody array (indexed by the caller) and a list of SolverContactInput, so
 // it can be unit-tested in isolation.
 
-// One body as the solver sees it. `invMass` drives the velocity (impulse) pass:
-// it is 0 for Static and Kinematic bodies, so contact impulses never shove them.
-// `positionWeight` drives the split-impulse position pass: Kinematic gets a
-// nominal weight there so it still slides out of penetration (mirroring the
-// pre-P2 pushWeight), Static stays 0.
+// One body as the solver sees it. `invMass` / `inverseInertiaLocal` drive the
+// velocity (impulse) pass: both are 0 for Static and Kinematic bodies, so contact
+// impulses never shove or spin a scene-driven body. `positionWeight` drives the
+// split-impulse position pass: Kinematic gets a nominal weight there so it still
+// slides out of penetration (mirroring the pre-P2 pushWeight), Static stays 0.
+// `position` is the centre of mass (contact anchors are measured from it).
 struct SolverBody
 {
     Vec3 velocity{};
+    Vec3 angularVelocity{};
     Vec3 position{};
+    Quaternion orientation{};
     float invMass{0.0f};
+    Vec3 inverseInertiaLocal{}; // diagonal, principal frame (0 ⇒ infinite inertia)
     float positionWeight{0.0f};
 };
 
@@ -100,6 +107,8 @@ private:
         Vec3 tangent1{};
         Vec3 tangent2{};
         Vec3 point{};
+        Vec3 rA{}; // contact point − body A centre of mass (lever arm)
+        Vec3 rB{}; // contact point − body B centre of mass
         float normalMass{0.0f};
         float posNormalMass{0.0f};
         float tangentMass1{0.0f};
@@ -130,6 +139,9 @@ private:
 
     std::vector<ConstraintPoint> points_;
     std::vector<Vec3> pseudoVelocity_;
+    std::vector<Vec3> pseudoAngularVelocity_;
+    // World-space inverse inertia per body, R·diag(invI_local)·Rᵀ, built in prepare.
+    std::vector<Mat3> invInertiaWorld_;
     float dt_{0.0f};
 
     // Warm-start cache, keyed by collider pair. `cache_` holds the previous step's

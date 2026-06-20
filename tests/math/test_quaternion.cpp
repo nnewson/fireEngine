@@ -11,6 +11,7 @@
 #include <fire_engine/math/vec4.hpp>
 
 using fire_engine::Mat4;
+using fire_engine::pi;
 using fire_engine::Quaternion;
 using fire_engine::Vec3;
 using fire_engine::Vec4;
@@ -392,4 +393,49 @@ TEST_CASE("Quaternion.ConjugateAndRotate", "[Quaternion]")
     const Vec3 v{0.3f, -0.7f, 1.1f};
     const Vec4 m = qz.toMat4() * Vec4{v.x(), v.y(), v.z(), 0.0f};
     CHECK(qz.rotate(v).approxEqual(Vec3{m.x(), m.y(), m.z()}, 1e-5f));
+}
+
+TEST_CASE("Quaternion.HamiltonProductComposesRotations", "[Quaternion]")
+{
+    const float h = std::sqrt(0.5f);
+    const Quaternion qz{0.0f, 0.0f, h, h}; // 90° about Z
+
+    // Identity is the multiplicative identity.
+    CHECK((qz * Quaternion::identity()).approxEqual(qz, 1e-6f));
+    CHECK((Quaternion::identity() * qz).approxEqual(qz, 1e-6f));
+
+    // Two 90° rotations about Z compose to 180° about Z (maps +x → -x).
+    const Quaternion twice = qz * qz;
+    CHECK(twice.rotate(Vec3{1.0f, 0.0f, 0.0f}).approxEqual(Vec3{-1.0f, 0.0f, 0.0f}, 1e-5f));
+
+    // Composition matches applying the rotations in sequence (apply rhs, then lhs).
+    const Quaternion qx{h, 0.0f, 0.0f, h}; // 90° about X
+    const Vec3 v{0.2f, 0.5f, -0.9f};
+    CHECK((qz * qx).rotate(v).approxEqual(qz.rotate(qx.rotate(v)), 1e-5f));
+}
+
+TEST_CASE("Quaternion.IntegrateAdvancesOrientation", "[Quaternion]")
+{
+    // Zero angular velocity leaves the orientation unchanged.
+    const Quaternion start{0.1f, 0.2f, 0.3f, 0.9f};
+    const Quaternion startUnit = Quaternion::normalise(start);
+    CHECK(startUnit.integrate(Vec3{0.0f, 0.0f, 0.0f}, 1.0f / 60.0f).approxEqual(startUnit, 1e-6f));
+
+    // Integrating π/2 rad/s about Z for 1 s gives a 90° rotation (maps +x → +y),
+    // and the result stays unit-length.
+    const Quaternion spun = Quaternion::identity().integrate(Vec3{0.0f, 0.0f, pi * 0.5f}, 1.0f);
+    CHECK(spun.rotate(Vec3{1.0f, 0.0f, 0.0f}).approxEqual(Vec3{0.0f, 1.0f, 0.0f}, 1e-5f));
+    CHECK(spun.magnitude() == Catch::Approx(1.0f).margin(1e-6f));
+
+    // 60 substeps of π/3 rad/s (Δ over 1 s) accumulate to the same 60° rotation as
+    // one analytic step — exponential-map integration composes cleanly.
+    Quaternion stepped = Quaternion::identity();
+    for (int i = 0; i < 60; ++i)
+    {
+        stepped = stepped.integrate(Vec3{0.0f, pi / 3.0f, 0.0f}, 1.0f / 60.0f);
+    }
+    const float c = std::cos(pi / 6.0f); // half of 60°
+    const Quaternion expected{0.0f, std::sin(pi / 6.0f), 0.0f, c};
+    CHECK(stepped.rotate(Vec3{1.0f, 0.0f, 0.0f})
+              .approxEqual(expected.rotate(Vec3{1.0f, 0.0f, 0.0f}), 1e-4f));
 }

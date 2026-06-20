@@ -15,6 +15,75 @@
 namespace fire_engine
 {
 
+namespace
+{
+
+// Diagonal inverse inertia in the body's local (principal) frame for a shape of
+// the given mass, with the body's per-axis scale folded in. Zero for non-positive
+// mass or a degenerate axis (→ infinite inertia about that axis). All current
+// shapes have a diagonal inertia tensor in their local frame.
+[[nodiscard]] Vec3 localInverseInertia(const ColliderShape& shape, float mass, Vec3 scale)
+{
+    if (mass <= 0.0f)
+    {
+        return {};
+    }
+    const float uniform = std::max({scale.x(), scale.y(), scale.z()});
+
+    auto boxInertia = [mass](Vec3 h) -> Vec3
+    {
+        return {mass / 3.0f * (h.y() * h.y() + h.z() * h.z()),
+                mass / 3.0f * (h.x() * h.x() + h.z() * h.z()),
+                mass / 3.0f * (h.x() * h.x() + h.y() * h.y())};
+    };
+
+    const Vec3 inertia = std::visit(
+        [&](const auto& s) -> Vec3
+        {
+            using S = std::decay_t<decltype(s)>;
+            if constexpr (std::is_same_v<S, BoxShape>)
+            {
+                return boxInertia({s.halfExtents.x() * scale.x(), s.halfExtents.y() * scale.y(),
+                                   s.halfExtents.z() * scale.z()});
+            }
+            else if constexpr (std::is_same_v<S, SphereShape>)
+            {
+                const float r = s.radius * uniform;
+                const float i = 0.4f * mass * r * r;
+                return {i, i, i};
+            }
+            else if constexpr (std::is_same_v<S, CapsuleShape>)
+            {
+                // Solid capsule about its local-Y axis: a cylinder plus two
+                // hemispheres (= one sphere), mass split by volume.
+                const float r = s.radius * uniform;
+                const float h = 2.0f * s.halfHeight * scale.y(); // cylinder length
+                const float vc = pi * r * r * h;
+                const float vs = 4.0f / 3.0f * pi * r * r * r;
+                const float total = vc + vs;
+                const float mc = total > 0.0f ? mass * vc / total : 0.0f;
+                const float ms = total > 0.0f ? mass * vs / total : 0.0f;
+                const float iAxis = mc * 0.5f * r * r + ms * 0.4f * r * r;
+                const float iPerp = mc * (0.25f * r * r + h * h / 12.0f) +
+                                    ms * (0.4f * r * r + 0.375f * r * h + 0.25f * h * h);
+                return {iPerp, iAxis, iPerp};
+            }
+            else // AabbShape
+            {
+                const Vec3 e = s.bounds.extent();
+                return boxInertia(
+                    {e.x() * 0.5f * scale.x(), e.y() * 0.5f * scale.y(), e.z() * 0.5f * scale.z()});
+            }
+        },
+        shape);
+
+    return {inertia.x() > 0.0f ? 1.0f / inertia.x() : 0.0f,
+            inertia.y() > 0.0f ? 1.0f / inertia.y() : 0.0f,
+            inertia.z() > 0.0f ? 1.0f / inertia.z() : 0.0f};
+}
+
+} // namespace
+
 PhysicsBodyHandle PhysicsWorld::createBody(const PhysicsBodyDesc& desc)
 {
     const PhysicsBodyHandle handle = nextBodyHandle_;
@@ -63,6 +132,14 @@ PhysicsColliderHandle PhysicsWorld::createCollider(PhysicsBodyHandle bodyHandle,
     colliderIndexByPointer_.emplace(&colliders_.back().collider, colliders_.size() - 1);
     owner->colliders.push_back(handle);
     broadPhase_.addCollider(colliders_.back().collider);
+
+    // Local inverse inertia from the (now-known) shape + mass; dynamic bodies only,
+    // others keep infinite inertia (zero). Single collider assumed (COM = origin).
+    if (owner->body.type() == PhysicsBodyType::Dynamic)
+    {
+        owner->body.inverseInertiaLocal(
+            localInverseInertia(desc.shape, owner->body.mass(), owner->transform.scale()));
+    }
     return handle;
 }
 
@@ -622,8 +699,12 @@ bool PhysicsWorld::solveAndIntegrate(const std::vector<SolverContact>& contacts,
     {
         const BodyEntry& entry = bodies_[i];
         solverBodies[i].velocity = entry.body.linearVelocity();
+        solverBodies[i].angularVelocity = entry.body.angularVelocity();
         solverBodies[i].position = entry.transform.position();
+        solverBodies[i].orientation = entry.transform.rotation();
         solverBodies[i].invMass = entry.active ? velocityInvMass(entry) : 0.0f;
+        solverBodies[i].inverseInertiaLocal =
+            entry.active ? entry.body.inverseInertiaLocal() : Vec3{};
         solverBodies[i].positionWeight = entry.active ? positionWeight(entry) : 0.0f;
     }
 
@@ -671,7 +752,13 @@ bool PhysicsWorld::solveAndIntegrate(const std::vector<SolverContact>& contacts,
             continue;
         }
         entry.body.linearVelocity(solverBodies[i].velocity);
+        entry.body.angularVelocity(solverBodies[i].angularVelocity);
         solverBodies[i].position += solverBodies[i].velocity * dt;
+        if (solverBodies[i].angularVelocity.magnitudeSquared() > 0.0f)
+        {
+            solverBodies[i].orientation =
+                solverBodies[i].orientation.integrate(solverBodies[i].angularVelocity, dt);
+        }
     }
 
     // Split-impulse positional correction (may also nudge Kinematic bodies).
@@ -681,7 +768,7 @@ bool PhysicsWorld::solveAndIntegrate(const std::vector<SolverContact>& contacts,
         solver_.store();
     }
 
-    // Write final positions back (everything but Static).
+    // Write final positions + orientations back (everything but Static).
     bool moved = false;
     for (std::size_t i = 0; i < bodies_.size(); ++i)
     {
@@ -690,9 +777,22 @@ bool PhysicsWorld::solveAndIntegrate(const std::vector<SolverContact>& contacts,
         {
             continue;
         }
+        bool changed = false;
         if (entry.transform.position() != solverBodies[i].position)
         {
             entry.transform.position(solverBodies[i].position);
+            changed = true;
+        }
+        // Orientation was integrated into the solver body (from the solved angular
+        // velocity, plus any pseudo-angular position correction) — Dynamic only.
+        if (entry.body.type() == PhysicsBodyType::Dynamic &&
+            !(entry.transform.rotation() == solverBodies[i].orientation))
+        {
+            entry.transform.rotation(solverBodies[i].orientation);
+            changed = true;
+        }
+        if (changed)
+        {
             entry.transform.update(Mat4::identity());
             moved = true;
         }

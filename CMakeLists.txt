@@ -188,6 +188,7 @@ add_executable(test_fire_engine
     tests/physics/test_contact_solver.cpp
     tests/physics/test_physics_handle.cpp
     tests/physics/test_physics_determinism.cpp
+    tests/math/test_mat3.cpp
     tests/math/test_mat4.cpp
     tests/math/test_quaternion.cpp
     tests/math/test_vec2.cpp

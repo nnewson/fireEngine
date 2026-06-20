@@ -201,3 +201,50 @@ TEST_CASE("ContactSolver.SpeculativeContactIgnoresSlowApproach", "[ContactSolver
 
     CHECK(bodies[0].velocity.y() == Catch::Approx(-1.0f).margin(1e-4f)); // unchanged
 }
+
+TEST_CASE("ContactSolver.OffCentreImpulseImpartsAngularVelocity", "[ContactSolver]")
+{
+    // A body descending onto a contact offset +x from its centre of mass gains spin.
+    // invMass 1, isotropic inverse inertia 2; contact at r=(1,0,0), normal +y.
+    // Solving the normal constraint to vRel=0 gives velA.y=-2/3 and ωz=+2/3:
+    //   J(impulse): velA.y = -1 + J,  ωz = invInertia·(r×P).z = 2·J,
+    //   vRel·n = velA.y + (ω×r).y = velA.y + ωz = 0  ⇒  3J = 1.
+    std::vector<SolverBody> bodies(2);
+    bodies[0].velocity = {0.0f, -1.0f, 0.0f};
+    bodies[0].invMass = 1.0f;
+    bodies[0].inverseInertiaLocal = {2.0f, 2.0f, 2.0f};
+    bodies[0].positionWeight = 1.0f;
+
+    SolverContactInput c;
+    c.bodyA = 0;
+    c.bodyB = 1; // static (defaults: invMass 0, inverse inertia 0)
+    c.normal = {0.0f, 1.0f, 0.0f};
+    c.points[0] = {1.0f, 0.0f, 0.0f};
+    c.penetration[0] = 0.0f;
+    c.pointCount = 1;
+
+    ContactSolver solver;
+    runVelocity(solver, bodies, {c});
+
+    CHECK(bodies[0].velocity.y() == Catch::Approx(-2.0f / 3.0f).margin(1e-3f));
+    CHECK(bodies[0].angularVelocity.z() == Catch::Approx(2.0f / 3.0f).margin(1e-3f));
+    CHECK(bodies[0].angularVelocity.x() == Catch::Approx(0.0f).margin(1e-4f));
+    CHECK(bodies[0].angularVelocity.y() == Catch::Approx(0.0f).margin(1e-4f));
+}
+
+TEST_CASE("ContactSolver.CentredContactProducesNoSpin", "[ContactSolver]")
+{
+    // A contact at the centre of mass (r = 0) has no lever arm, so the result is
+    // pure-linear — identical to the P2 solver, with zero angular velocity.
+    std::vector<SolverBody> bodies(2);
+    bodies[0].velocity = {0.0f, -1.0f, 0.0f};
+    bodies[0].invMass = 1.0f;
+    bodies[0].inverseInertiaLocal = {2.0f, 2.0f, 2.0f};
+    bodies[0].positionWeight = 1.0f;
+
+    ContactSolver solver;
+    runVelocity(solver, bodies, {makeContact({0.0f, 1.0f, 0.0f}, 0.0f, 0.0f, 0.0f)});
+
+    CHECK(bodies[0].velocity.y() == Catch::Approx(0.0f).margin(1e-3f));
+    CHECK(bodies[0].angularVelocity.approxEqual(Vec3{0.0f, 0.0f, 0.0f}, 1e-5f));
+}
