@@ -4,14 +4,20 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
+#include <vector>
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
+#include <fire_engine/core/convex_hull_builder.hpp>
+
 using fire_engine::AabbShape;
 using fire_engine::BoxShape;
+using fire_engine::buildConvexHull;
 using fire_engine::ClothColliderType;
 using fire_engine::ColliderDesc;
+using fire_engine::ConvexHullShape;
 using fire_engine::InputState;
 using fire_engine::Node;
 using fire_engine::PhysicsBodyDesc;
@@ -34,6 +40,21 @@ ColliderDesc unitCollider()
     ColliderDesc desc;
     desc.shape = AabbShape{{Vec3{0.0f, 0.0f, 0.0f}, Vec3{1.0f, 1.0f, 1.0f}}};
     return desc;
+}
+
+// A cube convex hull of half-extent `h`, built from a triangle mesh (exercises the
+// full authoring path: weld + coplanar-merge into 6 quad faces).
+ConvexHullShape boxHull(float h)
+{
+    const std::vector<Vec3> verts{
+        {-h, -h, -h}, {h, -h, -h}, {h, h, -h}, {-h, h, -h},
+        {-h, -h, h},  {h, -h, h},  {h, h, h},  {-h, h, h},
+    };
+    const std::vector<std::uint32_t> idx{
+        1, 2, 6, 1, 6, 5, 0, 4, 7, 0, 7, 3, 3, 7, 6, 3, 6, 2,
+        0, 1, 5, 0, 5, 4, 4, 5, 6, 4, 6, 7, 0, 3, 2, 0, 2, 1,
+    };
+    return buildConvexHull(verts, idx);
 }
 
 PhysicsBodyHandle createBox(PhysicsWorld& physics, PhysicsBodyType type, Vec3 position,
@@ -305,6 +326,42 @@ TEST_CASE("PhysicsWorld.BoxDroppedFlatRestsFlatAndStill", "[PhysicsWorld]")
     REQUIRE(t.has_value());
     CHECK(t->position().y() == Catch::Approx(1.0f).margin(0.05f)); // resting on the floor
     CHECK(t->rotation().rotate(Vec3{0.0f, 1.0f, 0.0f}).approxEqual(Vec3{0.0f, 1.0f, 0.0f}, 0.02f));
+    CHECK(physics.body(boxBody)->angularVelocity().approxEqual(Vec3{0.0f, 0.0f, 0.0f}, 0.05f));
+    CHECK(physics.body(boxBody)->linearVelocity().approxEqual(Vec3{0.0f, 0.0f, 0.0f}, 0.05f));
+}
+
+TEST_CASE("PhysicsWorld.ConvexHullCubeRestsFlatLikeABox", "[PhysicsWorld]")
+{
+    // A dynamic ConvexHullShape cube (GJK/EPA + face-clip narrowphase) dropped flat
+    // onto the floor settles flat and still — the same outcome as the primitive box,
+    // proving the convex path produces a stable multi-point resting manifold.
+    PhysicsWorld physics;
+
+    PhysicsBodyDesc floor;
+    floor.type = PhysicsBodyType::Static;
+    floor.material = PhysicsMaterial{.restitution = 0.0f, .friction = 0.5f};
+    const auto floorBody = physics.createBody(floor);
+    [[maybe_unused]] const auto floorCollider = physics.createCollider(
+        floorBody, ColliderDesc{.shape = BoxShape{.halfExtents = {10.0f, 0.5f, 10.0f}}});
+
+    PhysicsBodyDesc box;
+    box.type = PhysicsBodyType::Dynamic;
+    box.gravityScale = 1.0f;
+    box.position = {0.0f, 2.0f, 0.0f};
+    box.material = PhysicsMaterial{.restitution = 0.0f, .friction = 0.5f};
+    const auto boxBody = physics.createBody(box);
+    [[maybe_unused]] const auto boxCollider =
+        physics.createCollider(boxBody, ColliderDesc{.shape = boxHull(0.5f)});
+
+    for (int i = 0; i < 240; ++i)
+    {
+        physics.step(1.0f / 60.0f);
+    }
+
+    const auto t = physics.bodyTransform(boxBody);
+    REQUIRE(t.has_value());
+    CHECK(t->position().y() == Catch::Approx(1.0f).margin(0.05f));
+    CHECK(t->rotation().rotate(Vec3{0.0f, 1.0f, 0.0f}).approxEqual(Vec3{0.0f, 1.0f, 0.0f}, 0.03f));
     CHECK(physics.body(boxBody)->angularVelocity().approxEqual(Vec3{0.0f, 0.0f, 0.0f}, 0.05f));
     CHECK(physics.body(boxBody)->linearVelocity().approxEqual(Vec3{0.0f, 0.0f, 0.0f}, 0.05f));
 }

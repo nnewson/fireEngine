@@ -104,12 +104,19 @@ public:
         float friction{0.0f};
         float gravityScale{1.0f};
         std::optional<ColliderShape> shape;
+        // `Shape: "ConvexHull"` defers to the node mesh (built in applyPhysicsConfig),
+        // since the hull geometry isn't available when parsing extras.
+        bool convexHullFromMesh{false};
     };
 
     // CPU-only mesh bounds for collision setup. Prefers POSITION accessor
     // min/max when present, falling back to scanning POSITION data.
     [[nodiscard]]
     static std::optional<AABB> meshBounds(const fastgltf::Asset& asset, const fastgltf::Mesh& mesh);
+
+    // Convex hull collider built from a mesh's welded POSITION vertices + triangles.
+    [[nodiscard]]
+    static ConvexHullShape meshConvexHull(const fastgltf::Asset& asset, const fastgltf::Mesh& mesh);
 
     [[nodiscard]]
     static bool nodeExtrasControllable(simdjson::dom::object* extras) noexcept;

@@ -24,8 +24,10 @@ add_library(fireengine SHARED
     src/animation/animation.cpp
     src/collision/collider.cpp
     src/collision/geometry.cpp
+    src/collision/gjk_epa.cpp
     src/collision/sweep_and_prune_broad_phase.cpp
     src/collision/narrow_phase.cpp
+    src/core/convex_hull_builder.cpp
     src/core/gltf_loader.cpp
     src/core/gltf_loader_assets.cpp
     src/core/gltf_loader_mesh.cpp
@@ -184,6 +186,8 @@ add_executable(test_fire_engine
     tests/collision/test_geometry.cpp
     tests/collision/test_sweep_and_prune_broad_phase.cpp
     tests/collision/test_narrow_phase.cpp
+    tests/collision/test_support.cpp
+    tests/collision/test_gjk_epa.cpp
     tests/physics/test_physics_world.cpp
     tests/physics/test_contact_solver.cpp
     tests/physics/test_physics_handle.cpp
@@ -216,6 +220,7 @@ add_executable(test_fire_engine
     tests/core/test_shader_loader.cpp
     tests/core/test_system.cpp
     tests/core/test_gltf_loader.cpp
+    tests/core/test_convex_hull_builder.cpp
     tests/core/test_tangent_generator.cpp
     tests/input/test_camera_state.cpp
     tests/input/test_controller_state.cpp

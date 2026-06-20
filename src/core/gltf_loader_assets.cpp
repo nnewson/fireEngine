@@ -345,9 +345,15 @@ GltfLoader::nodeExtrasPhysics(simdjson::dom::object* extras)
             config.shape = CapsuleShape{reader.readFloat("Radius", 0.5f, "Radius"),
                                         reader.readFloat("HalfHeight", 0.5f, "HalfHeight"), center};
         }
+        else if (shape == "ConvexHull")
+        {
+            // Hull geometry comes from the node mesh, built in applyPhysicsConfig.
+            config.convexHullFromMesh = true;
+        }
         else
         {
-            throw std::runtime_error("glTF Physics Shape must be Box, Sphere, or Capsule");
+            throw std::runtime_error(
+                "glTF Physics Shape must be Box, Sphere, Capsule, or ConvexHull");
         }
     }
 

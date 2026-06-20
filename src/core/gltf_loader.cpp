@@ -120,6 +120,18 @@ void applyPhysicsConfig(std::size_t nodeIndex,
     {
         colliderDesc.shape = it->second.shape.value();
     }
+    else if (it->second.convexHullFromMesh)
+    {
+        ConvexHullShape hull = GltfLoader::meshConvexHull(asset, mesh);
+        if (!hull.faces.empty())
+        {
+            colliderDesc.shape = std::move(hull);
+        }
+        else if (auto bounds = GltfLoader::meshBounds(asset, mesh); bounds.has_value())
+        {
+            colliderDesc.shape = AabbShape{bounds.value()}; // degenerate hull → AABB
+        }
+    }
     else if (auto bounds = GltfLoader::meshBounds(asset, mesh); bounds.has_value())
     {
         colliderDesc.shape = AabbShape{bounds.value()};

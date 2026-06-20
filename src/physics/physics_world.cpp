@@ -68,11 +68,25 @@ namespace
                                     ms * (0.4f * r * r + 0.375f * r * h + 0.25f * h * h);
                 return {iPerp, iAxis, iPerp};
             }
-            else // AabbShape
+            else if constexpr (std::is_same_v<S, AabbShape>)
             {
                 const Vec3 e = s.bounds.extent();
                 return boxInertia(
                     {e.x() * 0.5f * scale.x(), e.y() * 0.5f * scale.y(), e.z() * 0.5f * scale.z()});
+            }
+            else // ConvexHullShape — approximate with the hull's AABB box inertia
+            {
+                Vec3 lo = s.vertices.empty() ? Vec3{} : s.vertices.front();
+                Vec3 hi = lo;
+                for (const Vec3& v : s.vertices)
+                {
+                    lo = {std::min(lo.x(), v.x()), std::min(lo.y(), v.y()),
+                          std::min(lo.z(), v.z())};
+                    hi = {std::max(hi.x(), v.x()), std::max(hi.y(), v.y()),
+                          std::max(hi.z(), v.z())};
+                }
+                const Vec3 he = (hi - lo) * 0.5f;
+                return boxInertia({he.x() * scale.x(), he.y() * scale.y(), he.z() * scale.z()});
             }
         },
         shape);
@@ -317,6 +331,19 @@ WorldShape PhysicsWorld::worldShape(const ColliderEntry& entry) const
         const Vec3 p1 = transformPoint(world, Vec3{c.x(), c.y() + capsule->halfHeight, c.z()});
         return WorldCapsule{p0, p1, capsule->radius * uniform};
     }
+    if (const auto* hull = std::get_if<ConvexHullShape>(&entry.shape))
+    {
+        // Transform local vertices into a world-space hull; faces (index loops)
+        // reference the stable source shape (valid for this step).
+        WorldConvex convex;
+        convex.vertices.reserve(hull->vertices.size());
+        for (const Vec3& v : hull->vertices)
+        {
+            convex.vertices.push_back(transformPoint(world, v));
+        }
+        convex.faces = hull->faces;
+        return convex;
+    }
     const auto& aabb = std::get<AabbShape>(entry.shape);
     const Vec3 he = aabb.bounds.extent() * 0.5f;
     return WorldBox{transformPoint(world, aabb.bounds.center()),
@@ -348,10 +375,12 @@ std::vector<ClothCollider> PhysicsWorld::gatherColliders() const
                     out.push_back(
                         makeBoxCollider(shape.center, shape.halfExtents, shape.orientation));
                 }
-                else // WorldCapsule
+                else if constexpr (std::is_same_v<T, WorldCapsule>)
                 {
                     out.push_back(makeCapsuleCollider(shape.p0, shape.p1, shape.radius));
                 }
+                // WorldConvex has no ClothCollider encoding — the cloth solver only
+                // supports plane/sphere/box/capsule, so convex hulls are skipped here.
             },
             worldShape(entry));
     }
@@ -478,10 +507,23 @@ AABB PhysicsWorld::localBounds(const ColliderShape& shape) const noexcept
                 const Vec3 extents{value.radius, value.radius, value.radius};
                 return {value.center - extents, value.center + extents};
             }
-            else
+            else if constexpr (std::is_same_v<Shape, CapsuleShape>)
             {
                 const Vec3 extents{value.radius, value.radius + value.halfHeight, value.radius};
                 return {value.center - extents, value.center + extents};
+            }
+            else // ConvexHullShape — AABB of the hull vertices
+            {
+                AABB bounds{value.vertices.empty() ? Vec3{} : value.vertices.front(),
+                            value.vertices.empty() ? Vec3{} : value.vertices.front()};
+                for (const Vec3& v : value.vertices)
+                {
+                    bounds.min = {std::min(bounds.min.x(), v.x()), std::min(bounds.min.y(), v.y()),
+                                  std::min(bounds.min.z(), v.z())};
+                    bounds.max = {std::max(bounds.max.x(), v.x()), std::max(bounds.max.y(), v.y()),
+                                  std::max(bounds.max.z(), v.z())};
+                }
+                return bounds;
             }
         },
         shape);

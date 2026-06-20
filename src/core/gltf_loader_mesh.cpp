@@ -1,5 +1,6 @@
 #include <fire_engine/core/gltf_loader.hpp>
 
+#include <fire_engine/core/convex_hull_builder.hpp>
 #include <fire_engine/render/resources.hpp>
 
 #include <algorithm>
@@ -309,6 +310,45 @@ std::optional<AABB> GltfLoader::meshBounds(const fastgltf::Asset& asset, const f
     }
 
     return bounds;
+}
+
+ConvexHullShape GltfLoader::meshConvexHull(const fastgltf::Asset& asset, const fastgltf::Mesh& mesh)
+{
+    std::vector<Vec3> positions;
+    std::vector<std::uint32_t> indices;
+    for (const auto& primitive : mesh.primitives)
+    {
+        if (!isSupportedPrimitiveType(primitive.type))
+        {
+            continue;
+        }
+        const auto* posAttr = primitive.findAttribute("POSITION");
+        if (posAttr == primitive.attributes.end())
+        {
+            continue;
+        }
+
+        const auto base = static_cast<std::uint32_t>(positions.size());
+        const auto& posAccessor = asset.accessors[posAttr->accessorIndex];
+        fastgltf::iterateAccessorWithIndex<fastgltf::math::fvec3>(
+            asset, posAccessor, [&](fastgltf::math::fvec3 p, std::size_t)
+            { positions.push_back({p.x(), p.y(), p.z()}); });
+
+        if (primitive.indicesAccessor.has_value())
+        {
+            const auto& indexAccessor = asset.accessors[primitive.indicesAccessor.value()];
+            fastgltf::iterateAccessor<std::uint32_t>(asset, indexAccessor, [&](std::uint32_t idx)
+                                                     { indices.push_back(base + idx); });
+        }
+        else
+        {
+            for (std::size_t i = 0; i < posAccessor.count; ++i)
+            {
+                indices.push_back(base + static_cast<std::uint32_t>(i));
+            }
+        }
+    }
+    return buildConvexHull(positions, indices);
 }
 
 namespace

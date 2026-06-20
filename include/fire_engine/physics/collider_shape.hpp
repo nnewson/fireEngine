@@ -2,8 +2,10 @@
 
 #include <cstdint>
 #include <variant>
+#include <vector>
 
 #include <fire_engine/collision/collider.hpp>
+#include <fire_engine/collision/world_shape.hpp>
 #include <fire_engine/math/vec3.hpp>
 #include <fire_engine/physics/physics_body.hpp>
 
@@ -34,7 +36,17 @@ struct CapsuleShape
     Vec3 center{};
 };
 
-using ColliderShape = std::variant<AabbShape, BoxShape, SphereShape, CapsuleShape>;
+// An authored convex hull: local-space vertices plus polygon faces (each a CCW
+// outward loop of vertex indices + local normal — see `ConvexFace`). Built from a
+// mesh by `buildConvexHull`; composed into a `WorldConvex` per step by
+// `PhysicsWorld::worldShape` for the GJK/EPA narrowphase.
+struct ConvexHullShape
+{
+    std::vector<Vec3> vertices;
+    std::vector<ConvexFace> faces;
+};
+
+using ColliderShape = std::variant<AabbShape, BoxShape, SphereShape, CapsuleShape, ConvexHullShape>;
 
 struct ColliderDesc
 {

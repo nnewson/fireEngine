@@ -4,10 +4,12 @@
 #include <array>
 #include <cmath>
 #include <limits>
+#include <type_traits>
 #include <variant>
 #include <vector>
 
 #include <fire_engine/collision/geometry.hpp>
+#include <fire_engine/collision/gjk_epa.hpp>
 
 namespace fire_engine
 {
@@ -411,15 +413,253 @@ collidePair(const WorldCapsule& cap, const WorldSphere& s, float margin) noexcep
     return m ? std::optional<ContactManifold>{flipped(*m)} : std::nullopt;
 }
 
+// ----- Convex (GJK/EPA) contact: any pair where at least one shape is convex -----
+
+// A world-space polygon face: outward normal + ordered boundary loop.
+struct PolyFace
+{
+    Vec3 normal{};
+    std::vector<Vec3> verts;
+};
+
+[[nodiscard]] std::vector<PolyFace> boxFaces(const WorldBox& box)
+{
+    const std::array<Vec3, 3> axis{box.orientation.rotate({1.0f, 0.0f, 0.0f}),
+                                   box.orientation.rotate({0.0f, 1.0f, 0.0f}),
+                                   box.orientation.rotate({0.0f, 0.0f, 1.0f})};
+    const std::array<float, 3> he{box.halfExtents.x(), box.halfExtents.y(), box.halfExtents.z()};
+    std::vector<PolyFace> faces;
+    faces.reserve(6);
+    for (int ai = 0; ai < 3; ++ai)
+    {
+        const int u = (ai + 1) % 3;
+        const int v = (ai + 2) % 3;
+        for (float sgn : {1.0f, -1.0f})
+        {
+            const Vec3 base = box.center + axis[ai] * (sgn * he[ai]);
+            const Vec3 du = axis[u] * he[u];
+            const Vec3 dv = axis[v] * he[v];
+            PolyFace f;
+            f.normal = axis[ai] * sgn;
+            f.verts = {base - du - dv, base + du - dv, base + du + dv, base - du + dv};
+            faces.push_back(std::move(f));
+        }
+    }
+    return faces;
+}
+
+[[nodiscard]] std::vector<PolyFace> convexFaces(const WorldConvex& hull)
+{
+    Vec3 centroid{};
+    for (const Vec3& v : hull.vertices)
+    {
+        centroid += v;
+    }
+    if (!hull.vertices.empty())
+    {
+        centroid = centroid * (1.0f / static_cast<float>(hull.vertices.size()));
+    }
+
+    std::vector<PolyFace> faces;
+    faces.reserve(hull.faces.size());
+    for (const ConvexFace& cf : hull.faces)
+    {
+        if (cf.loop.size() < 3)
+        {
+            continue;
+        }
+        PolyFace f;
+        f.verts.reserve(cf.loop.size());
+        Vec3 faceCenter{};
+        for (int idx : cf.loop)
+        {
+            const Vec3& v = hull.vertices[static_cast<std::size_t>(idx)];
+            f.verts.push_back(v);
+            faceCenter += v;
+        }
+        faceCenter = faceCenter * (1.0f / static_cast<float>(cf.loop.size()));
+        Vec3 n =
+            Vec3::normalise(Vec3::crossProduct(f.verts[1] - f.verts[0], f.verts[2] - f.verts[0]));
+        if (dot(n, faceCenter - centroid) < 0.0f)
+        {
+            n = n * -1.0f; // point outward from the hull
+        }
+        f.normal = n;
+        faces.push_back(std::move(f));
+    }
+    return faces;
+}
+
+[[nodiscard]] std::vector<PolyFace> polytopeFaces(const WorldShape& s)
+{
+    if (const auto* box = std::get_if<WorldBox>(&s))
+    {
+        return boxFaces(*box);
+    }
+    if (const auto* hull = std::get_if<WorldConvex>(&s))
+    {
+        return convexFaces(*hull);
+    }
+    return {};
+}
+
+[[nodiscard]] bool isPolytope(const WorldShape& s) noexcept
+{
+    return std::holds_alternative<WorldBox>(s) || std::holds_alternative<WorldConvex>(s);
+}
+
+[[nodiscard]] int bestAlignedFace(const std::vector<PolyFace>& faces, const Vec3& dir) noexcept
+{
+    int best = 0;
+    float bestDot = -std::numeric_limits<float>::infinity();
+    for (std::size_t i = 0; i < faces.size(); ++i)
+    {
+        const float d = dot(faces[i].normal, dir);
+        if (d > bestDot)
+        {
+            bestDot = d;
+            best = static_cast<int>(i);
+        }
+    }
+    return best;
+}
+
+// Multi-point manifold for a polytope-polytope contact: clip the incident face
+// against the reference face's side planes (reference = whichever face is most
+// aligned with the contact normal `n`, which points b -> a). Mirrors the box/box
+// face path, generalised to arbitrary convex faces.
+[[nodiscard]] ContactManifold clipFaceManifold(const std::vector<PolyFace>& facesA,
+                                               const std::vector<PolyFace>& facesB, const Vec3& n)
+{
+    // A's contact face points toward B (≈ -n); B's toward A (≈ +n).
+    const int fa = bestAlignedFace(facesA, n * -1.0f);
+    const int fb = bestAlignedFace(facesB, n);
+    const float alignA =
+        facesA.empty() ? -1.0f : dot(facesA[static_cast<std::size_t>(fa)].normal, n * -1.0f);
+    const float alignB =
+        facesB.empty() ? -1.0f : dot(facesB[static_cast<std::size_t>(fb)].normal, n);
+
+    const std::vector<PolyFace>* incFaces = nullptr;
+    const PolyFace* ref = nullptr;
+    if (alignA >= alignB)
+    {
+        ref = &facesA[static_cast<std::size_t>(fa)];
+        incFaces = &facesB;
+    }
+    else
+    {
+        ref = &facesB[static_cast<std::size_t>(fb)];
+        incFaces = &facesA;
+    }
+    const Vec3 refNormal = ref->normal;
+    const PolyFace& incident =
+        (*incFaces)[static_cast<std::size_t>(bestAlignedFace(*incFaces, refNormal * -1.0f))];
+
+    // Clip the incident loop against the reference face's edge side-planes.
+    std::vector<Vec3> poly = incident.verts;
+    Vec3 refCentroid{};
+    for (const Vec3& v : ref->verts)
+    {
+        refCentroid += v;
+    }
+    refCentroid = refCentroid * (1.0f / static_cast<float>(ref->verts.size()));
+    for (std::size_t i = 0; i < ref->verts.size(); ++i)
+    {
+        const Vec3& v0 = ref->verts[i];
+        const Vec3& v1 = ref->verts[(i + 1) % ref->verts.size()];
+        Vec3 sideN = Vec3::crossProduct(v1 - v0, refNormal);
+        if (dot(sideN, refCentroid - v0) > 0.0f)
+        {
+            sideN = sideN * -1.0f; // point outward from the face
+        }
+        clipAgainstPlane(poly, sideN, dot(sideN, v0));
+    }
+
+    const float refFaceD = dot(refNormal, ref->verts[0]);
+    ContactManifold m;
+    m.normal = n; // b -> a
+    for (const Vec3& p : poly)
+    {
+        const float depth = refFaceD - dot(refNormal, p);
+        if (depth < -1e-4f)
+        {
+            continue; // above the reference face, not in contact
+        }
+        if (m.count >= kMaxManifoldPoints)
+        {
+            int shallow = 0;
+            for (int i = 1; i < m.count; ++i)
+            {
+                if (m.points[static_cast<std::size_t>(i)].penetration <
+                    m.points[static_cast<std::size_t>(shallow)].penetration)
+                {
+                    shallow = i;
+                }
+            }
+            if (depth > m.points[static_cast<std::size_t>(shallow)].penetration)
+            {
+                m.points[static_cast<std::size_t>(shallow)] = {p, std::max(depth, 0.0f)};
+            }
+            continue;
+        }
+        m.points[static_cast<std::size_t>(m.count++)] = {p, std::max(depth, 0.0f)};
+    }
+    return m;
+}
+
+// Generic convex-vs-anything contact (any pair where at least one shape is a
+// WorldConvex). GJK/EPA over support functions handles every such pair uniformly,
+// then a polytope-face clip or single witness point builds the manifold. Normal
+// points b -> a; honours the speculative margin (separated within margin → a
+// negative-penetration gap contact).
+[[nodiscard]] std::optional<ContactManifold> collideConvex(const WorldShape& a, const WorldShape& b,
+                                                           float margin)
+{
+    const ConvexContact c = gjkEpaContact(a, b);
+    if (!c.colliding)
+    {
+        if (c.depth > margin)
+        {
+            return std::nullopt; // separated beyond the speculative margin
+        }
+        return onePoint(c.normal, (c.pointA + c.pointB) * 0.5f, -c.depth); // gap contact
+    }
+    if (isPolytope(a) && isPolytope(b))
+    {
+        ContactManifold m = clipFaceManifold(polytopeFaces(a), polytopeFaces(b), c.normal);
+        if (m.count > 0)
+        {
+            return m;
+        }
+    }
+    // Curved-involving (or a degenerate clip) → a single point at the contact.
+    return onePoint(c.normal, (c.pointA + c.pointB) * 0.5f, c.depth);
+}
+
 } // namespace
 
 std::optional<ContactManifold> NarrowPhase::collide(const WorldShape& a, const WorldShape& b,
                                                     float speculativeMargin) const noexcept
 {
-    // 2-arg visit dispatches to the matching collidePair overload (6 canonical +
-    // 3 swapped). The result normal points b -> a.
-    return std::visit([speculativeMargin](const auto& sa, const auto& sb)
-                      { return collidePair(sa, sb, speculativeMargin); }, a, b);
+    // 2-arg visit. Primitive pairs go to the analytic collidePair overloads; any
+    // pair involving a convex hull goes through the generic GJK/EPA collideConvex.
+    // The result normal points b -> a.
+    return std::visit(
+        [&a, &b, speculativeMargin](const auto& sa,
+                                    const auto& sb) -> std::optional<ContactManifold>
+        {
+            using A = std::decay_t<decltype(sa)>;
+            using B = std::decay_t<decltype(sb)>;
+            if constexpr (std::is_same_v<A, WorldConvex> || std::is_same_v<B, WorldConvex>)
+            {
+                return collideConvex(a, b, speculativeMargin);
+            }
+            else
+            {
+                return collidePair(sa, sb, speculativeMargin);
+            }
+        },
+        a, b);
 }
 
 } // namespace fire_engine

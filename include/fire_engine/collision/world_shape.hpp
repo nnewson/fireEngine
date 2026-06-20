@@ -1,6 +1,8 @@
 #pragma once
 
+#include <span>
 #include <variant>
+#include <vector>
 
 #include <fire_engine/math/quaternion.hpp>
 #include <fire_engine/math/vec3.hpp>
@@ -35,6 +37,26 @@ struct WorldCapsule
     float radius{0.5f};
 };
 
-using WorldShape = std::variant<WorldSphere, WorldBox, WorldCapsule>;
+// One polygon face of a convex hull: its outward normal (in whatever frame the
+// owning vertices live) and an ordered (CCW-outward) loop of vertex indices.
+// Shared by the authored `ConvexHullShape` (local) and `WorldConvex` (the loops
+// are frame-independent; world normals are recomputed from the world vertices).
+struct ConvexFace
+{
+    Vec3 normal{};
+    std::vector<int> loop;
+};
+
+// A convex hull in world space. `vertices` is owned (the body transform applied to
+// the hull's local vertices each step); `faces` references the source
+// `ConvexHullShape::faces` (stable for the step). Support queries read `vertices`;
+// the manifold clip reads `faces` (recomputing world normals from `vertices`).
+struct WorldConvex
+{
+    std::vector<Vec3> vertices;
+    std::span<const ConvexFace> faces;
+};
+
+using WorldShape = std::variant<WorldSphere, WorldBox, WorldCapsule, WorldConvex>;
 
 } // namespace fire_engine
