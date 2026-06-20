@@ -180,21 +180,21 @@ private:
     [[nodiscard]]
     WorldShape worldShape(const ColliderEntry& entry) const;
 
-    void updateCollider(ColliderEntry& collider);
+    void updateCollider(ColliderEntry& collider, float dt);
     void resetCollider(ColliderEntry& collider);
-    void updateColliders();
+    void updateColliders(float dt);
     void resetResolvedColliders();
     void capturePreviousPositions() noexcept;
 
     [[nodiscard]]
-    std::vector<SolverContact> contacts();
+    std::vector<SolverContact> contacts(float dt);
 
     // Rebuild debugContacts_ from this step's solver contacts (real manifold
     // points + normal), before the solver mutates positions.
     void captureDebugContacts(const std::vector<SolverContact>& contacts);
 
     [[nodiscard]]
-    std::optional<SolverContact> contactForPair(const CollisionPair& pair);
+    std::optional<SolverContact> contactForPair(const CollisionPair& pair, float dt);
 
     [[nodiscard]]
     std::optional<ContactCandidate> contactCandidateForPair(const CollisionPair& pair);

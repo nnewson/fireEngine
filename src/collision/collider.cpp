@@ -108,7 +108,7 @@ Collider& Collider::operator=(Collider&& rhs) noexcept
     return *this;
 }
 
-void Collider::update(Mat4 world)
+void Collider::update(Mat4 world, Vec3 motion)
 {
     const AABB nextBounds = transformBounds(localBounds_, world);
     if (!hasWorldBounds_)
@@ -122,6 +122,12 @@ void Collider::update(Mat4 world)
 
     worldBounds_ = nextBounds;
     sweptWorldBounds_ = mergeBounds(previousWorldBounds_, worldBounds_);
+    // Extend the swept bound by the predicted forward motion so the broadphase
+    // pairs fast movers with what they will reach this step. The step still solves
+    // at the start pose, so the narrowphase sees the true gap. A zero motion leaves
+    // the plain previous→current swept bound unchanged.
+    const AABB predicted{worldBounds_.min + motion, worldBounds_.max + motion};
+    sweptWorldBounds_ = mergeBounds(sweptWorldBounds_, predicted);
     hasWorldBounds_ = true;
     updateEndPointValues();
 }

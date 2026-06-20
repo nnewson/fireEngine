@@ -29,4 +29,10 @@ inline constexpr float kRestitutionThreshold = 1.0f;
 // accumulated impulse for warm starting (proximity match).
 inline constexpr float kWarmStartMatchRadius = 0.02f;
 
+// Base speculative-contact margin (metres) for CCD: shapes separated by up to this
+// distance still generate a (negative-penetration) contact, on top of a
+// motion-dependent term (relative speed × dt). ~4× the linear slop catches slow
+// near-touching pairs; the motion term scales it so fast movers can't tunnel.
+inline constexpr float kSpeculativeDistance = 0.02f;
+
 } // namespace fire_engine

@@ -104,7 +104,11 @@ private:
         float posNormalMass{0.0f};
         float tangentMass1{0.0f};
         float tangentMass2{0.0f};
-        float restitutionBias{0.0f};
+        // Target relative-normal velocity for the normal constraint. For a
+        // penetrating/touching contact this is the restitution bounce velocity; for
+        // a speculative gap (penetration < 0) it is -separation/dt, which lets the
+        // body close the gap but not overshoot through the surface in one step.
+        float normalBias{0.0f};
         float penetration{0.0f};
         float friction{0.0f};
         float normalImpulse{0.0f};

@@ -122,10 +122,10 @@ void PhysicsWorld::step(float fixedDt)
         entry.body.linearVelocity(velocity);
     }
 
-    updateColliders();
+    updateColliders(fixedDt);
     broadPhase_.update();
 
-    auto frameContacts = contacts();
+    auto frameContacts = contacts(fixedDt);
     // Snapshot for debug draw before the solver advances bodies.
     captureDebugContacts(frameContacts);
 
@@ -144,8 +144,14 @@ void PhysicsWorld::captureDebugContacts(const std::vector<SolverContact>& contac
     for (const SolverContact& contact : contacts)
     {
         // Real manifold points + normal (target -> moving) from the narrowphase.
+        // Speculative gap points (penetration < 0) are predictions, not actual
+        // contacts, so they are filtered out of the debug view.
         for (int i = 0; i < contact.manifold.count; ++i)
         {
+            if (contact.manifold.points[i].penetration < 0.0f)
+            {
+                continue;
+            }
             debugContacts_.push_back(
                 DebugContact{contact.manifold.points[i].position, contact.manifold.normal});
         }
@@ -404,7 +410,7 @@ AABB PhysicsWorld::localBounds(const ColliderShape& shape) const noexcept
         shape);
 }
 
-void PhysicsWorld::updateCollider(ColliderEntry& collider)
+void PhysicsWorld::updateCollider(ColliderEntry& collider, float dt)
 {
     const BodyEntry* owner = findBody(collider.body);
     if (owner == nullptr)
@@ -412,8 +418,14 @@ void PhysicsWorld::updateCollider(ColliderEntry& collider)
         return;
     }
 
+    // Predicted displacement this step (dynamic bodies only — kinematic/static were
+    // already moved into place by the scene before step()). Threaded into the swept
+    // bound so the broadphase pairs fast movers with what they are about to reach.
+    const Vec3 motion =
+        owner->body.type() == PhysicsBodyType::Dynamic ? owner->body.linearVelocity() * dt : Vec3{};
+
     collider.collider.localBounds(localBounds(collider.shape));
-    collider.collider.update(owner->transform.world());
+    collider.collider.update(owner->transform.world(), motion);
 }
 
 void PhysicsWorld::resetCollider(ColliderEntry& collider)
@@ -428,13 +440,13 @@ void PhysicsWorld::resetCollider(ColliderEntry& collider)
     collider.collider.resetFrame(owner->transform.world());
 }
 
-void PhysicsWorld::updateColliders()
+void PhysicsWorld::updateColliders(float dt)
 {
     for (ColliderEntry& collider : colliders_)
     {
         if (collider.active)
         {
-            updateCollider(collider);
+            updateCollider(collider, dt);
         }
     }
 }
@@ -461,13 +473,13 @@ void PhysicsWorld::capturePreviousPositions() noexcept
     }
 }
 
-std::vector<PhysicsWorld::SolverContact> PhysicsWorld::contacts()
+std::vector<PhysicsWorld::SolverContact> PhysicsWorld::contacts(float dt)
 {
     std::vector<SolverContact> result;
     result.reserve(broadPhase_.possiblePairs().size());
     for (const CollisionPair& pair : broadPhase_.possiblePairs())
     {
-        auto contact = contactForPair(pair);
+        auto contact = contactForPair(pair, dt);
         if (contact.has_value())
         {
             result.push_back(contact.value());
@@ -532,7 +544,8 @@ PhysicsWorld::contactCandidateForPair(const CollisionPair& pair)
     return ContactCandidate{moving, target, movingCollider, targetCollider};
 }
 
-std::optional<PhysicsWorld::SolverContact> PhysicsWorld::contactForPair(const CollisionPair& pair)
+std::optional<PhysicsWorld::SolverContact> PhysicsWorld::contactForPair(const CollisionPair& pair,
+                                                                        float dt)
 {
     auto candidate = contactCandidateForPair(pair);
     if (!candidate.has_value())
@@ -540,11 +553,20 @@ std::optional<PhysicsWorld::SolverContact> PhysicsWorld::contactForPair(const Co
         return std::nullopt;
     }
 
+    // Speculative-contact margin (CCD): how far the pair could close this step.
+    // Using the pre-solve velocities is conservative (the solver only brakes), so a
+    // fast mover within this margin generates a negative-penetration gap contact the
+    // solver clamps against — no tunnelling. Slow pairs get ~kSpeculativeDistance.
+    const float closingReach = (candidate->moving->body.linearVelocity().magnitude() +
+                                candidate->target->body.linearVelocity().magnitude()) *
+                                   dt +
+                               kSpeculativeDistance;
+
     // Shape-specific manifold in world space. The normal points target -> moving,
     // i.e. the direction to push the moving body out of penetration.
     const WorldShape movingShape = worldShape(*candidate->movingCollider);
     const WorldShape targetShape = worldShape(*candidate->targetCollider);
-    auto manifold = narrowPhase_.collide(movingShape, targetShape);
+    auto manifold = narrowPhase_.collide(movingShape, targetShape, closingReach);
     if (!manifold.has_value() || manifold->count == 0)
     {
         return std::nullopt;

@@ -8,7 +8,6 @@
 #include <vector>
 
 #include <fire_engine/collision/geometry.hpp>
-#include <fire_engine/math/constants.hpp>
 
 namespace fire_engine
 {
@@ -43,13 +42,13 @@ constexpr float kGeomEps = 1e-6f;
 
 // ----- sphere / sphere / capsule analytic pairs (normal points b -> a) -------
 
-[[nodiscard]] std::optional<ContactManifold> collidePair(const WorldSphere& a,
-                                                         const WorldSphere& b) noexcept
+[[nodiscard]] std::optional<ContactManifold> collidePair(const WorldSphere& a, const WorldSphere& b,
+                                                         float margin) noexcept
 {
     const Vec3 d = a.center - b.center; // b -> a
     const float dist = d.magnitude();
     const float rsum = a.radius + b.radius;
-    if (dist >= rsum)
+    if (dist >= rsum + margin)
     {
         return std::nullopt;
     }
@@ -59,13 +58,14 @@ constexpr float kGeomEps = 1e-6f;
     return onePoint(n, (onA + onB) * 0.5f, rsum - dist);
 }
 
-[[nodiscard]] std::optional<ContactManifold> collidePair(const WorldSphere& s,
-                                                         const WorldBox& box) noexcept
+[[nodiscard]] std::optional<ContactManifold> collidePair(const WorldSphere& s, const WorldBox& box,
+                                                         float margin) noexcept
 {
     const Vec3 closest = closestPointOnObb(s.center, box);
     Vec3 d = s.center - closest; // box surface -> sphere centre
     const float dist2 = d.magnitudeSquared();
-    if (dist2 >= s.radius * s.radius)
+    const float reach = s.radius + margin;
+    if (dist2 >= reach * reach)
     {
         return std::nullopt;
     }
@@ -105,14 +105,14 @@ constexpr float kGeomEps = 1e-6f;
     return onePoint(n, closest, pen);
 }
 
-[[nodiscard]] std::optional<ContactManifold> collidePair(const WorldSphere& s,
-                                                         const WorldCapsule& cap) noexcept
+[[nodiscard]] std::optional<ContactManifold>
+collidePair(const WorldSphere& s, const WorldCapsule& cap, float margin) noexcept
 {
     const Vec3 closest = closestPointOnSegment(s.center, cap.p0, cap.p1);
     const Vec3 d = s.center - closest;
     const float dist = d.magnitude();
     const float rsum = s.radius + cap.radius;
-    if (dist >= rsum)
+    if (dist >= rsum + margin)
     {
         return std::nullopt;
     }
@@ -122,14 +122,14 @@ constexpr float kGeomEps = 1e-6f;
     return onePoint(n, (onS + onC) * 0.5f, rsum - dist);
 }
 
-[[nodiscard]] std::optional<ContactManifold> collidePair(const WorldCapsule& a,
-                                                         const WorldCapsule& b) noexcept
+[[nodiscard]] std::optional<ContactManifold>
+collidePair(const WorldCapsule& a, const WorldCapsule& b, float margin) noexcept
 {
     const SegmentClosest cl = closestPointsBetweenSegments(a.p0, a.p1, b.p0, b.p1);
     const Vec3 d = cl.c1 - cl.c2; // b -> a
     const float dist = d.magnitude();
     const float rsum = a.radius + b.radius;
-    if (dist >= rsum)
+    if (dist >= rsum + margin)
     {
         return std::nullopt;
     }
@@ -139,8 +139,8 @@ constexpr float kGeomEps = 1e-6f;
     return onePoint(n, (onA + onB) * 0.5f, rsum - dist);
 }
 
-[[nodiscard]] std::optional<ContactManifold> collidePair(const WorldBox& box,
-                                                         const WorldCapsule& cap) noexcept
+[[nodiscard]] std::optional<ContactManifold>
+collidePair(const WorldBox& box, const WorldCapsule& cap, float margin) noexcept
 {
     // Closest point between the capsule segment and the box, by alternating
     // closest-on-segment / closest-on-box a few times (converges quickly), then
@@ -155,7 +155,7 @@ constexpr float kGeomEps = 1e-6f;
     }
     Vec3 d = onBox - onSeg; // cap segment -> box surface
     const float dist = d.magnitude();
-    if (dist >= cap.radius)
+    if (dist >= cap.radius + margin)
     {
         return std::nullopt;
     }
@@ -229,14 +229,17 @@ void clipAgainstPlane(std::vector<Vec3>& poly, const Vec3& n, float d)
     poly.swap(out);
 }
 
-[[nodiscard]] std::optional<ContactManifold> collidePair(const WorldBox& A,
-                                                         const WorldBox& B) noexcept
+[[nodiscard]] std::optional<ContactManifold> collidePair(const WorldBox& A, const WorldBox& B,
+                                                         float margin) noexcept
 {
     const BoxFrame a = frameOf(A);
     const BoxFrame b = frameOf(B);
     const Vec3 t = b.c - a.c; // a -> b
 
     // Best face axis on each box (max separation = least penetration) + best edge.
+    // We scan every axis (no early-out on a separating axis) so the maximum
+    // separation is known: it drives both the margin reject and the speculative
+    // (separated-within-margin) contact below.
     float bestFaceSep = -std::numeric_limits<float>::infinity();
     Vec3 bestFaceAxis;
     const BoxFrame* refBox = &a;
@@ -247,10 +250,6 @@ void clipAgainstPlane(std::vector<Vec3>& poly, const Vec3& n, float d)
         for (int i = 0; i < 3; ++i)
         {
             const float s = separation(a, b, t, f.axis[i]);
-            if (s > 0.0f)
-            {
-                return std::nullopt; // separating axis found
-            }
             if (s > bestFaceSep)
             {
                 bestFaceSep = s;
@@ -274,16 +273,21 @@ void clipAgainstPlane(std::vector<Vec3>& poly, const Vec3& n, float d)
             }
             L = Vec3::normalise(L);
             const float s = separation(a, b, t, L);
-            if (s > 0.0f)
-            {
-                return std::nullopt;
-            }
             if (s > bestEdgeSep)
             {
                 bestEdgeSep = s;
                 bestEdgeAxis = L;
             }
         }
+    }
+
+    // Separated by more than the margin → no contact. When the best separation is
+    // in (0, margin] the boxes are apart but approaching close enough to matter: the
+    // face/edge paths below yield a single point with negative penetration (a gap)
+    // via the `-bestSep` depth, exactly the speculative contact the solver wants.
+    if (std::max(bestFaceSep, bestEdgeSep) > margin)
+    {
+        return std::nullopt;
     }
 
     // Prefer a face contact unless an edge axis is clearly less penetrating.
@@ -388,183 +392,34 @@ void clipAgainstPlane(std::vector<Vec3>& poly, const Vec3& n, float d)
 }
 
 // Swapped overloads: evaluate the canonical pair, then flip the normal.
-[[nodiscard]] std::optional<ContactManifold> collidePair(const WorldBox& box,
-                                                         const WorldSphere& s) noexcept
+[[nodiscard]] std::optional<ContactManifold> collidePair(const WorldBox& box, const WorldSphere& s,
+                                                         float margin) noexcept
 {
-    auto m = collidePair(s, box);
+    auto m = collidePair(s, box, margin);
+    return m ? std::optional<ContactManifold>{flipped(*m)} : std::nullopt;
+}
+[[nodiscard]] std::optional<ContactManifold>
+collidePair(const WorldCapsule& cap, const WorldSphere& s, float margin) noexcept
+{
+    auto m = collidePair(s, cap, margin);
     return m ? std::optional<ContactManifold>{flipped(*m)} : std::nullopt;
 }
 [[nodiscard]] std::optional<ContactManifold> collidePair(const WorldCapsule& cap,
-                                                         const WorldSphere& s) noexcept
+                                                         const WorldBox& box, float margin) noexcept
 {
-    auto m = collidePair(s, cap);
+    auto m = collidePair(box, cap, margin);
     return m ? std::optional<ContactManifold>{flipped(*m)} : std::nullopt;
-}
-[[nodiscard]] std::optional<ContactManifold> collidePair(const WorldCapsule& cap,
-                                                         const WorldBox& box) noexcept
-{
-    auto m = collidePair(box, cap);
-    return m ? std::optional<ContactManifold>{flipped(*m)} : std::nullopt;
-}
-
-
-[[nodiscard]]
-Vec3 axisNormal(Axis axis, float direction) noexcept
-{
-    switch (axis)
-    {
-    case Axis::X:
-        return {direction, 0.0f, 0.0f};
-    case Axis::Y:
-        return {0.0f, direction, 0.0f};
-    case Axis::Z:
-        return {0.0f, 0.0f, direction};
-    }
-
-    return {direction, 0.0f, 0.0f};
-}
-
-[[nodiscard]]
-bool intervalsOverlap(const AABB& lhs, const AABB& rhs, Axis axis) noexcept
-{
-    return lhs.axisMin(axis) <= rhs.axisMax(axis) && lhs.axisMax(axis) >= rhs.axisMin(axis);
-}
-
-[[nodiscard]]
-bool aabbOverlap(const AABB& lhs, const AABB& rhs) noexcept
-{
-    return intervalsOverlap(lhs, rhs, Axis::X) && intervalsOverlap(lhs, rhs, Axis::Y) &&
-           intervalsOverlap(lhs, rhs, Axis::Z);
-}
-
-[[nodiscard]]
-float axisComponent(Vec3 value, Axis axis) noexcept
-{
-    switch (axis)
-    {
-    case Axis::X:
-        return value.x();
-    case Axis::Y:
-        return value.y();
-    case Axis::Z:
-        return value.z();
-    }
-
-    return value.x();
-}
-
-[[nodiscard]]
-Vec3 boundsDelta(const AABB& previous, const AABB& current) noexcept
-{
-    return {current.min.x() - previous.min.x(), current.min.y() - previous.min.y(),
-            current.min.z() - previous.min.z()};
-}
-
-[[nodiscard]]
-Vec3 startingOverlapNormal(const AABB& movingBounds, const AABB& targetBounds) noexcept
-{
-    const std::array<Axis, 3> axes{Axis::X, Axis::Y, Axis::Z};
-    Axis bestAxis = Axis::X;
-    float bestDepth = std::numeric_limits<float>::max();
-
-    for (Axis axis : axes)
-    {
-        const float depth = std::min(movingBounds.axisMax(axis), targetBounds.axisMax(axis)) -
-                            std::max(movingBounds.axisMin(axis), targetBounds.axisMin(axis));
-        if (depth < bestDepth)
-        {
-            bestDepth = depth;
-            bestAxis = axis;
-        }
-    }
-
-    const float movingCentre =
-        (movingBounds.axisMin(bestAxis) + movingBounds.axisMax(bestAxis)) * 0.5f;
-    const float targetCentre =
-        (targetBounds.axisMin(bestAxis) + targetBounds.axisMax(bestAxis)) * 0.5f;
-    return axisNormal(bestAxis, movingCentre < targetCentre ? -1.0f : 1.0f);
 }
 
 } // namespace
 
-std::optional<ContactManifold> NarrowPhase::collide(const WorldShape& a,
-                                                    const WorldShape& b) const noexcept
+std::optional<ContactManifold> NarrowPhase::collide(const WorldShape& a, const WorldShape& b,
+                                                    float speculativeMargin) const noexcept
 {
     // 2-arg visit dispatches to the matching collidePair overload (6 canonical +
     // 3 swapped). The result normal points b -> a.
-    return std::visit([](const auto& sa, const auto& sb) { return collidePair(sa, sb); }, a, b);
-}
-
-std::optional<SweptAabbContact> NarrowPhase::sweptAabb(const Collider& moving,
-                                                       const Collider& target) const noexcept
-{
-    const AABB movingStart = moving.previousWorldBounds();
-    const AABB movingEnd = moving.worldBounds();
-    const AABB targetStart = target.previousWorldBounds();
-    const AABB targetEnd = target.worldBounds();
-    const Vec3 relativeDelta =
-        boundsDelta(movingStart, movingEnd) - boundsDelta(targetStart, targetEnd);
-
-    if (relativeDelta.magnitudeSquared() < float_epsilon * float_epsilon)
-    {
-        if (!aabbOverlap(movingEnd, targetEnd))
-        {
-            return std::nullopt;
-        }
-        return SweptAabbContact{0.0f, startingOverlapNormal(movingEnd, targetEnd)};
-    }
-
-    const std::array<Axis, 3> axes{Axis::X, Axis::Y, Axis::Z};
-    float entryTime = -std::numeric_limits<float>::infinity();
-    float exitTime = std::numeric_limits<float>::infinity();
-    Vec3 normal{};
-
-    for (Axis axis : axes)
-    {
-        const float delta = axisComponent(relativeDelta, axis);
-        float axisEntry = -std::numeric_limits<float>::infinity();
-        float axisExit = std::numeric_limits<float>::infinity();
-        Vec3 axisEntryNormal{};
-
-        if (std::abs(delta) < float_epsilon)
-        {
-            if (!intervalsOverlap(movingStart, targetStart, axis))
-            {
-                return std::nullopt;
-            }
-        }
-        else if (delta > 0.0f)
-        {
-            axisEntry = (targetStart.axisMin(axis) - movingStart.axisMax(axis)) / delta;
-            axisExit = (targetStart.axisMax(axis) - movingStart.axisMin(axis)) / delta;
-            axisEntryNormal = axisNormal(axis, -1.0f);
-        }
-        else
-        {
-            axisEntry = (targetStart.axisMax(axis) - movingStart.axisMin(axis)) / delta;
-            axisExit = (targetStart.axisMin(axis) - movingStart.axisMax(axis)) / delta;
-            axisEntryNormal = axisNormal(axis, 1.0f);
-        }
-
-        if (axisEntry > entryTime)
-        {
-            entryTime = axisEntry;
-            normal = axisEntryNormal;
-        }
-        exitTime = std::min(exitTime, axisExit);
-    }
-
-    if (entryTime > exitTime || exitTime < 0.0f || entryTime > 1.0f)
-    {
-        return std::nullopt;
-    }
-
-    if (entryTime < 0.0f)
-    {
-        return SweptAabbContact{0.0f, startingOverlapNormal(movingStart, targetStart)};
-    }
-
-    return SweptAabbContact{entryTime, normal};
+    return std::visit([speculativeMargin](const auto& sa, const auto& sb)
+                      { return collidePair(sa, sb, speculativeMargin); }, a, b);
 }
 
 } // namespace fire_engine

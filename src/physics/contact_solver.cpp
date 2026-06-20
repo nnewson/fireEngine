@@ -80,12 +80,23 @@ void ContactSolver::prepare(const std::vector<SolverBody>& bodies,
             cp.tangentMass2 = cp.normalMass;
             cp.key = contact.key;
 
-            // Restitution as a target separating speed, suppressed below the
-            // resting threshold so settling stacks do not buzz. vRelNormal < 0
-            // means the bodies are approaching.
-            const float vRelNormal = dot(bodyA.velocity - bodyB.velocity, cp.normal);
-            cp.restitutionBias =
-                vRelNormal < -kRestitutionThreshold ? -contact.restitution * vRelNormal : 0.0f;
+            if (cp.penetration < 0.0f)
+            {
+                // Speculative gap contact: target relative-normal velocity of
+                // -separation/dt (= penetration/dt, penetration < 0). The body may
+                // close the gap this step but the normal-impulse clamp stops it
+                // overshooting through the surface — anti-tunnelling, no restitution.
+                cp.normalBias = cp.penetration / dt;
+            }
+            else
+            {
+                // Restitution as a target separating speed, suppressed below the
+                // resting threshold so settling stacks do not buzz. vRelNormal < 0
+                // means the bodies are approaching.
+                const float vRelNormal = dot(bodyA.velocity - bodyB.velocity, cp.normal);
+                cp.normalBias =
+                    vRelNormal < -kRestitutionThreshold ? -contact.restitution * vRelNormal : 0.0f;
+            }
 
             // Warm start: inherit the previous step's impulses from the nearest
             // cached point of this pair (resting bodies barely move, so proximity
@@ -160,7 +171,7 @@ void ContactSolver::solveVelocity(std::vector<SolverBody>& bodies)
         }
 
         const float vn = dot(a.velocity - b.velocity, cp.normal);
-        float lambda = -cp.normalMass * (vn - cp.restitutionBias);
+        float lambda = -cp.normalMass * (vn - cp.normalBias);
         const float oldImpulse = cp.normalImpulse;
         cp.normalImpulse = std::max(oldImpulse + lambda, 0.0f);
         lambda = cp.normalImpulse - oldImpulse;

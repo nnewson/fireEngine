@@ -6,6 +6,7 @@
 #include <fire_engine/collision/aabb.hpp>
 #include <fire_engine/collision/end_point.hpp>
 #include <fire_engine/math/mat4.hpp>
+#include <fire_engine/math/vec3.hpp>
 
 namespace fire_engine
 {
@@ -82,7 +83,12 @@ public:
         collisionMask_ = collisionMask;
     }
 
-    void update(Mat4 world);
+    // Refresh world/swept bounds from `world`. `motion` is the predicted
+    // displacement this step (e.g. velocity × dt): the swept bound is extended to
+    // cover it, so the broadphase pairs a fast mover with what it is about to reach
+    // even when it started this step from rest. Default {} reproduces the plain
+    // previous→current swept bound.
+    void update(Mat4 world, Vec3 motion = Vec3{});
     void resetFrame(Mat4 world);
 
     [[nodiscard]]

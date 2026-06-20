@@ -168,3 +168,36 @@ TEST_CASE("ContactSolver.PositionPassPushesOutOfPenetration", "[ContactSolver]")
     CHECK(bodies[0].position.y() < 0.1f);                  // by less than the full penetration
     CHECK(bodies[1].position.y() == Catch::Approx(-1.0f)); // immovable target stays put
 }
+
+TEST_CASE("ContactSolver.SpeculativeContactBrakesOvershoot", "[ContactSolver]")
+{
+    // A speculative gap contact (negative penetration = a 0.05 m gap) lets the body
+    // close the gap but no further: a body closing far faster than gap/dt is braked
+    // to exactly gap/dt (= 0.05 * 60 = 3 m/s), so it reaches the surface this step
+    // without tunnelling through it.
+    const float dt = 1.0f / 60.0f;
+    std::vector<SolverBody> bodies(2);
+    bodies[0].velocity = {0.0f, -10.0f, 0.0f};
+    bodies[0].invMass = 1.0f;
+    bodies[0].positionWeight = 1.0f;
+
+    ContactSolver solver;
+    runVelocity(solver, bodies, {makeContact({0.0f, 1.0f, 0.0f}, -0.05f, 0.0f, 0.0f)});
+
+    CHECK(bodies[0].velocity.y() == Catch::Approx(-0.05f / dt).margin(1e-3f)); // = -3 m/s
+}
+
+TEST_CASE("ContactSolver.SpeculativeContactIgnoresSlowApproach", "[ContactSolver]")
+{
+    // A body approaching slower than gap/dt won't reach the surface this step, so
+    // the speculative contact applies no impulse and leaves its velocity untouched.
+    std::vector<SolverBody> bodies(2);
+    bodies[0].velocity = {0.0f, -1.0f, 0.0f}; // gap/dt = 3 m/s; 1 m/s won't reach
+    bodies[0].invMass = 1.0f;
+    bodies[0].positionWeight = 1.0f;
+
+    ContactSolver solver;
+    runVelocity(solver, bodies, {makeContact({0.0f, 1.0f, 0.0f}, -0.05f, 0.0f, 0.0f)});
+
+    CHECK(bodies[0].velocity.y() == Catch::Approx(-1.0f).margin(1e-4f)); // unchanged
+}

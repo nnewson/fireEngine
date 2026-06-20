@@ -270,6 +270,44 @@ TEST_CASE("PhysicsWorld.StackOfBoxesSettlesAndStaysStill", "[PhysicsWorld]")
     CHECK(y2 > y1);
 }
 
+TEST_CASE("PhysicsWorld.FastBulletDoesNotTunnelThroughThinWall", "[PhysicsWorld]")
+{
+    // Speculative-margin CCD: a fast 'bullet' aimed at a thin static wall would
+    // tunnel under discrete-only collision — at 300 m/s it moves 5 m/step, so its
+    // end-of-step pose is well past the wall. The motion-scaled speculative margin
+    // generates a gap contact and the solver brakes the closing velocity to exactly
+    // reach the wall, so the bullet ends resting against the near face, not beyond.
+    PhysicsWorld physics;
+
+    PhysicsBodyDesc wall;
+    wall.type = PhysicsBodyType::Static;
+    wall.position = {2.5f, 0.0f, 0.0f};
+    wall.material = PhysicsMaterial{.restitution = 0.0f, .friction = 0.0f};
+    const auto wallBody = physics.createBody(wall);
+    [[maybe_unused]] const auto wallCollider = physics.createCollider(
+        wallBody, ColliderDesc{.shape = BoxShape{.halfExtents = {0.1f, 2.0f, 2.0f}}});
+
+    PhysicsBodyDesc bullet;
+    bullet.type = PhysicsBodyType::Dynamic;
+    bullet.gravityScale = 0.0f;
+    bullet.linearVelocity = {300.0f, 0.0f, 0.0f};
+    bullet.material = PhysicsMaterial{.restitution = 0.0f, .friction = 0.0f};
+    const auto bulletBody = physics.createBody(bullet);
+    [[maybe_unused]] const auto bulletCollider = physics.createCollider(
+        bulletBody, ColliderDesc{.shape = BoxShape{.halfExtents = {0.1f, 0.1f, 0.1f}}});
+
+    for (int i = 0; i < 30; ++i)
+    {
+        physics.step(1.0f / 60.0f);
+    }
+
+    const Vec3 p = physics.bodyTransform(bulletBody)->position();
+    // Wall near face at x=2.4, bullet half-width 0.1 → rests at body x≈2.3.
+    CHECK(p.x() < 2.4f);                              // never crossed to the far side
+    CHECK(p.x() == Catch::Approx(2.3f).margin(0.1f)); // settled against the near face
+    CHECK(physics.body(bulletBody)->linearVelocity().approxEqual(Vec3{0.0f, 0.0f, 0.0f}, 0.1f));
+}
+
 TEST_CASE("SceneGraphPhysicsSync.KinematicNodesPushAndDynamicNodesPullTransforms",
           "[SceneGraphPhysicsSync]")
 {

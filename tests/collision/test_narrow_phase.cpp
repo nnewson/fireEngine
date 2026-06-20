@@ -4,9 +4,6 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
-using fire_engine::Collider;
-using fire_engine::ContactManifold;
-using fire_engine::Mat4;
 using fire_engine::NarrowPhase;
 using fire_engine::Quaternion;
 using fire_engine::Vec3;
@@ -14,72 +11,6 @@ using fire_engine::WorldBox;
 using fire_engine::WorldCapsule;
 using fire_engine::WorldShape;
 using fire_engine::WorldSphere;
-
-namespace
-{
-
-Collider makeCollider(Vec3 min, Vec3 max, Mat4 world = Mat4::identity())
-{
-    Collider collider;
-    collider.localBounds({min, max});
-    collider.update(world);
-    return collider;
-}
-
-} // namespace
-
-TEST_CASE("SweptAabb.MovingBoxReportsTimeOfImpactAndNormal", "[SweptAabb]")
-{
-    NarrowPhase narrowPhase;
-    Collider moving = makeCollider({0.0f, 0.0f, 0.0f}, {1.0f, 1.0f, 1.0f});
-    Collider target = makeCollider({3.0f, 0.0f, 0.0f}, {4.0f, 1.0f, 1.0f});
-
-    moving.update(Mat4::translate({4.0f, 0.0f, 0.0f}));
-
-    auto contact = narrowPhase.sweptAabb(moving, target);
-    REQUIRE(contact.has_value());
-    CHECK(contact->toi == Catch::Approx(0.5f).margin(1e-5f));
-    CHECK(contact->normal == Vec3(-1.0f, 0.0f, 0.0f));
-}
-
-TEST_CASE("SweptAabb.MissReturnsNoContact", "[SweptAabb]")
-{
-    NarrowPhase narrowPhase;
-    Collider moving = makeCollider({0.0f, 0.0f, 0.0f}, {1.0f, 1.0f, 1.0f});
-    Collider target = makeCollider({3.0f, 3.0f, 0.0f}, {4.0f, 4.0f, 1.0f});
-
-    moving.update(Mat4::translate({4.0f, 0.0f, 0.0f}));
-
-    CHECK_FALSE(narrowPhase.sweptAabb(moving, target).has_value());
-}
-
-TEST_CASE("SweptAabb.StartingOverlapReturnsImmediateContact", "[SweptAabb]")
-{
-    NarrowPhase narrowPhase;
-    Collider moving = makeCollider({0.0f, 0.0f, 0.0f}, {2.0f, 2.0f, 2.0f});
-    Collider target = makeCollider({1.0f, 0.0f, 0.0f}, {3.0f, 2.0f, 2.0f});
-
-    moving.update(Mat4::translate({1.0f, 0.0f, 0.0f}));
-
-    auto contact = narrowPhase.sweptAabb(moving, target);
-    REQUIRE(contact.has_value());
-    CHECK(contact->toi == Catch::Approx(0.0f).margin(1e-5f));
-    CHECK(contact->normal == Vec3(-1.0f, 0.0f, 0.0f));
-}
-
-TEST_CASE("SweptAabb.StartingTouchUsesGeometryNormalSoMovingAwayCanBeIgnored", "[SweptAabb]")
-{
-    NarrowPhase narrowPhase;
-    Collider moving = makeCollider({0.0f, 0.0f, 0.0f}, {1.0f, 1.0f, 1.0f});
-    Collider target = makeCollider({1.0f, 0.0f, 0.0f}, {2.0f, 1.0f, 1.0f});
-
-    moving.update(Mat4::translate({-1.0f, 0.0f, 0.0f}));
-
-    auto contact = narrowPhase.sweptAabb(moving, target);
-    REQUIRE(contact.has_value());
-    CHECK(contact->toi == Catch::Approx(0.0f).margin(1e-5f));
-    CHECK(contact->normal == Vec3(-1.0f, 0.0f, 0.0f));
-}
 
 // --- Shape-specific contact manifolds (collide). Normal points b -> a. -------
 
@@ -163,4 +94,39 @@ TEST_CASE("Collide.BoxCapsule", "[Collide]")
     // box(a) <- cap(b): normal points cap -> box = -x.
     CHECK(m->normal.approxEqual(Vec3{-1.0f, 0.0f, 0.0f}, 1e-4f));
     CHECK(m->maxPenetration() == Catch::Approx(0.1f).margin(1e-4f));
+}
+
+// --- Speculative margin: separated-but-within-margin → negative-penetration gap --
+
+TEST_CASE("Collide.SpeculativeSphereGapWithinMargin", "[Collide]")
+{
+    NarrowPhase np;
+    const WorldShape a{WorldSphere{{0.0f, 0.0f, 0.0f}, 1.0f}};
+    const WorldShape b{WorldSphere{{2.5f, 0.0f, 0.0f}, 1.0f}}; // surfaces 0.5 apart
+
+    CHECK_FALSE(np.collide(a, b).has_value()); // margin 0 → separated, no contact
+
+    auto m = np.collide(a, b, 1.0f); // margin covers the 0.5 gap
+    REQUIRE(m.has_value());
+    CHECK(m->count == 1);
+    CHECK(m->normal.approxEqual(Vec3{-1.0f, 0.0f, 0.0f}, 1e-5f));          // b -> a
+    CHECK(m->points[0].penetration == Catch::Approx(-0.5f).margin(1e-5f)); // negative = gap
+
+    CHECK_FALSE(np.collide(a, b, 0.3f).has_value()); // margin < gap → still none
+}
+
+TEST_CASE("Collide.SpeculativeBoxGapWithinMargin", "[Collide]")
+{
+    NarrowPhase np;
+    const WorldShape a{WorldBox{{0.0f, 0.0f, 0.0f}, {1.0f, 1.0f, 1.0f}, Quaternion::identity()}};
+    const WorldShape b{WorldBox{{3.0f, 0.0f, 0.0f}, {1.0f, 1.0f, 1.0f}, Quaternion::identity()}};
+    // Faces 1.0 apart along x (the BoxBoxSeparated case).
+    CHECK_FALSE(np.collide(a, b).has_value()); // margin 0 → none
+
+    auto m = np.collide(a, b, 1.5f);
+    REQUIRE(m.has_value());
+    REQUIRE(m->count >= 1);
+    CHECK(m->normal.approxEqual(Vec3{-1.0f, 0.0f, 0.0f}, 1e-5f));          // b -> a
+    CHECK(m->points[0].penetration == Catch::Approx(-1.0f).margin(1e-4f)); // gap
+    CHECK(m->maxPenetration() == Catch::Approx(0.0f).margin(1e-6f));       // gaps don't count
 }
