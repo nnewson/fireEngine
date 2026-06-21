@@ -231,7 +231,7 @@ void FireEngine::loadScene(std::string_view scene_path)
     std::string_view path = scene_path.empty() ? default_scene : scene_path;
     std::vector<GltfLoader::ClothRegistration> clothRegistrations;
     Node* activeCamera = GltfLoader::loadScene(std::string(path), scene_, renderer_->resources(),
-                                               assets_, physics_, &clothRegistrations);
+                                               assets_, physics_, &clothRegistrations, &ragdolls_);
 
     // Register any glTF `extras.Cloth` meshes with the soft-body solver. The
     // geometry (Assets-owned) keeps its storage vertex buffer; the solver writes it.

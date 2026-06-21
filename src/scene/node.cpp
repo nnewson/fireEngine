@@ -17,6 +17,18 @@ Node& Node::addChild(std::unique_ptr<Node> child)
 
 void Node::update(const InputState& input_state, const Mat4& parentComposedWorld)
 {
+    // A world-override (ragdoll drive) is authoritative: the physics body's world
+    // pose is the composed world, bypassing the parent chain and local transform.
+    if (worldOverride_)
+    {
+        setComposedWorld(*worldOverride_);
+        for (auto& child : children_)
+        {
+            child->update(input_state, composedWorld_);
+        }
+        return;
+    }
+
     if (controllable_)
     {
         controllable_->update(input_state.controllerState(), transform_, parentComposedWorld);
@@ -31,14 +43,7 @@ void Node::update(const InputState& input_state, const Mat4& parentComposedWorld
 
     // Composed world includes component effects (e.g. Animator's model matrix)
     Mat4 componentMatrix = componentModelMatrix(component_);
-    Mat4 newComposedWorld = parentComposedWorld * transform_.local() * componentMatrix;
-
-    // Carry last frame's world for motion vectors (TAA) and continuous
-    // collision / constraint solving. First frame: previous == current so the
-    // motion vector is zero rather than a jump from the identity default.
-    previousComposedWorld_ = hasComposedWorld_ ? composedWorld_ : newComposedWorld;
-    hasComposedWorld_ = true;
-    composedWorld_ = newComposedWorld;
+    setComposedWorld(parentComposedWorld * transform_.local() * componentMatrix);
 
     for (auto& child : children_)
     {
@@ -48,19 +53,35 @@ void Node::update(const InputState& input_state, const Mat4& parentComposedWorld
 
 void Node::resolve(const Mat4& parentComposedWorld)
 {
+    if (worldOverride_)
+    {
+        setComposedWorld(*worldOverride_);
+        for (auto& child : children_)
+        {
+            child->resolve(composedWorld_);
+        }
+        return;
+    }
+
     transform_.update(parentComposedWorld);
 
     Mat4 componentMatrix = componentModelMatrix(component_);
-    Mat4 newComposedWorld = parentComposedWorld * transform_.local() * componentMatrix;
-
-    previousComposedWorld_ = hasComposedWorld_ ? composedWorld_ : newComposedWorld;
-    hasComposedWorld_ = true;
-    composedWorld_ = newComposedWorld;
+    setComposedWorld(parentComposedWorld * transform_.local() * componentMatrix);
 
     for (auto& child : children_)
     {
         child->resolve(composedWorld_);
     }
+}
+
+void Node::setComposedWorld(const Mat4& newComposedWorld) noexcept
+{
+    // Carry last frame's world for motion vectors (TAA) and continuous
+    // collision / constraint solving. First frame: previous == current so the
+    // motion vector is zero rather than a jump from the identity default.
+    previousComposedWorld_ = hasComposedWorld_ ? composedWorld_ : newComposedWorld;
+    hasComposedWorld_ = true;
+    composedWorld_ = newComposedWorld;
 }
 
 void Node::render(const RenderContext& ctx, const Mat4& parentWorld)

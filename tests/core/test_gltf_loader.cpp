@@ -238,6 +238,16 @@ static std::optional<ClothMeshParams> nodeExtrasClothFromJson(std::string_view j
     return GltfLoader::nodeExtrasCloth(&extras);
 }
 
+static std::optional<fire_engine::RagdollParams> nodeExtrasRagdollFromJson(std::string_view json)
+{
+    simdjson::dom::parser parser;
+    simdjson::padded_string padded{std::string{json}};
+    auto doc = parser.parse(padded);
+    simdjson::dom::object extras;
+    CHECK(doc.get_object().get(extras) == simdjson::SUCCESS);
+    return GltfLoader::nodeExtrasRagdoll(&extras);
+}
+
 // Applies a fastgltf matrix to a Node's Transform via decomposition,
 // mirroring the logic in GltfLoader::applyTRS for the matrix branch.
 static void applyMatrix(const fastgltf::math::fmat4x4& mat, Node& node)
@@ -615,6 +625,47 @@ TEST_CASE("GltfNodeExtras.InvalidClothObjectThrows", "[GltfNodeExtras]")
 TEST_CASE("GltfNodeExtras.InvalidClothPinThrows", "[GltfNodeExtras]")
 {
     CHECK_THROWS_AS(nodeExtrasClothFromJson(R"({"Cloth":{"Pin":"Middle"}})"), std::runtime_error);
+}
+
+TEST_CASE("GltfNodeExtras.NoRagdollExtrasReturnsNullopt", "[GltfNodeExtras]")
+{
+    CHECK_FALSE(nodeExtrasRagdollFromJson(R"({"Physics":{"BodyType":"Dynamic"}})").has_value());
+}
+
+TEST_CASE("GltfNodeExtras.EmptyRagdollUsesDefaults", "[GltfNodeExtras]")
+{
+    const auto params = nodeExtrasRagdollFromJson(R"({"Ragdoll":{}})");
+    REQUIRE(params.has_value());
+    const fire_engine::RagdollParams defaults;
+    CHECK(params->mass == defaults.mass);
+    CHECK(params->radius == defaults.radius);
+    CHECK(params->coneTwist == defaults.coneTwist);
+    CHECK(params->swingLimit == defaults.swingLimit);
+}
+
+TEST_CASE("GltfNodeExtras.RagdollFieldsParse", "[GltfNodeExtras]")
+{
+    const auto params = nodeExtrasRagdollFromJson(
+        R"({"Ragdoll":{"Mass":2.5,"Radius":0.1,"BoneLength":0.3,"ConeTwist":false,)"
+        R"("SwingLimit":0.9,"TwistLimit":0.6}})");
+    REQUIRE(params.has_value());
+    CHECK(params->mass == Catch::Approx(2.5f));
+    CHECK(params->radius == Catch::Approx(0.1f));
+    CHECK(params->defaultBoneLength == Catch::Approx(0.3f));
+    CHECK_FALSE(params->coneTwist);
+    CHECK(params->swingLimit == Catch::Approx(0.9f));
+    CHECK(params->twistLimit == Catch::Approx(0.6f));
+}
+
+TEST_CASE("GltfNodeExtras.InvalidRagdollObjectThrows", "[GltfNodeExtras]")
+{
+    CHECK_THROWS_AS(nodeExtrasRagdollFromJson(R"({"Ragdoll":true})"), std::runtime_error);
+}
+
+TEST_CASE("GltfNodeExtras.NonNumericRagdollMassThrows", "[GltfNodeExtras]")
+{
+    CHECK_THROWS_AS(nodeExtrasRagdollFromJson(R"({"Ragdoll":{"Mass":"heavy"}})"),
+                    std::runtime_error);
 }
 
 TEST_CASE("GltfNodeExtras.NonNumericVelocityThrows", "[GltfNodeExtras]")

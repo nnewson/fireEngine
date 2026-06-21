@@ -297,6 +297,52 @@ public:
         return {rotX, rotY, rotZ};
     }
 
+    // Extract the rotation from a transform matrix's upper-left 3×3 (assumed
+    // orthonormal — strip any scale first). Column-major element access m[row, col];
+    // Shepperd's method, picking the largest diagonal term for numerical stability.
+    [[nodiscard]]
+    static Quaternion fromMatrix(const Mat4& m) noexcept
+    {
+        const float m00 = m[0, 0];
+        const float m11 = m[1, 1];
+        const float m22 = m[2, 2];
+        const float trace = m00 + m11 + m22;
+        Quaternion q;
+        if (trace > 0.0f)
+        {
+            const float s = std::sqrt(trace + 1.0f) * 2.0f; // s = 4w
+            q.w(0.25f * s);
+            q.x((m[2, 1] - m[1, 2]) / s);
+            q.y((m[0, 2] - m[2, 0]) / s);
+            q.z((m[1, 0] - m[0, 1]) / s);
+        }
+        else if (m00 > m11 && m00 > m22)
+        {
+            const float s = std::sqrt(1.0f + m00 - m11 - m22) * 2.0f; // s = 4x
+            q.w((m[2, 1] - m[1, 2]) / s);
+            q.x(0.25f * s);
+            q.y((m[0, 1] + m[1, 0]) / s);
+            q.z((m[0, 2] + m[2, 0]) / s);
+        }
+        else if (m11 > m22)
+        {
+            const float s = std::sqrt(1.0f + m11 - m00 - m22) * 2.0f; // s = 4y
+            q.w((m[0, 2] - m[2, 0]) / s);
+            q.x((m[0, 1] + m[1, 0]) / s);
+            q.y(0.25f * s);
+            q.z((m[1, 2] + m[2, 1]) / s);
+        }
+        else
+        {
+            const float s = std::sqrt(1.0f + m22 - m00 - m11) * 2.0f; // s = 4z
+            q.w((m[1, 0] - m[0, 1]) / s);
+            q.x((m[0, 2] + m[2, 0]) / s);
+            q.y((m[1, 2] + m[2, 1]) / s);
+            q.z(0.25f * s);
+        }
+        return Quaternion::normalise(q);
+    }
+
     [[nodiscard]]
     Mat4 toMat4() const noexcept
     {

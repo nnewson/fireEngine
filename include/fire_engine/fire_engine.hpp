@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <memory>
+#include <vector>
 
 #include <fire_engine/graphics/assets.hpp>
 #include <fire_engine/graphics/geometry.hpp>
@@ -10,6 +11,7 @@
 #include <fire_engine/platform/window.hpp>
 #include <fire_engine/render/renderer.hpp>
 #include <fire_engine/scene/camera.hpp>
+#include <fire_engine/scene/ragdoll.hpp>
 #include <fire_engine/scene/scene_graph.hpp>
 
 namespace fire_engine
@@ -42,6 +44,10 @@ private:
     Assets assets_;
     PhysicsWorld physics_;
     Camera* camera_{nullptr};
+    // Ragdolls auto-built from `extras.Ragdoll` skinned nodes. Retained for the
+    // app's lifetime: they hold the bone-node ↔ body bindings (the bodies live in
+    // physics_, but the Ragdoll owns the activation/override state).
+    std::vector<Ragdoll> ragdolls_;
 
     // Floor plane — kept outside `assets_` because
     // resizing the asset vector after the glTF loader populated it would

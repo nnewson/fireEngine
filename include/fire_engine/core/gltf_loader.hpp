@@ -21,6 +21,7 @@
 #include <fire_engine/math/vec3.hpp>
 #include <fire_engine/physics/collider_shape.hpp>
 #include <fire_engine/physics/physics_world.hpp>
+#include <fire_engine/scene/ragdoll.hpp>
 
 namespace simdjson::dom
 {
@@ -64,10 +65,13 @@ public:
     // Returns the first imported glTF camera node, or nullptr when the scene
     // has no authored camera. The node owns an engine Camera component. When
     // `clothRegistrations` is non-null, any `extras.Cloth` nodes are appended for
-    // the caller to register with the soft-body solver.
+    // the caller to register with the soft-body solver. When `ragdolls` is non-null,
+    // any `extras.Ragdoll` node auto-builds a Ragdoll from its skin's joints (bodies
+    // + joints created in `physics`, activated), appended for the caller to retain.
     static Node* loadScene(const std::string& path, SceneGraph& scene, Resources& resources,
                            Assets& assets, PhysicsWorld& physics,
-                           std::vector<ClothRegistration>* clothRegistrations = nullptr);
+                           std::vector<ClothRegistration>* clothRegistrations = nullptr,
+                           std::vector<Ragdoll>* ragdolls = nullptr);
 
     // Synthesises per-vertex normals from a triangle mesh when the source
     // glTF lacks the NORMAL attribute. Smooth (area-weighted accumulate-and-
@@ -130,6 +134,12 @@ public:
     [[nodiscard]]
     static std::optional<ClothMeshParams> nodeExtrasCloth(simdjson::dom::object* extras);
 
+    // `extras.Ragdoll` authoring parameters on a skinned node. All fields optional
+    // (sensible defaults from RagdollParams); presence of the "Ragdoll" object is
+    // what flags the node. ConeTwist is a bool; the rest are numbers.
+    [[nodiscard]]
+    static std::optional<RagdollParams> nodeExtrasRagdoll(simdjson::dom::object* extras);
+
 private:
     // Asset parsing and setup
     [[nodiscard]]
@@ -137,7 +147,8 @@ private:
     parseAsset(const std::filesystem::path& gltfPath,
                std::unordered_set<std::size_t>* controllableNodeIndices = nullptr,
                std::unordered_map<std::size_t, PhysicsConfig>* physicsNodeConfigs = nullptr,
-               std::unordered_map<std::size_t, ClothMeshParams>* clothNodeConfigs = nullptr);
+               std::unordered_map<std::size_t, ClothMeshParams>* clothNodeConfigs = nullptr,
+               std::unordered_map<std::size_t, RagdollParams>* ragdollNodeConfigs = nullptr);
 
     static void presizeAssets(const fastgltf::Asset& asset, Assets& assets);
 

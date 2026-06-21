@@ -80,6 +80,7 @@ struct ExtrasParseState
     std::unordered_set<std::size_t>* controllableNodeIndices{nullptr};
     std::unordered_map<std::size_t, GltfLoader::PhysicsConfig>* physicsNodeConfigs{nullptr};
     std::unordered_map<std::size_t, ClothMeshParams>* clothNodeConfigs{nullptr};
+    std::unordered_map<std::size_t, RagdollParams>* ragdollNodeConfigs{nullptr};
 };
 } // namespace
 
@@ -144,6 +145,15 @@ void parseNodeExtras(simdjson::dom::object* extras, std::size_t objectIndex,
         if (cloth.has_value())
         {
             state->clothNodeConfigs->insert_or_assign(objectIndex, cloth.value());
+        }
+    }
+
+    if (state->ragdollNodeConfigs != nullptr)
+    {
+        auto ragdoll = GltfLoader::nodeExtrasRagdoll(extras);
+        if (ragdoll.has_value())
+        {
+            state->ragdollNodeConfigs->insert_or_assign(objectIndex, ragdoll.value());
         }
     }
 }
@@ -414,18 +424,61 @@ std::optional<ClothMeshParams> GltfLoader::nodeExtrasCloth(simdjson::dom::object
     return params;
 }
 
+std::optional<RagdollParams> GltfLoader::nodeExtrasRagdoll(simdjson::dom::object* extras)
+{
+    if (extras == nullptr)
+    {
+        return std::nullopt;
+    }
+
+    simdjson::dom::object ragdollObject;
+    auto ragdollElement = extras->at_key("Ragdoll");
+    if (ragdollElement.error() == simdjson::NO_SUCH_FIELD)
+    {
+        return std::nullopt;
+    }
+    if (ragdollElement.get_object().get(ragdollObject) != simdjson::SUCCESS)
+    {
+        throw std::runtime_error("glTF Ragdoll extras must be an object");
+    }
+
+    const ExtrasReader reader{ragdollObject, "Ragdoll"};
+    RagdollParams params;
+    params.mass = reader.readFloat("Mass", params.mass, "Mass");
+    params.radius = reader.readFloat("Radius", params.radius, "Radius");
+    params.defaultBoneLength =
+        reader.readFloat("BoneLength", params.defaultBoneLength, "BoneLength");
+    params.swingLimit = reader.readFloat("SwingLimit", params.swingLimit, "SwingLimit");
+    params.twistLimit = reader.readFloat("TwistLimit", params.twistLimit, "TwistLimit");
+
+    auto coneTwistElement = ragdollObject.at_key("ConeTwist");
+    if (coneTwistElement.error() != simdjson::NO_SUCH_FIELD)
+    {
+        bool coneTwist = false;
+        if (coneTwistElement.get(coneTwist) != simdjson::SUCCESS)
+        {
+            throw std::runtime_error("glTF Ragdoll ConeTwist must be a boolean");
+        }
+        params.coneTwist = coneTwist;
+    }
+
+    return params;
+}
+
 fastgltf::Expected<fastgltf::Asset>
 GltfLoader::parseAsset(const std::filesystem::path& gltfPath,
                        std::unordered_set<std::size_t>* controllableNodeIndices,
                        std::unordered_map<std::size_t, PhysicsConfig>* physicsNodeConfigs,
-                       std::unordered_map<std::size_t, ClothMeshParams>* clothNodeConfigs)
+                       std::unordered_map<std::size_t, ClothMeshParams>* clothNodeConfigs,
+                       std::unordered_map<std::size_t, RagdollParams>* ragdollNodeConfigs)
 {
     // fastgltf only parses extension data when the extension is enabled here.
     // Without the opt-in, extension fields silently stay at their defaults.
     fastgltf::Parser parser(supportedExtensionMask());
-    ExtrasParseState extrasState{controllableNodeIndices, physicsNodeConfigs, clothNodeConfigs};
+    ExtrasParseState extrasState{controllableNodeIndices, physicsNodeConfigs, clothNodeConfigs,
+                                 ragdollNodeConfigs};
     if (controllableNodeIndices != nullptr || physicsNodeConfigs != nullptr ||
-        clothNodeConfigs != nullptr)
+        clothNodeConfigs != nullptr || ragdollNodeConfigs != nullptr)
     {
         if (controllableNodeIndices != nullptr)
         {
@@ -438,6 +491,10 @@ GltfLoader::parseAsset(const std::filesystem::path& gltfPath,
         if (clothNodeConfigs != nullptr)
         {
             clothNodeConfigs->clear();
+        }
+        if (ragdollNodeConfigs != nullptr)
+        {
+            ragdollNodeConfigs->clear();
         }
         parser.setUserPointer(&extrasState);
         parser.setExtrasParseCallback(&parseNodeExtras);

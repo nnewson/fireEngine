@@ -77,9 +77,19 @@ void applyPhysicsRecursive(Node& node, const PhysicsWorld& physics)
         auto transform = physics.bodyTransform(handle);
         if (body != nullptr && transform.has_value() && body->type() != PhysicsBodyType::Static)
         {
-            node.transform().position(transform->position());
-            node.transform().rotation(transform->rotation());
-            node.transform().scale(transform->scale());
+            if (node.hasWorldOverride())
+            {
+                // Ragdoll-driven bone: the body's world transform *is* the bone's
+                // world pose (no parent composition), so write it straight into the
+                // override that resolve() reads.
+                node.worldOverride(transform->world());
+            }
+            else
+            {
+                node.transform().position(transform->position());
+                node.transform().rotation(transform->rotation());
+                node.transform().scale(transform->scale());
+            }
         }
     }
 

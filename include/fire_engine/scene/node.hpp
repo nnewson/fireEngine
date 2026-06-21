@@ -134,6 +134,33 @@ public:
         return physicsColliderHandle_.valid();
     }
 
+    // World-space override (ragdoll drive). When set, update()/resolve() use this
+    // matrix as the node's composedWorld directly — ignoring the parent chain and
+    // local transform — so a physics body's world pose can drive the skinned pose
+    // (Skin reads composedWorld). SceneGraph::applyPhysics keeps it in sync each
+    // frame; clear it to hand the node back to the animation/transform hierarchy.
+    [[nodiscard]]
+    bool hasWorldOverride() const noexcept
+    {
+        return worldOverride_.has_value();
+    }
+
+    [[nodiscard]]
+    const Mat4* worldOverride() const noexcept
+    {
+        return worldOverride_ ? &worldOverride_.value() : nullptr;
+    }
+
+    void worldOverride(const Mat4& world) noexcept
+    {
+        worldOverride_ = world;
+    }
+
+    void clearWorldOverride() noexcept
+    {
+        worldOverride_.reset();
+    }
+
     [[nodiscard]] Node* parent() const noexcept
     {
         return parent_;
@@ -164,12 +191,17 @@ public:
     void render(const RenderContext& ctx, const Mat4& parentWorld);
 
 private:
+    // Store a freshly computed composed world, rolling the prior value into
+    // previousComposedWorld_ (motion vectors / CCD). Shared by update/resolve.
+    void setComposedWorld(const Mat4& newComposedWorld) noexcept;
+
     std::string name_;
     Transform transform_;
     Components component_;
     std::optional<Controllable> controllable_;
     PhysicsBodyHandle physicsBodyHandle_;
     PhysicsColliderHandle physicsColliderHandle_;
+    std::optional<Mat4> worldOverride_;
     Mat4 composedWorld_{Mat4::identity()};
     Mat4 previousComposedWorld_{Mat4::identity()};
     bool hasComposedWorld_{false};

@@ -327,14 +327,17 @@ Node& GltfLoader::attachCamera(Node& node, Node*& activeCamera)
 
 Node* GltfLoader::loadScene(const std::string& path, SceneGraph& scene, Resources& resources,
                             Assets& assets, PhysicsWorld& physics,
-                            std::vector<ClothRegistration>* clothRegistrations)
+                            std::vector<ClothRegistration>* clothRegistrations,
+                            std::vector<Ragdoll>* ragdolls)
 {
     auto gltfPath = std::filesystem::path(path);
     std::unordered_set<std::size_t> controllableNodeIndices;
     std::unordered_map<std::size_t, PhysicsConfig> physicsNodeConfigs;
     std::unordered_map<std::size_t, ClothMeshParams> clothNodeConfigs;
+    std::unordered_map<std::size_t, RagdollParams> ragdollNodeConfigs;
     auto result = parseAsset(gltfPath, &controllableNodeIndices, &physicsNodeConfigs,
-                             clothRegistrations != nullptr ? &clothNodeConfigs : nullptr);
+                             clothRegistrations != nullptr ? &clothNodeConfigs : nullptr,
+                             ragdolls != nullptr ? &ragdollNodeConfigs : nullptr);
     auto& asset = result.get();
 
     // fastgltf stores extensionsRequired in a pmr-allocated string vector.
@@ -422,6 +425,42 @@ Node* GltfLoader::loadScene(const std::string& path, SceneGraph& scene, Resource
         ClothRegistration reg{makeClothFromMesh(geometry.vertices(), geometry.indices(), params),
                               &assets.geometry(geoIdx)};
         clothRegistrations->push_back(std::move(reg));
+    }
+
+    // Auto-build a ragdoll from each `extras.Ragdoll` node's skin. Resolve once so
+    // the bones carry their bind-pose composed-world (the ragdoll seeds bodies from
+    // it); the per-frame update() recomputes it afterwards.
+    if (!ragdollNodeConfigs.empty())
+    {
+        scene.resolve();
+        for (const auto& [nodeIndex, params] : ragdollNodeConfigs)
+        {
+            const auto& gltfNode = asset.nodes[nodeIndex];
+            if (!gltfNode.skinIndex.has_value())
+            {
+                std::clog << "glTF: node '" << nodeName(asset, gltfNode)
+                          << "' has Ragdoll extras but no skin; ignoring.\n";
+                continue;
+            }
+            const auto& gltfSkin = asset.skins[gltfNode.skinIndex.value()];
+            std::vector<Node*> bones;
+            bones.reserve(gltfSkin.joints.size());
+            for (const auto jointNodeIndex : gltfSkin.joints)
+            {
+                const auto it = nodeMap.find(jointNodeIndex);
+                if (it != nodeMap.end())
+                {
+                    bones.push_back(it->second);
+                }
+            }
+            if (bones.empty())
+            {
+                continue;
+            }
+            Ragdoll ragdoll = Ragdoll::make(physics, bones, params);
+            ragdoll.activate();
+            ragdolls->push_back(std::move(ragdoll));
+        }
     }
 
     return activeCamera;
