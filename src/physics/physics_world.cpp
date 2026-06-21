@@ -96,6 +96,44 @@ namespace
             inertia.z() > 0.0f ? 1.0f / inertia.z() : 0.0f};
 }
 
+// The shape's centre of mass in its (unscaled) local frame — the centre offset for the
+// analytic primitives, the AABB centre of the vertices for a hull (matching the AABB
+// inertia approximation). Zero for a centred shape.
+[[nodiscard]] Vec3 shapeCenter(const ColliderShape& shape)
+{
+    return std::visit(
+        [](const auto& s) -> Vec3
+        {
+            using S = std::decay_t<decltype(s)>;
+            if constexpr (std::is_same_v<S, AabbShape>)
+            {
+                return s.bounds.center();
+            }
+            else if constexpr (std::is_same_v<S, ConvexHullShape>)
+            {
+                if (s.vertices.empty())
+                {
+                    return Vec3{};
+                }
+                Vec3 lo = s.vertices.front();
+                Vec3 hi = lo;
+                for (const Vec3& v : s.vertices)
+                {
+                    lo = {std::min(lo.x(), v.x()), std::min(lo.y(), v.y()),
+                          std::min(lo.z(), v.z())};
+                    hi = {std::max(hi.x(), v.x()), std::max(hi.y(), v.y()),
+                          std::max(hi.z(), v.z())};
+                }
+                return (lo + hi) * 0.5f;
+            }
+            else // BoxShape / SphereShape / CapsuleShape
+            {
+                return s.center;
+            }
+        },
+        shape);
+}
+
 } // namespace
 
 PhysicsBodyHandle PhysicsWorld::createBody(const PhysicsBodyDesc& desc)
@@ -149,11 +187,16 @@ PhysicsColliderHandle PhysicsWorld::createCollider(PhysicsBodyHandle bodyHandle,
     broadPhase_->addCollider(colliders_.back().collider);
 
     // Local inverse inertia from the (now-known) shape + mass; dynamic bodies only,
-    // others keep infinite inertia (zero). Single collider assumed (COM = origin).
+    // others keep infinite inertia (zero). Single collider assumed; the centre of mass
+    // is the shape's (scaled) centre — zero for a centred shape, so a centred body is
+    // unchanged. The inertia is taken about that COM.
     if (owner->body.type() == PhysicsBodyType::Dynamic)
     {
-        owner->body.inverseInertiaLocal(
-            localInverseInertia(desc.shape, owner->body.mass(), owner->transform.scale()));
+        const Vec3 scale = owner->transform.scale();
+        owner->body.inverseInertiaLocal(localInverseInertia(desc.shape, owner->body.mass(), scale));
+        const Vec3 center = shapeCenter(desc.shape);
+        owner->body.centerOfMassLocal(
+            {center.x() * scale.x(), center.y() * scale.y(), center.z() * scale.z()});
     }
     return handle;
 }
@@ -984,7 +1027,10 @@ bool PhysicsWorld::solveAndIntegrate(const std::vector<SolverContact>& contacts,
         const BodyEntry& entry = bodies_[i];
         solverBodies[i].velocity = entry.body.linearVelocity();
         solverBodies[i].angularVelocity = entry.body.angularVelocity();
-        solverBodies[i].position = entry.transform.position();
+        // The solver integrates about the world centre of mass, not the transform
+        // origin (they coincide when centerOfMassLocal is zero — the common case).
+        solverBodies[i].position = entry.transform.position() + entry.transform.rotation().rotate(
+                                                                    entry.body.centerOfMassLocal());
         solverBodies[i].orientation = entry.transform.rotation();
         solverBodies[i].invMass = entry.active ? velocityInvMass(entry) : 0.0f;
         solverBodies[i].inverseInertiaLocal =
@@ -1114,9 +1160,13 @@ bool PhysicsWorld::solveAndIntegrate(const std::vector<SolverContact>& contacts,
             continue;
         }
         bool changed = false;
-        if (entry.transform.position() != solverBodies[i].position)
+        // solverBodies[i].position is the world centre of mass; convert back to the
+        // transform origin (origin = COM − R·comLocal). Identity when comLocal is zero.
+        const Vec3 origin = solverBodies[i].position -
+                            solverBodies[i].orientation.rotate(entry.body.centerOfMassLocal());
+        if (entry.transform.position() != origin)
         {
-            entry.transform.position(solverBodies[i].position);
+            entry.transform.position(origin);
             changed = true;
         }
         // Orientation was integrated into the solver body (from the solved angular

@@ -181,16 +181,30 @@ TEST_CASE("PhysicsWorld.DynamicBodyIntegratesVelocityOnStep", "[PhysicsWorld]")
 
 TEST_CASE("PhysicsWorld.DynamicBodySettlesAgainstStaticContact", "[PhysicsWorld]")
 {
-    // P2 sequential-impulse solver: a slow dynamic box driven into a static box has
+    // P2 sequential-impulse solver: a slow dynamic body driven into a static box has
     // its approaching velocity removed by the normal impulse (no bounce — the 1 m/s
-    // approach is below the restitution threshold) and is pushed out of penetration
-    // by the split-impulse position pass over several steps. Unit colliders span
-    // the body origin + (0.5,0.5,0.5), so it settles just touching the static box
-    // (body x≈2.0) at rest, rather than tunnelling, jittering, or bouncing.
+    // approach is below the restitution threshold) and is pushed out of penetration by
+    // the split-impulse position pass over several steps. A sphere (radius 0.5) is used
+    // for the moving body so the head-on contact has no rotational degree of freedom to
+    // drift along (a frictionless box-vs-box wall contact with no gravity can skid/spin);
+    // it settles just touching the static box (centre x≈2.0) at rest, not tunnelling.
     PhysicsWorld physics;
-    auto dynamic =
-        createBox(physics, PhysicsBodyType::Dynamic, {1.8f, 0.0f, 0.0f}, {1.0f, 0.0f, 0.0f});
-    createBox(physics, PhysicsBodyType::Static, {3.0f, 0.0f, 0.0f});
+    PhysicsBodyDesc dd;
+    dd.type = PhysicsBodyType::Dynamic;
+    dd.position = {1.8f, 0.0f, 0.0f};
+    dd.linearVelocity = {1.0f, 0.0f, 0.0f};
+    dd.gravityScale = 0.0f;
+    auto dynamic = physics.createBody(dd);
+    ColliderDesc sphere;
+    sphere.shape = SphereShape{0.5f, Vec3{}};
+    (void)physics.createCollider(dynamic, sphere);
+    PhysicsBodyDesc sd;
+    sd.type = PhysicsBodyType::Static;
+    sd.position = {3.0f, 0.0f, 0.0f};
+    auto staticBody = physics.createBody(sd);
+    ColliderDesc staticColl;
+    staticColl.shape = BoxShape{Vec3{0.5f, 0.5f, 0.5f}, Vec3{}};
+    (void)physics.createCollider(staticBody, staticColl);
 
     for (int i = 0; i < 120; ++i)
     {
@@ -202,6 +216,42 @@ TEST_CASE("PhysicsWorld.DynamicBodySettlesAgainstStaticContact", "[PhysicsWorld]
     REQUIRE(physics.body(dynamic) != nullptr);
     CHECK(transform->position().approxEqual(Vec3(2.0f, 0.0f, 0.0f), 0.02f));
     CHECK(physics.body(dynamic)->linearVelocity().approxEqual(Vec3(0.0f, 0.0f, 0.0f), 0.05f));
+}
+
+TEST_CASE("PhysicsWorld.OffCenterColliderRotatesAboutCenterOfMass", "[PhysicsWorld]")
+{
+    // True COM offset (P6): a body whose collider is offset from the transform origin
+    // spins about its centre of mass, not the origin. A free body (no gravity, no
+    // contacts) given an angular velocity about a principal axis keeps its COM fixed
+    // while the origin orbits around it.
+    PhysicsWorld physics;
+    PhysicsBodyDesc desc;
+    desc.type = PhysicsBodyType::Dynamic;
+    desc.gravityScale = 0.0f;
+    desc.angularVelocity = {0.0f, pi, 0.0f}; // π rad/s about y → 180° over one second
+    const auto body = physics.createBody(desc);
+    ColliderDesc collider;
+    collider.shape = BoxShape{Vec3{0.5f, 0.5f, 0.5f}, Vec3{1.0f, 0.0f, 0.0f}}; // COM at +x
+    (void)physics.createCollider(body, collider);
+
+    auto worldCom = [&]
+    {
+        const auto t = physics.bodyTransform(body).value();
+        return t.position() + t.rotation().rotate(physics.body(body)->centerOfMassLocal());
+    };
+
+    // The COM starts at world (1,0,0); the origin at (0,0,0).
+    REQUIRE(worldCom().approxEqual(Vec3(1.0f, 0.0f, 0.0f), 1e-4f));
+    REQUIRE(physics.bodyTransform(body)->position().approxEqual(Vec3(0.0f, 0.0f, 0.0f), 1e-4f));
+
+    for (int i = 0; i < 120; ++i)
+    {
+        physics.step(1.0f / 120.0f);
+    }
+
+    // After ~180° about y: COM unmoved, the origin has swung to the far side (~(2,0,0)).
+    CHECK(worldCom().approxEqual(Vec3(1.0f, 0.0f, 0.0f), 0.02f));
+    CHECK(physics.bodyTransform(body)->position().approxEqual(Vec3(2.0f, 0.0f, 0.0f), 0.05f));
 }
 
 TEST_CASE("PhysicsWorld.KinematicBodyPushesOutOfStaticContact", "[PhysicsWorld]")
