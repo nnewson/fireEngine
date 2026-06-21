@@ -70,8 +70,16 @@ public:
     // sweeps over pseudo-velocities and writes the corrected positions back.
     void solvePosition(std::vector<SolverBody>& bodies);
 
-    // Persist accumulated impulses for next frame's warm start.
+    // Warm-start persistence is split into three calls so a single step can run
+    // many independent per-island solves through one solver instance: `beginStore`
+    // once before the islands clears the pending cache, `store` after each island's
+    // solve appends that island's impulses, and `commitStore` once after all islands
+    // swaps the pending cache in as next frame's source. (Each pair key belongs to
+    // exactly one island, so the appends never collide.) A single global solve is
+    // just begin → store → commit, identical to the old single `store()`.
+    void beginStore() noexcept;
     void store();
+    void commitStore() noexcept;
 
     [[nodiscard]]
     bool empty() const noexcept

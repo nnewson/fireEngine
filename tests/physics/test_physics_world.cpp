@@ -70,6 +70,41 @@ PhysicsBodyHandle createBox(PhysicsWorld& physics, PhysicsBodyType type, Vec3 po
     return handle;
 }
 
+// A wide static (or kinematic) floor whose top face sits at y = 0. Restitution 0 so
+// bodies settle (and can sleep) rather than bouncing on the default elastic material.
+PhysicsBodyHandle createFloor(PhysicsWorld& physics, PhysicsBodyType type = PhysicsBodyType::Static)
+{
+    PhysicsBodyDesc bodyDesc;
+    bodyDesc.type = type;
+    bodyDesc.material.restitution = 0.0f;
+    auto handle = physics.createBody(bodyDesc);
+    ColliderDesc desc;
+    desc.shape = AabbShape{{Vec3{-10.0f, -1.0f, -10.0f}, Vec3{10.0f, 0.0f, 10.0f}}};
+    [[maybe_unused]] const auto collider = physics.createCollider(handle, desc);
+    return handle;
+}
+
+// A gravity-driven dynamic box (unit collider, origin at its min corner).
+PhysicsBodyHandle createFallingBox(PhysicsWorld& physics, Vec3 position)
+{
+    PhysicsBodyDesc bodyDesc;
+    bodyDesc.type = PhysicsBodyType::Dynamic;
+    bodyDesc.position = position;
+    bodyDesc.gravityScale = 1.0f;
+    bodyDesc.material.restitution = 0.0f;
+    auto handle = physics.createBody(bodyDesc);
+    [[maybe_unused]] const auto collider = physics.createCollider(handle, unitCollider());
+    return handle;
+}
+
+void stepMany(PhysicsWorld& physics, int steps)
+{
+    for (int i = 0; i < steps; ++i)
+    {
+        physics.step(1.0f / 60.0f);
+    }
+}
+
 } // namespace
 
 TEST_CASE("PhysicsWorld.CreatesBodiesAndCollidersWithStableHandles", "[PhysicsWorld]")
@@ -551,4 +586,128 @@ TEST_CASE("PhysicsWorld.GatherCollidersComposesWorldSphere", "[PhysicsWorld]")
     CHECK(c.a[1] == Catch::Approx(3.0f).margin(1e-5f));
     CHECK(c.a[2] == Catch::Approx(4.0f).margin(1e-5f));
     CHECK(c.a[3] == Catch::Approx(1.0f).margin(1e-5f));
+}
+
+// ==========================================================================
+// Sleeping (P5)
+// ==========================================================================
+
+TEST_CASE("PhysicsWorld.StationaryDynamicBodySleepsAfterTimeout", "[PhysicsWorld][Sleep]")
+{
+    // A lone dynamic body at rest (no gravity, no contacts) is below the sleep
+    // thresholds every step, so its singleton island sleeps after kSleepTime (0.5s).
+    PhysicsWorld physics;
+    const auto body = createBox(physics, PhysicsBodyType::Dynamic, {});
+
+    physics.step(1.0f / 60.0f);
+    CHECK_FALSE(physics.sleeping(body)); // not yet — timer still below kSleepTime
+
+    stepMany(physics, 40); // > 0.5s total
+    CHECK(physics.sleeping(body));
+}
+
+TEST_CASE("PhysicsWorld.WakeAndSetVelocityResumeSimulation", "[PhysicsWorld][Sleep]")
+{
+    PhysicsWorld physics;
+    const auto body = createBox(physics, PhysicsBodyType::Dynamic, {});
+    stepMany(physics, 40);
+    REQUIRE(physics.sleeping(body));
+
+    physics.wake(body);
+    CHECK_FALSE(physics.sleeping(body));
+
+    // Re-sleeps, then an externally set velocity wakes it and it moves.
+    stepMany(physics, 40);
+    REQUIRE(physics.sleeping(body));
+    physics.setBodyVelocity(body, {1.0f, 0.0f, 0.0f});
+    CHECK_FALSE(physics.sleeping(body));
+
+    const float beforeX = physics.bodyTransform(body)->position().x();
+    physics.step(1.0f / 60.0f);
+    CHECK(physics.bodyTransform(body)->position().x() > beforeX);
+}
+
+TEST_CASE("PhysicsWorld.AllowSleepingFalseNeverSleeps", "[PhysicsWorld][Sleep]")
+{
+    PhysicsWorld physics;
+    PhysicsBodyDesc desc;
+    desc.type = PhysicsBodyType::Dynamic;
+    desc.gravityScale = 0.0f;
+    desc.allowSleeping = false;
+    const auto body = physics.createBody(desc);
+    [[maybe_unused]] const auto collider = physics.createCollider(body, unitCollider());
+
+    stepMany(physics, 120);
+    CHECK_FALSE(physics.sleeping(body));
+}
+
+TEST_CASE("PhysicsWorld.SleepingDisabledKeepsBodiesAwake", "[PhysicsWorld][Sleep]")
+{
+    PhysicsWorld physics;
+    physics.sleepingEnabled(false);
+    const auto body = createBox(physics, PhysicsBodyType::Dynamic, {});
+
+    stepMany(physics, 120);
+    CHECK_FALSE(physics.sleeping(body));
+}
+
+TEST_CASE("PhysicsWorld.BoxSettlesOnFloorAndSleeps", "[PhysicsWorld][Sleep]")
+{
+    // A gravity box dropped onto a static floor settles to rest and then sleeps.
+    PhysicsWorld physics;
+    createFloor(physics);
+    const auto box = createFallingBox(physics, {0.0f, 2.0f, 0.0f});
+
+    stepMany(physics, 240); // fall + settle + kSleepTime
+    CHECK(physics.sleeping(box));
+    // Resting on the floor top (y = 0); unit collider origin is its min corner.
+    CHECK(physics.bodyTransform(box)->position().y() == Catch::Approx(0.0f).margin(0.02f));
+}
+
+TEST_CASE("PhysicsWorld.SleepingBodyIsWokenByAnIncomingBody", "[PhysicsWorld][Sleep]")
+{
+    // One body sleeps; another slides into it. The new contact merges them into one
+    // island whose moving member keeps it awake, so the sleeper wakes and is pushed.
+    PhysicsWorld physics;
+    const auto sleeper = createBox(physics, PhysicsBodyType::Dynamic, {0.0f, 0.0f, 0.0f});
+    const auto mover =
+        createBox(physics, PhysicsBodyType::Dynamic, {-4.0f, 0.0f, 0.0f}, {2.0f, 0.0f, 0.0f});
+
+    // Let the sleeper settle while the mover is still far away.
+    stepMany(physics, 40);
+    REQUIRE(physics.sleeping(sleeper));
+    REQUIRE_FALSE(physics.sleeping(mover));
+
+    // Run until the mover reaches and pushes the sleeper.
+    stepMany(physics, 120);
+    CHECK_FALSE(physics.sleeping(sleeper));
+    CHECK(physics.bodyTransform(sleeper)->position().x() > 0.01f);
+}
+
+TEST_CASE("PhysicsWorld.MovingKinematicFloorKeepsRiderAwake", "[PhysicsWorld][Sleep]")
+{
+    // A box resting on a kinematic floor that keeps moving must not sleep, while the
+    // same box on a parked kinematic floor does sleep.
+    auto riderSleeps = [](bool moveFloor)
+    {
+        PhysicsWorld physics;
+        const auto floor = createFloor(physics, PhysicsBodyType::Kinematic);
+        const auto box = createFallingBox(physics, {0.0f, 1.0f, 0.0f});
+
+        for (int i = 0; i < 300; ++i)
+        {
+            if (moveFloor)
+            {
+                // Nudge the kinematic floor sideways each step (scene-driven motion).
+                auto t = physics.bodyTransform(floor).value();
+                t.position(t.position() + Vec3{0.001f, 0.0f, 0.0f});
+                physics.setBodyTransform(floor, t);
+            }
+            physics.step(1.0f / 60.0f);
+        }
+        return physics.sleeping(box);
+    };
+
+    CHECK_FALSE(riderSleeps(true)); // moving floor → rider stays awake
+    CHECK(riderSleeps(false));      // parked floor → rider sleeps
 }

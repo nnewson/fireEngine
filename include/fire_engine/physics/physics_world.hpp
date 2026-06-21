@@ -3,17 +3,20 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <memory>
 #include <optional>
 #include <unordered_map>
 #include <vector>
 
 #include <fire_engine/collision/aabb.hpp>
+#include <fire_engine/collision/broad_phase.hpp>
+#include <fire_engine/collision/dynamic_aabb_tree_broad_phase.hpp>
 #include <fire_engine/collision/narrow_phase.hpp>
-#include <fire_engine/collision/sweep_and_prune_broad_phase.hpp>
 #include <fire_engine/graphics/cloth.hpp>
 #include <fire_engine/physics/collider_shape.hpp>
 #include <fire_engine/physics/contact.hpp>
 #include <fire_engine/physics/contact_solver.hpp>
+#include <fire_engine/physics/island.hpp>
 #include <fire_engine/physics/joint.hpp>
 #include <fire_engine/physics/joint_solver.hpp>
 #include <fire_engine/physics/physics_body.hpp>
@@ -106,16 +109,37 @@ public:
     void setBodyTransform(PhysicsBodyHandle handle, const Transform& transform) noexcept;
     void setBodyVelocity(PhysicsBodyHandle handle, Vec3 velocity) noexcept;
 
+    // Wake a sleeping body (and reset its sleep timer). A no-op for a body that is
+    // already awake or invalid. Mutating a body's velocity/transform wakes it too.
+    void wake(PhysicsBodyHandle handle) noexcept;
+
+    // Whether a body is currently asleep (skipped by the solver until disturbed).
+    [[nodiscard]]
+    bool sleeping(PhysicsBodyHandle handle) const noexcept;
+
+    // Global on/off for the sleeping system (default on). Disabling wakes nothing
+    // already asleep but stops new islands from sleeping.
+    void sleepingEnabled(bool enabled) noexcept
+    {
+        sleepingEnabled_ = enabled;
+    }
+
+    [[nodiscard]]
+    bool sleepingEnabled() const noexcept
+    {
+        return sleepingEnabled_;
+    }
+
     [[nodiscard]]
     const std::vector<CollisionPair>& possiblePairs() const noexcept
     {
-        return broadPhase_.possiblePairs();
+        return broadPhase_->possiblePairs();
     }
 
     [[nodiscard]]
     bool validateBroadPhase() const
     {
-        return broadPhase_.validate();
+        return broadPhase_->validate();
     }
 
 private:
@@ -127,6 +151,11 @@ private:
         Vec3 previousPosition{};
         bool active{true};
         std::vector<PhysicsColliderHandle> colliders;
+        // Sleeping (P5): `sleeping` skips this body from integration + solving; the
+        // timer accumulates while the body is below the sleep thresholds and resets
+        // when it moves or is woken. Driven per-island in solveAndIntegrate.
+        bool sleeping{false};
+        float sleepTimer{0.0f};
     };
 
     struct ColliderEntry
@@ -180,11 +209,14 @@ private:
     std::unordered_map<std::uint32_t, std::size_t> colliderIndexByHandle_;
     std::unordered_map<std::uint32_t, std::size_t> jointIndexByHandle_;
     std::unordered_map<const Collider*, std::size_t> colliderIndexByPointer_;
-    SweepAndPruneBroadPhase broadPhase_;
+    // Owned via the BroadPhase interface so the implementation is swappable; defaults
+    // to the dynamic AABB tree (sweep-and-prune is still available + selectable).
+    std::unique_ptr<BroadPhase> broadPhase_{std::make_unique<DynamicAabbTreeBroadPhase>()};
     NarrowPhase narrowPhase_;
     ContactSolver solver_;
     JointSolver jointSolver_;
     Vec3 gravity_{0.0f, -9.81f, 0.0f};
+    bool sleepingEnabled_{true};
     // Contacts from the most recent step(), kept for debug visualisation only.
     std::vector<DebugContact> debugContacts_;
 
@@ -237,11 +269,25 @@ private:
     [[nodiscard]]
     std::optional<ContactCandidate> contactCandidateForPair(const CollisionPair& pair);
 
-    // Integrate constrained velocities + positions for this step: build the solver
-    // views from the frame's contacts, run the sequential-impulse velocity solve,
-    // integrate positions, then the split-impulse penetration correction, writing
-    // the results back onto the bodies. Returns true if any body moved.
+    // Integrate constrained velocities + positions for this step: build the global
+    // SolverBody view + contact/joint inputs from the frame's contacts, partition the
+    // dynamic bodies into islands, solve + integrate each island independently, then
+    // write the results back onto the bodies. Returns true if any body moved.
     bool solveAndIntegrate(const std::vector<SolverContact>& contacts, float dt);
+
+    // Solve one island: run the contact + joint solvers over the island's input
+    // subset (indexing the shared `solverBodies` array), then integrate the island's
+    // dynamic bodies' velocities into positions/orientations and position-correct.
+    void solveIsland(const Island& island, std::vector<SolverBody>& solverBodies,
+                     const std::vector<SolverContactInput>& contactInputs,
+                     const std::vector<JointInput>& jointInputs, float dt);
+
+    // Whether the whole island may sleep this step: sleeping enabled, every dynamic
+    // member allows sleeping and has been below the thresholds for kSleepTime, and no
+    // kinematic member moved (a moving platform keeps its riders awake). An already-
+    // asleep island stays asleep because its members keep their elapsed timers.
+    [[nodiscard]]
+    bool islandShouldSleep(const Island& island) const;
 
     [[nodiscard]]
     static bool movable(const BodyEntry& body) noexcept;

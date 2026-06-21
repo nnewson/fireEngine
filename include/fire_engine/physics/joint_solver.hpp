@@ -45,8 +45,12 @@ public:
     // One velocity-constraint Gauss-Seidel sweep. Call kVelocityIterations times.
     void solveVelocity(std::vector<SolverBody>& bodies);
 
-    // Persist accumulated impulses for next frame's warm start.
+    // Warm-start persistence split for the per-island solve (see ContactSolver):
+    // `beginStore` once before the islands, `store` per island (appends), `commitStore`
+    // once after. A single global solve is begin → store → commit.
+    void beginStore() noexcept;
     void store();
+    void commitStore() noexcept;
 
     [[nodiscard]]
     bool empty() const noexcept

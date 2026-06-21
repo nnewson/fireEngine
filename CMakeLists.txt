@@ -26,6 +26,7 @@ add_library(fireengine SHARED
     src/collision/geometry.cpp
     src/collision/gjk_epa.cpp
     src/collision/sweep_and_prune_broad_phase.cpp
+    src/collision/dynamic_aabb_tree_broad_phase.cpp
     src/collision/narrow_phase.cpp
     src/core/convex_hull_builder.cpp
     src/core/gltf_loader.cpp
@@ -49,6 +50,7 @@ add_library(fireengine SHARED
     src/platform/mouse.cpp
     src/platform/window.cpp
     src/physics/contact_solver.cpp
+    src/physics/island.cpp
     src/physics/joint_solver.cpp
     src/physics/physics_body.cpp
     src/physics/physics_world.cpp
@@ -187,11 +189,13 @@ add_executable(test_fire_engine
     tests/collision/test_aabb.cpp
     tests/collision/test_geometry.cpp
     tests/collision/test_sweep_and_prune_broad_phase.cpp
+    tests/collision/test_dynamic_aabb_tree_broad_phase.cpp
     tests/collision/test_narrow_phase.cpp
     tests/collision/test_support.cpp
     tests/collision/test_gjk_epa.cpp
     tests/physics/test_physics_world.cpp
     tests/physics/test_contact_solver.cpp
+    tests/physics/test_island.cpp
     tests/physics/test_joint.cpp
     tests/physics/test_physics_handle.cpp
     tests/physics/test_physics_determinism.cpp

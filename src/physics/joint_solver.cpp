@@ -306,9 +306,15 @@ void JointSolver::solveVelocity(std::vector<SolverBody>& bodies)
     }
 }
 
-void JointSolver::store()
+void JointSolver::beginStore() noexcept
 {
     next_.clear();
+}
+
+void JointSolver::store()
+{
+    // Append this island's accumulated row impulses (per joint key, by slot) to the
+    // pending cache. Each joint key belongs to one island, so appends never collide.
     for (const ConstraintRow& row : rows_)
     {
         std::vector<float>& impulses = next_[row.key];
@@ -318,6 +324,10 @@ void JointSolver::store()
         }
         impulses[static_cast<std::size_t>(row.slot)] = row.impulse;
     }
+}
+
+void JointSolver::commitStore() noexcept
+{
     cache_.swap(next_);
 }
 
