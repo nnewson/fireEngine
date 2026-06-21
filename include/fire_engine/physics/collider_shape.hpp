@@ -69,4 +69,14 @@ struct CompoundChild
     PhysicsMaterial material{};
 };
 
+// A static triangle-mesh collider: local-space vertices + triangle indices (3 per
+// triangle). Passed to PhysicsWorld::createMeshCollider, which builds a triangle BVH
+// and resolves a moving body against the mesh's actual triangles (not its AABB).
+// Static bodies only (no inertia); the mesh is assumed to keep a fixed transform.
+struct StaticMeshShape
+{
+    std::vector<Vec3> vertices;
+    std::vector<std::uint32_t> indices;
+};
+
 } // namespace fire_engine

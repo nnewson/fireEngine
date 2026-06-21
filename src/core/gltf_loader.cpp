@@ -112,6 +112,23 @@ void applyPhysicsConfig(std::size_t nodeIndex,
     PhysicsBodyHandle bodyHandle = physics.createBody(bodyDesc);
     node.physicsBodyHandle(bodyHandle);
 
+    // Compound: one child collider per authored child (aggregate mass properties).
+    if (!it->second.compoundChildren.empty())
+    {
+        node.physicsColliderHandle(physics.createCompoundCollider(
+            bodyHandle, it->second.compoundChildren, it->second.layer, it->second.mask));
+        return;
+    }
+    // Static triangle mesh from the node geometry.
+    if (it->second.staticMeshFromMesh)
+    {
+        node.physicsColliderHandle(
+            physics.createMeshCollider(bodyHandle, GltfLoader::meshTriangles(asset, mesh),
+                                       PhysicsMaterial{it->second.restitution, it->second.friction},
+                                       it->second.layer, it->second.mask));
+        return;
+    }
+
     ColliderDesc colliderDesc;
     colliderDesc.collisionLayer = it->second.layer;
     colliderDesc.collisionMask = it->second.mask;

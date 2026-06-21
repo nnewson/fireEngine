@@ -1,8 +1,11 @@
 #include <fire_engine/physics/physics_world.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
+#include <iostream>
+#include <memory>
 #include <type_traits>
 #include <utility>
 #include <variant>
@@ -384,6 +387,67 @@ PhysicsWorld::createCompoundCollider(PhysicsBodyHandle bodyHandle,
     return first;
 }
 
+PhysicsColliderHandle PhysicsWorld::createMeshCollider(PhysicsBodyHandle bodyHandle,
+                                                       const StaticMeshShape& mesh,
+                                                       const PhysicsMaterial& material,
+                                                       std::uint32_t collisionLayer,
+                                                       std::uint32_t collisionMask)
+{
+    BodyEntry* owner = findBody(bodyHandle);
+    if (owner == nullptr || mesh.vertices.empty() || mesh.indices.size() < 3)
+    {
+        return {};
+    }
+    if (owner->body.type() != PhysicsBodyType::Static)
+    {
+        std::clog << "PhysicsWorld: mesh colliders are static-only; ignoring.\n";
+        return {};
+    }
+
+    // Whole-mesh local AABB as the broadphase proxy shape.
+    AABB bounds{mesh.vertices.front(), mesh.vertices.front()};
+    for (const Vec3& v : mesh.vertices)
+    {
+        bounds.min = {std::min(bounds.min.x(), v.x()), std::min(bounds.min.y(), v.y()),
+                      std::min(bounds.min.z(), v.z())};
+        bounds.max = {std::max(bounds.max.x(), v.x()), std::max(bounds.max.y(), v.y()),
+                      std::max(bounds.max.z(), v.z())};
+    }
+    const PhysicsColliderHandle handle =
+        addColliderEntry(*owner, AabbShape{bounds}, material, collisionLayer, collisionMask, Vec3{},
+                         Quaternion::identity());
+
+    // Build the world-space triangles + BVH once (the static body keeps a fixed
+    // transform). Stored on the collider entry; contacts() resolves against them.
+    auto data = std::make_shared<MeshCollisionData>();
+    data->indices = mesh.indices;
+    const Mat4 world = owner->transform.world();
+    data->worldVertices.reserve(mesh.vertices.size());
+    for (const Vec3& v : mesh.vertices)
+    {
+        data->worldVertices.push_back(transformPoint(world, v));
+    }
+    const std::size_t triCount = data->indices.size() / 3;
+    for (std::size_t t = 0; t < triCount; ++t)
+    {
+        const Vec3& v0 = data->worldVertices[data->indices[3 * t + 0]];
+        const Vec3& v1 = data->worldVertices[data->indices[3 * t + 1]];
+        const Vec3& v2 = data->worldVertices[data->indices[3 * t + 2]];
+        const AABB tri{{std::min({v0.x(), v1.x(), v2.x()}), std::min({v0.y(), v1.y(), v2.y()}),
+                        std::min({v0.z(), v1.z(), v2.z()})},
+                       {std::max({v0.x(), v1.x(), v2.x()}), std::max({v0.y(), v1.y(), v2.y()}),
+                        std::max({v0.z(), v1.z(), v2.z()})}};
+        (void)data->bvh.createProxy(tri, static_cast<int>(t));
+    }
+
+    ColliderEntry* entry = findCollider(handle);
+    if (entry != nullptr)
+    {
+        entry->mesh = std::move(data);
+    }
+    return handle;
+}
+
 PhysicsColliderHandle PhysicsWorld::addColliderEntry(BodyEntry& owner, const ColliderShape& shape,
                                                      const PhysicsMaterial& material,
                                                      std::uint32_t collisionLayer,
@@ -405,7 +469,7 @@ PhysicsColliderHandle PhysicsWorld::addColliderEntry(BodyEntry& owner, const Col
 
     colliderIndexByHandle_.emplace(handle.value(), colliders_.size());
     colliders_.push_back({handle, owner.handle, std::move(collider), shape, material, localPosition,
-                          localRotation, true});
+                          localRotation, true, nullptr});
     colliderIndexByPointer_.emplace(&colliders_.back().collider, colliders_.size() - 1);
     owner.colliders.push_back(handle);
     broadPhase_->addCollider(colliders_.back().collider);
@@ -670,7 +734,9 @@ std::vector<ClothCollider> PhysicsWorld::gatherColliders() const
 
     for (const ColliderEntry& entry : colliders_)
     {
-        if (!entry.active || findBody(entry.body) == nullptr)
+        // Mesh colliders have no cloth-collider encoding (the AabbShape proxy is only
+        // a broadphase bound); the cloth solver skips them.
+        if (!entry.active || entry.mesh != nullptr || findBody(entry.body) == nullptr)
         {
             continue;
         }
@@ -935,11 +1001,7 @@ std::vector<PhysicsWorld::SolverContact> PhysicsWorld::contacts(float dt)
     result.reserve(broadPhase_->possiblePairs().size());
     for (const CollisionPair& pair : broadPhase_->possiblePairs())
     {
-        auto contact = contactForPair(pair, dt);
-        if (contact.has_value())
-        {
-            result.push_back(contact.value());
-        }
+        appendContactsForPair(pair, dt, result);
     }
     return result;
 }
@@ -1000,36 +1062,139 @@ PhysicsWorld::contactCandidateForPair(const CollisionPair& pair)
     return ContactCandidate{moving, target, movingCollider, targetCollider};
 }
 
-std::optional<PhysicsWorld::SolverContact> PhysicsWorld::contactForPair(const CollisionPair& pair,
-                                                                        float dt)
+void PhysicsWorld::appendContactsForPair(const CollisionPair& pair, float dt,
+                                         std::vector<SolverContact>& out)
 {
-    auto candidate = contactCandidateForPair(pair);
+    const auto candidate = contactCandidateForPair(pair);
     if (!candidate.has_value())
     {
-        return std::nullopt;
+        return;
     }
+    // A static mesh is always the target (it never moves). Resolve the moving body
+    // against its triangles; otherwise the ordinary single-manifold path.
+    if (candidate->targetCollider->mesh != nullptr)
+    {
+        appendMeshContacts(*candidate, dt, out);
+        return;
+    }
+    if (candidate->movingCollider->mesh != nullptr)
+    {
+        return; // a mesh is static and never the moving body
+    }
+    if (const auto contact = singleContact(*candidate, dt))
+    {
+        out.push_back(*contact);
+    }
+}
 
+std::optional<PhysicsWorld::SolverContact>
+PhysicsWorld::singleContact(const ContactCandidate& candidate, float dt)
+{
     // Speculative-contact margin (CCD): how far the pair could close this step.
     // Using the pre-solve velocities is conservative (the solver only brakes), so a
     // fast mover within this margin generates a negative-penetration gap contact the
     // solver clamps against — no tunnelling. Slow pairs get ~kSpeculativeDistance.
-    const float closingReach = (candidate->moving->body.linearVelocity().magnitude() +
-                                candidate->target->body.linearVelocity().magnitude()) *
+    const float closingReach = (candidate.moving->body.linearVelocity().magnitude() +
+                                candidate.target->body.linearVelocity().magnitude()) *
                                    dt +
                                kSpeculativeDistance;
 
     // Shape-specific manifold in world space. The normal points target -> moving,
     // i.e. the direction to push the moving body out of penetration.
-    const WorldShape movingShape = worldShape(*candidate->movingCollider);
-    const WorldShape targetShape = worldShape(*candidate->targetCollider);
+    const WorldShape movingShape = worldShape(*candidate.movingCollider);
+    const WorldShape targetShape = worldShape(*candidate.targetCollider);
     auto manifold = narrowPhase_.collide(movingShape, targetShape, closingReach);
     if (!manifold.has_value() || manifold->count == 0)
     {
         return std::nullopt;
     }
 
-    return SolverContact{*manifold, candidate->moving, candidate->target, candidate->movingCollider,
-                         candidate->targetCollider};
+    return SolverContact{*manifold,
+                         candidate.moving,
+                         candidate.target,
+                         candidate.movingCollider,
+                         candidate.targetCollider,
+                         0};
+}
+
+void PhysicsWorld::appendMeshContacts(const ContactCandidate& candidate, float dt,
+                                      std::vector<SolverContact>& out)
+{
+    const WorldShape movingShape = worldShape(*candidate.movingCollider);
+    const MeshCollisionData& mesh = *candidate.targetCollider->mesh;
+    const float closingReach =
+        candidate.moving->body.linearVelocity().magnitude() * dt + kSpeculativeDistance;
+
+    // Query the triangle BVH with the moving collider's swept world bounds; collide the
+    // moving shape against each candidate triangle (a flat WorldConvex) individually.
+    const AABB query = candidate.movingCollider->collider.sweptWorldBounds();
+    mesh.bvh.query(
+        query,
+        [&](int proxy)
+        {
+            const int t = mesh.bvh.payload(proxy);
+            const auto base = static_cast<std::size_t>(t) * 3;
+            const Vec3 v0 = mesh.worldVertices[mesh.indices[base + 0]];
+            const Vec3 v1 = mesh.worldVertices[mesh.indices[base + 1]];
+            const Vec3 v2 = mesh.worldVertices[mesh.indices[base + 2]];
+            const std::array<ConvexFace, 1> faces{ConvexFace{Vec3{}, std::vector<int>{0, 1, 2}}};
+            WorldConvex triangle;
+            triangle.vertices = {v0, v1, v2};
+            triangle.faces = faces;
+
+            auto manifold = narrowPhase_.collide(movingShape, WorldShape{triangle}, closingReach);
+            if (!manifold.has_value() || manifold->count == 0)
+            {
+                return;
+            }
+            const Vec3 n = manifold->normal;
+            if (!std::isfinite(n.x()) || !std::isfinite(n.y()) || !std::isfinite(n.z()) ||
+                n.magnitudeSquared() <= 1.0e-8f)
+            {
+                return; // degenerate EPA result
+            }
+
+            // Reconstruct the contact against the triangle's (CCW-outward) face plane:
+            // force the normal to the surface normal and re-measure each point's
+            // penetration as its signed depth below that plane. EPA on a flat triangle
+            // gives unreliable normals/depths (especially where the body overhangs a
+            // shared edge, where it returns a sideways *edge* normal that would kick the
+            // body into a growing rock); using only its contact *points* + the true plane
+            // is stable. A back-facing triangle (body behind it) is skipped — mesh
+            // collision is one-sided (front face only).
+            const Vec3 faceNormal = Vec3::normalise(Vec3::crossProduct(v1 - v0, v2 - v0));
+            if (Vec3::dotProduct(n, faceNormal) <= 0.0f)
+            {
+                return;
+            }
+            ContactManifold planar;
+            planar.normal = faceNormal;
+            for (int i = 0; i < manifold->count; ++i)
+            {
+                const Vec3 pos = manifold->points[static_cast<std::size_t>(i)].position;
+                if (!std::isfinite(pos.x()) || !std::isfinite(pos.y()) || !std::isfinite(pos.z()))
+                {
+                    continue; // EPA can return a garbage witness point for a flat triangle
+                }
+                const float penetration = Vec3::dotProduct(faceNormal, v0 - pos);
+                // Keep only points within the speculative band of the surface; an
+                // implausibly deep one is a degenerate EPA result, not a real contact.
+                if (penetration < -closingReach || penetration > kMaxMeshPenetration)
+                {
+                    continue;
+                }
+                planar.points[static_cast<std::size_t>(planar.count)] = {pos, penetration};
+                ++planar.count;
+            }
+            if (planar.count == 0)
+            {
+                return;
+            }
+
+            out.push_back(SolverContact{planar, candidate.moving, candidate.target,
+                                        candidate.movingCollider, candidate.targetCollider,
+                                        static_cast<std::uint32_t>(t) + 1});
+        });
 }
 
 float PhysicsWorld::velocityInvMass(const BodyEntry& body) noexcept
@@ -1273,6 +1438,12 @@ bool PhysicsWorld::solveAndIntegrate(const std::vector<SolverContact>& contacts,
         in.restitution = std::max(ma.restitution, mb.restitution);
         in.friction = std::sqrt(std::max(ma.friction, 0.0f) * std::max(mb.friction, 0.0f));
         in.key = pairKey(contact.movingCollider->handle, contact.targetCollider->handle);
+        // Mesh triangles share a collider pair; mix the sub-key in so each warm-starts
+        // independently. subKey 0 (ordinary pairs) leaves the key unchanged.
+        if (contact.subKey != 0)
+        {
+            in.key ^= static_cast<std::uint64_t>(contact.subKey) * 0x9E3779B97F4A7C15ULL;
+        }
         inputs.push_back(in);
     }
 

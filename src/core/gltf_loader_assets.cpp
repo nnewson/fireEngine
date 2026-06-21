@@ -251,6 +251,44 @@ public:
         return {values[0], values[1], values[2]};
     }
 
+    // A quaternion [x, y, z, w]; defaults to identity when absent.
+    [[nodiscard]] Quaternion readQuat(std::string_view key, std::string_view label) const
+    {
+        auto element = object_.at_key(key);
+        if (element.error() == simdjson::NO_SUCH_FIELD)
+        {
+            return Quaternion::identity();
+        }
+
+        simdjson::dom::array array;
+        if (element.get_array().get(array) != simdjson::SUCCESS)
+        {
+            throw std::runtime_error(prefix(label) + " must be an array of four numbers [x,y,z,w]");
+        }
+
+        std::array<float, 4> values{};
+        std::size_t i = 0;
+        for (auto valueElement : array)
+        {
+            if (i >= values.size())
+            {
+                throw std::runtime_error(prefix(label) + " must contain exactly four numbers");
+            }
+            double value = 0.0;
+            if (valueElement.get(value) != simdjson::SUCCESS)
+            {
+                throw std::runtime_error(prefix(label) + " must contain only numbers");
+            }
+            values[i] = static_cast<float>(value);
+            ++i;
+        }
+        if (i != values.size())
+        {
+            throw std::runtime_error(prefix(label) + " must contain exactly four numbers");
+        }
+        return {values[0], values[1], values[2], values[3]};
+    }
+
 private:
     [[nodiscard]] std::string prefix(std::string_view label) const
     {
@@ -260,6 +298,73 @@ private:
     simdjson::dom::object& object_;
     std::string_view section_;
 };
+
+// Parse a primitive collider shape (Box / Sphere / Capsule) from `reader`. Returns
+// nullopt for any other shape name (the caller handles ConvexHull / Mesh / Compound).
+[[nodiscard]] std::optional<ColliderShape> parsePrimitiveShape(std::string_view shape,
+                                                               const ExtrasReader& reader)
+{
+    const Vec3 center = reader.readVec3("Center", {}, "Center");
+    if (shape == "Box")
+    {
+        return BoxShape{reader.readVec3("HalfExtents", {0.5f, 0.5f, 0.5f}, "HalfExtents"), center};
+    }
+    if (shape == "Sphere")
+    {
+        return SphereShape{reader.readFloat("Radius", 0.5f, "Radius"), center};
+    }
+    if (shape == "Capsule")
+    {
+        return CapsuleShape{reader.readFloat("Radius", 0.5f, "Radius"),
+                            reader.readFloat("HalfHeight", 0.5f, "HalfHeight"), center};
+    }
+    return std::nullopt;
+}
+
+// Parse `Shape: "Compound"`'s `Children` array — each an offset primitive with its own
+// shape, Position, Rotation, and material.
+[[nodiscard]] std::vector<CompoundChild> parseCompoundChildren(simdjson::dom::object& physicsObject)
+{
+    auto childrenElement = physicsObject.at_key("Children");
+    simdjson::dom::array childrenArray;
+    if (childrenElement.error() == simdjson::NO_SUCH_FIELD ||
+        childrenElement.get_array().get(childrenArray) != simdjson::SUCCESS)
+    {
+        throw std::runtime_error("glTF Physics Compound requires a Children array");
+    }
+
+    std::vector<CompoundChild> children;
+    for (auto childElement : childrenArray)
+    {
+        simdjson::dom::object childObject;
+        if (childElement.get_object().get(childObject) != simdjson::SUCCESS)
+        {
+            throw std::runtime_error("glTF Physics Compound child must be an object");
+        }
+        const ExtrasReader childReader{childObject, "Physics Compound child"};
+
+        std::string_view shape;
+        if (childObject.at_key("Shape").get(shape) != simdjson::SUCCESS)
+        {
+            throw std::runtime_error("glTF Physics Compound child requires a Shape string");
+        }
+        auto primitive = parsePrimitiveShape(shape, childReader);
+        if (!primitive.has_value())
+        {
+            throw std::runtime_error(
+                "glTF Physics Compound child Shape must be Box, Sphere, or Capsule");
+        }
+
+        CompoundChild child;
+        child.shape = std::move(primitive.value());
+        child.localPosition = childReader.readVec3("Position", {}, "Position");
+        child.localRotation = childReader.readQuat("Rotation", "Rotation");
+        child.material = PhysicsMaterial{childReader.readFloat("Restitution", 1.0f, "Restitution"),
+                                         childReader.readFloat("Friction", 0.0f, "Friction")};
+        children.push_back(std::move(child));
+    }
+    return children;
+}
 
 } // namespace
 
@@ -340,30 +445,28 @@ GltfLoader::nodeExtrasPhysics(simdjson::dom::object* extras)
             throw std::runtime_error("glTF Physics Shape must be a string");
         }
 
-        const Vec3 center = reader.readVec3("Center", {}, "Center");
-        if (shape == "Box")
+        if (auto primitive = parsePrimitiveShape(shape, reader))
         {
-            config.shape =
-                BoxShape{reader.readVec3("HalfExtents", {0.5f, 0.5f, 0.5f}, "HalfExtents"), center};
-        }
-        else if (shape == "Sphere")
-        {
-            config.shape = SphereShape{reader.readFloat("Radius", 0.5f, "Radius"), center};
-        }
-        else if (shape == "Capsule")
-        {
-            config.shape = CapsuleShape{reader.readFloat("Radius", 0.5f, "Radius"),
-                                        reader.readFloat("HalfHeight", 0.5f, "HalfHeight"), center};
+            config.shape = std::move(primitive.value());
         }
         else if (shape == "ConvexHull")
         {
             // Hull geometry comes from the node mesh, built in applyPhysicsConfig.
             config.convexHullFromMesh = true;
         }
+        else if (shape == "Mesh")
+        {
+            // Triangle geometry comes from the node mesh (static colliders only).
+            config.staticMeshFromMesh = true;
+        }
+        else if (shape == "Compound")
+        {
+            config.compoundChildren = parseCompoundChildren(physicsObject);
+        }
         else
         {
             throw std::runtime_error(
-                "glTF Physics Shape must be Box, Sphere, Capsule, or ConvexHull");
+                "glTF Physics Shape must be Box, Sphere, Capsule, ConvexHull, Mesh, or Compound");
         }
     }
 

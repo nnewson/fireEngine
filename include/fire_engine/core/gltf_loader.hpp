@@ -108,9 +108,13 @@ public:
         float friction{0.0f};
         float gravityScale{1.0f};
         std::optional<ColliderShape> shape;
-        // `Shape: "ConvexHull"` defers to the node mesh (built in applyPhysicsConfig),
-        // since the hull geometry isn't available when parsing extras.
+        // `Shape: "ConvexHull"` / `"Mesh"` defer to the node mesh (built in
+        // applyPhysicsConfig), since the geometry isn't available when parsing extras.
         bool convexHullFromMesh{false};
+        bool staticMeshFromMesh{false};
+        // `Shape: "Compound"` children (each an offset primitive). Non-empty selects a
+        // compound collider over the single `shape`.
+        std::vector<CompoundChild> compoundChildren;
     };
 
     // CPU-only mesh bounds for collision setup. Prefers POSITION accessor
@@ -121,6 +125,11 @@ public:
     // Convex hull collider built from a mesh's welded POSITION vertices + triangles.
     [[nodiscard]]
     static ConvexHullShape meshConvexHull(const fastgltf::Asset& asset, const fastgltf::Mesh& mesh);
+
+    // Static triangle-mesh collider geometry (raw POSITION vertices + triangle indices)
+    // from a node mesh — for `Shape: "Mesh"`.
+    [[nodiscard]]
+    static StaticMeshShape meshTriangles(const fastgltf::Asset& asset, const fastgltf::Mesh& mesh);
 
     [[nodiscard]]
     static bool nodeExtrasControllable(simdjson::dom::object* extras) noexcept;

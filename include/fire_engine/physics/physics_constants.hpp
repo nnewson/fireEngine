@@ -55,4 +55,10 @@ inline constexpr float kLinearSleepThreshold = 0.05f;
 inline constexpr float kAngularSleepThreshold = 0.05f;
 inline constexpr float kSleepTime = 0.5f;
 
+// Static-mesh contacts (P6): a triangle contact point deeper than this below the
+// triangle plane is treated as a degenerate EPA result (a garbage witness point on a
+// flat triangle) and dropped, so it can't inject a huge correction. Generous — the
+// speculative margin brakes fast movers before they penetrate this far.
+inline constexpr float kMaxMeshPenetration = 1.0f;
+
 } // namespace fire_engine

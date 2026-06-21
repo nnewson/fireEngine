@@ -198,6 +198,7 @@ add_executable(test_fire_engine
     tests/physics/test_contact_solver.cpp
     tests/physics/test_island.cpp
     tests/physics/test_compound.cpp
+    tests/physics/test_static_mesh.cpp
     tests/physics/test_joint.cpp
     tests/physics/test_physics_handle.cpp
     tests/physics/test_physics_determinism.cpp
