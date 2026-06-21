@@ -46,4 +46,13 @@ inline constexpr float kJointBaumgarte = 0.2f;
 // joint contributes no bias and never buzzes.
 inline constexpr float kJointSlop = 0.0005f;
 
+// Sleeping (P5): a Dynamic body whose linear AND angular speed stay below these
+// thresholds for kSleepTime becomes eligible to sleep; a whole island sleeps once
+// every dynamic member is eligible, stops integrating + solving, and has its
+// velocities zeroed until disturbed. Squared magnitudes are compared, so these are
+// the linear (m/s) and angular (rad/s) speeds.
+inline constexpr float kLinearSleepThreshold = 0.05f;
+inline constexpr float kAngularSleepThreshold = 0.05f;
+inline constexpr float kSleepTime = 0.5f;
+
 } // namespace fire_engine

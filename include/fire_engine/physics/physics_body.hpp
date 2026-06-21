@@ -104,6 +104,18 @@ public:
         material_ = material;
     }
 
+    // Whether this body may be put to sleep when its island settles (P5). Set false
+    // for a body that must keep simulating — e.g. one the game drives via forces.
+    [[nodiscard]]
+    bool allowSleeping() const noexcept
+    {
+        return allowSleeping_;
+    }
+    void allowSleeping(bool allow) noexcept
+    {
+        allowSleeping_ = allow;
+    }
+
 private:
     PhysicsBodyType type_{PhysicsBodyType::Static};
     Vec3 linearVelocity_{};
@@ -113,6 +125,7 @@ private:
     Vec3 inverseInertiaLocal_{};
     float gravityScale_{1.0f};
     PhysicsMaterial material_{};
+    bool allowSleeping_{true};
 };
 
 struct PhysicsBodyDesc
@@ -126,6 +139,7 @@ struct PhysicsBodyDesc
     float mass{1.0f};
     float gravityScale{1.0f};
     PhysicsMaterial material{};
+    bool allowSleeping{true};
 };
 
 } // namespace fire_engine

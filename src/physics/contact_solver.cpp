@@ -245,16 +245,25 @@ void ContactSolver::solvePosition(std::vector<SolverBody>& bodies)
     }
 }
 
+void ContactSolver::beginStore() noexcept
+{
+    next_.clear();
+}
+
 void ContactSolver::store()
 {
-    // Collect this step's accumulated impulses per pair (in deterministic points_
-    // order), then swap them in as next step's warm-start source.
-    next_.clear();
+    // Append this island's accumulated impulses per pair (in deterministic points_
+    // order) to the pending cache. Keys are island-local, so appends never collide.
     for (const ConstraintPoint& cp : points_)
     {
         next_[cp.key].push_back(
             CachedPoint{cp.point, cp.normalImpulse, cp.tangentImpulse1, cp.tangentImpulse2});
     }
+}
+
+void ContactSolver::commitStore() noexcept
+{
+    // Swap the pending cache in as next step's warm-start source.
     cache_.swap(next_);
 }
 

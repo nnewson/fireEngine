@@ -5,24 +5,17 @@
 #include <unordered_map>
 #include <vector>
 
+#include <fire_engine/collision/broad_phase.hpp>
 #include <fire_engine/collision/collider.hpp>
 
 namespace fire_engine
 {
 
-struct CollisionPair
-{
-    ColliderId firstId;
-    ColliderId secondId;
-    const Collider* first;
-    const Collider* second;
-};
-
-class SweepAndPruneBroadPhase
+class SweepAndPruneBroadPhase final : public BroadPhase
 {
 public:
     SweepAndPruneBroadPhase() = default;
-    ~SweepAndPruneBroadPhase() = default;
+    ~SweepAndPruneBroadPhase() override = default;
 
     SweepAndPruneBroadPhase(const SweepAndPruneBroadPhase&) = delete;
     SweepAndPruneBroadPhase& operator=(const SweepAndPruneBroadPhase&) = delete;
@@ -31,31 +24,31 @@ public:
 
     // Ensure Collider::update() is called before adding and after moving colliders,
     // so endpoint values are up to date before incremental SAP sorting.
-    ColliderId addCollider(Collider& collider);
+    ColliderId addCollider(Collider& collider) override;
 
     [[nodiscard]]
-    bool removeCollider(ColliderId colliderId);
+    bool removeCollider(ColliderId colliderId) override;
 
     [[nodiscard]]
-    bool removeCollider(Collider& collider);
+    bool removeCollider(Collider& collider) override;
 
-    void clear();
-    void update();
+    void clear() override;
+    void update() override;
     void updateCollider(Collider& collider);
     void updateEndPoint(EndPoint& endPoint);
-    void rebuild();
+    void rebuild() override;
 
     [[nodiscard]]
-    bool validate() const;
+    bool validate() const override;
 
     [[nodiscard]]
-    const std::vector<CollisionPair>& possiblePairs() const noexcept
+    const std::vector<CollisionPair>& possiblePairs() const noexcept override
     {
         return possiblePairs_;
     }
 
     [[nodiscard]]
-    std::size_t colliderCount() const noexcept
+    std::size_t colliderCount() const noexcept override
     {
         return colliders_.size();
     }

@@ -110,6 +110,7 @@ PhysicsBodyHandle PhysicsWorld::createBody(const PhysicsBodyDesc& desc)
     body.angularVelocity(desc.angularVelocity);
     body.gravityScale(desc.gravityScale);
     body.material(desc.material);
+    body.allowSleeping(desc.allowSleeping);
 
     Transform transform;
     transform.position(desc.position);
@@ -145,7 +146,7 @@ PhysicsColliderHandle PhysicsWorld::createCollider(PhysicsBodyHandle bodyHandle,
         {handle, bodyHandle, std::move(collider), desc.shape, desc.material, true});
     colliderIndexByPointer_.emplace(&colliders_.back().collider, colliders_.size() - 1);
     owner->colliders.push_back(handle);
-    broadPhase_.addCollider(colliders_.back().collider);
+    broadPhase_->addCollider(colliders_.back().collider);
 
     // Local inverse inertia from the (now-known) shape + mass; dynamic bodies only,
     // others keep infinite inertia (zero). Single collider assumed (COM = origin).
@@ -171,7 +172,7 @@ bool PhysicsWorld::destroyBody(PhysicsBodyHandle handle)
         if (colliderEntry != nullptr && colliderEntry->active)
         {
             [[maybe_unused]] const bool removed =
-                broadPhase_.removeCollider(colliderEntry->collider);
+                broadPhase_->removeCollider(colliderEntry->collider);
             colliderEntry->active = false;
         }
     }
@@ -213,7 +214,7 @@ bool PhysicsWorld::destroyJoint(PhysicsConstraintHandle handle)
 
 void PhysicsWorld::clear()
 {
-    broadPhase_.clear();
+    broadPhase_->clear();
     bodies_.clear();
     colliders_.clear();
     joints_.clear();
@@ -234,10 +235,11 @@ void PhysicsWorld::step(float fixedDt)
     }
 
     // Integrate velocity only (gravity); positions advance after the velocity
-    // solve so contact impulses are applied before the bodies move.
+    // solve so contact impulses are applied before the bodies move. Sleeping bodies
+    // are skipped — no gravity, so they stay put until their island wakes.
     for (BodyEntry& entry : bodies_)
     {
-        if (!entry.active || entry.body.type() != PhysicsBodyType::Dynamic)
+        if (!entry.active || entry.body.type() != PhysicsBodyType::Dynamic || entry.sleeping)
         {
             continue;
         }
@@ -248,7 +250,7 @@ void PhysicsWorld::step(float fixedDt)
     }
 
     updateColliders(fixedDt);
-    broadPhase_.update();
+    broadPhase_->update();
 
     auto frameContacts = contacts(fixedDt);
     // Snapshot for debug draw before the solver advances bodies.
@@ -257,7 +259,7 @@ void PhysicsWorld::step(float fixedDt)
     if (solveAndIntegrate(frameContacts, fixedDt))
     {
         resetResolvedColliders();
-        broadPhase_.rebuild();
+        broadPhase_->rebuild();
     }
 
     capturePreviousPositions();
@@ -346,6 +348,16 @@ namespace
     return {Vec3{m[0, 0], m[1, 0], m[2, 0]}.magnitude(),
             Vec3{m[0, 1], m[1, 1], m[2, 1]}.magnitude(),
             Vec3{m[0, 2], m[1, 2], m[2, 2]}.magnitude()};
+}
+
+// A body is sleep-eligible this step when both its linear and angular speeds are
+// below the sleep thresholds (squared comparison).
+[[nodiscard]] bool belowSleepThreshold(const PhysicsBody& body) noexcept
+{
+    return body.linearVelocity().magnitudeSquared() <
+               kLinearSleepThreshold * kLinearSleepThreshold &&
+           body.angularVelocity().magnitudeSquared() <
+               kAngularSleepThreshold * kAngularSleepThreshold;
 }
 
 } // namespace
@@ -467,6 +479,9 @@ void PhysicsWorld::setBodyTransform(PhysicsBodyHandle handle, const Transform& t
 
     entry->transform = transform;
     entry->transform.update(Mat4::identity());
+    // An externally repositioned body must re-simulate.
+    entry->sleeping = false;
+    entry->sleepTimer = 0.0f;
 }
 
 void PhysicsWorld::setBodyVelocity(PhysicsBodyHandle handle, Vec3 velocity) noexcept
@@ -475,7 +490,26 @@ void PhysicsWorld::setBodyVelocity(PhysicsBodyHandle handle, Vec3 velocity) noex
     if (entry != nullptr)
     {
         entry->body.linearVelocity(velocity);
+        // An externally driven velocity must re-simulate.
+        entry->sleeping = false;
+        entry->sleepTimer = 0.0f;
     }
+}
+
+void PhysicsWorld::wake(PhysicsBodyHandle handle) noexcept
+{
+    BodyEntry* entry = findBody(handle);
+    if (entry != nullptr)
+    {
+        entry->sleeping = false;
+        entry->sleepTimer = 0.0f;
+    }
+}
+
+bool PhysicsWorld::sleeping(PhysicsBodyHandle handle) const noexcept
+{
+    const BodyEntry* entry = findBody(handle);
+    return entry != nullptr && entry->sleeping;
 }
 
 PhysicsWorld::BodyEntry* PhysicsWorld::findBody(PhysicsBodyHandle handle) noexcept
@@ -641,8 +675,8 @@ void PhysicsWorld::capturePreviousPositions() noexcept
 std::vector<PhysicsWorld::SolverContact> PhysicsWorld::contacts(float dt)
 {
     std::vector<SolverContact> result;
-    result.reserve(broadPhase_.possiblePairs().size());
-    for (const CollisionPair& pair : broadPhase_.possiblePairs())
+    result.reserve(broadPhase_->possiblePairs().size());
+    for (const CollisionPair& pair : broadPhase_->possiblePairs())
     {
         auto contact = contactForPair(pair, dt);
         if (contact.has_value())
@@ -826,6 +860,118 @@ std::vector<JointInput> PhysicsWorld::buildJointInputs() const
     return inputs;
 }
 
+void PhysicsWorld::solveIsland(const Island& island, std::vector<SolverBody>& solverBodies,
+                               const std::vector<SolverContactInput>& contactInputs,
+                               const std::vector<JointInput>& jointInputs, float dt)
+{
+    // Narrow the global constraint inputs to this island's subset (the solvers index
+    // the shared global SolverBody array, so only which constraints they build changes).
+    std::vector<SolverContactInput> islandContacts;
+    islandContacts.reserve(island.contacts.size());
+    for (const int c : island.contacts)
+    {
+        islandContacts.push_back(contactInputs[static_cast<std::size_t>(c)]);
+    }
+    std::vector<JointInput> islandJoints;
+    islandJoints.reserve(island.joints.size());
+    for (const int j : island.joints)
+    {
+        islandJoints.push_back(jointInputs[static_cast<std::size_t>(j)]);
+    }
+
+    const bool haveContacts = !islandContacts.empty();
+    const bool haveJoints = !islandJoints.empty();
+
+    // Velocity (impulse) solve: joints and contacts share the SolverBody array and
+    // are interleaved Gauss-Seidel — joints first each sweep, then contacts. Joints
+    // fold their position error into a Baumgarte velocity bias (no split-impulse
+    // pass), so the orientation/position integration below corrects them.
+    if (haveContacts)
+    {
+        solver_.prepare(solverBodies, islandContacts, dt);
+        solver_.warmStart(solverBodies);
+    }
+    if (haveJoints)
+    {
+        jointSolver_.prepare(solverBodies, islandJoints, dt);
+        jointSolver_.warmStart(solverBodies);
+    }
+    for (int i = 0; i < kVelocityIterations; ++i)
+    {
+        if (haveJoints)
+        {
+            jointSolver_.solveVelocity(solverBodies);
+        }
+        if (haveContacts)
+        {
+            solver_.solveVelocity(solverBodies);
+        }
+    }
+
+    // Integrate this island's dynamic bodies: write solved velocity back and advance
+    // position/orientation. Free-faller singletons (no constraints) integrate here too.
+    // Kinematic members are nodes (their contacts were solved + position-corrected
+    // above) but are scene-driven, so they are not velocity-integrated.
+    for (const int bi : island.bodies)
+    {
+        const auto b = static_cast<std::size_t>(bi);
+        BodyEntry& entry = bodies_[b];
+        if (entry.body.type() != PhysicsBodyType::Dynamic)
+        {
+            continue;
+        }
+        entry.body.linearVelocity(solverBodies[b].velocity);
+        entry.body.angularVelocity(solverBodies[b].angularVelocity);
+        solverBodies[b].position += solverBodies[b].velocity * dt;
+        if (solverBodies[b].angularVelocity.magnitudeSquared() > 0.0f)
+        {
+            solverBodies[b].orientation =
+                solverBodies[b].orientation.integrate(solverBodies[b].angularVelocity, dt);
+        }
+    }
+
+    // Split-impulse positional correction (contacts; may also nudge Kinematic
+    // anchors), then append this island's warm-start impulses.
+    if (haveContacts)
+    {
+        solver_.solvePosition(solverBodies);
+        solver_.store();
+    }
+    if (haveJoints)
+    {
+        jointSolver_.store();
+    }
+}
+
+bool PhysicsWorld::islandShouldSleep(const Island& island) const
+{
+    if (!sleepingEnabled_)
+    {
+        return false;
+    }
+
+    bool anyDynamic = false;
+    for (const int bi : island.bodies)
+    {
+        const BodyEntry& entry = bodies_[static_cast<std::size_t>(bi)];
+        if (entry.body.type() == PhysicsBodyType::Kinematic)
+        {
+            // A kinematic that moved this step keeps the island (its riders) awake.
+            if (entry.transform.position() != entry.previousPosition)
+            {
+                return false;
+            }
+            continue;
+        }
+        anyDynamic = true;
+        if (!entry.body.allowSleeping() || entry.sleepTimer < kSleepTime)
+        {
+            return false;
+        }
+    }
+    return anyDynamic;
+}
+
 bool PhysicsWorld::solveAndIntegrate(const std::vector<SolverContact>& contacts, float dt)
 {
     // Flat solver-body view, indexed 1:1 with bodies_ (insertion order → stable
@@ -872,71 +1018,91 @@ bool PhysicsWorld::solveAndIntegrate(const std::vector<SolverContact>& contacts,
 
     // World-space joints for this step, composed from the live body transforms.
     const std::vector<JointInput> jointInputs = buildJointInputs();
-    const bool haveContacts = !inputs.empty();
-    const bool haveJoints = !jointInputs.empty();
 
-    // Velocity (impulse) solve: joints and contacts share the SolverBody array and
-    // are interleaved Gauss-Seidel — joints first each sweep, then contacts. Joints
-    // fold their position error into a Baumgarte velocity bias (no split-impulse
-    // pass), so the orientation/position integration below corrects them.
-    if (haveContacts)
-    {
-        solver_.prepare(solverBodies, inputs, dt);
-    }
-    if (haveJoints)
-    {
-        jointSolver_.prepare(solverBodies, jointInputs, dt);
-    }
-    if (haveContacts)
-    {
-        solver_.warmStart(solverBodies);
-    }
-    if (haveJoints)
-    {
-        jointSolver_.warmStart(solverBodies);
-    }
-    for (int i = 0; i < kVelocityIterations; ++i)
-    {
-        if (haveJoints)
-        {
-            jointSolver_.solveVelocity(solverBodies);
-        }
-        if (haveContacts)
-        {
-            solver_.solveVelocity(solverBodies);
-        }
-    }
-
-    // Write solved velocities back and integrate positions with them (Dynamic).
+    // Partition the movable bodies into islands (connected components linked by
+    // movable-movable contacts/joints) and solve each independently. Islands don't
+    // share solver bodies or constraints, so solving them separately is equivalent to
+    // one global solve while letting P5.2 sleep whole islands. Kinematic bodies are
+    // nodes (their contacts must be solved for the position pass) but never
+    // velocity-integrated; Static bodies are pure boundaries.
+    std::vector<bool> movableNode(bodies_.size(), false);
     for (std::size_t i = 0; i < bodies_.size(); ++i)
     {
-        BodyEntry& entry = bodies_[i];
-        if (!entry.active || entry.body.type() != PhysicsBodyType::Dynamic)
+        movableNode[i] = bodies_[i].active && movable(bodies_[i]);
+    }
+    std::vector<IslandEdge> contactEdges;
+    contactEdges.reserve(inputs.size());
+    for (const SolverContactInput& in : inputs)
+    {
+        contactEdges.push_back(IslandEdge{in.bodyA, in.bodyB});
+    }
+    std::vector<IslandEdge> jointEdges;
+    jointEdges.reserve(jointInputs.size());
+    for (const JointInput& in : jointInputs)
+    {
+        jointEdges.push_back(IslandEdge{in.bodyA, in.bodyB});
+    }
+    const std::vector<Island> islands =
+        buildIslands(bodies_.size(), movableNode, contactEdges, jointEdges);
+
+    // One solver instance services every island in turn; the warm-start cache is
+    // cleared once, appended per island, and committed once. Fully-settled islands
+    // sleep — skipped entirely until disturbed.
+    solver_.beginStore();
+    jointSolver_.beginStore();
+    for (const Island& island : islands)
+    {
+        if (islandShouldSleep(island))
         {
+            // Put (or keep) the island asleep: zero the dynamic members' velocities,
+            // flag them sleeping, and skip the solve + integration.
+            for (const int bi : island.bodies)
+            {
+                BodyEntry& entry = bodies_[static_cast<std::size_t>(bi)];
+                if (entry.body.type() != PhysicsBodyType::Dynamic)
+                {
+                    continue;
+                }
+                entry.body.linearVelocity(Vec3{});
+                entry.body.angularVelocity(Vec3{});
+                entry.sleeping = true;
+            }
             continue;
         }
-        entry.body.linearVelocity(solverBodies[i].velocity);
-        entry.body.angularVelocity(solverBodies[i].angularVelocity);
-        solverBodies[i].position += solverBodies[i].velocity * dt;
-        if (solverBodies[i].angularVelocity.magnitudeSquared() > 0.0f)
+
+        // Awake: wake any sleeping members, resetting their timer on the transition.
+        for (const int bi : island.bodies)
         {
-            solverBodies[i].orientation =
-                solverBodies[i].orientation.integrate(solverBodies[i].angularVelocity, dt);
+            BodyEntry& entry = bodies_[static_cast<std::size_t>(bi)];
+            if (entry.sleeping)
+            {
+                entry.sleeping = false;
+                entry.sleepTimer = 0.0f;
+            }
+        }
+
+        solveIsland(island, solverBodies, inputs, jointInputs, dt);
+
+        // Accumulate each dynamic member's sleep timer from its post-solve velocity.
+        for (const int bi : island.bodies)
+        {
+            BodyEntry& entry = bodies_[static_cast<std::size_t>(bi)];
+            if (entry.body.type() != PhysicsBodyType::Dynamic)
+            {
+                continue;
+            }
+            if (belowSleepThreshold(entry.body))
+            {
+                entry.sleepTimer += dt;
+            }
+            else
+            {
+                entry.sleepTimer = 0.0f;
+            }
         }
     }
-
-    // Split-impulse positional correction (may also nudge Kinematic bodies).
-    if (haveContacts)
-    {
-        solver_.solvePosition(solverBodies);
-        solver_.store();
-    }
-    // Joints correct position through their velocity bias; just persist the
-    // accumulated impulses for next frame's warm start.
-    if (haveJoints)
-    {
-        jointSolver_.store();
-    }
+    solver_.commitStore();
+    jointSolver_.commitStore();
 
     // Write final positions + orientations back (everything but Static).
     bool moved = false;

@@ -12,6 +12,7 @@ namespace fire_engine
 {
 
 class SweepAndPruneBroadPhase;
+class DynamicAabbTreeBroadPhase;
 
 class Collider
 {
@@ -108,6 +109,7 @@ public:
 
 private:
     friend class SweepAndPruneBroadPhase;
+    friend class DynamicAabbTreeBroadPhase;
 
     static constexpr std::uint32_t defaultCollisionLayer = 1U;
     static constexpr std::uint32_t defaultCollisionMask = ~0U;
