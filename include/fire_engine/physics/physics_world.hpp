@@ -43,6 +43,16 @@ public:
     [[nodiscard]]
     PhysicsColliderHandle createCollider(PhysicsBodyHandle bodyHandle, const ColliderDesc& desc);
 
+    // Create a compound collider: one child collider per CompoundChild (each placed at
+    // its local offset and registered with the broadphase). For a Dynamic body the
+    // children's mass properties are aggregated into the body's centre of mass +
+    // inertia (mass split by child volume; parallel-axis sum, diagonalised). Returns
+    // the first child's handle (or a null handle if `children` is empty / body invalid).
+    [[nodiscard]]
+    PhysicsColliderHandle
+    createCompoundCollider(PhysicsBodyHandle bodyHandle, const std::vector<CompoundChild>& children,
+                           std::uint32_t collisionLayer = 1U, std::uint32_t collisionMask = ~0U);
+
     [[nodiscard]]
     bool destroyBody(PhysicsBodyHandle handle);
 
@@ -165,6 +175,10 @@ private:
         Collider collider;
         ColliderShape shape;
         PhysicsMaterial material;
+        // Offset of this collider within the body (a compound child); identity for a
+        // plain single collider. worldShape composes it after the body transform.
+        Vec3 localPosition{};
+        Quaternion localRotation{Quaternion::identity()};
         bool active{true};
     };
 
@@ -219,6 +233,16 @@ private:
     bool sleepingEnabled_{true};
     // Contacts from the most recent step(), kept for debug visualisation only.
     std::vector<DebugContact> debugContacts_;
+
+    // Create a Collider + ColliderEntry for `shape` at a local offset within `owner`,
+    // register it with the broadphase, and return its handle. Shared by createCollider
+    // (identity offset) and createCompoundCollider (per-child offsets). Does not touch
+    // the body's mass properties — the caller aggregates those.
+    [[nodiscard]]
+    PhysicsColliderHandle
+    addColliderEntry(BodyEntry& owner, const ColliderShape& shape, const PhysicsMaterial& material,
+                     std::uint32_t collisionLayer, std::uint32_t collisionMask,
+                     const Vec3& localPosition, const Quaternion& localRotation);
 
     [[nodiscard]]
     BodyEntry* findBody(PhysicsBodyHandle handle) noexcept;

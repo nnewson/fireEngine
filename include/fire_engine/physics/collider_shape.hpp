@@ -56,4 +56,17 @@ struct ColliderDesc
     PhysicsMaterial material{};
 };
 
+// One primitive of a compound collider: a (non-compound) shape placed at a local
+// offset within the body. A body's compound collider is a list of these passed to
+// PhysicsWorld::createCompoundCollider, which creates one child collider per entry
+// (each registered with the broadphase) and aggregates their mass properties into the
+// body's centre of mass + inertia. Compounds do not nest.
+struct CompoundChild
+{
+    ColliderShape shape{AabbShape{}};
+    Vec3 localPosition{};
+    Quaternion localRotation{Quaternion::identity()};
+    PhysicsMaterial material{};
+};
+
 } // namespace fire_engine
