@@ -43,6 +43,26 @@ public:
     [[nodiscard]]
     PhysicsColliderHandle createCollider(PhysicsBodyHandle bodyHandle, const ColliderDesc& desc);
 
+    // Create a compound collider: one child collider per CompoundChild (each placed at
+    // its local offset and registered with the broadphase). For a Dynamic body the
+    // children's mass properties are aggregated into the body's centre of mass +
+    // inertia (mass split by child volume; parallel-axis sum, diagonalised). Returns
+    // the first child's handle (or a null handle if `children` is empty / body invalid).
+    [[nodiscard]]
+    PhysicsColliderHandle
+    createCompoundCollider(PhysicsBodyHandle bodyHandle, const std::vector<CompoundChild>& children,
+                           std::uint32_t collisionLayer = 1U, std::uint32_t collisionMask = ~0U);
+
+    // Create a static triangle-mesh collider. A moving body is resolved against the
+    // mesh's actual triangles (via a per-collider triangle BVH), not its bounding box.
+    // The body must be Static (returns a null handle otherwise) and is assumed to keep
+    // a fixed transform (the triangle BVH is built once in world space).
+    [[nodiscard]]
+    PhysicsColliderHandle
+    createMeshCollider(PhysicsBodyHandle bodyHandle, const StaticMeshShape& mesh,
+                       const PhysicsMaterial& material = {}, std::uint32_t collisionLayer = 1U,
+                       std::uint32_t collisionMask = ~0U);
+
     [[nodiscard]]
     bool destroyBody(PhysicsBodyHandle handle);
 
@@ -158,6 +178,16 @@ private:
         float sleepTimer{0.0f};
     };
 
+    // Per-collider triangle-mesh data (static mesh colliders only): the triangles in
+    // world space + a BVH over them. Built once at createMeshCollider (the mesh body is
+    // assumed not to move). Shared so ColliderEntry stays copyable.
+    struct MeshCollisionData
+    {
+        std::vector<Vec3> worldVertices;
+        std::vector<std::uint32_t> indices;
+        AabbBvh<int> bvh{0.0f}; // triangle index → world AABB
+    };
+
     struct ColliderEntry
     {
         PhysicsColliderHandle handle;
@@ -165,7 +195,13 @@ private:
         Collider collider;
         ColliderShape shape;
         PhysicsMaterial material;
+        // Offset of this collider within the body (a compound child); identity for a
+        // plain single collider. worldShape composes it after the body transform.
+        Vec3 localPosition{};
+        Quaternion localRotation{Quaternion::identity()};
         bool active{true};
+        // Non-null for a static triangle-mesh collider; null otherwise.
+        std::shared_ptr<MeshCollisionData> mesh;
     };
 
     struct JointEntry
@@ -193,6 +229,9 @@ private:
         BodyEntry* target{nullptr};
         ColliderEntry* movingCollider{nullptr};
         ColliderEntry* targetCollider{nullptr};
+        // Distinguishes several contacts from one collider pair (a mesh triangle index
+        // + 1); 0 for an ordinary single-manifold pair. Folded into the warm-start key.
+        std::uint32_t subKey{0};
     };
 
     PhysicsBodyHandle nextBodyHandle_{PhysicsBodyHandle{1U}};
@@ -219,6 +258,16 @@ private:
     bool sleepingEnabled_{true};
     // Contacts from the most recent step(), kept for debug visualisation only.
     std::vector<DebugContact> debugContacts_;
+
+    // Create a Collider + ColliderEntry for `shape` at a local offset within `owner`,
+    // register it with the broadphase, and return its handle. Shared by createCollider
+    // (identity offset) and createCompoundCollider (per-child offsets). Does not touch
+    // the body's mass properties — the caller aggregates those.
+    [[nodiscard]]
+    PhysicsColliderHandle
+    addColliderEntry(BodyEntry& owner, const ColliderShape& shape, const PhysicsMaterial& material,
+                     std::uint32_t collisionLayer, std::uint32_t collisionMask,
+                     const Vec3& localPosition, const Quaternion& localRotation);
 
     [[nodiscard]]
     BodyEntry* findBody(PhysicsBodyHandle handle) noexcept;
@@ -263,8 +312,17 @@ private:
     // points + normal), before the solver mutates positions.
     void captureDebugContacts(const std::vector<SolverContact>& contacts);
 
+    // Append the solver contact(s) for one broadphase pair to `out`: a single manifold
+    // for a primitive/convex pair, or one per overlapping triangle for a static-mesh
+    // pair (mesh as the target). Nothing when there's no contact.
+    void appendContactsForPair(const CollisionPair& pair, float dt,
+                               std::vector<SolverContact>& out);
+
     [[nodiscard]]
-    std::optional<SolverContact> contactForPair(const CollisionPair& pair, float dt);
+    std::optional<SolverContact> singleContact(const ContactCandidate& candidate, float dt);
+
+    void appendMeshContacts(const ContactCandidate& candidate, float dt,
+                            std::vector<SolverContact>& out);
 
     [[nodiscard]]
     std::optional<ContactCandidate> contactCandidateForPair(const CollisionPair& pair);

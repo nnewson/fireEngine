@@ -312,13 +312,17 @@ std::optional<AABB> GltfLoader::meshBounds(const fastgltf::Asset& asset, const f
     return bounds;
 }
 
-ConvexHullShape GltfLoader::meshConvexHull(const fastgltf::Asset& asset, const fastgltf::Mesh& mesh)
+namespace
 {
-    std::vector<Vec3> positions;
-    std::vector<std::uint32_t> indices;
+
+// Gather a mesh's POSITION vertices + triangle indices across its supported primitives
+// (re-basing each primitive's indices into the combined vertex list).
+void gatherMeshGeometry(const fastgltf::Asset& asset, const fastgltf::Mesh& mesh,
+                        std::vector<Vec3>& positions, std::vector<std::uint32_t>& indices)
+{
     for (const auto& primitive : mesh.primitives)
     {
-        if (!isSupportedPrimitiveType(primitive.type))
+        if (!GltfLoader::isSupportedPrimitiveType(primitive.type))
         {
             continue;
         }
@@ -348,7 +352,23 @@ ConvexHullShape GltfLoader::meshConvexHull(const fastgltf::Asset& asset, const f
             }
         }
     }
+}
+
+} // namespace
+
+ConvexHullShape GltfLoader::meshConvexHull(const fastgltf::Asset& asset, const fastgltf::Mesh& mesh)
+{
+    std::vector<Vec3> positions;
+    std::vector<std::uint32_t> indices;
+    gatherMeshGeometry(asset, mesh, positions, indices);
     return buildConvexHull(positions, indices);
+}
+
+StaticMeshShape GltfLoader::meshTriangles(const fastgltf::Asset& asset, const fastgltf::Mesh& mesh)
+{
+    StaticMeshShape result;
+    gatherMeshGeometry(asset, mesh, result.vertices, result.indices);
+    return result;
 }
 
 namespace

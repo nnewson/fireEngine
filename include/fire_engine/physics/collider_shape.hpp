@@ -56,4 +56,27 @@ struct ColliderDesc
     PhysicsMaterial material{};
 };
 
+// One primitive of a compound collider: a (non-compound) shape placed at a local
+// offset within the body. A body's compound collider is a list of these passed to
+// PhysicsWorld::createCompoundCollider, which creates one child collider per entry
+// (each registered with the broadphase) and aggregates their mass properties into the
+// body's centre of mass + inertia. Compounds do not nest.
+struct CompoundChild
+{
+    ColliderShape shape{AabbShape{}};
+    Vec3 localPosition{};
+    Quaternion localRotation{Quaternion::identity()};
+    PhysicsMaterial material{};
+};
+
+// A static triangle-mesh collider: local-space vertices + triangle indices (3 per
+// triangle). Passed to PhysicsWorld::createMeshCollider, which builds a triangle BVH
+// and resolves a moving body against the mesh's actual triangles (not its AABB).
+// Static bodies only (no inertia); the mesh is assumed to keep a fixed transform.
+struct StaticMeshShape
+{
+    std::vector<Vec3> vertices;
+    std::vector<std::uint32_t> indices;
+};
+
 } // namespace fire_engine

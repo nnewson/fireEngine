@@ -33,6 +33,7 @@ using fire_engine::Material;
 using fire_engine::MaterialTextureSlot;
 using fire_engine::Node;
 using fire_engine::PhysicsBodyType;
+using fire_engine::BoxShape;
 using fire_engine::SphereShape;
 using fire_engine::TransmissionParams;
 using fire_engine::Vec3;
@@ -554,6 +555,44 @@ TEST_CASE("GltfNodeExtras.PhysicsShapeFieldsAreParsed", "[GltfNodeExtras]")
     const auto shape = std::get<SphereShape>(config->shape.value());
     CHECK(shape.radius == Catch::Approx(3.0f).margin(1e-5f));
     CHECK(shape.center == Vec3(1.0f, 2.0f, 3.0f));
+}
+
+TEST_CASE("GltfNodeExtras.PhysicsMeshShapeDefersToNodeMesh", "[GltfNodeExtras]")
+{
+    auto config = nodeExtrasPhysicsFromJson(R"({"Physics":{"BodyType":"Static","Shape":"Mesh"}})");
+    REQUIRE(config.has_value());
+    CHECK(config->staticMeshFromMesh);
+    CHECK_FALSE(config->shape.has_value());
+}
+
+TEST_CASE("GltfNodeExtras.PhysicsCompoundChildrenAreParsed", "[GltfNodeExtras]")
+{
+    auto config = nodeExtrasPhysicsFromJson(
+        R"({"Physics":{"BodyType":"Dynamic","Shape":"Compound","Children":[)"
+        R"({"Shape":"Box","HalfExtents":[0.5,0.5,0.5],"Position":[-1,0,0]},)"
+        R"({"Shape":"Sphere","Radius":0.25,"Position":[1,0,0]}]}})");
+
+    REQUIRE(config.has_value());
+    REQUIRE(config->compoundChildren.size() == 2U);
+    const auto& a = config->compoundChildren[0];
+    CHECK(std::holds_alternative<BoxShape>(a.shape));
+    CHECK(a.localPosition == Vec3(-1.0f, 0.0f, 0.0f));
+    const auto& b = config->compoundChildren[1];
+    REQUIRE(std::holds_alternative<SphereShape>(b.shape));
+    CHECK(std::get<SphereShape>(b.shape).radius == Catch::Approx(0.25f));
+    CHECK(b.localPosition == Vec3(1.0f, 0.0f, 0.0f));
+}
+
+TEST_CASE("GltfNodeExtras.PhysicsCompoundWithoutChildrenThrows", "[GltfNodeExtras]")
+{
+    CHECK_THROWS_AS(nodeExtrasPhysicsFromJson(R"({"Physics":{"Shape":"Compound"}})"),
+                    std::runtime_error);
+}
+
+TEST_CASE("GltfNodeExtras.InvalidPhysicsShapeThrows", "[GltfNodeExtras]")
+{
+    CHECK_THROWS_AS(nodeExtrasPhysicsFromJson(R"({"Physics":{"Shape":"Pyramid"}})"),
+                    std::runtime_error);
 }
 
 TEST_CASE("GltfNodeExtras.InvalidPhysicsObjectThrows", "[GltfNodeExtras]")

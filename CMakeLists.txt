@@ -190,12 +190,15 @@ add_executable(test_fire_engine
     tests/collision/test_geometry.cpp
     tests/collision/test_sweep_and_prune_broad_phase.cpp
     tests/collision/test_dynamic_aabb_tree_broad_phase.cpp
+    tests/collision/test_aabb_bvh.cpp
     tests/collision/test_narrow_phase.cpp
     tests/collision/test_support.cpp
     tests/collision/test_gjk_epa.cpp
     tests/physics/test_physics_world.cpp
     tests/physics/test_contact_solver.cpp
     tests/physics/test_island.cpp
+    tests/physics/test_compound.cpp
+    tests/physics/test_static_mesh.cpp
     tests/physics/test_joint.cpp
     tests/physics/test_physics_handle.cpp
     tests/physics/test_physics_determinism.cpp

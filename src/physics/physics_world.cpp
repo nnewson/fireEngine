@@ -1,8 +1,11 @@
 #include <fire_engine/physics/physics_world.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
+#include <iostream>
+#include <memory>
 #include <type_traits>
 #include <utility>
 #include <variant>
@@ -22,7 +25,8 @@ namespace
 // the given mass, with the body's per-axis scale folded in. Zero for non-positive
 // mass or a degenerate axis (→ infinite inertia about that axis). All current
 // shapes have a diagonal inertia tensor in their local frame.
-[[nodiscard]] Vec3 localInverseInertia(const ColliderShape& shape, float mass, Vec3 scale)
+// Diagonal inertia (about the shape's centre of mass) in the body's local frame.
+[[nodiscard]] Vec3 localInertia(const ColliderShape& shape, float mass, Vec3 scale)
 {
     if (mass <= 0.0f)
     {
@@ -91,9 +95,207 @@ namespace
         },
         shape);
 
+    return inertia;
+}
+
+// Invert a diagonal inertia component-wise (0 ⇒ infinite inertia about that axis).
+[[nodiscard]] Vec3 invertInertia(Vec3 inertia) noexcept
+{
     return {inertia.x() > 0.0f ? 1.0f / inertia.x() : 0.0f,
             inertia.y() > 0.0f ? 1.0f / inertia.y() : 0.0f,
             inertia.z() > 0.0f ? 1.0f / inertia.z() : 0.0f};
+}
+
+[[nodiscard]] Vec3 localInverseInertia(const ColliderShape& shape, float mass, Vec3 scale)
+{
+    return invertInertia(localInertia(shape, mass, scale));
+}
+
+// Approximate volume of a shape (with the body scale folded in) — used to split a
+// compound body's mass across its children by volume (equal density).
+[[nodiscard]] float shapeVolume(const ColliderShape& shape, Vec3 scale)
+{
+    const float uniform = std::max({scale.x(), scale.y(), scale.z()});
+    return std::visit(
+        [&](const auto& s) -> float
+        {
+            using S = std::decay_t<decltype(s)>;
+            if constexpr (std::is_same_v<S, BoxShape>)
+            {
+                return 8.0f * s.halfExtents.x() * scale.x() * s.halfExtents.y() * scale.y() *
+                       s.halfExtents.z() * scale.z();
+            }
+            else if constexpr (std::is_same_v<S, SphereShape>)
+            {
+                const float r = s.radius * uniform;
+                return 4.0f / 3.0f * pi * r * r * r;
+            }
+            else if constexpr (std::is_same_v<S, CapsuleShape>)
+            {
+                const float r = s.radius * uniform;
+                const float h = 2.0f * s.halfHeight * scale.y();
+                return pi * r * r * h + 4.0f / 3.0f * pi * r * r * r;
+            }
+            else if constexpr (std::is_same_v<S, AabbShape>)
+            {
+                const Vec3 e = s.bounds.extent();
+                return e.x() * scale.x() * e.y() * scale.y() * e.z() * scale.z();
+            }
+            else // ConvexHullShape — AABB volume of the vertices
+            {
+                if (s.vertices.empty())
+                {
+                    return 0.0f;
+                }
+                Vec3 lo = s.vertices.front();
+                Vec3 hi = lo;
+                for (const Vec3& v : s.vertices)
+                {
+                    lo = {std::min(lo.x(), v.x()), std::min(lo.y(), v.y()),
+                          std::min(lo.z(), v.z())};
+                    hi = {std::max(hi.x(), v.x()), std::max(hi.y(), v.y()),
+                          std::max(hi.z(), v.z())};
+                }
+                const Vec3 e = hi - lo;
+                return e.x() * scale.x() * e.y() * scale.y() * e.z() * scale.z();
+            }
+        },
+        shape);
+}
+
+// The shape's centre of mass in its (unscaled) local frame — the centre offset for the
+// analytic primitives, the AABB centre of the vertices for a hull (matching the AABB
+// inertia approximation). Zero for a centred shape.
+[[nodiscard]] Vec3 shapeCenter(const ColliderShape& shape)
+{
+    return std::visit(
+        [](const auto& s) -> Vec3
+        {
+            using S = std::decay_t<decltype(s)>;
+            if constexpr (std::is_same_v<S, AabbShape>)
+            {
+                return s.bounds.center();
+            }
+            else if constexpr (std::is_same_v<S, ConvexHullShape>)
+            {
+                if (s.vertices.empty())
+                {
+                    return Vec3{};
+                }
+                Vec3 lo = s.vertices.front();
+                Vec3 hi = lo;
+                for (const Vec3& v : s.vertices)
+                {
+                    lo = {std::min(lo.x(), v.x()), std::min(lo.y(), v.y()),
+                          std::min(lo.z(), v.z())};
+                    hi = {std::max(hi.x(), v.x()), std::max(hi.y(), v.y()),
+                          std::max(hi.z(), v.z())};
+                }
+                return (lo + hi) * 0.5f;
+            }
+            else // BoxShape / SphereShape / CapsuleShape
+            {
+                return s.center;
+            }
+        },
+        shape);
+}
+
+[[nodiscard]] Vec3 transformPoint(const Mat4& m, Vec3 p)
+{
+    const Vec4 r = m * Vec4{p.x(), p.y(), p.z(), 1.0f};
+    return {r.x(), r.y(), r.z()};
+}
+
+// AABB enclosing `a` after transforming its 8 corners by `m` (used to place a
+// compound child's local bounds within the body frame).
+[[nodiscard]] AABB transformAabb(const Mat4& m, const AABB& a)
+{
+    Vec3 lo;
+    Vec3 hi;
+    for (int i = 0; i < 8; ++i)
+    {
+        const Vec3 corner{(i & 1) ? a.max.x() : a.min.x(), (i & 2) ? a.max.y() : a.min.y(),
+                          (i & 4) ? a.max.z() : a.min.z()};
+        const Vec3 p = transformPoint(m, corner);
+        if (i == 0)
+        {
+            lo = p;
+            hi = p;
+        }
+        else
+        {
+            lo = {std::min(lo.x(), p.x()), std::min(lo.y(), p.y()), std::min(lo.z(), p.z())};
+            hi = {std::max(hi.x(), p.x()), std::max(hi.y(), p.y()), std::max(hi.z(), p.z())};
+        }
+    }
+    return {lo, hi};
+}
+
+struct CompoundMassProperties
+{
+    Vec3 com;
+    Vec3 inverseInertia;
+};
+
+// Aggregate a compound's children into a body centre of mass + diagonal inverse
+// inertia. Mass is split across children by volume (equal density). The inertia is
+// the parallel-axis sum of each child's (rotated) diagonal inertia about the body
+// COM; only the diagonal is kept (off-diagonal products of inertia are dropped —
+// exact for compounds symmetric about the body axes, approximate otherwise).
+[[nodiscard]] CompoundMassProperties
+compoundMassProperties(const std::vector<CompoundChild>& children, float totalMass, Vec3 scale)
+{
+    const std::size_t n = children.size();
+    std::vector<float> mass(n, 0.0f);
+    std::vector<Vec3> childCom(n); // child COM in the body frame
+
+    float totalVolume = 0.0f;
+    std::vector<float> volumes(n, 0.0f);
+    for (std::size_t i = 0; i < n; ++i)
+    {
+        volumes[i] = shapeVolume(children[i].shape, scale);
+        totalVolume += volumes[i];
+    }
+    for (std::size_t i = 0; i < n; ++i)
+    {
+        mass[i] = totalVolume > 0.0f ? totalMass * volumes[i] / totalVolume
+                                     : totalMass / static_cast<float>(n);
+        const Vec3 sc = shapeCenter(children[i].shape);
+        const Vec3 scaled{sc.x() * scale.x(), sc.y() * scale.y(), sc.z() * scale.z()};
+        childCom[i] = children[i].localPosition + children[i].localRotation.rotate(scaled);
+    }
+
+    Vec3 com{};
+    for (std::size_t i = 0; i < n; ++i)
+    {
+        com += childCom[i] * mass[i];
+    }
+    com = totalMass > 0.0f ? com / totalMass : Vec3{};
+
+    Vec3 diag{};
+    for (std::size_t i = 0; i < n; ++i)
+    {
+        const Vec3 childI = localInertia(children[i].shape, mass[i], scale);
+        const Mat3 r = Mat3::fromQuaternion(children[i].localRotation);
+        const Vec3 c0 = r * Vec3{1.0f, 0.0f, 0.0f};
+        const Vec3 c1 = r * Vec3{0.0f, 1.0f, 0.0f};
+        const Vec3 c2 = r * Vec3{0.0f, 0.0f, 1.0f};
+        // Diagonal of R·diag(childI)·Rᵀ.
+        const Vec3 rotDiag{c0.x() * c0.x() * childI.x() + c1.x() * c1.x() * childI.y() +
+                               c2.x() * c2.x() * childI.z(),
+                           c0.y() * c0.y() * childI.x() + c1.y() * c1.y() * childI.y() +
+                               c2.y() * c2.y() * childI.z(),
+                           c0.z() * c0.z() * childI.x() + c1.z() * c1.z() * childI.y() +
+                               c2.z() * c2.z() * childI.z()};
+        // Parallel-axis diagonal: mass·(|d|² − d_a²) about each axis a.
+        const Vec3 d = childCom[i] - com;
+        const float d2 = Vec3::dotProduct(d, d);
+        const Vec3 par{mass[i] * (d2 - d.x() * d.x()), mass[i] * (d2 - d.y() * d.y()),
+                       mass[i] * (d2 - d.z() * d.z())};
+        diag += rotDiag + par;
+    }
+    return {com, invertInertia(diag)};
 }
 
 } // namespace
@@ -132,29 +334,145 @@ PhysicsColliderHandle PhysicsWorld::createCollider(PhysicsBodyHandle bodyHandle,
         return {};
     }
 
+    const PhysicsColliderHandle handle =
+        addColliderEntry(*owner, desc.shape, desc.material, desc.collisionLayer, desc.collisionMask,
+                         Vec3{}, Quaternion::identity());
+
+    // Mass properties from the (now-known) shape + mass; dynamic bodies only, others
+    // keep infinite inertia (zero). Single collider; the centre of mass is the shape's
+    // (scaled) centre — zero for a centred shape, so a centred body is unchanged. The
+    // inertia is taken about that COM.
+    if (owner->body.type() == PhysicsBodyType::Dynamic)
+    {
+        const Vec3 scale = owner->transform.scale();
+        owner->body.inverseInertiaLocal(localInverseInertia(desc.shape, owner->body.mass(), scale));
+        const Vec3 center = shapeCenter(desc.shape);
+        owner->body.centerOfMassLocal(
+            {center.x() * scale.x(), center.y() * scale.y(), center.z() * scale.z()});
+    }
+    return handle;
+}
+
+PhysicsColliderHandle
+PhysicsWorld::createCompoundCollider(PhysicsBodyHandle bodyHandle,
+                                     const std::vector<CompoundChild>& children,
+                                     std::uint32_t collisionLayer, std::uint32_t collisionMask)
+{
+    BodyEntry* owner = findBody(bodyHandle);
+    if (owner == nullptr || children.empty())
+    {
+        return {};
+    }
+
+    PhysicsColliderHandle first;
+    for (const CompoundChild& child : children)
+    {
+        const PhysicsColliderHandle h =
+            addColliderEntry(*owner, child.shape, child.material, collisionLayer, collisionMask,
+                             child.localPosition, child.localRotation);
+        if (!first.valid())
+        {
+            first = h;
+        }
+    }
+
+    // Aggregate the children's mass properties into the body (Dynamic only).
+    if (owner->body.type() == PhysicsBodyType::Dynamic)
+    {
+        const CompoundMassProperties mp =
+            compoundMassProperties(children, owner->body.mass(), owner->transform.scale());
+        owner->body.centerOfMassLocal(mp.com);
+        owner->body.inverseInertiaLocal(mp.inverseInertia);
+    }
+    return first;
+}
+
+PhysicsColliderHandle PhysicsWorld::createMeshCollider(PhysicsBodyHandle bodyHandle,
+                                                       const StaticMeshShape& mesh,
+                                                       const PhysicsMaterial& material,
+                                                       std::uint32_t collisionLayer,
+                                                       std::uint32_t collisionMask)
+{
+    BodyEntry* owner = findBody(bodyHandle);
+    if (owner == nullptr || mesh.vertices.empty() || mesh.indices.size() < 3)
+    {
+        return {};
+    }
+    if (owner->body.type() != PhysicsBodyType::Static)
+    {
+        std::clog << "PhysicsWorld: mesh colliders are static-only; ignoring.\n";
+        return {};
+    }
+
+    // Whole-mesh local AABB as the broadphase proxy shape.
+    AABB bounds{mesh.vertices.front(), mesh.vertices.front()};
+    for (const Vec3& v : mesh.vertices)
+    {
+        bounds.min = {std::min(bounds.min.x(), v.x()), std::min(bounds.min.y(), v.y()),
+                      std::min(bounds.min.z(), v.z())};
+        bounds.max = {std::max(bounds.max.x(), v.x()), std::max(bounds.max.y(), v.y()),
+                      std::max(bounds.max.z(), v.z())};
+    }
+    const PhysicsColliderHandle handle =
+        addColliderEntry(*owner, AabbShape{bounds}, material, collisionLayer, collisionMask, Vec3{},
+                         Quaternion::identity());
+
+    // Build the world-space triangles + BVH once (the static body keeps a fixed
+    // transform). Stored on the collider entry; contacts() resolves against them.
+    auto data = std::make_shared<MeshCollisionData>();
+    data->indices = mesh.indices;
+    const Mat4 world = owner->transform.world();
+    data->worldVertices.reserve(mesh.vertices.size());
+    for (const Vec3& v : mesh.vertices)
+    {
+        data->worldVertices.push_back(transformPoint(world, v));
+    }
+    const std::size_t triCount = data->indices.size() / 3;
+    for (std::size_t t = 0; t < triCount; ++t)
+    {
+        const Vec3& v0 = data->worldVertices[data->indices[3 * t + 0]];
+        const Vec3& v1 = data->worldVertices[data->indices[3 * t + 1]];
+        const Vec3& v2 = data->worldVertices[data->indices[3 * t + 2]];
+        const AABB tri{{std::min({v0.x(), v1.x(), v2.x()}), std::min({v0.y(), v1.y(), v2.y()}),
+                        std::min({v0.z(), v1.z(), v2.z()})},
+                       {std::max({v0.x(), v1.x(), v2.x()}), std::max({v0.y(), v1.y(), v2.y()}),
+                        std::max({v0.z(), v1.z(), v2.z()})}};
+        (void)data->bvh.createProxy(tri, static_cast<int>(t));
+    }
+
+    ColliderEntry* entry = findCollider(handle);
+    if (entry != nullptr)
+    {
+        entry->mesh = std::move(data);
+    }
+    return handle;
+}
+
+PhysicsColliderHandle PhysicsWorld::addColliderEntry(BodyEntry& owner, const ColliderShape& shape,
+                                                     const PhysicsMaterial& material,
+                                                     std::uint32_t collisionLayer,
+                                                     std::uint32_t collisionMask,
+                                                     const Vec3& localPosition,
+                                                     const Quaternion& localRotation)
+{
     const PhysicsColliderHandle handle = nextColliderHandle_;
     nextColliderHandle_ = PhysicsColliderHandle{nextColliderHandle_.value() + 1U};
 
     Collider collider;
-    collider.localBounds(localBounds(desc.shape));
-    collider.collisionLayer(desc.collisionLayer);
-    collider.collisionMask(desc.collisionMask);
-    collider.resetFrame(owner->transform.world());
+    // Local bounds include the child's offset within the body (identity for a single
+    // collider), so the broadphase covers the right region.
+    const Mat4 childMat = Mat4::translate(localPosition) * localRotation.toMat4();
+    collider.localBounds(transformAabb(childMat, localBounds(shape)));
+    collider.collisionLayer(collisionLayer);
+    collider.collisionMask(collisionMask);
+    collider.resetFrame(owner.transform.world());
 
     colliderIndexByHandle_.emplace(handle.value(), colliders_.size());
-    colliders_.push_back(
-        {handle, bodyHandle, std::move(collider), desc.shape, desc.material, true});
+    colliders_.push_back({handle, owner.handle, std::move(collider), shape, material, localPosition,
+                          localRotation, true, nullptr});
     colliderIndexByPointer_.emplace(&colliders_.back().collider, colliders_.size() - 1);
-    owner->colliders.push_back(handle);
+    owner.colliders.push_back(handle);
     broadPhase_->addCollider(colliders_.back().collider);
-
-    // Local inverse inertia from the (now-known) shape + mass; dynamic bodies only,
-    // others keep infinite inertia (zero). Single collider assumed (COM = origin).
-    if (owner->body.type() == PhysicsBodyType::Dynamic)
-    {
-        owner->body.inverseInertiaLocal(
-            localInverseInertia(desc.shape, owner->body.mass(), owner->transform.scale()));
-    }
     return handle;
 }
 
@@ -336,12 +654,6 @@ std::size_t PhysicsWorld::jointCount() const noexcept
 namespace
 {
 
-[[nodiscard]] Vec3 transformPoint(const Mat4& m, Vec3 p)
-{
-    const Vec4 r = m * Vec4{p.x(), p.y(), p.z(), 1.0f};
-    return {r.x(), r.y(), r.z()};
-}
-
 // Per-axis scale from the world matrix columns.
 [[nodiscard]] Vec3 matrixScale(const Mat4& m)
 {
@@ -366,9 +678,16 @@ WorldShape PhysicsWorld::worldShape(const ColliderEntry& entry) const
 {
     // Identity when the owner is missing (shouldn't happen for active colliders).
     const BodyEntry* owner = findBody(entry.body);
-    const Mat4 world = owner != nullptr ? owner->transform.world() : Mat4::identity();
-    const Quaternion rot = owner != nullptr ? owner->transform.rotation() : Quaternion::identity();
-    const Vec3 s = matrixScale(world);
+    const Mat4 bodyWorld = owner != nullptr ? owner->transform.world() : Mat4::identity();
+    const Quaternion bodyRot =
+        owner != nullptr ? owner->transform.rotation() : Quaternion::identity();
+    // Compose the body world with the collider's local offset (identity for a plain
+    // single collider; a compound child's placement otherwise). Shape dimensions take
+    // the body scale; orientation is body × child rotation.
+    const Mat4 world =
+        bodyWorld * (Mat4::translate(entry.localPosition) * entry.localRotation.toMat4());
+    const Quaternion rot = bodyRot * entry.localRotation;
+    const Vec3 s = matrixScale(bodyWorld);
     const float uniform = std::max({s.x(), s.y(), s.z()});
 
     if (const auto* sphere = std::get_if<SphereShape>(&entry.shape))
@@ -415,7 +734,9 @@ std::vector<ClothCollider> PhysicsWorld::gatherColliders() const
 
     for (const ColliderEntry& entry : colliders_)
     {
-        if (!entry.active || findBody(entry.body) == nullptr)
+        // Mesh colliders have no cloth-collider encoding (the AabbShape proxy is only
+        // a broadphase bound); the cloth solver skips them.
+        if (!entry.active || entry.mesh != nullptr || findBody(entry.body) == nullptr)
         {
             continue;
         }
@@ -623,7 +944,8 @@ void PhysicsWorld::updateCollider(ColliderEntry& collider, float dt)
     const Vec3 motion =
         owner->body.type() == PhysicsBodyType::Dynamic ? owner->body.linearVelocity() * dt : Vec3{};
 
-    collider.collider.localBounds(localBounds(collider.shape));
+    const Mat4 childMat = Mat4::translate(collider.localPosition) * collider.localRotation.toMat4();
+    collider.collider.localBounds(transformAabb(childMat, localBounds(collider.shape)));
     collider.collider.update(owner->transform.world(), motion);
 }
 
@@ -635,7 +957,8 @@ void PhysicsWorld::resetCollider(ColliderEntry& collider)
         return;
     }
 
-    collider.collider.localBounds(localBounds(collider.shape));
+    const Mat4 childMat = Mat4::translate(collider.localPosition) * collider.localRotation.toMat4();
+    collider.collider.localBounds(transformAabb(childMat, localBounds(collider.shape)));
     collider.collider.resetFrame(owner->transform.world());
 }
 
@@ -678,11 +1001,7 @@ std::vector<PhysicsWorld::SolverContact> PhysicsWorld::contacts(float dt)
     result.reserve(broadPhase_->possiblePairs().size());
     for (const CollisionPair& pair : broadPhase_->possiblePairs())
     {
-        auto contact = contactForPair(pair, dt);
-        if (contact.has_value())
-        {
-            result.push_back(contact.value());
-        }
+        appendContactsForPair(pair, dt, result);
     }
     return result;
 }
@@ -743,36 +1062,139 @@ PhysicsWorld::contactCandidateForPair(const CollisionPair& pair)
     return ContactCandidate{moving, target, movingCollider, targetCollider};
 }
 
-std::optional<PhysicsWorld::SolverContact> PhysicsWorld::contactForPair(const CollisionPair& pair,
-                                                                        float dt)
+void PhysicsWorld::appendContactsForPair(const CollisionPair& pair, float dt,
+                                         std::vector<SolverContact>& out)
 {
-    auto candidate = contactCandidateForPair(pair);
+    const auto candidate = contactCandidateForPair(pair);
     if (!candidate.has_value())
     {
-        return std::nullopt;
+        return;
     }
+    // A static mesh is always the target (it never moves). Resolve the moving body
+    // against its triangles; otherwise the ordinary single-manifold path.
+    if (candidate->targetCollider->mesh != nullptr)
+    {
+        appendMeshContacts(*candidate, dt, out);
+        return;
+    }
+    if (candidate->movingCollider->mesh != nullptr)
+    {
+        return; // a mesh is static and never the moving body
+    }
+    if (const auto contact = singleContact(*candidate, dt))
+    {
+        out.push_back(*contact);
+    }
+}
 
+std::optional<PhysicsWorld::SolverContact>
+PhysicsWorld::singleContact(const ContactCandidate& candidate, float dt)
+{
     // Speculative-contact margin (CCD): how far the pair could close this step.
     // Using the pre-solve velocities is conservative (the solver only brakes), so a
     // fast mover within this margin generates a negative-penetration gap contact the
     // solver clamps against — no tunnelling. Slow pairs get ~kSpeculativeDistance.
-    const float closingReach = (candidate->moving->body.linearVelocity().magnitude() +
-                                candidate->target->body.linearVelocity().magnitude()) *
+    const float closingReach = (candidate.moving->body.linearVelocity().magnitude() +
+                                candidate.target->body.linearVelocity().magnitude()) *
                                    dt +
                                kSpeculativeDistance;
 
     // Shape-specific manifold in world space. The normal points target -> moving,
     // i.e. the direction to push the moving body out of penetration.
-    const WorldShape movingShape = worldShape(*candidate->movingCollider);
-    const WorldShape targetShape = worldShape(*candidate->targetCollider);
+    const WorldShape movingShape = worldShape(*candidate.movingCollider);
+    const WorldShape targetShape = worldShape(*candidate.targetCollider);
     auto manifold = narrowPhase_.collide(movingShape, targetShape, closingReach);
     if (!manifold.has_value() || manifold->count == 0)
     {
         return std::nullopt;
     }
 
-    return SolverContact{*manifold, candidate->moving, candidate->target, candidate->movingCollider,
-                         candidate->targetCollider};
+    return SolverContact{*manifold,
+                         candidate.moving,
+                         candidate.target,
+                         candidate.movingCollider,
+                         candidate.targetCollider,
+                         0};
+}
+
+void PhysicsWorld::appendMeshContacts(const ContactCandidate& candidate, float dt,
+                                      std::vector<SolverContact>& out)
+{
+    const WorldShape movingShape = worldShape(*candidate.movingCollider);
+    const MeshCollisionData& mesh = *candidate.targetCollider->mesh;
+    const float closingReach =
+        candidate.moving->body.linearVelocity().magnitude() * dt + kSpeculativeDistance;
+
+    // Query the triangle BVH with the moving collider's swept world bounds; collide the
+    // moving shape against each candidate triangle (a flat WorldConvex) individually.
+    const AABB query = candidate.movingCollider->collider.sweptWorldBounds();
+    mesh.bvh.query(
+        query,
+        [&](int proxy)
+        {
+            const int t = mesh.bvh.payload(proxy);
+            const auto base = static_cast<std::size_t>(t) * 3;
+            const Vec3 v0 = mesh.worldVertices[mesh.indices[base + 0]];
+            const Vec3 v1 = mesh.worldVertices[mesh.indices[base + 1]];
+            const Vec3 v2 = mesh.worldVertices[mesh.indices[base + 2]];
+            const std::array<ConvexFace, 1> faces{ConvexFace{Vec3{}, std::vector<int>{0, 1, 2}}};
+            WorldConvex triangle;
+            triangle.vertices = {v0, v1, v2};
+            triangle.faces = faces;
+
+            auto manifold = narrowPhase_.collide(movingShape, WorldShape{triangle}, closingReach);
+            if (!manifold.has_value() || manifold->count == 0)
+            {
+                return;
+            }
+            const Vec3 n = manifold->normal;
+            if (!std::isfinite(n.x()) || !std::isfinite(n.y()) || !std::isfinite(n.z()) ||
+                n.magnitudeSquared() <= 1.0e-8f)
+            {
+                return; // degenerate EPA result
+            }
+
+            // Reconstruct the contact against the triangle's (CCW-outward) face plane:
+            // force the normal to the surface normal and re-measure each point's
+            // penetration as its signed depth below that plane. EPA on a flat triangle
+            // gives unreliable normals/depths (especially where the body overhangs a
+            // shared edge, where it returns a sideways *edge* normal that would kick the
+            // body into a growing rock); using only its contact *points* + the true plane
+            // is stable. A back-facing triangle (body behind it) is skipped — mesh
+            // collision is one-sided (front face only).
+            const Vec3 faceNormal = Vec3::normalise(Vec3::crossProduct(v1 - v0, v2 - v0));
+            if (Vec3::dotProduct(n, faceNormal) <= 0.0f)
+            {
+                return;
+            }
+            ContactManifold planar;
+            planar.normal = faceNormal;
+            for (int i = 0; i < manifold->count; ++i)
+            {
+                const Vec3 pos = manifold->points[static_cast<std::size_t>(i)].position;
+                if (!std::isfinite(pos.x()) || !std::isfinite(pos.y()) || !std::isfinite(pos.z()))
+                {
+                    continue; // EPA can return a garbage witness point for a flat triangle
+                }
+                const float penetration = Vec3::dotProduct(faceNormal, v0 - pos);
+                // Keep only points within the speculative band of the surface; an
+                // implausibly deep one is a degenerate EPA result, not a real contact.
+                if (penetration < -closingReach || penetration > kMaxMeshPenetration)
+                {
+                    continue;
+                }
+                planar.points[static_cast<std::size_t>(planar.count)] = {pos, penetration};
+                ++planar.count;
+            }
+            if (planar.count == 0)
+            {
+                return;
+            }
+
+            out.push_back(SolverContact{planar, candidate.moving, candidate.target,
+                                        candidate.movingCollider, candidate.targetCollider,
+                                        static_cast<std::uint32_t>(t) + 1});
+        });
 }
 
 float PhysicsWorld::velocityInvMass(const BodyEntry& body) noexcept
@@ -984,7 +1406,10 @@ bool PhysicsWorld::solveAndIntegrate(const std::vector<SolverContact>& contacts,
         const BodyEntry& entry = bodies_[i];
         solverBodies[i].velocity = entry.body.linearVelocity();
         solverBodies[i].angularVelocity = entry.body.angularVelocity();
-        solverBodies[i].position = entry.transform.position();
+        // The solver integrates about the world centre of mass, not the transform
+        // origin (they coincide when centerOfMassLocal is zero — the common case).
+        solverBodies[i].position = entry.transform.position() + entry.transform.rotation().rotate(
+                                                                    entry.body.centerOfMassLocal());
         solverBodies[i].orientation = entry.transform.rotation();
         solverBodies[i].invMass = entry.active ? velocityInvMass(entry) : 0.0f;
         solverBodies[i].inverseInertiaLocal =
@@ -1013,6 +1438,12 @@ bool PhysicsWorld::solveAndIntegrate(const std::vector<SolverContact>& contacts,
         in.restitution = std::max(ma.restitution, mb.restitution);
         in.friction = std::sqrt(std::max(ma.friction, 0.0f) * std::max(mb.friction, 0.0f));
         in.key = pairKey(contact.movingCollider->handle, contact.targetCollider->handle);
+        // Mesh triangles share a collider pair; mix the sub-key in so each warm-starts
+        // independently. subKey 0 (ordinary pairs) leaves the key unchanged.
+        if (contact.subKey != 0)
+        {
+            in.key ^= static_cast<std::uint64_t>(contact.subKey) * 0x9E3779B97F4A7C15ULL;
+        }
         inputs.push_back(in);
     }
 
@@ -1114,9 +1545,13 @@ bool PhysicsWorld::solveAndIntegrate(const std::vector<SolverContact>& contacts,
             continue;
         }
         bool changed = false;
-        if (entry.transform.position() != solverBodies[i].position)
+        // solverBodies[i].position is the world centre of mass; convert back to the
+        // transform origin (origin = COM − R·comLocal). Identity when comLocal is zero.
+        const Vec3 origin = solverBodies[i].position -
+                            solverBodies[i].orientation.rotate(entry.body.centerOfMassLocal());
+        if (entry.transform.position() != origin)
         {
-            entry.transform.position(solverBodies[i].position);
+            entry.transform.position(origin);
             changed = true;
         }
         // Orientation was integrated into the solver body (from the solved angular

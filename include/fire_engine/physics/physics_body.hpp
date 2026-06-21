@@ -73,7 +73,8 @@ public:
     // Inverse inertia in the body's local (principal) frame — diagonal, since all
     // current shapes have a diagonal inertia tensor. Zero components mean infinite
     // inertia (no angular response): the default, and what Static/Kinematic keep.
-    // Set by PhysicsWorld::createCollider once the shape + mass are known.
+    // Set by PhysicsWorld::createCollider once the shape + mass are known. Taken about
+    // the centre of mass (see centerOfMassLocal).
     [[nodiscard]]
     Vec3 inverseInertiaLocal() const noexcept
     {
@@ -82,6 +83,20 @@ public:
     void inverseInertiaLocal(Vec3 inverseInertiaLocal) noexcept
     {
         inverseInertiaLocal_ = inverseInertiaLocal;
+    }
+
+    // Centre of mass in the body's local frame (offset from the transform origin). The
+    // solver integrates the body about this point, not the origin. Zero for a centred
+    // single collider; set by createCollider from the shape/compound centroid. Only
+    // ever non-zero for Dynamic bodies (Static/Kinematic get no angular response).
+    [[nodiscard]]
+    Vec3 centerOfMassLocal() const noexcept
+    {
+        return centerOfMassLocal_;
+    }
+    void centerOfMassLocal(Vec3 centerOfMassLocal) noexcept
+    {
+        centerOfMassLocal_ = centerOfMassLocal;
     }
 
     [[nodiscard]]
@@ -123,6 +138,7 @@ private:
     float mass_{1.0f};
     float inverseMass_{0.0f};
     Vec3 inverseInertiaLocal_{};
+    Vec3 centerOfMassLocal_{};
     float gravityScale_{1.0f};
     PhysicsMaterial material_{};
     bool allowSleeping_{true};
