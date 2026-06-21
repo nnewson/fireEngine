@@ -7,8 +7,8 @@
 
 #include <fire_engine/collision/contact_manifold.hpp>
 #include <fire_engine/math/mat3.hpp>
-#include <fire_engine/math/quaternion.hpp>
 #include <fire_engine/math/vec3.hpp>
+#include <fire_engine/physics/solver_math.hpp>
 
 namespace fire_engine
 {
@@ -21,25 +21,10 @@ namespace fire_engine
 // the angular terms vanishing for a centred contact (reproducing the P2 linear case).
 //
 // The solver is deliberately decoupled from PhysicsWorld: it operates on a flat
-// SolverBody array (indexed by the caller) and a list of SolverContactInput, so
-// it can be unit-tested in isolation.
-
-// One body as the solver sees it. `invMass` / `inverseInertiaLocal` drive the
-// velocity (impulse) pass: both are 0 for Static and Kinematic bodies, so contact
-// impulses never shove or spin a scene-driven body. `positionWeight` drives the
-// split-impulse position pass: Kinematic gets a nominal weight there so it still
-// slides out of penetration (mirroring the pre-P2 pushWeight), Static stays 0.
-// `position` is the centre of mass (contact anchors are measured from it).
-struct SolverBody
-{
-    Vec3 velocity{};
-    Vec3 angularVelocity{};
-    Vec3 position{};
-    Quaternion orientation{};
-    float invMass{0.0f};
-    Vec3 inverseInertiaLocal{}; // diagonal, principal frame (0 ⇒ infinite inertia)
-    float positionWeight{0.0f};
-};
+// `SolverBody` array (see solver_math.hpp) and a list of SolverContactInput, so it
+// can be unit-tested in isolation. The per-body math (world inverse inertia, relative
+// velocity, effective mass, apply-impulse) is shared with the joint solver via
+// solver_math.hpp.
 
 // A contact pair handed to the solver. `bodyA`/`bodyB` index the SolverBody
 // array; `normal` points B -> A (target -> moving), i.e. the direction body A is

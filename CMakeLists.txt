@@ -49,6 +49,7 @@ add_library(fireengine SHARED
     src/platform/mouse.cpp
     src/platform/window.cpp
     src/physics/contact_solver.cpp
+    src/physics/joint_solver.cpp
     src/physics/physics_body.cpp
     src/physics/physics_world.cpp
     src/render/compute_pipeline.cpp
@@ -190,6 +191,7 @@ add_executable(test_fire_engine
     tests/collision/test_gjk_epa.cpp
     tests/physics/test_physics_world.cpp
     tests/physics/test_contact_solver.cpp
+    tests/physics/test_joint.cpp
     tests/physics/test_physics_handle.cpp
     tests/physics/test_physics_determinism.cpp
     tests/math/test_mat3.cpp

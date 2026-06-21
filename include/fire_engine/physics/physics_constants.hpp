@@ -35,4 +35,15 @@ inline constexpr float kWarmStartMatchRadius = 0.02f;
 // near-touching pairs; the motion term scales it so fast movers can't tunnel.
 inline constexpr float kSpeculativeDistance = 0.02f;
 
+// Joints (P4) reuse the same sequential-impulse machinery as contacts. Position
+// error is fed back through a Baumgarte velocity bias rather than a separate
+// split-impulse pass: bias = -(kJointBaumgarte/dt)·C, removing that fraction of the
+// anchor/axis error per step. Stiffer than contacts (joints should hold tightly)
+// but < 1 to stay stable.
+inline constexpr float kJointBaumgarte = 0.2f;
+
+// Anchor/axis error (metres / radians) a joint leaves uncorrected, so a satisfied
+// joint contributes no bias and never buzzes.
+inline constexpr float kJointSlop = 0.0005f;
+
 } // namespace fire_engine

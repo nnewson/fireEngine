@@ -180,16 +180,50 @@ bool PhysicsWorld::destroyBody(PhysicsBodyHandle handle)
     return true;
 }
 
+PhysicsConstraintHandle PhysicsWorld::createJoint(const JointDesc& desc)
+{
+    const BodyEntry* a = findBody(desc.bodyA);
+    const BodyEntry* b = findBody(desc.bodyB);
+    if (a == nullptr || b == nullptr)
+    {
+        return {};
+    }
+
+    const PhysicsConstraintHandle handle = nextJointHandle_;
+    nextJointHandle_ = PhysicsConstraintHandle{nextJointHandle_.value() + 1U};
+
+    // Capture the rest relative orientation (B in A's frame) so limits read 0 here.
+    const Quaternion restRelative = a->transform.rotation().conjugate() * b->transform.rotation();
+
+    jointIndexByHandle_.emplace(handle.value(), joints_.size());
+    joints_.push_back({handle, desc, restRelative, true});
+    return handle;
+}
+
+bool PhysicsWorld::destroyJoint(PhysicsConstraintHandle handle)
+{
+    const auto it = jointIndexByHandle_.find(handle.value());
+    if (it == jointIndexByHandle_.end() || !joints_[it->second].active)
+    {
+        return false;
+    }
+    joints_[it->second].active = false;
+    return true;
+}
+
 void PhysicsWorld::clear()
 {
     broadPhase_.clear();
     bodies_.clear();
     colliders_.clear();
+    joints_.clear();
     bodyIndexByHandle_.clear();
     colliderIndexByHandle_.clear();
+    jointIndexByHandle_.clear();
     colliderIndexByPointer_.clear();
     nextBodyHandle_ = PhysicsBodyHandle{1U};
     nextColliderHandle_ = PhysicsColliderHandle{1U};
+    nextJointHandle_ = PhysicsConstraintHandle{1U};
 }
 
 void PhysicsWorld::step(float fixedDt)
@@ -273,6 +307,12 @@ bool PhysicsWorld::valid(PhysicsColliderHandle handle) const noexcept
     return findCollider(handle) != nullptr;
 }
 
+bool PhysicsWorld::valid(PhysicsConstraintHandle handle) const noexcept
+{
+    const auto it = jointIndexByHandle_.find(handle.value());
+    return it != jointIndexByHandle_.end() && joints_[it->second].active;
+}
+
 std::size_t PhysicsWorld::bodyCount() const noexcept
 {
     return static_cast<std::size_t>(
@@ -283,6 +323,12 @@ std::size_t PhysicsWorld::colliderCount() const noexcept
 {
     return static_cast<std::size_t>(
         std::ranges::count_if(colliders_, [](const ColliderEntry& entry) { return entry.active; }));
+}
+
+std::size_t PhysicsWorld::jointCount() const noexcept
+{
+    return static_cast<std::size_t>(
+        std::ranges::count_if(joints_, [](const JointEntry& entry) { return entry.active; }));
 }
 
 namespace
@@ -730,6 +776,56 @@ namespace
 
 } // namespace
 
+std::vector<JointInput> PhysicsWorld::buildJointInputs() const
+{
+    // Compose each joint's local anchors/axes with the live body transforms. Anchors
+    // are relative to the body centre of mass (assumed unit scale, as for ragdoll
+    // bodies); the indices match the solver-body array (1:1 with bodies_).
+    std::vector<JointInput> inputs;
+    inputs.reserve(joints_.size());
+    for (const JointEntry& entry : joints_)
+    {
+        if (!entry.active)
+        {
+            continue;
+        }
+        const auto ia = bodyIndexByHandle_.find(entry.desc.bodyA.value());
+        const auto ib = bodyIndexByHandle_.find(entry.desc.bodyB.value());
+        if (ia == bodyIndexByHandle_.end() || ib == bodyIndexByHandle_.end())
+        {
+            continue;
+        }
+        const BodyEntry& a = bodies_[ia->second];
+        const BodyEntry& b = bodies_[ib->second];
+        if (!a.active || !b.active)
+        {
+            continue;
+        }
+
+        const Mat3 ra = Mat3::fromQuaternion(a.transform.rotation());
+        const Mat3 rb = Mat3::fromQuaternion(b.transform.rotation());
+
+        JointInput in;
+        in.bodyA = static_cast<int>(ia->second);
+        in.bodyB = static_cast<int>(ib->second);
+        in.type = entry.desc.type;
+        in.anchorA = a.transform.position() + ra * entry.desc.anchorA;
+        in.anchorB = b.transform.position() + rb * entry.desc.anchorB;
+        in.axisA = ra * entry.desc.axisA;
+        in.axisB = rb * entry.desc.axisB;
+        in.twistAxisLocal = entry.desc.axisA;
+        in.restLength = entry.desc.restLength;
+        // Relative orientation of B in A's frame, taken relative to the rest frame:
+        // identity at the creation pose, so the limit decomposition reads 0 there.
+        in.relative = entry.restRelative.conjugate() *
+                      (a.transform.rotation().conjugate() * b.transform.rotation());
+        in.limits = entry.desc.limits;
+        in.key = entry.handle.value();
+        inputs.push_back(in);
+    }
+    return inputs;
+}
+
 bool PhysicsWorld::solveAndIntegrate(const std::vector<SolverContact>& contacts, float dt)
 {
     // Flat solver-body view, indexed 1:1 with bodies_ (insertion order → stable
@@ -774,12 +870,38 @@ bool PhysicsWorld::solveAndIntegrate(const std::vector<SolverContact>& contacts,
         inputs.push_back(in);
     }
 
-    // Velocity (impulse) solve.
-    if (!inputs.empty())
+    // World-space joints for this step, composed from the live body transforms.
+    const std::vector<JointInput> jointInputs = buildJointInputs();
+    const bool haveContacts = !inputs.empty();
+    const bool haveJoints = !jointInputs.empty();
+
+    // Velocity (impulse) solve: joints and contacts share the SolverBody array and
+    // are interleaved Gauss-Seidel — joints first each sweep, then contacts. Joints
+    // fold their position error into a Baumgarte velocity bias (no split-impulse
+    // pass), so the orientation/position integration below corrects them.
+    if (haveContacts)
     {
         solver_.prepare(solverBodies, inputs, dt);
+    }
+    if (haveJoints)
+    {
+        jointSolver_.prepare(solverBodies, jointInputs, dt);
+    }
+    if (haveContacts)
+    {
         solver_.warmStart(solverBodies);
-        for (int i = 0; i < kVelocityIterations; ++i)
+    }
+    if (haveJoints)
+    {
+        jointSolver_.warmStart(solverBodies);
+    }
+    for (int i = 0; i < kVelocityIterations; ++i)
+    {
+        if (haveJoints)
+        {
+            jointSolver_.solveVelocity(solverBodies);
+        }
+        if (haveContacts)
         {
             solver_.solveVelocity(solverBodies);
         }
@@ -804,10 +926,16 @@ bool PhysicsWorld::solveAndIntegrate(const std::vector<SolverContact>& contacts,
     }
 
     // Split-impulse positional correction (may also nudge Kinematic bodies).
-    if (!inputs.empty())
+    if (haveContacts)
     {
         solver_.solvePosition(solverBodies);
         solver_.store();
+    }
+    // Joints correct position through their velocity bias; just persist the
+    // accumulated impulses for next frame's warm start.
+    if (haveJoints)
+    {
+        jointSolver_.store();
     }
 
     // Write final positions + orientations back (everything but Static).

@@ -14,6 +14,8 @@
 #include <fire_engine/physics/collider_shape.hpp>
 #include <fire_engine/physics/contact.hpp>
 #include <fire_engine/physics/contact_solver.hpp>
+#include <fire_engine/physics/joint.hpp>
+#include <fire_engine/physics/joint_solver.hpp>
 #include <fire_engine/physics/physics_body.hpp>
 #include <fire_engine/physics/physics_handle.hpp>
 #include <fire_engine/scene/transform.hpp>
@@ -41,6 +43,15 @@ public:
     [[nodiscard]]
     bool destroyBody(PhysicsBodyHandle handle);
 
+    // Create a constraint (distance / ball-socket / hinge) between two bodies. The
+    // descriptor's anchors/axes are in each body's local frame; both bodies must be
+    // valid. Returns a null handle if either body is missing.
+    [[nodiscard]]
+    PhysicsConstraintHandle createJoint(const JointDesc& desc);
+
+    [[nodiscard]]
+    bool destroyJoint(PhysicsConstraintHandle handle);
+
     void clear();
     void step(float fixedDt);
 
@@ -51,10 +62,16 @@ public:
     bool valid(PhysicsColliderHandle handle) const noexcept;
 
     [[nodiscard]]
+    bool valid(PhysicsConstraintHandle handle) const noexcept;
+
+    [[nodiscard]]
     std::size_t bodyCount() const noexcept;
 
     [[nodiscard]]
     std::size_t colliderCount() const noexcept;
+
+    [[nodiscard]]
+    std::size_t jointCount() const noexcept;
 
     // World-space collision primitives for the cloth/soft-body solver — each
     // active collider's shape composed with its body transform. Vulkan-free
@@ -122,6 +139,16 @@ private:
         bool active{true};
     };
 
+    struct JointEntry
+    {
+        PhysicsConstraintHandle handle;
+        JointDesc desc;
+        // Relative orientation of B in A's frame at creation time — the rest frame
+        // the angular limits are measured from.
+        Quaternion restRelative{};
+        bool active{true};
+    };
+
     struct ContactCandidate
     {
         BodyEntry* moving{nullptr};
@@ -141,18 +168,22 @@ private:
 
     PhysicsBodyHandle nextBodyHandle_{PhysicsBodyHandle{1U}};
     PhysicsColliderHandle nextColliderHandle_{PhysicsColliderHandle{1U}};
+    PhysicsConstraintHandle nextJointHandle_{PhysicsConstraintHandle{1U}};
     std::vector<BodyEntry> bodies_;
     std::deque<ColliderEntry> colliders_;
+    std::vector<JointEntry> joints_;
     // Side-tables for O(1) lookup into the entry containers, keyed by handle
     // value and (for the broadphase's pair pointers) by Collider address.
     // Entries are tombstoned, never erased before clear(), so the stored indices
     // stay valid for the container's lifetime; find* still checks `active`.
     std::unordered_map<std::uint32_t, std::size_t> bodyIndexByHandle_;
     std::unordered_map<std::uint32_t, std::size_t> colliderIndexByHandle_;
+    std::unordered_map<std::uint32_t, std::size_t> jointIndexByHandle_;
     std::unordered_map<const Collider*, std::size_t> colliderIndexByPointer_;
     SweepAndPruneBroadPhase broadPhase_;
     NarrowPhase narrowPhase_;
     ContactSolver solver_;
+    JointSolver jointSolver_;
     Vec3 gravity_{0.0f, -9.81f, 0.0f};
     // Contacts from the most recent step(), kept for debug visualisation only.
     std::vector<DebugContact> debugContacts_;
@@ -171,6 +202,13 @@ private:
 
     [[nodiscard]]
     ColliderEntry* findCollider(const Collider* collider) noexcept;
+
+    // Compose each active joint's local anchors/axes with the current body
+    // transforms into the world-space JointInputs the solver consumes (skipping any
+    // joint whose bodies are no longer valid). `bodyIndex` maps a body handle to its
+    // solver-body index.
+    [[nodiscard]]
+    std::vector<JointInput> buildJointInputs() const;
 
     [[nodiscard]]
     AABB localBounds(const ColliderShape& shape) const noexcept;
