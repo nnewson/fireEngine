@@ -2,6 +2,7 @@
 
 #include <array>
 
+#include <fire_engine/graphics/frustum.hpp>
 #include <fire_engine/render/device.hpp>
 #include <fire_engine/render/render_target.hpp>
 #include <fire_engine/render/ubo.hpp>
@@ -124,10 +125,36 @@ Shadows::Shadows(const Device& device, Resources& resources)
 void Shadows::recordPass(vk::CommandBuffer cmd, const std::vector<DrawCommand>& shadowDraws,
                          const std::vector<DrawCommand>& worldOnlyShadowDraws,
                          const std::vector<DrawCommand>& selfShadowDraws, int activeSpotCasters,
-                         std::span<const PointShadowCaster> pointCasters) const
+                         std::span<const PointShadowCaster> pointCasters,
+                         std::span<const Mat4> shadowViewProjs, bool cullingEnabled) const
 {
     const vk::ClearValue depthClear{.depthStencil =
                                         vk::ClearDepthStencilValue{.depth = 1.0f, .stencil = 0}};
+
+    // Drop casters whose world bounds fall outside the light/cascade frustum at
+    // `matrixIndex`. Returns the (possibly filtered) list; a self-shadow slot
+    // (matrixIndex < 0) and disabled culling pass everything through.
+    const auto cullForFrustum =
+        [&](int matrixIndex, const std::vector<DrawCommand>& draws) -> std::vector<DrawCommand>
+    {
+        if (!cullingEnabled || matrixIndex < 0 ||
+            matrixIndex >= static_cast<int>(shadowViewProjs.size()))
+        {
+            return draws;
+        }
+        const Frustum frustum =
+            Frustum::fromViewProj(shadowViewProjs[static_cast<std::size_t>(matrixIndex)]);
+        std::vector<DrawCommand> visible;
+        visible.reserve(draws.size());
+        for (const DrawCommand& dc : draws)
+        {
+            if (frustum.intersects(dc.shadowBounds))
+            {
+                visible.push_back(dc);
+            }
+        }
+        return visible;
+    };
 
     // Renders one shadow layer with depth-only dynamic rendering. depthLayer is
     // the array-layer subresource the barriers target; depthView is the matching
@@ -197,10 +224,11 @@ void Shadows::recordPass(vk::CommandBuffer cmd, const std::vector<DrawCommand>& 
     {
         ShadowPushConstants pc{};
         pc.matrixIndex = kShadowCascadeMatrixBase + static_cast<int>(cascade);
-        layeredIteration(shadowMapHandle_, cascade, kShadowMapExtent, pc, shadowDraws,
-                         shadowPipelineHandle_, kDirectionalShadowRasterBiasConstant,
-                         kDirectionalShadowRasterBiasSlope);
-        layeredIteration(worldShadowMapHandle_, cascade, kShadowMapExtent, pc, worldOnlyShadowDraws,
+        layeredIteration(shadowMapHandle_, cascade, kShadowMapExtent, pc,
+                         cullForFrustum(pc.matrixIndex, shadowDraws), shadowPipelineHandle_,
+                         kDirectionalShadowRasterBiasConstant, kDirectionalShadowRasterBiasSlope);
+        layeredIteration(worldShadowMapHandle_, cascade, kShadowMapExtent, pc,
+                         cullForFrustum(pc.matrixIndex, worldOnlyShadowDraws),
                          shadowPipelineHandle_, kDirectionalShadowRasterBiasConstant,
                          kDirectionalShadowRasterBiasSlope);
     }
@@ -240,8 +268,9 @@ void Shadows::recordPass(vk::CommandBuffer cmd, const std::vector<DrawCommand>& 
         recordShadowIteration(
             resources_->vulkanImage(spotShadowMapHandle_), static_cast<uint32_t>(s),
             resources_->vulkanShadowMapLayerView(spotShadowMapHandle_, static_cast<uint32_t>(s)),
-            kSpotShadowMapExtent, pc, shadowDraws, shadowPipelineHandle_,
-            kPunctualShadowRasterBiasConstant, kPunctualShadowRasterBiasSlope);
+            kSpotShadowMapExtent, pc, cullForFrustum(pc.matrixIndex, shadowDraws),
+            shadowPipelineHandle_, kPunctualShadowRasterBiasConstant,
+            kPunctualShadowRasterBiasSlope);
     }
 
     for (std::size_t p = 0;
@@ -260,8 +289,9 @@ void Shadows::recordPass(vk::CommandBuffer cmd, const std::vector<DrawCommand>& 
                 resources_->vulkanImage(pointShadowMapHandle_), static_cast<uint32_t>(6 * p + face),
                 resources_->vulkanPointShadowFaceView(pointShadowMapHandle_,
                                                       static_cast<uint32_t>(p), face),
-                kPointShadowMapExtent, pc, shadowDraws, shadowPipelineHandle_,
-                kPunctualShadowRasterBiasConstant, kPunctualShadowRasterBiasSlope);
+                kPointShadowMapExtent, pc, cullForFrustum(pc.matrixIndex, shadowDraws),
+                shadowPipelineHandle_, kPunctualShadowRasterBiasConstant,
+                kPunctualShadowRasterBiasSlope);
         }
     }
 }

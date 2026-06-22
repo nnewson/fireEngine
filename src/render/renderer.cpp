@@ -7,6 +7,7 @@
 #include <span>
 #include <unordered_map>
 
+#include <fire_engine/graphics/frustum.hpp>
 #include <fire_engine/graphics/image.hpp>
 #include <fire_engine/math/constants.hpp>
 #include <fire_engine/math/view_basis.hpp>
@@ -506,6 +507,11 @@ Renderer::DrawBuckets Renderer::buildDrawBuckets(const std::vector<DrawCommand>&
 {
     DrawBuckets buckets;
     buckets.opaque.reserve(drawCommands.size());
+    // Camera-frustum cull the forward (non-shadow) draws; shadow draws are culled
+    // per-cascade/-light in the shadow pass. A draw with invalid bounds (the skybox) is
+    // never culled. The shadow buckets carry every caster — the shadow pass filters them.
+    const bool cull = tunables_.cullingEnabled;
+    const Frustum cameraFrustum = Frustum::fromViewProj(currentViewProj_);
     for (const auto& dc : drawCommands)
     {
         if (dc.pipeline == shadows_.pipelineHandle())
@@ -519,8 +525,14 @@ Renderer::DrawBuckets Renderer::buildDrawBuckets(const std::vector<DrawCommand>&
             {
                 buckets.selfShadow.push_back(dc);
             }
+            continue;
         }
-        else if (dc.pipeline == forwardBlendHandle_)
+
+        if (cull && !cameraFrustum.intersects(dc.shadowBounds))
+        {
+            continue;
+        }
+        if (dc.pipeline == forwardBlendHandle_)
         {
             buckets.blend.push_back(dc);
         }
@@ -735,7 +747,8 @@ void Renderer::recordShadowPass(vk::CommandBuffer cmd, const DrawBuckets& bucket
     std::span<const PointShadowCaster> pointCasterSpan{
         pointCasters_.data(), static_cast<std::size_t>(activePointCasters_)};
     shadows_.recordPass(cmd, buckets.shadow, buckets.worldShadow, buckets.selfShadow,
-                        activeSpotCasters_, pointCasterSpan);
+                        activeSpotCasters_, pointCasterSpan, shadowViewProjs_,
+                        tunables_.cullingEnabled);
 }
 
 void Renderer::recordTransmissionPass(vk::CommandBuffer cmd, const DrawBuckets& buckets)

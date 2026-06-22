@@ -213,6 +213,7 @@ add_executable(test_fire_engine
     tests/graphics/test_joints4.cpp
     tests/graphics/test_image.cpp
     tests/graphics/test_ktx_image.cpp
+    tests/graphics/test_frustum.cpp
     tests/graphics/test_vertex.cpp
     tests/graphics/test_skin.cpp
     tests/graphics/test_assets.cpp
