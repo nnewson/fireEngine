@@ -102,6 +102,7 @@ public:
         PhysicsBodyType bodyType{PhysicsBodyType::Static};
         std::uint32_t layer{1U};
         std::uint32_t mask{~0U};
+        bool isTrigger{false};
         Vec3 velocity{};
         float mass{1.0f};
         float restitution{1.0f};

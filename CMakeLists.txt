@@ -200,6 +200,7 @@ add_executable(test_fire_engine
     tests/collision/test_shape_cast.cpp
     tests/physics/test_physics_world.cpp
     tests/physics/test_physics_query.cpp
+    tests/physics/test_collision_events.cpp
     tests/physics/test_contact_solver.cpp
     tests/physics/test_island.cpp
     tests/physics/test_compound.cpp

@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdint>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <type_traits>
 #include <utility>
@@ -337,7 +338,7 @@ PhysicsColliderHandle PhysicsWorld::createCollider(PhysicsBodyHandle bodyHandle,
 
     const PhysicsColliderHandle handle =
         addColliderEntry(*owner, desc.shape, desc.material, desc.collisionLayer, desc.collisionMask,
-                         Vec3{}, Quaternion::identity());
+                         Vec3{}, Quaternion::identity(), desc.isTrigger);
 
     // Mass properties from the (now-known) shape + mass; dynamic bodies only, others
     // keep infinite inertia (zero). Single collider; the centre of mass is the shape's
@@ -449,12 +450,11 @@ PhysicsColliderHandle PhysicsWorld::createMeshCollider(PhysicsBodyHandle bodyHan
     return handle;
 }
 
-PhysicsColliderHandle PhysicsWorld::addColliderEntry(BodyEntry& owner, const ColliderShape& shape,
-                                                     const PhysicsMaterial& material,
-                                                     std::uint32_t collisionLayer,
-                                                     std::uint32_t collisionMask,
-                                                     const Vec3& localPosition,
-                                                     const Quaternion& localRotation)
+PhysicsColliderHandle
+PhysicsWorld::addColliderEntry(BodyEntry& owner, const ColliderShape& shape,
+                               const PhysicsMaterial& material, std::uint32_t collisionLayer,
+                               std::uint32_t collisionMask, const Vec3& localPosition,
+                               const Quaternion& localRotation, bool isTrigger)
 {
     const PhysicsColliderHandle handle = nextColliderHandle_;
     nextColliderHandle_ = PhysicsColliderHandle{nextColliderHandle_.value() + 1U};
@@ -466,6 +466,7 @@ PhysicsColliderHandle PhysicsWorld::addColliderEntry(BodyEntry& owner, const Col
     collider.localBounds(transformAabb(childMat, localBounds(shape)));
     collider.collisionLayer(collisionLayer);
     collider.collisionMask(collisionMask);
+    collider.isTrigger(isTrigger);
     collider.resetFrame(owner.transform.world());
 
     colliderIndexByHandle_.emplace(handle.value(), colliders_.size());
@@ -544,6 +545,12 @@ void PhysicsWorld::clear()
     nextBodyHandle_ = PhysicsBodyHandle{1U};
     nextColliderHandle_ = PhysicsColliderHandle{1U};
     nextJointHandle_ = PhysicsConstraintHandle{1U};
+    triggerOverlaps_.clear();
+    previousTriggerOverlaps_.clear();
+    collisionOverlaps_.clear();
+    previousCollisionOverlaps_.clear();
+    triggerEvents_.clear();
+    collisionEvents_.clear();
 }
 
 void PhysicsWorld::step(float fixedDt)
@@ -580,6 +587,9 @@ void PhysicsWorld::step(float fixedDt)
         resetResolvedColliders();
         broadPhase_->rebuild();
     }
+
+    // Diff this step's overlaps against the previous step into enter/stay/exit events.
+    updateOverlapEvents();
 
     capturePreviousPositions();
 }
@@ -1309,6 +1319,11 @@ void PhysicsWorld::capturePreviousPositions() noexcept
 
 std::vector<PhysicsWorld::SolverContact> PhysicsWorld::contacts(float dt)
 {
+    // Fresh overlap sets for this step; appendContactsForPair records into them and
+    // step() diffs them against the previous step into enter/stay/exit events.
+    triggerOverlaps_.clear();
+    collisionOverlaps_.clear();
+
     // Solve in a canonical pair order — sorted by (firstId, secondId) — so the
     // (order-dependent) sequential-impulse result is independent of which broadphase
     // produced the pairs and of that broadphase's internal ordering. The dynamic AABB
@@ -1398,11 +1413,21 @@ void PhysicsWorld::appendContactsForPair(const CollisionPair& pair, float dt,
     {
         return;
     }
+    // A trigger collider generates overlap events but no solver response — detect the
+    // overlap, then return without pushing contacts.
+    const bool triggerPair = candidate->movingCollider->collider.isTrigger() ||
+                             candidate->targetCollider->collider.isTrigger();
+
     // A static mesh is always the target (it never moves). Resolve the moving body
     // against its triangles; otherwise the ordinary single-manifold path.
     if (candidate->targetCollider->mesh != nullptr)
     {
-        appendMeshContacts(*candidate, dt, out);
+        const bool overlapped = appendMeshContacts(*candidate, dt, triggerPair ? nullptr : &out);
+        if (overlapped)
+        {
+            recordOverlap(candidate->movingCollider->handle, candidate->targetCollider->handle,
+                          triggerPair);
+        }
         return;
     }
     if (candidate->movingCollider->mesh != nullptr)
@@ -1411,7 +1436,32 @@ void PhysicsWorld::appendContactsForPair(const CollisionPair& pair, float dt,
     }
     if (const auto contact = singleContact(*candidate, dt))
     {
+        // Deepest signed penetration across the manifold (a speculative gap is negative).
+        // A trigger fires only on real overlap (> 0); a collision event fires when the
+        // pair is touching — within the small speculative contact band — since the solver
+        // brakes resting contacts at ~0 penetration so they rarely read strictly positive.
+        float signedPenetration = -std::numeric_limits<float>::infinity();
+        for (int i = 0; i < contact->manifold.count; ++i)
+        {
+            signedPenetration =
+                std::max(signedPenetration,
+                         contact->manifold.points[static_cast<std::size_t>(i)].penetration);
+        }
+        if (triggerPair)
+        {
+            if (signedPenetration > 0.0f)
+            {
+                recordOverlap(candidate->movingCollider->handle, candidate->targetCollider->handle,
+                              true);
+            }
+            return; // no solver response for a trigger
+        }
         out.push_back(*contact);
+        if (signedPenetration > -kSpeculativeDistance)
+        {
+            recordOverlap(candidate->movingCollider->handle, candidate->targetCollider->handle,
+                          false);
+        }
     }
 }
 
@@ -1445,13 +1495,15 @@ PhysicsWorld::singleContact(const ContactCandidate& candidate, float dt)
                          0};
 }
 
-void PhysicsWorld::appendMeshContacts(const ContactCandidate& candidate, float dt,
-                                      std::vector<SolverContact>& out)
+bool PhysicsWorld::appendMeshContacts(const ContactCandidate& candidate, float dt,
+                                      std::vector<SolverContact>* out)
 {
     const WorldShape movingShape = worldShape(*candidate.movingCollider);
     const MeshCollisionData& mesh = *candidate.targetCollider->mesh;
     const float closingReach =
         candidate.moving->body.linearVelocity().magnitude() * dt + kSpeculativeDistance;
+
+    bool overlapped = false;
 
     // Query the triangle BVH with the moving collider's swept world bounds; collide the
     // moving shape against each candidate triangle (a flat WorldConvex) individually.
@@ -1513,16 +1565,74 @@ void PhysicsWorld::appendMeshContacts(const ContactCandidate& candidate, float d
                 }
                 planar.points[static_cast<std::size_t>(planar.count)] = {pos, penetration};
                 ++planar.count;
+                overlapped = overlapped || penetration > 0.0f;
             }
             if (planar.count == 0)
             {
                 return;
             }
 
-            out.push_back(SolverContact{planar, candidate.moving, candidate.target,
-                                        candidate.movingCollider, candidate.targetCollider,
-                                        static_cast<std::uint32_t>(t) + 1});
+            if (out != nullptr)
+            {
+                out->push_back(SolverContact{planar, candidate.moving, candidate.target,
+                                             candidate.movingCollider, candidate.targetCollider,
+                                             static_cast<std::uint32_t>(t) + 1});
+            }
         });
+    return overlapped;
+}
+
+void PhysicsWorld::recordOverlap(PhysicsColliderHandle first, PhysicsColliderHandle second,
+                                 bool trigger)
+{
+    const std::uint32_t lo = std::min(first.value(), second.value());
+    const std::uint32_t hi = std::max(first.value(), second.value());
+    const std::uint64_t key = (static_cast<std::uint64_t>(lo) << 32) | hi;
+    (trigger ? triggerOverlaps_ : collisionOverlaps_).insert(key);
+}
+
+void PhysicsWorld::updateOverlapEvents()
+{
+    const auto build = [](const std::unordered_set<std::uint64_t>& previous,
+                          const std::unordered_set<std::uint64_t>& current,
+                          std::vector<ContactEvent>& out)
+    {
+        out.clear();
+        const auto event = [](std::uint64_t key, EventPhase phase)
+        {
+            return ContactEvent{
+                PhysicsColliderHandle{static_cast<std::uint32_t>(key >> 32)},
+                PhysicsColliderHandle{static_cast<std::uint32_t>(key & 0xFFFFFFFFULL)}, phase};
+        };
+        for (const std::uint64_t key : current)
+        {
+            out.push_back(
+                event(key, previous.contains(key) ? EventPhase::Stay : EventPhase::Enter));
+        }
+        for (const std::uint64_t key : previous)
+        {
+            if (!current.contains(key))
+            {
+                out.push_back(event(key, EventPhase::Exit));
+            }
+        }
+        // Deterministic order regardless of hash-set iteration (events don't affect the
+        // simulation, but a stable order keeps consumers/tests reproducible).
+        std::sort(out.begin(), out.end(),
+                  [](const ContactEvent& a, const ContactEvent& b)
+                  {
+                      if (a.first.value() != b.first.value())
+                      {
+                          return a.first.value() < b.first.value();
+                      }
+                      return a.second.value() < b.second.value();
+                  });
+    };
+
+    build(previousTriggerOverlaps_, triggerOverlaps_, triggerEvents_);
+    build(previousCollisionOverlaps_, collisionOverlaps_, collisionEvents_);
+    previousTriggerOverlaps_ = triggerOverlaps_;
+    previousCollisionOverlaps_ = collisionOverlaps_;
 }
 
 float PhysicsWorld::velocityInvMass(const BodyEntry& body) noexcept

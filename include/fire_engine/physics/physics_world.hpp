@@ -6,6 +6,7 @@
 #include <memory>
 #include <optional>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include <fire_engine/collision/aabb.hpp>
@@ -16,6 +17,7 @@
 #include <fire_engine/collision/shape_cast.hpp>
 #include <fire_engine/graphics/cloth.hpp>
 #include <fire_engine/physics/collider_shape.hpp>
+#include <fire_engine/physics/collision_event.hpp>
 #include <fire_engine/physics/contact.hpp>
 #include <fire_engine/physics/contact_solver.hpp>
 #include <fire_engine/physics/island.hpp>
@@ -127,6 +129,22 @@ public:
     const std::vector<DebugContact>& debugContacts() const noexcept
     {
         return debugContacts_;
+    }
+
+    // Overlap-lifecycle events from the most recent step(). triggerEvents covers pairs
+    // where at least one collider isTrigger (no solver response); collisionEvents covers
+    // touching solid pairs. Both are rebuilt each step (enter/stay/exit) — read them
+    // after step().
+    [[nodiscard]]
+    const std::vector<ContactEvent>& triggerEvents() const noexcept
+    {
+        return triggerEvents_;
+    }
+
+    [[nodiscard]]
+    const std::vector<ContactEvent>& collisionEvents() const noexcept
+    {
+        return collisionEvents_;
     }
 
     [[nodiscard]]
@@ -300,15 +318,32 @@ private:
     // Contacts from the most recent step(), kept for debug visualisation only.
     std::vector<DebugContact> debugContacts_;
 
+    // Overlap tracking for trigger/collision events: the set of overlapping collider
+    // pairs (ordered-id key) this step and last, diffed into enter/stay/exit events.
+    std::unordered_set<std::uint64_t> triggerOverlaps_;
+    std::unordered_set<std::uint64_t> previousTriggerOverlaps_;
+    std::unordered_set<std::uint64_t> collisionOverlaps_;
+    std::unordered_set<std::uint64_t> previousCollisionOverlaps_;
+    std::vector<ContactEvent> triggerEvents_;
+    std::vector<ContactEvent> collisionEvents_;
+
+    // Record an overlapping collider pair (ordered key) into the current trigger /
+    // collision set.
+    void recordOverlap(PhysicsColliderHandle first, PhysicsColliderHandle second, bool trigger);
+    // Diff current vs previous overlap sets into enter/stay/exit events, then roll
+    // current → previous for the next step.
+    void updateOverlapEvents();
+
     // Create a Collider + ColliderEntry for `shape` at a local offset within `owner`,
     // register it with the broadphase, and return its handle. Shared by createCollider
     // (identity offset) and createCompoundCollider (per-child offsets). Does not touch
     // the body's mass properties — the caller aggregates those.
     [[nodiscard]]
-    PhysicsColliderHandle
-    addColliderEntry(BodyEntry& owner, const ColliderShape& shape, const PhysicsMaterial& material,
-                     std::uint32_t collisionLayer, std::uint32_t collisionMask,
-                     const Vec3& localPosition, const Quaternion& localRotation);
+    PhysicsColliderHandle addColliderEntry(BodyEntry& owner, const ColliderShape& shape,
+                                           const PhysicsMaterial& material,
+                                           std::uint32_t collisionLayer,
+                                           std::uint32_t collisionMask, const Vec3& localPosition,
+                                           const Quaternion& localRotation, bool isTrigger = false);
 
     [[nodiscard]]
     BodyEntry* findBody(PhysicsBodyHandle handle) noexcept;
@@ -368,8 +403,12 @@ private:
     [[nodiscard]]
     std::optional<SolverContact> singleContact(const ContactCandidate& candidate, float dt);
 
-    void appendMeshContacts(const ContactCandidate& candidate, float dt,
-                            std::vector<SolverContact>& out);
+    // Collide the moving collider against the target static-mesh triangles. Pushes one
+    // contact per overlapping triangle into `out` when non-null (a trigger pair passes
+    // null to suppress the solver response). Returns whether any real overlap occurred
+    // (for the overlap-event sets).
+    bool appendMeshContacts(const ContactCandidate& candidate, float dt,
+                            std::vector<SolverContact>* out);
 
     [[nodiscard]]
     std::optional<ContactCandidate> contactCandidateForPair(const CollisionPair& pair);

@@ -211,6 +211,22 @@ public:
         return static_cast<std::uint32_t>(value);
     }
 
+    [[nodiscard]] bool readBool(std::string_view key, bool fallback, std::string_view label) const
+    {
+        auto element = object_.at_key(key);
+        if (element.error() == simdjson::NO_SUCH_FIELD)
+        {
+            return fallback;
+        }
+
+        bool value = false;
+        if (element.get(value) != simdjson::SUCCESS)
+        {
+            throw std::runtime_error(prefix(label) + " must be a boolean");
+        }
+        return value;
+    }
+
     [[nodiscard]] Vec3 readVec3(std::string_view key, Vec3 fallback, std::string_view label) const
     {
         auto element = object_.at_key(key);
@@ -430,6 +446,7 @@ GltfLoader::nodeExtrasPhysics(simdjson::dom::object* extras)
 
     config.layer = reader.readUint("Layer", config.layer, "Layer");
     config.mask = reader.readUint("Mask", config.mask, "Mask");
+    config.isTrigger = reader.readBool("IsTrigger", config.isTrigger, "IsTrigger");
     config.velocity = reader.readVec3("Velocity", config.velocity, "Velocity");
     config.mass = reader.readFloat("Mass", config.mass, "Mass");
     config.restitution = reader.readFloat("Restitution", config.restitution, "Restitution");
