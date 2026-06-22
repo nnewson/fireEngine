@@ -997,9 +997,25 @@ void PhysicsWorld::capturePreviousPositions() noexcept
 
 std::vector<PhysicsWorld::SolverContact> PhysicsWorld::contacts(float dt)
 {
+    // Solve in a canonical pair order — sorted by (firstId, secondId) — so the
+    // (order-dependent) sequential-impulse result is independent of which broadphase
+    // produced the pairs and of that broadphase's internal ordering. The dynamic AABB
+    // tree already emits id-sorted pairs, so this is a no-op for the default path;
+    // sweep-and-prune emits update-ordered pairs, which this canonicalises.
+    std::vector<CollisionPair> pairs = broadPhase_->possiblePairs();
+    std::sort(pairs.begin(), pairs.end(),
+              [](const CollisionPair& lhs, const CollisionPair& rhs)
+              {
+                  if (lhs.firstId.value() != rhs.firstId.value())
+                  {
+                      return lhs.firstId.value() < rhs.firstId.value();
+                  }
+                  return lhs.secondId.value() < rhs.secondId.value();
+              });
+
     std::vector<SolverContact> result;
-    result.reserve(broadPhase_->possiblePairs().size());
-    for (const CollisionPair& pair : broadPhase_->possiblePairs())
+    result.reserve(pairs.size());
+    for (const CollisionPair& pair : pairs)
     {
         appendContactsForPair(pair, dt, result);
     }
