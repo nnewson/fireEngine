@@ -67,6 +67,8 @@ private:
     std::optional<CharacterController> character_;
     Node* characterNode_{nullptr};
     float characterVerticalVelocity_{0.0f};
+    float characterPatrolTimer_{0.0f};
+    int characterStuckFrames_{0};
     Vec3 characterWalkDir_{1.0f, 0.0f, 0.0f};
     std::unique_ptr<Geometry> characterGeometry_;
     std::vector<std::unique_ptr<Geometry>> courseGeometries_;

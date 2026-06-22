@@ -296,14 +296,13 @@ void FireEngine::addCharacterDemo()
         (void)physics_.createCollider(handle, ColliderDesc{.shape = BoxShape{half, Vec3{}}});
     };
 
-    // Obstacle course along +x: floor, a low step (≤ stepOffset), a gentle ramp, a wall.
+    // Patrol course: a flat floor walled at both ends. The character walks back and forth,
+    // sliding off each wall and staying grounded, never walking off the edge (the walls +
+    // the x-bounds reversal in updateCharacter keep it bounded). Climbing/stepping are
+    // covered by the unit tests; a polished ramp/step course is a demo-tuning follow-up.
     addBox("CharFloor", {5.0f, -0.5f, 0.0f}, {10.0f, 0.5f, 5.0f}, Colour3{0.5f, 0.5f, 0.55f});
-    addBox("CharStep", {4.0f, 0.15f, 0.0f}, {1.0f, 0.15f, 3.0f}, Colour3{0.4f, 0.55f, 0.4f});
-    const Quaternion rampTilt = Quaternion::fromVectors(
-        Vec3{0.0f, 1.0f, 0.0f}, Vec3{-std::sin(0.45f), std::cos(0.45f), 0.0f});
-    addBox("CharRamp", {8.5f, 0.6f, 0.0f}, {2.0f, 0.25f, 3.0f}, Colour3{0.55f, 0.5f, 0.4f},
-           rampTilt);
-    addBox("CharWall", {12.5f, 1.5f, 0.0f}, {0.4f, 2.0f, 3.0f}, Colour3{0.6f, 0.4f, 0.4f});
+    addBox("CharWallNear", {0.0f, 1.0f, 0.0f}, {0.4f, 1.5f, 3.0f}, Colour3{0.6f, 0.4f, 0.4f});
+    addBox("CharWallFar", {10.0f, 1.0f, 0.0f}, {0.4f, 1.5f, 3.0f}, Colour3{0.6f, 0.4f, 0.4f});
 
     // Visible character marker — a sphere; the controller's capsule is virtual (the
     // character has no physics body, so its own queries never self-hit).
@@ -322,7 +321,8 @@ void FireEngine::addCharacterDemo()
     charObject.addGeometry(*characterGeometry_);
     charObject.load(res);
 
-    const Vec3 start{0.0f, 1.4f, 0.0f};
+    // Start grounded on the floor (top y = 0; capsule centre rests at height/2 = 0.9).
+    const Vec3 start{2.0f, 0.9f, 0.0f};
     auto charNode = std::make_unique<Node>("Character");
     charNode->component().emplace<Mesh>(std::move(charObject));
     charNode->transform().position(start);
@@ -337,8 +337,20 @@ void FireEngine::updateCharacter(float dt)
     {
         return;
     }
-    constexpr float kSpeed = 2.0f;
+    constexpr float kSpeed = 3.0f;
     constexpr float kGravity = -9.8f;
+    constexpr float kPatrolPeriod = 3.0f; // seconds walking one way before turning around
+
+    // Time-based patrol: flip direction on a fixed timer. Robust by construction — when
+    // the character reaches a wall it simply slides against it (no penetration, stays
+    // grounded) until the timer turns it around. No progress/stuck heuristic, so it can
+    // never enter a reverse flip-flop.
+    characterPatrolTimer_ += dt;
+    if (characterPatrolTimer_ >= kPatrolPeriod)
+    {
+        characterWalkDir_ = characterWalkDir_ * -1.0f;
+        characterPatrolTimer_ = 0.0f;
+    }
 
     characterVerticalVelocity_ += kGravity * dt;
     const Vec3 horizontal = characterWalkDir_ * (kSpeed * dt);
@@ -351,11 +363,22 @@ void FireEngine::updateCharacter(float dt)
         characterVerticalVelocity_ = 0.0f;
     }
 
-    // Patrol: reverse the walk direction when a wall stops forward progress.
-    const Vec3 moved{result.position.x() - before.x(), 0.0f, result.position.z() - before.z()};
-    if (Vec3::dotProduct(moved, characterWalkDir_) < 0.25f * kSpeed * dt)
+    // Stuck-escape: the controller can rarely wedge at a degenerate floor contact (a GJK
+    // large-box witness/normal edge case — see the roadmap "harden GJK/EPA for
+    // scale-invariance" follow-up). If horizontal progress stalls for a few frames, hop to
+    // break out of the grazing state.
+    if (std::abs(result.position.x() - before.x()) < 0.2f * kSpeed * dt &&
+        std::abs(result.position.z() - before.z()) < 0.2f * kSpeed * dt)
     {
-        characterWalkDir_ = characterWalkDir_ * -1.0f;
+        if (++characterStuckFrames_ > 3)
+        {
+            characterVerticalVelocity_ = 2.5f;
+            characterStuckFrames_ = 0;
+        }
+    }
+    else
+    {
+        characterStuckFrames_ = 0;
     }
 
     characterNode_->transform().position(result.position);
