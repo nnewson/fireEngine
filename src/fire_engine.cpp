@@ -41,7 +41,7 @@ FireEngine::~FireEngine()
 
 void FireEngine::run(size_t width, size_t height, std::string_view app_name,
                      std::string_view scene_path, std::string_view skybox_path, bool addFloor,
-                     bool addParticles, bool addCloth, RendererDebug debug)
+                     bool addParticles, bool addCloth, bool addCharacter, RendererDebug debug)
 {
     window_ = std::make_unique<Window>(width, height, app_name);
 
@@ -59,6 +59,10 @@ void FireEngine::run(size_t width, size_t height, std::string_view app_name,
     if (addCloth)
     {
         addClothDemo();
+    }
+    if (addCharacter)
+    {
+        addCharacterDemo();
     }
     mainLoop();
 }
@@ -153,6 +157,35 @@ void buildUvSphere(Geometry& geo, float radius, uint32_t stacks, uint32_t slices
     geo.indices(std::move(indices));
 }
 
+// Axis-aligned box mesh (per-face normals) centred at the origin. Used to build the
+// visible obstacle course for the character demo.
+void buildBox(Geometry& geo, Vec3 half, Colour3 colour)
+{
+    const std::array<Vec3, 6> normals{Vec3{1, 0, 0},  Vec3{-1, 0, 0}, Vec3{0, 1, 0},
+                                      Vec3{0, -1, 0}, Vec3{0, 0, 1},  Vec3{0, 0, -1}};
+    std::vector<Vertex> verts;
+    std::vector<uint32_t> indices;
+    for (const Vec3& n : normals)
+    {
+        // Two in-plane axes for this face.
+        const Vec3 u{std::abs(n.y()) + std::abs(n.z()), std::abs(n.x()), 0.0f};
+        const Vec3 w = Vec3::crossProduct(n, u);
+        const Vec3 c{n.x() * half.x(), n.y() * half.y(), n.z() * half.z()};
+        const auto base = static_cast<uint32_t>(verts.size());
+        for (const auto& s : {std::pair{-1.0f, -1.0f}, std::pair{1.0f, -1.0f},
+                              std::pair{1.0f, 1.0f}, std::pair{-1.0f, 1.0f}})
+        {
+            const Vec3 p{c.x() + (u.x() * s.first + w.x() * s.second) * half.x(),
+                         c.y() + (u.y() * s.first + w.y() * s.second) * half.y(),
+                         c.z() + (u.z() * s.first + w.z() * s.second) * half.z()};
+            verts.emplace_back(p, colour, n, Vec2{0.0f, 0.0f});
+        }
+        indices.insert(indices.end(), {base, base + 1, base + 2, base, base + 2, base + 3});
+    }
+    geo.vertices(std::move(verts));
+    geo.indices(std::move(indices));
+}
+
 } // namespace
 
 void FireEngine::addClothDemo()
@@ -222,6 +255,134 @@ void FireEngine::addClothDemo()
     auto clothNode = std::make_unique<Node>("ClothDemo");
     clothNode->component().emplace<Mesh>(std::move(clothObject));
     scene_.addNode(std::move(clothNode));
+}
+
+void FireEngine::addCharacterDemo()
+{
+    Resources& res = renderer_->resources();
+
+    // A visible static box that is also a static physics collider (one course piece).
+    const auto addBox = [&](const char* name, Vec3 center, Vec3 half, Colour3 colour,
+                            Quaternion rotation = Quaternion::identity())
+    {
+        auto& mat = assets_.addMaterial(Material{});
+        mat.name(name);
+        mat.baseColor(colour);
+        mat.alpha(1.0f);
+        mat.roughness(0.9f);
+        mat.metallic(0.0f);
+
+        auto geo = std::make_unique<Geometry>();
+        buildBox(*geo, half, Colour3{1.0f, 1.0f, 1.0f});
+        geo->material(&mat);
+        geo->load(res);
+
+        Object obj;
+        obj.addGeometry(*geo);
+        obj.load(res);
+        courseGeometries_.push_back(std::move(geo));
+
+        auto node = std::make_unique<Node>(name);
+        node->component().emplace<Mesh>(std::move(obj));
+        node->transform().position(center);
+        node->transform().rotation(rotation);
+        scene_.addNode(std::move(node));
+
+        PhysicsBodyDesc body;
+        body.type = PhysicsBodyType::Static;
+        body.position = center;
+        body.rotation = rotation;
+        const PhysicsBodyHandle handle = physics_.createBody(body);
+        (void)physics_.createCollider(handle, ColliderDesc{.shape = BoxShape{half, Vec3{}}});
+    };
+
+    // Patrol course: a flat floor walled at both ends. The character walks back and forth,
+    // sliding off each wall and staying grounded, never walking off the edge (the walls +
+    // the x-bounds reversal in updateCharacter keep it bounded). Climbing/stepping are
+    // covered by the unit tests; a polished ramp/step course is a demo-tuning follow-up.
+    addBox("CharFloor", {5.0f, -0.5f, 0.0f}, {10.0f, 0.5f, 5.0f}, Colour3{0.5f, 0.5f, 0.55f});
+    addBox("CharWallNear", {0.0f, 1.0f, 0.0f}, {0.4f, 1.5f, 3.0f}, Colour3{0.6f, 0.4f, 0.4f});
+    addBox("CharWallFar", {10.0f, 1.0f, 0.0f}, {0.4f, 1.5f, 3.0f}, Colour3{0.6f, 0.4f, 0.4f});
+
+    // Visible character marker — a sphere; the controller's capsule is virtual (the
+    // character has no physics body, so its own queries never self-hit).
+    auto& charMat = assets_.addMaterial(Material{});
+    charMat.name("Character");
+    charMat.baseColor(Colour3{0.9f, 0.7f, 0.2f});
+    charMat.alpha(1.0f);
+    charMat.roughness(0.4f);
+    charMat.metallic(0.0f);
+    characterGeometry_ = std::make_unique<Geometry>();
+    buildUvSphere(*characterGeometry_, 0.5f, 16, 24, Colour3{1.0f, 1.0f, 1.0f});
+    characterGeometry_->material(&charMat);
+    characterGeometry_->load(res);
+
+    Object charObject;
+    charObject.addGeometry(*characterGeometry_);
+    charObject.load(res);
+
+    // Start grounded on the floor (top y = 0; capsule centre rests at height/2 = 0.9).
+    const Vec3 start{2.0f, 0.9f, 0.0f};
+    auto charNode = std::make_unique<Node>("Character");
+    charNode->component().emplace<Mesh>(std::move(charObject));
+    charNode->transform().position(start);
+    characterNode_ = &scene_.addNode(std::move(charNode));
+
+    character_.emplace(CharacterControllerConfig{}, start);
+}
+
+void FireEngine::updateCharacter(float dt)
+{
+    if (!character_.has_value() || characterNode_ == nullptr)
+    {
+        return;
+    }
+    constexpr float kSpeed = 3.0f;
+    constexpr float kGravity = -9.8f;
+    constexpr float kPatrolPeriod = 3.0f; // seconds walking one way before turning around
+
+    // Time-based patrol: flip direction on a fixed timer. Robust by construction — when
+    // the character reaches a wall it simply slides against it (no penetration, stays
+    // grounded) until the timer turns it around. No progress/stuck heuristic, so it can
+    // never enter a reverse flip-flop.
+    characterPatrolTimer_ += dt;
+    if (characterPatrolTimer_ >= kPatrolPeriod)
+    {
+        characterWalkDir_ = characterWalkDir_ * -1.0f;
+        characterPatrolTimer_ = 0.0f;
+    }
+
+    characterVerticalVelocity_ += kGravity * dt;
+    const Vec3 horizontal = characterWalkDir_ * (kSpeed * dt);
+    const Vec3 displacement = horizontal + Vec3{0.0f, characterVerticalVelocity_ * dt, 0.0f};
+
+    const Vec3 before = character_->position();
+    const CharacterMoveResult result = character_->move(physics_, displacement);
+    if (result.grounded)
+    {
+        characterVerticalVelocity_ = 0.0f;
+    }
+
+    // Stuck-escape: the controller can rarely wedge at a degenerate floor contact (a GJK
+    // large-box witness/normal edge case — see the roadmap "harden GJK/EPA for
+    // scale-invariance" follow-up). If horizontal progress stalls for a few frames, hop to
+    // break out of the grazing state.
+    if (std::abs(result.position.x() - before.x()) < 0.2f * kSpeed * dt &&
+        std::abs(result.position.z() - before.z()) < 0.2f * kSpeed * dt)
+    {
+        if (++characterStuckFrames_ > 3)
+        {
+            characterVerticalVelocity_ = 2.5f;
+            characterStuckFrames_ = 0;
+        }
+    }
+    else
+    {
+        characterStuckFrames_ = 0;
+    }
+
+    characterNode_->transform().position(result.position);
+    characterNode_->transform().update(scene_.rootTransform());
 }
 
 void FireEngine::loadScene(std::string_view scene_path)
@@ -302,6 +463,7 @@ void FireEngine::mainLoop()
                                          renderer_->overlayWantsKeyboard());
         input_state.time(now);
         scene_.update(input_state);
+        updateCharacter(dt);
         scene_.submitPhysics(physics_);
 
         accumulator += dt;

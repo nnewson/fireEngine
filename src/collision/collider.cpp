@@ -72,7 +72,8 @@ Collider::Collider(Collider&& rhs) noexcept
       sweptWorldBounds_{rhs.sweptWorldBounds_},
       hasWorldBounds_{rhs.hasWorldBounds_},
       collisionLayer_{rhs.collisionLayer_},
-      collisionMask_{rhs.collisionMask_}
+      collisionMask_{rhs.collisionMask_},
+      isTrigger_{rhs.isTrigger_}
 {
     assert(!rhs.colliderId_.valid() &&
            "Cannot move a Collider that is currently registered with a "
@@ -102,6 +103,7 @@ Collider& Collider::operator=(Collider&& rhs) noexcept
     hasWorldBounds_ = rhs.hasWorldBounds_;
     collisionLayer_ = rhs.collisionLayer_;
     collisionMask_ = rhs.collisionMask_;
+    isTrigger_ = rhs.isTrigger_;
     initialiseEndPoints();
     updateEndPointValues();
     rhs.colliderId_ = ColliderId{};

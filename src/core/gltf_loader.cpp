@@ -132,6 +132,7 @@ void applyPhysicsConfig(std::size_t nodeIndex,
     ColliderDesc colliderDesc;
     colliderDesc.collisionLayer = it->second.layer;
     colliderDesc.collisionMask = it->second.mask;
+    colliderDesc.isTrigger = it->second.isTrigger;
     colliderDesc.material = bodyDesc.material;
     if (it->second.shape.has_value())
     {

@@ -54,6 +54,8 @@ struct ColliderDesc
     std::uint32_t collisionLayer{1U};
     std::uint32_t collisionMask{~0U};
     PhysicsMaterial material{};
+    // A trigger collider reports overlaps as events but generates no solver response.
+    bool isTrigger{false};
 };
 
 // One primitive of a compound collider: a (non-compound) shape placed at a local

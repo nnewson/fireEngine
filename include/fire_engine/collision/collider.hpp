@@ -84,6 +84,20 @@ public:
         collisionMask_ = collisionMask;
     }
 
+    // A trigger collider is still tracked by the broadphase and tested by the
+    // narrowphase, but generates no solver response — overlaps surface as enter/stay/exit
+    // events instead (PhysicsWorld::triggerEvents).
+    [[nodiscard]]
+    bool isTrigger() const noexcept
+    {
+        return isTrigger_;
+    }
+
+    void isTrigger(bool trigger) noexcept
+    {
+        isTrigger_ = trigger;
+    }
+
     // Refresh world/swept bounds from `world`. `motion` is the predicted
     // displacement this step (e.g. velocity × dt): the swept bound is extended to
     // cover it, so the broadphase pairs a fast mover with what it is about to reach
@@ -122,6 +136,7 @@ private:
     ColliderId colliderId_;
     std::uint32_t collisionLayer_{defaultCollisionLayer};
     std::uint32_t collisionMask_{defaultCollisionMask};
+    bool isTrigger_{false};
     EndPoint xMin_;
     EndPoint xMax_;
     EndPoint yMin_;
