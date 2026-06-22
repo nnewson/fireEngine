@@ -41,7 +41,7 @@ FireEngine::~FireEngine()
 
 void FireEngine::run(size_t width, size_t height, std::string_view app_name,
                      std::string_view scene_path, std::string_view skybox_path, bool addFloor,
-                     bool addParticles, bool addCloth, RendererDebug debug)
+                     bool addParticles, bool addCloth, bool addCharacter, RendererDebug debug)
 {
     window_ = std::make_unique<Window>(width, height, app_name);
 
@@ -59,6 +59,10 @@ void FireEngine::run(size_t width, size_t height, std::string_view app_name,
     if (addCloth)
     {
         addClothDemo();
+    }
+    if (addCharacter)
+    {
+        addCharacterDemo();
     }
     mainLoop();
 }
@@ -153,6 +157,35 @@ void buildUvSphere(Geometry& geo, float radius, uint32_t stacks, uint32_t slices
     geo.indices(std::move(indices));
 }
 
+// Axis-aligned box mesh (per-face normals) centred at the origin. Used to build the
+// visible obstacle course for the character demo.
+void buildBox(Geometry& geo, Vec3 half, Colour3 colour)
+{
+    const std::array<Vec3, 6> normals{Vec3{1, 0, 0},  Vec3{-1, 0, 0}, Vec3{0, 1, 0},
+                                      Vec3{0, -1, 0}, Vec3{0, 0, 1},  Vec3{0, 0, -1}};
+    std::vector<Vertex> verts;
+    std::vector<uint32_t> indices;
+    for (const Vec3& n : normals)
+    {
+        // Two in-plane axes for this face.
+        const Vec3 u{std::abs(n.y()) + std::abs(n.z()), std::abs(n.x()), 0.0f};
+        const Vec3 w = Vec3::crossProduct(n, u);
+        const Vec3 c{n.x() * half.x(), n.y() * half.y(), n.z() * half.z()};
+        const auto base = static_cast<uint32_t>(verts.size());
+        for (const auto& s : {std::pair{-1.0f, -1.0f}, std::pair{1.0f, -1.0f},
+                              std::pair{1.0f, 1.0f}, std::pair{-1.0f, 1.0f}})
+        {
+            const Vec3 p{c.x() + (u.x() * s.first + w.x() * s.second) * half.x(),
+                         c.y() + (u.y() * s.first + w.y() * s.second) * half.y(),
+                         c.z() + (u.z() * s.first + w.z() * s.second) * half.z()};
+            verts.emplace_back(p, colour, n, Vec2{0.0f, 0.0f});
+        }
+        indices.insert(indices.end(), {base, base + 1, base + 2, base, base + 2, base + 3});
+    }
+    geo.vertices(std::move(verts));
+    geo.indices(std::move(indices));
+}
+
 } // namespace
 
 void FireEngine::addClothDemo()
@@ -222,6 +255,111 @@ void FireEngine::addClothDemo()
     auto clothNode = std::make_unique<Node>("ClothDemo");
     clothNode->component().emplace<Mesh>(std::move(clothObject));
     scene_.addNode(std::move(clothNode));
+}
+
+void FireEngine::addCharacterDemo()
+{
+    Resources& res = renderer_->resources();
+
+    // A visible static box that is also a static physics collider (one course piece).
+    const auto addBox = [&](const char* name, Vec3 center, Vec3 half, Colour3 colour,
+                            Quaternion rotation = Quaternion::identity())
+    {
+        auto& mat = assets_.addMaterial(Material{});
+        mat.name(name);
+        mat.baseColor(colour);
+        mat.alpha(1.0f);
+        mat.roughness(0.9f);
+        mat.metallic(0.0f);
+
+        auto geo = std::make_unique<Geometry>();
+        buildBox(*geo, half, Colour3{1.0f, 1.0f, 1.0f});
+        geo->material(&mat);
+        geo->load(res);
+
+        Object obj;
+        obj.addGeometry(*geo);
+        obj.load(res);
+        courseGeometries_.push_back(std::move(geo));
+
+        auto node = std::make_unique<Node>(name);
+        node->component().emplace<Mesh>(std::move(obj));
+        node->transform().position(center);
+        node->transform().rotation(rotation);
+        scene_.addNode(std::move(node));
+
+        PhysicsBodyDesc body;
+        body.type = PhysicsBodyType::Static;
+        body.position = center;
+        body.rotation = rotation;
+        const PhysicsBodyHandle handle = physics_.createBody(body);
+        (void)physics_.createCollider(handle, ColliderDesc{.shape = BoxShape{half, Vec3{}}});
+    };
+
+    // Obstacle course along +x: floor, a low step (≤ stepOffset), a gentle ramp, a wall.
+    addBox("CharFloor", {5.0f, -0.5f, 0.0f}, {10.0f, 0.5f, 5.0f}, Colour3{0.5f, 0.5f, 0.55f});
+    addBox("CharStep", {4.0f, 0.15f, 0.0f}, {1.0f, 0.15f, 3.0f}, Colour3{0.4f, 0.55f, 0.4f});
+    const Quaternion rampTilt = Quaternion::fromVectors(
+        Vec3{0.0f, 1.0f, 0.0f}, Vec3{-std::sin(0.45f), std::cos(0.45f), 0.0f});
+    addBox("CharRamp", {8.5f, 0.6f, 0.0f}, {2.0f, 0.25f, 3.0f}, Colour3{0.55f, 0.5f, 0.4f},
+           rampTilt);
+    addBox("CharWall", {12.5f, 1.5f, 0.0f}, {0.4f, 2.0f, 3.0f}, Colour3{0.6f, 0.4f, 0.4f});
+
+    // Visible character marker — a sphere; the controller's capsule is virtual (the
+    // character has no physics body, so its own queries never self-hit).
+    auto& charMat = assets_.addMaterial(Material{});
+    charMat.name("Character");
+    charMat.baseColor(Colour3{0.9f, 0.7f, 0.2f});
+    charMat.alpha(1.0f);
+    charMat.roughness(0.4f);
+    charMat.metallic(0.0f);
+    characterGeometry_ = std::make_unique<Geometry>();
+    buildUvSphere(*characterGeometry_, 0.5f, 16, 24, Colour3{1.0f, 1.0f, 1.0f});
+    characterGeometry_->material(&charMat);
+    characterGeometry_->load(res);
+
+    Object charObject;
+    charObject.addGeometry(*characterGeometry_);
+    charObject.load(res);
+
+    const Vec3 start{0.0f, 1.4f, 0.0f};
+    auto charNode = std::make_unique<Node>("Character");
+    charNode->component().emplace<Mesh>(std::move(charObject));
+    charNode->transform().position(start);
+    characterNode_ = &scene_.addNode(std::move(charNode));
+
+    character_.emplace(CharacterControllerConfig{}, start);
+}
+
+void FireEngine::updateCharacter(float dt)
+{
+    if (!character_.has_value() || characterNode_ == nullptr)
+    {
+        return;
+    }
+    constexpr float kSpeed = 2.0f;
+    constexpr float kGravity = -9.8f;
+
+    characterVerticalVelocity_ += kGravity * dt;
+    const Vec3 horizontal = characterWalkDir_ * (kSpeed * dt);
+    const Vec3 displacement = horizontal + Vec3{0.0f, characterVerticalVelocity_ * dt, 0.0f};
+
+    const Vec3 before = character_->position();
+    const CharacterMoveResult result = character_->move(physics_, displacement);
+    if (result.grounded)
+    {
+        characterVerticalVelocity_ = 0.0f;
+    }
+
+    // Patrol: reverse the walk direction when a wall stops forward progress.
+    const Vec3 moved{result.position.x() - before.x(), 0.0f, result.position.z() - before.z()};
+    if (Vec3::dotProduct(moved, characterWalkDir_) < 0.25f * kSpeed * dt)
+    {
+        characterWalkDir_ = characterWalkDir_ * -1.0f;
+    }
+
+    characterNode_->transform().position(result.position);
+    characterNode_->transform().update(scene_.rootTransform());
 }
 
 void FireEngine::loadScene(std::string_view scene_path)
@@ -302,6 +440,7 @@ void FireEngine::mainLoop()
                                          renderer_->overlayWantsKeyboard());
         input_state.time(now);
         scene_.update(input_state);
+        updateCharacter(dt);
         scene_.submitPhysics(physics_);
 
         accumulator += dt;

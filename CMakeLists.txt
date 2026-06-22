@@ -51,6 +51,7 @@ add_library(fireengine SHARED
     src/platform/keyboard.cpp
     src/platform/mouse.cpp
     src/platform/window.cpp
+    src/physics/character_controller.cpp
     src/physics/contact_solver.cpp
     src/physics/island.cpp
     src/physics/joint_solver.cpp
@@ -201,6 +202,7 @@ add_executable(test_fire_engine
     tests/physics/test_physics_world.cpp
     tests/physics/test_physics_query.cpp
     tests/physics/test_collision_events.cpp
+    tests/physics/test_character_controller.cpp
     tests/physics/test_contact_solver.cpp
     tests/physics/test_island.cpp
     tests/physics/test_compound.cpp

@@ -18,6 +18,10 @@ namespace
 constexpr int kMaxGjkIterations = 32;
 constexpr int kMaxEpaIterations = 64;
 constexpr float kGjkEps = 1e-10f;
+// Relative slack on the GJK convergence test, scaling with the closest feature's squared
+// distance so large shapes (whose support dot products carry larger FP noise) still
+// converge instead of over-growing the simplex into a false origin enclosure.
+constexpr float kGjkRel = 1e-7f;
 constexpr float kEpaEps = 1e-5f;
 
 [[nodiscard]] float dot(const Vec3& a, const Vec3& b) noexcept
@@ -180,11 +184,21 @@ void closestTriangle(const Vec3& a, const Vec3& b, const Vec3& c, float& u, floa
         {1, 3, 2, 0}, // face bdc, opposite a
     }};
 
+    // A near-coplanar (zero-volume) tetrahedron can't actually enclose the origin, and its
+    // per-face "origin outside plane" tests are numerically unreliable (the opposite vertex
+    // sits on the plane). This happens with large axis-aligned shapes whose supports all
+    // land on one Minkowski face. Treat it as separated: take the closest of all four faces
+    // rather than risk a false enclosure → spurious collision.
+    const float volume = dot(s[3].v - s[0].v, cross(s[1].v - s[0].v, s[2].v - s[0].v));
+    const float edgeScale = (s[1].v - s[0].v).magnitude() * (s[2].v - s[0].v).magnitude() *
+                            (s[3].v - s[0].v).magnitude();
+    const bool degenerate = std::abs(volume) <= 1e-7f * (edgeScale + 1e-20f);
+
     float bestSq = std::numeric_limits<float>::max();
     bool anyOutside = false;
     for (const auto& f : faces)
     {
-        if (!originOutsidePlane(s[f[0]].v, s[f[1]].v, s[f[2]].v, s[f[3]].v))
+        if (!degenerate && !originOutsidePlane(s[f[0]].v, s[f[1]].v, s[f[2]].v, s[f[3]].v))
         {
             continue;
         }
@@ -205,7 +219,7 @@ void closestTriangle(const Vec3& a, const Vec3& b, const Vec3& c, float& u, floa
             result.weight[f[2]] = w;
         }
     }
-    if (!anyOutside)
+    if (!degenerate && !anyOutside)
     {
         result.containsOrigin = true;
     }
@@ -449,8 +463,14 @@ ConvexContact gjkEpaContact(const WorldShape& a, const WorldShape& b) noexcept
 
         // No progress past the current closest feature toward the origin → converged
         // (separated). For overlap the support reaches past the origin, so progress
-        // stays positive until the simplex grows to a tetrahedron enclosing it.
-        if (dot(p.v, dir) - dot(closest.point, dir) < kGjkEps)
+        // stays positive until the simplex grows to a tetrahedron enclosing it. The
+        // tolerance is *relative* to the closest feature's squared distance: with large
+        // shapes (e.g. a big floor/wall) the dot products are large and their FP noise
+        // would never fall under a fixed absolute epsilon, so GJK would keep iterating,
+        // over-grow the simplex, and a degenerate tetrahedron could falsely enclose the
+        // origin — reporting a separated pair as colliding.
+        const float progress = dot(p.v, dir) - dot(closest.point, dir);
+        if (progress < kGjkEps + kGjkRel * dot(closest.point, closest.point))
         {
             break;
         }

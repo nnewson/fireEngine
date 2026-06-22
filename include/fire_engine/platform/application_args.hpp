@@ -22,6 +22,9 @@ struct ApplicationArgs
     bool addParticles{false};
     // -c flag: drop a demo cloth (pinned grid) into the scene.
     bool addCloth{false};
+    // -k flag: drop a kinematic character-controller demo (a capsule that auto-walks an
+    // obstacle course — floor, ramp, step, wall — sliding, climbing, and stepping).
+    bool addCharacter{false};
     // Forwarded straight to the Renderer. Multiple --debug-* flags collapse to
     // the last one parsed (single debug view at a time); --no-shadows is
     // independent and combines with any view.
@@ -65,6 +68,11 @@ struct ApplicationArgs
         if (arg == "-c")
         {
             args.addCloth = true;
+            continue;
+        }
+        if (arg == "-k")
+        {
+            args.addCharacter = true;
             continue;
         }
         if (arg == "--debug-normals")
