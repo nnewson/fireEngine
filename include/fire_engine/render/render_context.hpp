@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdint>
+#include <unordered_set>
 #include <vector>
 
 #include <vulkan/vulkan.hpp>
@@ -19,6 +20,7 @@ class Device;
 class Swapchain;
 class Frame;
 class Pipeline;
+class Node;
 
 struct RenderContext
 {
@@ -41,6 +43,9 @@ struct RenderContext
     AlphaPipelines pipelines{};
     PipelineHandle shadowPipeline{NullPipeline};
     std::array<Mat4, kShadowTotalMatrixCount> shadowViewProjs{};
+    // Rigid renderable nodes the scene culler found outside every frustum; Node::render
+    // skips their draw-building. Null (the default) means "cull disabled" — render all.
+    const std::unordered_set<const Node*>* culledNodes{nullptr};
 
     [[nodiscard]] FrameInfo frameInfo() const noexcept;
 };

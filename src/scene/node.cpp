@@ -87,6 +87,20 @@ void Node::setComposedWorld(const Mat4& newComposedWorld) noexcept
 void Node::render(const RenderContext& ctx, const Mat4& parentWorld)
 {
     Mat4 world = parentWorld * transform_.local();
+
+    // The scene culler may have found this node outside every frustum. Skip its
+    // draw-building (no UBO writes, no per-vertex shadow bounds) but still recurse —
+    // children have independent bounds. Mesh::render returns `world` for children, so
+    // skipping it leaves childWorld == world.
+    if (ctx.culledNodes != nullptr && ctx.culledNodes->contains(this))
+    {
+        for (auto& child : children_)
+        {
+            child->render(ctx, world);
+        }
+        return;
+    }
+
     // Components that contribute to rendering (Animator, Mesh) define
     // render(ctx, world); the rest (Empty, Camera, Light) are no-ops that just
     // pass the world matrix down, handled here instead of each defining a

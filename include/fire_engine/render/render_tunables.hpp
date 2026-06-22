@@ -33,6 +33,10 @@ struct RenderTunables
     float taaHistoryBlend{kTaaHistoryBlend};
     float taaSharpen{0.0f}; // 0 = off; post-resolve unsharp amount
 
+    // Frustum culling: skip draws whose world bounds fall outside the camera / shadow
+    // frustums. Off = submit everything (A/B comparison + a regression escape hatch).
+    bool cullingEnabled{true};
+
     // Debug visualisation.
     DebugView debugView{DebugView::None};
     bool noShadows{false};
