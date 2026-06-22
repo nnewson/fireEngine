@@ -1,7 +1,9 @@
 #include <cstdint>
+#include <memory>
 #include <span>
 #include <vector>
 
+#include <fire_engine/collision/sweep_and_prune_broad_phase.hpp>
 #include <fire_engine/physics/physics_world.hpp>
 
 #include <catch2/catch_test_macros.hpp>
@@ -111,6 +113,25 @@ TEST_CASE("Determinism.FreeFallMatchesClosedForm", "[Determinism]")
     REQUIRE(transform.has_value());
     CHECK(transform->position().approxEqual(Vec3{0.0f, expectedY, 0.0f}, 1e-3f));
     CHECK(world.body(body)->linearVelocity().approxEqual(Vec3{0.0f, expectedVy, 0.0f}, 1e-3f));
+}
+
+TEST_CASE("Determinism.BroadphasesAgree", "[Determinism]")
+{
+    // Both broadphase implementations honour the same overlap+filter contract, so the
+    // same scripted scene must end in the identical state regardless of which one finds
+    // the pairs. This exercises the BroadPhase interface through PhysicsWorld (not just
+    // the standalone impl tests) and guards against a broadphase that drops or mis-emits
+    // pairs. Relies on PhysicsWorld::contacts() canonicalising pair order so the
+    // order-dependent solver is independent of each broadphase's internal ordering.
+    PhysicsWorld tree; // default = DynamicAabbTreeBroadPhase
+    const auto handlesTree = buildScene(tree);
+    const std::uint64_t hashTree = simulate(tree, handlesTree, kSteps);
+
+    PhysicsWorld sap{std::make_unique<SweepAndPruneBroadPhase>()};
+    const auto handlesSap = buildScene(sap);
+    const std::uint64_t hashSap = simulate(sap, handlesSap, kSteps);
+
+    CHECK(hashTree == hashSap);
 }
 
 TEST_CASE("Determinism.GoldenHash", "[Determinism]")

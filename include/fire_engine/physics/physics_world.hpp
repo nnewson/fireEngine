@@ -30,6 +30,15 @@ class PhysicsWorld
 {
 public:
     PhysicsWorld() = default;
+
+    // Inject a broadphase implementation (testing / alternative strategies). The
+    // default ctor uses a DynamicAabbTreeBroadPhase; this lets a caller substitute, say,
+    // a SweepAndPruneBroadPhase without changing any call site.
+    explicit PhysicsWorld(std::unique_ptr<BroadPhase> broadPhase)
+        : broadPhase_{std::move(broadPhase)}
+    {
+    }
+
     ~PhysicsWorld() = default;
 
     PhysicsWorld(const PhysicsWorld&) = delete;
@@ -248,8 +257,9 @@ private:
     std::unordered_map<std::uint32_t, std::size_t> colliderIndexByHandle_;
     std::unordered_map<std::uint32_t, std::size_t> jointIndexByHandle_;
     std::unordered_map<const Collider*, std::size_t> colliderIndexByPointer_;
-    // Owned via the BroadPhase interface so the implementation is swappable; defaults
-    // to the dynamic AABB tree (sweep-and-prune is still available + selectable).
+    // Owned via the BroadPhase interface so the implementation is swappable. Defaults to
+    // the dynamic AABB tree; inject an alternative (e.g. SweepAndPruneBroadPhase) through
+    // the unique_ptr constructor.
     std::unique_ptr<BroadPhase> broadPhase_{std::make_unique<DynamicAabbTreeBroadPhase>()};
     NarrowPhase narrowPhase_;
     ContactSolver solver_;
