@@ -25,6 +25,8 @@ add_library(fireengine SHARED
     src/collision/collider.cpp
     src/collision/geometry.cpp
     src/collision/gjk_epa.cpp
+    src/collision/ray.cpp
+    src/collision/shape_cast.cpp
     src/collision/sweep_and_prune_broad_phase.cpp
     src/collision/dynamic_aabb_tree_broad_phase.cpp
     src/collision/narrow_phase.cpp
@@ -195,7 +197,9 @@ add_executable(test_fire_engine
     tests/collision/test_narrow_phase.cpp
     tests/collision/test_support.cpp
     tests/collision/test_gjk_epa.cpp
+    tests/collision/test_shape_cast.cpp
     tests/physics/test_physics_world.cpp
+    tests/physics/test_physics_query.cpp
     tests/physics/test_contact_solver.cpp
     tests/physics/test_island.cpp
     tests/physics/test_compound.cpp

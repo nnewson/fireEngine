@@ -10,6 +10,7 @@
 #include <utility>
 #include <variant>
 
+#include <fire_engine/collision/gjk_epa.hpp>
 #include <fire_engine/math/constants.hpp>
 #include <fire_engine/math/mat4.hpp>
 #include <fire_engine/math/vec4.hpp>
@@ -672,6 +673,109 @@ namespace
                kAngularSleepThreshold * kAngularSleepThreshold;
 }
 
+// Compose an authored shape with an already-built world matrix / rotation / per-axis
+// scale into a neutral world-space primitive. Shared by worldShape (collider entries)
+// and the spatial-query path (free query shapes). Spheres/capsules take the max-axis
+// scale (uniform); boxes scale per axis.
+[[nodiscard]] WorldShape composeWorldShape(const ColliderShape& shape, const Mat4& world,
+                                           const Quaternion& rot, const Vec3& scale)
+{
+    const float uniform = std::max({scale.x(), scale.y(), scale.z()});
+
+    if (const auto* sphere = std::get_if<SphereShape>(&shape))
+    {
+        return WorldSphere{transformPoint(world, sphere->center), sphere->radius * uniform};
+    }
+    if (const auto* box = std::get_if<BoxShape>(&shape))
+    {
+        return WorldBox{transformPoint(world, box->center),
+                        Vec3{box->halfExtents.x() * scale.x(), box->halfExtents.y() * scale.y(),
+                             box->halfExtents.z() * scale.z()},
+                        rot};
+    }
+    if (const auto* capsule = std::get_if<CapsuleShape>(&shape))
+    {
+        const Vec3 c = capsule->center;
+        const Vec3 p0 = transformPoint(world, Vec3{c.x(), c.y() - capsule->halfHeight, c.z()});
+        const Vec3 p1 = transformPoint(world, Vec3{c.x(), c.y() + capsule->halfHeight, c.z()});
+        return WorldCapsule{p0, p1, capsule->radius * uniform};
+    }
+    if (const auto* hull = std::get_if<ConvexHullShape>(&shape))
+    {
+        WorldConvex convex;
+        convex.vertices.reserve(hull->vertices.size());
+        for (const Vec3& v : hull->vertices)
+        {
+            convex.vertices.push_back(transformPoint(world, v));
+        }
+        convex.faces = hull->faces;
+        return convex;
+    }
+    const auto& aabb = std::get<AabbShape>(shape);
+    const Vec3 he = aabb.bounds.extent() * 0.5f;
+    return WorldBox{transformPoint(world, aabb.bounds.center()),
+                    Vec3{he.x() * scale.x(), he.y() * scale.y(), he.z() * scale.z()}, rot};
+}
+
+// A collider passes a query filter when each side's mask admits the other's layer.
+[[nodiscard]] bool passesFilter(const Collider& collider, QueryFilter filter) noexcept
+{
+    return (filter.mask & collider.collisionLayer()) != 0U &&
+           (collider.collisionMask() & filter.layer) != 0U;
+}
+
+// World AABB enclosing a neutral shape (for broadphase reject + mesh BVH queries).
+[[nodiscard]] AABB aabbOfWorldShape(const WorldShape& shape) noexcept
+{
+    return std::visit(
+        [](const auto& s) -> AABB
+        {
+            using T = std::decay_t<decltype(s)>;
+            if constexpr (std::is_same_v<T, WorldSphere>)
+            {
+                const Vec3 r{s.radius, s.radius, s.radius};
+                return AABB{s.center - r, s.center + r};
+            }
+            else if constexpr (std::is_same_v<T, WorldBox>)
+            {
+                const Vec3 ax = s.orientation.rotate(Vec3{1.0f, 0.0f, 0.0f});
+                const Vec3 ay = s.orientation.rotate(Vec3{0.0f, 1.0f, 0.0f});
+                const Vec3 az = s.orientation.rotate(Vec3{0.0f, 0.0f, 1.0f});
+                const Vec3 e{
+                    std::abs(ax.x()) * s.halfExtents.x() + std::abs(ay.x()) * s.halfExtents.y() +
+                        std::abs(az.x()) * s.halfExtents.z(),
+                    std::abs(ax.y()) * s.halfExtents.x() + std::abs(ay.y()) * s.halfExtents.y() +
+                        std::abs(az.y()) * s.halfExtents.z(),
+                    std::abs(ax.z()) * s.halfExtents.x() + std::abs(ay.z()) * s.halfExtents.y() +
+                        std::abs(az.z()) * s.halfExtents.z()};
+                return AABB{s.center - e, s.center + e};
+            }
+            else if constexpr (std::is_same_v<T, WorldCapsule>)
+            {
+                const Vec3 lo{std::min(s.p0.x(), s.p1.x()), std::min(s.p0.y(), s.p1.y()),
+                              std::min(s.p0.z(), s.p1.z())};
+                const Vec3 hi{std::max(s.p0.x(), s.p1.x()), std::max(s.p0.y(), s.p1.y()),
+                              std::max(s.p0.z(), s.p1.z())};
+                const Vec3 r{s.radius, s.radius, s.radius};
+                return AABB{lo - r, hi + r};
+            }
+            else
+            {
+                Vec3 lo{s.vertices[0]};
+                Vec3 hi{s.vertices[0]};
+                for (const Vec3& v : s.vertices)
+                {
+                    lo = {std::min(lo.x(), v.x()), std::min(lo.y(), v.y()),
+                          std::min(lo.z(), v.z())};
+                    hi = {std::max(hi.x(), v.x()), std::max(hi.y(), v.y()),
+                          std::max(hi.z(), v.z())};
+                }
+                return AABB{lo, hi};
+            }
+        },
+        shape);
+}
+
 } // namespace
 
 WorldShape PhysicsWorld::worldShape(const ColliderEntry& entry) const
@@ -688,43 +792,251 @@ WorldShape PhysicsWorld::worldShape(const ColliderEntry& entry) const
         bodyWorld * (Mat4::translate(entry.localPosition) * entry.localRotation.toMat4());
     const Quaternion rot = bodyRot * entry.localRotation;
     const Vec3 s = matrixScale(bodyWorld);
-    const float uniform = std::max({s.x(), s.y(), s.z()});
+    return composeWorldShape(entry.shape, world, rot, s);
+}
 
-    if (const auto* sphere = std::get_if<SphereShape>(&entry.shape))
+std::optional<RaycastHit> PhysicsWorld::raycast(const Ray& ray, QueryFilter filter) const
+{
+    std::optional<RaycastHit> best;
+    const auto consider = [&](const RayHit& hit, const ColliderEntry& e)
     {
-        return WorldSphere{transformPoint(world, sphere->center), sphere->radius * uniform};
-    }
-    if (const auto* box = std::get_if<BoxShape>(&entry.shape))
-    {
-        return WorldBox{transformPoint(world, box->center),
-                        Vec3{box->halfExtents.x() * s.x(), box->halfExtents.y() * s.y(),
-                             box->halfExtents.z() * s.z()},
-                        rot};
-    }
-    if (const auto* capsule = std::get_if<CapsuleShape>(&entry.shape))
-    {
-        const Vec3 c = capsule->center;
-        const Vec3 p0 = transformPoint(world, Vec3{c.x(), c.y() - capsule->halfHeight, c.z()});
-        const Vec3 p1 = transformPoint(world, Vec3{c.x(), c.y() + capsule->halfHeight, c.z()});
-        return WorldCapsule{p0, p1, capsule->radius * uniform};
-    }
-    if (const auto* hull = std::get_if<ConvexHullShape>(&entry.shape))
-    {
-        // Transform local vertices into a world-space hull; faces (index loops)
-        // reference the stable source shape (valid for this step).
-        WorldConvex convex;
-        convex.vertices.reserve(hull->vertices.size());
-        for (const Vec3& v : hull->vertices)
+        if (!best.has_value() || hit.distance < best->distance)
         {
-            convex.vertices.push_back(transformPoint(world, v));
+            best = RaycastHit{e.handle, e.body, hit.point, hit.normal, hit.distance};
         }
-        convex.faces = hull->faces;
-        return convex;
+    };
+
+    for (const ColliderEntry& e : colliders_)
+    {
+        if (!e.active || !passesFilter(e.collider, filter))
+        {
+            continue;
+        }
+        float tNear = 0.0f;
+        if (!rayIntersectsAabb(ray, e.collider.worldBounds(), tNear))
+        {
+            continue;
+        }
+        if (best.has_value() && tNear >= best->distance)
+        {
+            continue; // the whole AABB is farther than the closest hit so far
+        }
+
+        if (e.mesh)
+        {
+            const MeshCollisionData& mesh = *e.mesh;
+            mesh.bvh.traverse(
+                [&](const AABB& box)
+                {
+                    float t = 0.0f;
+                    return rayIntersectsAabb(ray, box, t);
+                },
+                [&](int proxy)
+                {
+                    const auto base = static_cast<std::size_t>(mesh.bvh.payload(proxy)) * 3;
+                    const Vec3& v0 = mesh.worldVertices[mesh.indices[base + 0]];
+                    const Vec3& v1 = mesh.worldVertices[mesh.indices[base + 1]];
+                    const Vec3& v2 = mesh.worldVertices[mesh.indices[base + 2]];
+                    if (auto hit = rayIntersectTriangle(ray, v0, v1, v2))
+                    {
+                        consider(*hit, e);
+                    }
+                });
+        }
+        else if (auto hit = rayIntersect(ray, worldShape(e)))
+        {
+            consider(*hit, e);
+        }
     }
-    const auto& aabb = std::get<AabbShape>(entry.shape);
-    const Vec3 he = aabb.bounds.extent() * 0.5f;
-    return WorldBox{transformPoint(world, aabb.bounds.center()),
-                    Vec3{he.x() * s.x(), he.y() * s.y(), he.z() * s.z()}, rot};
+    return best;
+}
+
+std::vector<RaycastHit> PhysicsWorld::raycastAll(const Ray& ray, QueryFilter filter) const
+{
+    std::vector<RaycastHit> hits;
+    for (const ColliderEntry& e : colliders_)
+    {
+        if (!e.active || !passesFilter(e.collider, filter))
+        {
+            continue;
+        }
+        float tNear = 0.0f;
+        if (!rayIntersectsAabb(ray, e.collider.worldBounds(), tNear))
+        {
+            continue;
+        }
+
+        if (e.mesh)
+        {
+            const MeshCollisionData& mesh = *e.mesh;
+            std::optional<RayHit> nearest;
+            mesh.bvh.traverse(
+                [&](const AABB& box)
+                {
+                    float t = 0.0f;
+                    return rayIntersectsAabb(ray, box, t);
+                },
+                [&](int proxy)
+                {
+                    const auto base = static_cast<std::size_t>(mesh.bvh.payload(proxy)) * 3;
+                    const Vec3& v0 = mesh.worldVertices[mesh.indices[base + 0]];
+                    const Vec3& v1 = mesh.worldVertices[mesh.indices[base + 1]];
+                    const Vec3& v2 = mesh.worldVertices[mesh.indices[base + 2]];
+                    if (auto hit = rayIntersectTriangle(ray, v0, v1, v2))
+                    {
+                        if (!nearest.has_value() || hit->distance < nearest->distance)
+                        {
+                            nearest = hit;
+                        }
+                    }
+                });
+            if (nearest.has_value())
+            {
+                hits.push_back(RaycastHit{e.handle, e.body, nearest->point, nearest->normal,
+                                          nearest->distance});
+            }
+        }
+        else if (auto hit = rayIntersect(ray, worldShape(e)))
+        {
+            hits.push_back(RaycastHit{e.handle, e.body, hit->point, hit->normal, hit->distance});
+        }
+    }
+    return hits;
+}
+
+std::optional<ShapecastHit> PhysicsWorld::shapecast(const ColliderShape& shape,
+                                                    const Transform& pose, Vec3 direction,
+                                                    float maxDistance, QueryFilter filter) const
+{
+    const Vec3 dir = Vec3::normalise(direction);
+    const WorldShape moving =
+        composeWorldShape(shape, pose.world(), pose.rotation(), matrixScale(pose.world()));
+    // Sweep AABB: the moving shape's bounds extended along the sweep.
+    AABB sweptBounds = aabbOfWorldShape(moving);
+    const Vec3 sweep = dir * maxDistance;
+    sweptBounds = AABB{{std::min(sweptBounds.min.x(), sweptBounds.min.x() + sweep.x()),
+                        std::min(sweptBounds.min.y(), sweptBounds.min.y() + sweep.y()),
+                        std::min(sweptBounds.min.z(), sweptBounds.min.z() + sweep.z())},
+                       {std::max(sweptBounds.max.x(), sweptBounds.max.x() + sweep.x()),
+                        std::max(sweptBounds.max.y(), sweptBounds.max.y() + sweep.y()),
+                        std::max(sweptBounds.max.z(), sweptBounds.max.z() + sweep.z())}};
+
+    std::optional<ShapecastHit> best;
+    const auto consider = [&](const ToiHit& hit, const ColliderEntry& e)
+    {
+        if (!best.has_value() || hit.distance < best->distance)
+        {
+            best = ShapecastHit{e.handle, e.body, hit.point, hit.normal, hit.distance};
+        }
+    };
+
+    for (const ColliderEntry& e : colliders_)
+    {
+        if (!e.active || !passesFilter(e.collider, filter))
+        {
+            continue;
+        }
+        if (!aabbOverlaps(e.collider.worldBounds(), sweptBounds))
+        {
+            continue;
+        }
+
+        if (e.mesh)
+        {
+            const MeshCollisionData& mesh = *e.mesh;
+            mesh.bvh.query(
+                sweptBounds,
+                [&](int proxy)
+                {
+                    const auto base = static_cast<std::size_t>(mesh.bvh.payload(proxy)) * 3;
+                    const std::array<ConvexFace, 1> faces{
+                        ConvexFace{Vec3{}, std::vector<int>{0, 1, 2}}};
+                    WorldConvex triangle;
+                    triangle.vertices = {mesh.worldVertices[mesh.indices[base + 0]],
+                                         mesh.worldVertices[mesh.indices[base + 1]],
+                                         mesh.worldVertices[mesh.indices[base + 2]]};
+                    triangle.faces = faces;
+                    if (auto hit = shapeCast(moving, dir, maxDistance, WorldShape{triangle}))
+                    {
+                        consider(*hit, e);
+                    }
+                });
+        }
+        else if (auto hit = shapeCast(moving, dir, maxDistance, worldShape(e)))
+        {
+            consider(*hit, e);
+        }
+    }
+    return best;
+}
+
+std::vector<OverlapHit> PhysicsWorld::overlapWorldShape(const WorldShape& query,
+                                                        const AABB& queryAabb,
+                                                        QueryFilter filter) const
+{
+    std::vector<OverlapHit> hits;
+    for (const ColliderEntry& e : colliders_)
+    {
+        if (!e.active || !passesFilter(e.collider, filter))
+        {
+            continue;
+        }
+        if (!aabbOverlaps(e.collider.worldBounds(), queryAabb))
+        {
+            continue;
+        }
+
+        if (e.mesh)
+        {
+            const MeshCollisionData& mesh = *e.mesh;
+            bool overlapped = false;
+            mesh.bvh.query(queryAabb,
+                           [&](int proxy)
+                           {
+                               if (overlapped)
+                               {
+                                   return;
+                               }
+                               const auto base =
+                                   static_cast<std::size_t>(mesh.bvh.payload(proxy)) * 3;
+                               const std::array<ConvexFace, 1> faces{
+                                   ConvexFace{Vec3{}, std::vector<int>{0, 1, 2}}};
+                               WorldConvex triangle;
+                               triangle.vertices = {mesh.worldVertices[mesh.indices[base + 0]],
+                                                    mesh.worldVertices[mesh.indices[base + 1]],
+                                                    mesh.worldVertices[mesh.indices[base + 2]]};
+                               triangle.faces = faces;
+                               if (gjkEpaContact(query, WorldShape{triangle}).colliding)
+                               {
+                                   overlapped = true;
+                               }
+                           });
+            if (overlapped)
+            {
+                hits.push_back(OverlapHit{e.handle, e.body});
+            }
+        }
+        else if (gjkEpaContact(query, worldShape(e)).colliding)
+        {
+            hits.push_back(OverlapHit{e.handle, e.body});
+        }
+    }
+    return hits;
+}
+
+std::vector<OverlapHit> PhysicsWorld::overlapShape(const ColliderShape& shape,
+                                                   const Transform& pose, QueryFilter filter) const
+{
+    const WorldShape query =
+        composeWorldShape(shape, pose.world(), pose.rotation(), matrixScale(pose.world()));
+    return overlapWorldShape(query, aabbOfWorldShape(query), filter);
+}
+
+std::vector<OverlapHit> PhysicsWorld::overlapSphere(Vec3 center, float radius,
+                                                    QueryFilter filter) const
+{
+    const WorldShape query = WorldSphere{center, radius};
+    return overlapWorldShape(query, aabbOfWorldShape(query), filter);
 }
 
 std::vector<ClothCollider> PhysicsWorld::gatherColliders() const

@@ -12,6 +12,8 @@
 #include <fire_engine/collision/broad_phase.hpp>
 #include <fire_engine/collision/dynamic_aabb_tree_broad_phase.hpp>
 #include <fire_engine/collision/narrow_phase.hpp>
+#include <fire_engine/collision/ray.hpp>
+#include <fire_engine/collision/shape_cast.hpp>
 #include <fire_engine/graphics/cloth.hpp>
 #include <fire_engine/physics/collider_shape.hpp>
 #include <fire_engine/physics/contact.hpp>
@@ -21,6 +23,7 @@
 #include <fire_engine/physics/joint_solver.hpp>
 #include <fire_engine/physics/physics_body.hpp>
 #include <fire_engine/physics/physics_handle.hpp>
+#include <fire_engine/physics/physics_query.hpp>
 #include <fire_engine/scene/transform.hpp>
 
 namespace fire_engine
@@ -158,6 +161,34 @@ public:
     {
         return sleepingEnabled_;
     }
+
+    // --- Spatial queries (read-only; brute-force over active colliders) ---
+    //
+    // All filter colliders by layer/mask (see QueryFilter) and test the exact world
+    // shape after an AABB reject. Mesh colliders are tested against their triangle BVH.
+
+    // Nearest collider hit along `ray` (within ray.maxDistance), or nullopt.
+    [[nodiscard]]
+    std::optional<RaycastHit> raycast(const Ray& ray, QueryFilter filter = {}) const;
+
+    // Every collider hit along `ray` (nearest hit per collider), unsorted.
+    [[nodiscard]]
+    std::vector<RaycastHit> raycastAll(const Ray& ray, QueryFilter filter = {}) const;
+
+    // Sweep `shape` (posed by `pose`) along unit `direction` up to `maxDistance` and
+    // return the first collider reached, or nullopt.
+    [[nodiscard]]
+    std::optional<ShapecastHit> shapecast(const ColliderShape& shape, const Transform& pose,
+                                          Vec3 direction, float maxDistance,
+                                          QueryFilter filter = {}) const;
+
+    // Colliders overlapping `shape` (posed by `pose`) / a sphere.
+    [[nodiscard]]
+    std::vector<OverlapHit> overlapShape(const ColliderShape& shape, const Transform& pose,
+                                         QueryFilter filter = {}) const;
+
+    [[nodiscard]]
+    std::vector<OverlapHit> overlapSphere(Vec3 center, float radius, QueryFilter filter = {}) const;
 
     [[nodiscard]]
     const std::vector<CollisionPair>& possiblePairs() const noexcept
@@ -308,6 +339,12 @@ private:
     // neutral world-space shape for the narrowphase (and gatherColliders).
     [[nodiscard]]
     WorldShape worldShape(const ColliderEntry& entry) const;
+
+    // Shared overlap core for overlapShape / overlapSphere: every active collider whose
+    // bounds intersect `queryAabb` and which actually overlaps `query`.
+    [[nodiscard]]
+    std::vector<OverlapHit> overlapWorldShape(const WorldShape& query, const AABB& queryAabb,
+                                              QueryFilter filter) const;
 
     void updateCollider(ColliderEntry& collider, float dt);
     void resetCollider(ColliderEntry& collider);
