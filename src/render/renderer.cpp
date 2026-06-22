@@ -752,6 +752,13 @@ Renderer::DrawBuckets Renderer::collectDrawCommands(vk::CommandBuffer cmd, Scene
             frustums.push_back(Frustum::fromViewProj(shadowViewProj));
         }
         ctx.culledNodes = &scene.cull(frustums);
+        stats_.trackedNodes = static_cast<int>(scene.culler().trackedCount());
+        stats_.culledNodes = static_cast<int>(scene.culler().culledCount());
+    }
+    else
+    {
+        stats_.trackedNodes = 0;
+        stats_.culledNodes = 0;
     }
 
     scene.render(ctx);

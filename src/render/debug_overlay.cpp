@@ -127,6 +127,16 @@ void DebugOverlay::buildUi(const FrameStats& stats, RenderTunables& tunables)
         ImGui::EndDisabled();
     }
 
+    if (ImGui::CollapsingHeader("Culling", ImGuiTreeNodeFlags_DefaultOpen))
+    {
+        ImGui::Checkbox("Frustum culling", &tunables.cullingEnabled);
+        ImGui::BeginDisabled(!tunables.cullingEnabled);
+        const int visible = stats.trackedNodes - stats.culledNodes;
+        ImGui::Text("Tracked: %d   visible: %d   culled: %d", stats.trackedNodes, visible,
+                    stats.culledNodes);
+        ImGui::EndDisabled();
+    }
+
     if (ImGui::CollapsingHeader("Debug view", ImGuiTreeNodeFlags_DefaultOpen))
     {
         static constexpr const char* kViews[] = {"None",         "Normals",  "N·L", "Shadow",

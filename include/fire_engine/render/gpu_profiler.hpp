@@ -45,6 +45,12 @@ struct FrameStats
     std::array<float, kProfilePassCount> passMs{};
     float gpuTotalMs{0.0f};
     bool gpuValid{false};
+    // Scene frustum-cull results from the most recent collectDrawCommands (the overlay
+    // shows them a frame later). trackedNodes counts rigid renderables in the cull BVH;
+    // culledNodes is how many of those fell outside every frustum this frame. Both 0 when
+    // culling is disabled.
+    int trackedNodes{0};
+    int culledNodes{0};
 };
 
 class GpuProfiler
