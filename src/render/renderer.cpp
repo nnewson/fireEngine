@@ -736,6 +736,24 @@ Renderer::DrawBuckets Renderer::collectDrawCommands(vk::CommandBuffer cmd, Scene
                       pipelines,
                       shadows_.pipelineHandle(),
                       shadowViewProjs_};
+
+    // Coarse pre-cull: skip draw-building for rigid nodes outside every frustum (camera
+    // plus all shadow casters). The union is a superset of what buildDrawBuckets /
+    // shadows_ keep per pass, so a node dropped here is never wanted downstream. Inactive
+    // shadow slots are identity matrices — harmless degenerate frustums that can only add
+    // visibility, never remove it. Disabled toggle leaves culledNodes null (render all).
+    std::vector<Frustum> frustums;
+    if (tunables_.cullingEnabled)
+    {
+        frustums.reserve(1 + shadowViewProjs_.size());
+        frustums.push_back(Frustum::fromViewProj(currentViewProj_));
+        for (const Mat4& shadowViewProj : shadowViewProjs_)
+        {
+            frustums.push_back(Frustum::fromViewProj(shadowViewProj));
+        }
+        ctx.culledNodes = &scene.cull(frustums);
+    }
+
     scene.render(ctx);
 
     assignSelfShadowSlots(drawCommands);

@@ -40,6 +40,13 @@ public:
         object_.skin(s);
     }
 
+    // Read-only access to the wrapped renderable — the scene culler reads its local
+    // bounds and deformable flag to build/maintain its spatial proxy.
+    [[nodiscard]] const Object& object() const noexcept
+    {
+        return object_;
+    }
+
     void addMorphAnimation(std::size_t id, Animation* anim);
     void addMorphAnimation(Animation* anim)
     {

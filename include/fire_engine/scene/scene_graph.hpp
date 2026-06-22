@@ -1,8 +1,11 @@
 #pragma once
 
 #include <memory>
+#include <span>
+#include <unordered_set>
 #include <vector>
 
+#include <fire_engine/graphics/frustum.hpp>
 #include <fire_engine/graphics/lighting.hpp>
 #include <fire_engine/graphics/particle.hpp>
 #include <fire_engine/input/input_state.hpp>
@@ -10,6 +13,7 @@
 #include <fire_engine/physics/physics_world.hpp>
 #include <fire_engine/render/render_context.hpp>
 #include <fire_engine/scene/node.hpp>
+#include <fire_engine/scene/scene_culler.hpp>
 
 namespace fire_engine
 {
@@ -47,6 +51,17 @@ public:
     void applyPhysics(const PhysicsWorld& physics);
     void render(const RenderContext& ctx);
 
+    // Refresh the scene culler and return the rigid renderable nodes outside every
+    // frustum (camera + shadow casters). The renderer hands the result back through
+    // RenderContext::culledNodes so render() can skip their draw-building. The returned
+    // reference is owned by the culler and valid until the next cull()/render().
+    [[nodiscard]] const std::unordered_set<const Node*>& cull(std::span<const Frustum> frustums);
+
+    [[nodiscard]] const SceneCuller& culler() const noexcept
+    {
+        return culler_;
+    }
+
     // Walk the scene tree and resolve every Light component into a world-space
     // Lighting. Composed world matrices are taken from each Node's cached
     // composedWorld_ (populated by the most recent update() call). Cheap —
@@ -68,6 +83,7 @@ public:
 private:
     std::vector<std::unique_ptr<Node>> nodes_;
     Mat4 rootTransform_{Mat4::identity()};
+    SceneCuller culler_;
 };
 
 } // namespace fire_engine

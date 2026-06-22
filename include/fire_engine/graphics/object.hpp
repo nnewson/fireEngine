@@ -58,6 +58,19 @@ public:
     std::vector<DrawCommand> render(const FrameInfo& frame, const Mat4& world,
                                     const Mat4& previousWorld);
 
+    // Local-space (bind-pose) AABB over the geometry vertices, cached on first use.
+    // Used for frustum culling: a rigid object's world bound is this transformed by its
+    // node's world matrix (exact). Deformable objects are not culled by it (see below).
+    [[nodiscard]] const Bounds3& localBounds() const noexcept;
+
+    // True when the rendered geometry deforms beyond its bind pose (skin or morph) — its
+    // local bound under-covers the deformed mesh, so the coarse scene cull never skips it
+    // (it is always drawn, then the precise per-draw cull uses its exact world bounds).
+    [[nodiscard]] bool deformable() const noexcept
+    {
+        return skin_ != nullptr || !morphWeights_.empty();
+    }
+
 private:
     struct GeometryBindings
     {
@@ -111,6 +124,8 @@ private:
     std::array<BufferHandle, kMaxFramesInFlight> uniformBufs_{NullBuffer, NullBuffer};
 
     std::vector<GeometryBindings> bindings_;
+    // Lazily computed local-space AABB over the geometry vertices (see localBounds()).
+    mutable std::optional<Bounds3> localBounds_;
 };
 
 } // namespace fire_engine

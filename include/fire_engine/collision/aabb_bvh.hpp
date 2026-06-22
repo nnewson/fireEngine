@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <utility>
 #include <vector>
 
 #include <fire_engine/collision/aabb.hpp>
@@ -104,9 +105,11 @@ public:
         return nodes_[static_cast<std::size_t>(proxy)].payload;
     }
 
-    // Invoke `fn(int proxy)` for every leaf whose fat box overlaps `box`.
-    template <typename Fn>
-    void query(const AABB& box, Fn&& fn) const
+    // Generic traversal: descend only into nodes for which `nodeIntersects(box)` is
+    // true, invoking `fn(int proxy)` at each intersecting leaf. Lets callers query with
+    // any region predicate (e.g. a frustum) without this header depending on it.
+    template <typename NodeIntersects, typename Fn>
+    void traverse(NodeIntersects&& nodeIntersects, Fn&& fn) const
     {
         if (root_ == kNull)
         {
@@ -118,7 +121,7 @@ public:
         {
             const int n = queryStack_.back();
             queryStack_.pop_back();
-            if (n == kNull || !aabbOverlaps(nodes_[static_cast<std::size_t>(n)].box, box))
+            if (n == kNull || !nodeIntersects(nodes_[static_cast<std::size_t>(n)].box))
             {
                 continue;
             }
@@ -133,6 +136,14 @@ public:
                 queryStack_.push_back(node.child2);
             }
         }
+    }
+
+    // Invoke `fn(int proxy)` for every leaf whose fat box overlaps `box`.
+    template <typename Fn>
+    void query(const AABB& box, Fn&& fn) const
+    {
+        traverse([&box](const AABB& nodeBox) { return aabbOverlaps(nodeBox, box); },
+                 std::forward<Fn>(fn));
     }
 
     void clear() noexcept

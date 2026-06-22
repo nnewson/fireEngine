@@ -84,6 +84,7 @@ add_library(fireengine SHARED
     src/scene/node.cpp
     src/scene/particle_emitter.cpp
     src/scene/ragdoll.cpp
+    src/scene/scene_culler.cpp
     src/scene/scene_graph.cpp
     src/scene/transform.cpp
 )
@@ -245,6 +246,7 @@ add_executable(test_fire_engine
     tests/scene/test_light.cpp
     tests/scene/test_node.cpp
     tests/scene/test_ragdoll.cpp
+    tests/scene/test_scene_culler.cpp
     tests/scene/test_scene_graph.cpp
     tests/scene/test_formatter.cpp
     tests/animation/test_animation.cpp

@@ -273,6 +273,29 @@ void Object::updateSkin()
     }
 }
 
+const Bounds3& Object::localBounds() const noexcept
+{
+    if (!localBounds_.has_value())
+    {
+        Bounds3 bounds;
+        for (const auto& binding : bindings_)
+        {
+            const Geometry* geometry =
+                binding.geometry != nullptr ? binding.geometry : binding.shadowGeometry;
+            if (geometry == nullptr)
+            {
+                continue;
+            }
+            for (const auto& vertex : geometry->vertices())
+            {
+                bounds.expand(vertex.position());
+            }
+        }
+        localBounds_ = bounds;
+    }
+    return localBounds_.value();
+}
+
 Bounds3 Object::computeShadowBounds(const std::vector<Mat4>& jointMatrices, bool hasSkin,
                                     const Mat4& world) const noexcept
 {

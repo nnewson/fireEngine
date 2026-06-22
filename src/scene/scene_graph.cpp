@@ -147,6 +147,12 @@ void SceneGraph::render(const RenderContext& ctx)
     }
 }
 
+const std::unordered_set<const Node*>& SceneGraph::cull(std::span<const Frustum> frustums)
+{
+    culler_.sync(nodes_);
+    return culler_.cull(frustums);
+}
+
 std::vector<Lighting> SceneGraph::gatherLights() const
 {
     std::vector<Lighting> out;
