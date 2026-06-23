@@ -183,8 +183,9 @@ TEST_CASE("GjkEpa.Fuzz.SphereBoxAcrossScales", "[GjkEpa]")
             const bool inside = dist < 1e-6f * scale; // sphere centre inside the box
             const float gap = dist - r;
             // Codimension of the closest box feature: 1 clamped axis = face, 2 = edge,
-            // 3 = corner. GJK is exact on faces; edges/corners hit a known robustness
-            // limitation (see the [!shouldfail] case below + roadmap P7.5).
+            // 3 = corner. GJK is exact on all three — the loop reports the lower-bound
+            // separation through the closest feature, which holds even when the support
+            // tie-breaks on an edge/corner (see GjkEpa.SphereBoxEdgeAccuracy + roadmap P7.5).
             const int clamped = (std::abs(cp.x() - sc.x()) > 1e-6f * scale ? 1 : 0) +
                                 (std::abs(cp.y() - sc.y()) > 1e-6f * scale ? 1 : 0) +
                                 (std::abs(cp.z() - sc.z()) > 1e-6f * scale ? 1 : 0);
@@ -197,19 +198,9 @@ TEST_CASE("GjkEpa.Fuzz.SphereBoxAcrossScales", "[GjkEpa]")
             }
             if (!inside && gap > tol)
             {
-                if (clamped <= 1)
-                {
-                    // Face-closest: exact closest-distance + normal (box -> sphere).
-                    CHECK(c.depth == Catch::Approx(gap).margin(tol));
-                    CHECK(c.normal.approxEqual((sc - cp) * (1.0f / dist), 5e-3f));
-                }
-                else
-                {
-                    // Edge/corner-closest: GJK currently over-estimates the gap (converges
-                    // to a corner, never under-estimates dangerously). Sanity bound only;
-                    // the exact assertion lives in the [!shouldfail] case below.
-                    CHECK(c.depth >= gap - tol);
-                }
+                // Exact closest-distance + normal (box -> sphere) for face/edge/corner.
+                CHECK(c.depth == Catch::Approx(gap).margin(tol));
+                CHECK(c.normal.approxEqual((sc - cp) * (1.0f / dist), 5e-3f));
             }
             CHECK(c.depth >= -tol);
         }
@@ -239,16 +230,14 @@ TEST_CASE("GjkEpa.LargeFloorNormalRegression", "[GjkEpa]")
     }
 }
 
-// KNOWN BUG — roadmap P7.5 (blocks P8). When a sphere is closest to a box *edge*, the GJK
-// distance sub-algorithm converges to a box *corner* instead of the edge, so the reported
-// gap is over-estimated and the normal carries a spurious component. This case fuzzes
-// edge-closest configs and asserts the *correct* (exact) result, which GJK currently gets
-// wrong on a subset of them — so it is tagged `[!shouldfail]` (Catch2 inverts it: the case
-// PASSES because some assertions fail). The signed-volumes rewrite (P7.5) makes every
-// assertion pass → this case then *fails*, the signal to delete the `[!shouldfail]` tag and
-// fold the check into the main suite. A standalone config isn't reliable: GJK's error is
-// razor-sensitive to the exact floats, so the fuzz is what dependably surfaces it.
-TEST_CASE("GjkEpa.SphereBoxEdgeAccuracy", "[GjkEpa][!shouldfail]")
+// Edge/corner-closest robustness (roadmap P7.5). When a sphere is closest to a box *edge* or
+// *corner*, the box support tie-breaks and the GJK simplex stalls without tightening its
+// closest-point magnitude (which over-estimated the gap, with a spurious normal component —
+// the bug that previously had this tagged `[!shouldfail]`). The fix reports the lower-bound
+// separation projected through the closest feature, which is exact. This fuzzes edge/corner
+// configs specifically; a standalone config isn't reliable because the old error was
+// razor-sensitive to the exact floats, so the fuzz is what dependably exercises it.
+TEST_CASE("GjkEpa.SphereBoxEdgeAccuracy", "[GjkEpa]")
 {
     std::mt19937 rng{0xED9Eu};
     std::uniform_real_distribution<float> pos{-2.5f, 2.5f};

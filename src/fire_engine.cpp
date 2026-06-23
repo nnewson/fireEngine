@@ -297,9 +297,12 @@ void FireEngine::addCharacterDemo()
     };
 
     // Patrol course: a flat floor walled at both ends. The character walks back and forth,
-    // sliding off each wall and staying grounded, never walking off the edge (the walls +
-    // the x-bounds reversal in updateCharacter keep it bounded). Climbing/stepping are
-    // covered by the unit tests; a polished ramp/step course is a demo-tuning follow-up.
+    // sliding along each wall and staying grounded, never walking off the edge (the walls +
+    // the timed direction flip in updateCharacter keep it bounded). Climb/step/slope handling
+    // is covered by the controller unit tests; a robust climbing demo course needs further
+    // controller hardening (step-up at low per-frame speed, wall/ground corner wedges) and is
+    // a follow-up — this course demonstrates the controller running indefinitely without
+    // wedging.
     addBox("CharFloor", {5.0f, -0.5f, 0.0f}, {10.0f, 0.5f, 5.0f}, Colour3{0.5f, 0.5f, 0.55f});
     addBox("CharWallNear", {0.0f, 1.0f, 0.0f}, {0.4f, 1.5f, 3.0f}, Colour3{0.6f, 0.4f, 0.4f});
     addBox("CharWallFar", {10.0f, 1.0f, 0.0f}, {0.4f, 1.5f, 3.0f}, Colour3{0.6f, 0.4f, 0.4f});
@@ -352,34 +355,25 @@ void FireEngine::updateCharacter(float dt)
         characterPatrolTimer_ = 0.0f;
     }
 
-    characterVerticalVelocity_ += kGravity * dt;
-    const Vec3 horizontal = characterWalkDir_ * (kSpeed * dt);
-    const Vec3 displacement = horizontal + Vec3{0.0f, characterVerticalVelocity_ * dt, 0.0f};
-
-    const Vec3 before = character_->position();
-    const CharacterMoveResult result = character_->move(physics_, displacement);
-    if (result.grounded)
+    // Gravity only while airborne. A grounded character must not push *down* into the floor
+    // every frame — that fights the resting contact and (with the rounded capsule grazing the
+    // ground) can wedge it in place. Vertical rest is owned by the controller's ground snap;
+    // gravity kicks in only once the snap reports the character has left the ground (e.g.
+    // walked off a ledge), and resets on landing.
+    if (characterGrounded_)
     {
         characterVerticalVelocity_ = 0.0f;
     }
-
-    // Stuck-escape: the controller can rarely wedge at a degenerate floor contact (a GJK
-    // large-box witness/normal edge case — see the roadmap "harden GJK/EPA for
-    // scale-invariance" follow-up). If horizontal progress stalls for a few frames, hop to
-    // break out of the grazing state.
-    if (std::abs(result.position.x() - before.x()) < 0.2f * kSpeed * dt &&
-        std::abs(result.position.z() - before.z()) < 0.2f * kSpeed * dt)
-    {
-        if (++characterStuckFrames_ > 3)
-        {
-            characterVerticalVelocity_ = 2.5f;
-            characterStuckFrames_ = 0;
-        }
-    }
     else
     {
-        characterStuckFrames_ = 0;
+        characterVerticalVelocity_ += kGravity * dt;
     }
+    const Vec3 horizontal = characterWalkDir_ * (kSpeed * dt);
+    const float verticalStep = characterGrounded_ ? 0.0f : characterVerticalVelocity_ * dt;
+    const Vec3 displacement = horizontal + Vec3{0.0f, verticalStep, 0.0f};
+
+    const CharacterMoveResult result = character_->move(physics_, displacement);
+    characterGrounded_ = result.grounded;
 
     characterNode_->transform().position(result.position);
     characterNode_->transform().update(scene_.rootTransform());
