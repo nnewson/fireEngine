@@ -97,21 +97,40 @@ CharacterMoveResult CharacterController::move(const PhysicsWorld& world, Vec3 di
     {
         const Vec3 lifted = slide(world, pos, Vec3{0.0f, config_.stepOffset, 0.0f}, true);
         const Vec3 steppedWalk = slide(world, lifted, horizontal, false);
-        const Vec3 dropped = slide(world, steppedWalk, Vec3{0.0f, -config_.stepOffset, 0.0f}, true);
+
+        // A low step is the only obstacle the *lifted* walk clears: above a step's flat top
+        // there's open space, so the raised capsule advances ~fully, whereas a wall or a slope
+        // keeps blocking it. So a near-full lifted advance is the signal that this is a
+        // mountable step (and not a wall or a too-steep face, which the flat slide should keep
+        // blocking). Gating on the lifted advance — rather than the surface normal under the
+        // rounded capsule, whose ambiguous step-top-edge value reads "too steep" on approach —
+        // both avoids crawling up steep slopes and removes the frame-after-frame stutter where
+        // the capsule stalled at a riser for a beat before mounting.
+        const Vec3 liftedStep{steppedWalk.x() - lifted.x(), 0.0f, steppedWalk.z() - lifted.z()};
+        const bool clearedStep = liftedStep.magnitude() >= 0.8f * horizontal.magnitude();
+
+        // Drop onto the step by a downward *sweep-and-rest*, not a collide-and-slide: rest at
+        // first contact (a skin above it) with no lateral projection. A slide would push the
+        // rounded capsule off the step's top edge back to the floor whenever its centre hasn't
+        // yet cleared the edge — which, at walk speed (~0.05/frame ≪ radius), is every frame,
+        // so it could never accumulate height. Resting on the edge lets it gain a little each
+        // frame and mount over a run of frames.
+        Vec3 dropped = steppedWalk;
+        if (const auto down = sweep(world, steppedWalk, Vec3{0.0f, -1.0f, 0.0f},
+                                    config_.stepOffset + config_.skinWidth))
+        {
+            dropped = steppedWalk +
+                      Vec3{0.0f, -1.0f, 0.0f} * std::max(0.0f, down->distance - config_.skinWidth);
+        }
 
         const auto progress = [&](Vec3 p)
         {
             const Vec3 delta{p.x() - pos.x(), 0.0f, p.z() - pos.z()};
             return Vec3::dotProduct(delta, horizontal);
         };
-        // Accept the step only if it made more forward progress AND landed on walkable
-        // ground — otherwise stepping would let the character crawl up steep slopes.
-        const Ray landingRay{dropped + Vec3{0.0f, config_.skinWidth, 0.0f}, Vec3{0.0f, -1.0f, 0.0f},
-                             config_.height * 0.5f + config_.stepOffset + 0.2f};
-        const auto landing = world.raycast(landingRay, config_.filter);
-        const bool walkableLanding =
-            landing.has_value() && landing->normal.y() >= config_.maxSlopeCosine;
-        if (walkableLanding && progress(dropped) > progress(walked) + 1e-4f)
+        // Accept the step only if the lifted walk cleared the obstacle AND it made more forward
+        // progress than the flat slide (so it mounts low steps but not walls or steep slopes).
+        if (clearedStep && progress(dropped) > progress(walked) + 1e-4f)
         {
             walked = dropped;
         }

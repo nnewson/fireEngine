@@ -296,16 +296,19 @@ void FireEngine::addCharacterDemo()
         (void)physics_.createCollider(handle, ColliderDesc{.shape = BoxShape{half, Vec3{}}});
     };
 
-    // Patrol course: a flat floor walled at both ends. The character walks back and forth,
-    // sliding along each wall and staying grounded, never walking off the edge (the walls +
-    // the timed direction flip in updateCharacter keep it bounded). Climb/step/slope handling
-    // is covered by the controller unit tests; a robust climbing demo course needs further
-    // controller hardening (step-up at low per-frame speed, wall/ground corner wedges) and is
-    // a follow-up — this course demonstrates the controller running indefinitely without
-    // wedging.
+    // Patrol course: a step pyramid the character climbs up and down, walled at both ends on
+    // the floor. Each step rises 0.3 (≤ the controller's 0.35 step offset); the hardened
+    // step-up (sweep-and-rest onto the step edge) mounts them reliably at walk speed, and the
+    // timed direction flip turns the patrol around. Gated by the headless
+    // PatrolsStepPyramidWithoutWedging controller test.
     addBox("CharFloor", {5.0f, -0.5f, 0.0f}, {10.0f, 0.5f, 5.0f}, Colour3{0.5f, 0.5f, 0.55f});
+    addBox("CharStepA", {3.0f, 0.15f, 0.0f}, {0.5f, 0.15f, 3.0f}, Colour3{0.45f, 0.5f, 0.45f});
+    addBox("CharStepB", {4.0f, 0.30f, 0.0f}, {0.5f, 0.30f, 3.0f}, Colour3{0.45f, 0.55f, 0.45f});
+    addBox("CharPeak", {5.5f, 0.45f, 0.0f}, {1.0f, 0.45f, 3.0f}, Colour3{0.5f, 0.6f, 0.5f});
+    addBox("CharStepC", {7.0f, 0.30f, 0.0f}, {0.5f, 0.30f, 3.0f}, Colour3{0.45f, 0.55f, 0.45f});
+    addBox("CharStepD", {8.0f, 0.15f, 0.0f}, {0.5f, 0.15f, 3.0f}, Colour3{0.45f, 0.5f, 0.45f});
     addBox("CharWallNear", {0.0f, 1.0f, 0.0f}, {0.4f, 1.5f, 3.0f}, Colour3{0.6f, 0.4f, 0.4f});
-    addBox("CharWallFar", {10.0f, 1.0f, 0.0f}, {0.4f, 1.5f, 3.0f}, Colour3{0.6f, 0.4f, 0.4f});
+    addBox("CharWallFar", {11.0f, 1.0f, 0.0f}, {0.4f, 1.5f, 3.0f}, Colour3{0.6f, 0.4f, 0.4f});
 
     // Visible character marker — a sphere; the controller's capsule is virtual (the
     // character has no physics body, so its own queries never self-hit).
@@ -342,17 +345,23 @@ void FireEngine::updateCharacter(float dt)
     }
     constexpr float kSpeed = 3.0f;
     constexpr float kGravity = -9.8f;
-    constexpr float kPatrolPeriod = 3.0f; // seconds walking one way before turning around
 
-    // Time-based patrol: flip direction on a fixed timer. Robust by construction — when
-    // the character reaches a wall it simply slides against it (no penetration, stays
-    // grounded) until the timer turns it around. No progress/stuck heuristic, so it can
-    // never enter a reverse flip-flop.
-    characterPatrolTimer_ += dt;
-    if (characterPatrolTimer_ >= kPatrolPeriod)
+    // Bounds-based patrol: turn around only at the flat ends of the course, *past* the step
+    // pyramid (which spans x≈2.5–8.5). Walking +x until the far end, then −x until the near
+    // end. Driving the turn from position rather than a fixed timer means the character never
+    // reverses partway up a stair (a timer could fire mid-climb, or during the brief pause
+    // while a step-up mounts, sending it back down). Setting the direction (rather than
+    // toggling) is idempotent, so it can't flip-flop while sitting past a bound.
+    constexpr float kNearBound = 1.5f;
+    constexpr float kFarBound = 9.5f;
+    const float patrolX = character_->position().x();
+    if (patrolX > kFarBound)
     {
-        characterWalkDir_ = characterWalkDir_ * -1.0f;
-        characterPatrolTimer_ = 0.0f;
+        characterWalkDir_ = Vec3{-1.0f, 0.0f, 0.0f};
+    }
+    else if (patrolX < kNearBound)
+    {
+        characterWalkDir_ = Vec3{1.0f, 0.0f, 0.0f};
     }
 
     // Gravity only while airborne. A grounded character must not push *down* into the floor

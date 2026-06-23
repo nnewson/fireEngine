@@ -1,5 +1,6 @@
 #include <fire_engine/physics/character_controller.hpp>
 
+#include <algorithm>
 #include <cmath>
 
 #include <catch2/catch_approx.hpp>
@@ -110,6 +111,168 @@ TEST_CASE("CharacterController.StepsUpLowLedge", "[CharacterController]")
     CHECK(r.grounded);
     CHECK(cc.position().x() > 1.4f);
     CHECK(cc.position().y() > 1.5f);
+}
+
+TEST_CASE("CharacterController.StepsUpLowLedgeAtWalkSpeed", "[CharacterController]")
+{
+    // The demo cadence: 3 m/s at 60 fps = 0.05 per frame, far less than the capsule radius
+    // (0.35). A single lifted walk advances the centre only 0.05, so mounting a step takes a
+    // run of frames during which the rounded capsule must *rest on the step's top edge* rather
+    // than slide off it. (The existing StepsUpLowLedge test moves 0.3/frame, which mounts in
+    // one lifted walk and so never exercises this.)
+    PhysicsWorld world;
+    addStaticBox(world, {0.0f, 0.0f, 0.0f}, {10.0f, 0.5f, 10.0f}); // floor, top 0.5
+    // A wide ledge (near face x = 1) so the slow climb has room to mount and stay on top
+    // rather than walking off a short top.
+    addStaticBox(world, {4.0f, 0.65f, 0.0f}, {3.0f, 0.15f, 2.0f}); // top 0.8 (0.3 ≤ stepOffset)
+
+    CharacterController cc{CharacterControllerConfig{},
+                           Vec3{0.0f, 1.4f, 0.0f}}; // grounded on floor
+    CharacterMoveResult r;
+    bool grounded = true;
+    for (int i = 0; i < 120; ++i)
+    {
+        // Gravity only while airborne (as the demo driver does); 0.05 forward per frame.
+        const float vertical = grounded ? 0.0f : -0.05f;
+        r = cc.move(world, Vec3{0.05f, vertical, 0.0f});
+        grounded = r.grounded;
+    }
+    // Mounted the ledge: up onto it (x past the near face at 1.0) and risen ~0.3 to its rest
+    // height (top 0.8 → centre 1.7).
+    CHECK(r.grounded);
+    CHECK(cc.position().x() > 1.2f);
+    CHECK(cc.position().y() > 1.6f);
+}
+
+namespace
+{
+
+// Result of replaying the demo patrol over a course: the x/y extents reached and the longest
+// run of frames with no net movement (a permanent wedge shows up as never reaching the far
+// extents — a frozen capsule can't traverse).
+struct PatrolStats
+{
+    float minX{1e9f};
+    float maxX{-1e9f};
+    float maxY{-1e9f};
+    int maxFrozenStreak{0};
+};
+
+// Drives the controller like the demo (gravity only while airborne, fixed-speed walk) but with
+// a *timed* direction flip for `seconds` at 60 fps. The timer reverses at arbitrary points —
+// including partway up a climb — which is a deliberately harsher stress than the demo's
+// bounds-based turnaround, so traversing the whole course under it is a strong no-wedge gate.
+PatrolStats runPatrol(PhysicsWorld& world, Vec3 start, float seconds)
+{
+    constexpr float dt = 1.0f / 60.0f;
+    constexpr float speed = 3.0f;
+    constexpr float gravity = -9.8f;
+    constexpr float period = 3.0f;
+
+    CharacterController cc{CharacterControllerConfig{}, start};
+    PatrolStats s;
+    Vec3 dir{1.0f, 0.0f, 0.0f};
+    float timer = 0.0f;
+    float vvel = 0.0f;
+    bool grounded = true;
+    Vec3 last = start;
+    int frozen = 0;
+
+    const int frames = static_cast<int>(seconds / dt);
+    for (int f = 0; f < frames; ++f)
+    {
+        timer += dt;
+        if (timer >= period)
+        {
+            dir = dir * -1.0f;
+            timer = 0.0f;
+        }
+        if (grounded)
+        {
+            vvel = 0.0f;
+        }
+        else
+        {
+            vvel += gravity * dt;
+        }
+        const Vec3 disp = dir * (speed * dt) + Vec3{0.0f, grounded ? 0.0f : vvel * dt, 0.0f};
+        const CharacterMoveResult r = cc.move(world, disp);
+        grounded = r.grounded;
+
+        if ((r.position - last).magnitude() < 1e-4f)
+        {
+            ++frozen;
+        }
+        else
+        {
+            frozen = 0;
+        }
+        s.maxFrozenStreak = std::max(s.maxFrozenStreak, frozen);
+        last = r.position;
+        if (f > 30) // skip the initial settle
+        {
+            s.minX = std::min(s.minX, r.position.x());
+            s.maxX = std::max(s.maxX, r.position.x());
+            s.maxY = std::max(s.maxY, r.position.y());
+        }
+    }
+    return s;
+}
+
+} // namespace
+
+TEST_CASE("CharacterController.PatrolsStepPyramidWithoutWedging", "[CharacterController]")
+{
+    // A step pyramid the patrol must climb up and down at walk speed, walled at both ends on
+    // the floor. A permanent wedge (the climbing bug) shows up as failing to traverse the full
+    // course — a frozen capsule never reaches both far extents.
+    PhysicsWorld world;
+    addStaticBox(world, {5.0f, -0.5f, 0.0f}, {10.0f, 0.5f, 5.0f}); // floor, top 0
+    // Up the pyramid (each step rises 0.3 ≤ stepOffset 0.35).
+    addStaticBox(world, {3.0f, 0.15f, 0.0f}, {0.5f, 0.15f, 3.0f}); // top 0.3
+    addStaticBox(world, {4.0f, 0.30f, 0.0f}, {0.5f, 0.30f, 3.0f}); // top 0.6
+    addStaticBox(world, {5.5f, 0.45f, 0.0f}, {1.0f, 0.45f, 3.0f}); // peak, top 0.9
+    addStaticBox(world, {7.0f, 0.30f, 0.0f}, {0.5f, 0.30f, 3.0f}); // top 0.6
+    addStaticBox(world, {8.0f, 0.15f, 0.0f}, {0.5f, 0.15f, 3.0f}); // top 0.3
+    addStaticBox(world, {0.0f, 1.0f, 0.0f}, {0.4f, 1.5f, 3.0f});   // near wall
+    addStaticBox(world, {11.0f, 1.0f, 0.0f}, {0.4f, 1.5f, 3.0f});  // far wall
+
+    const PatrolStats s = runPatrol(world, Vec3{1.5f, 0.9f, 0.0f}, 30.0f);
+
+    INFO("minX=" << s.minX << " maxX=" << s.maxX << " maxY=" << s.maxY
+                 << " maxFrozen=" << s.maxFrozenStreak);
+    // Crossed the whole pyramid (the descending steps end at x = 8.5) and returned to the near
+    // side, climbing the peak each way — a permanent wedge can do none of these.
+    CHECK(s.maxX > 8.5f);
+    CHECK(s.minX < 2.0f);
+    CHECK(s.maxY > 1.7f); // peak top 0.9 → capsule centre ~1.8
+}
+
+TEST_CASE("CharacterController.PatrolsRampToWalledPlatformWithoutWedging", "[CharacterController]")
+{
+    // The elevated wall/ground corner case: the patrol walks up a ramp onto a raised platform
+    // and into a wall standing on that platform. Previously the capsule jammed ungrounded in
+    // the concave wall/platform corner and froze; here it must reach the wall, turn around on
+    // the timer, and come back — so it never racks up a long frozen streak.
+    PhysicsWorld world;
+    addStaticBox(world, {5.0f, -0.5f, 0.0f}, {10.0f, 0.5f, 5.0f}); // floor, top 0
+    const float a = 0.349f; // 20° ramp, well within slope limit
+    const Quaternion tilt =
+        Quaternion::fromVectors(Vec3{0.0f, 1.0f, 0.0f}, Vec3{-std::sin(a), std::cos(a), 0.0f});
+    addStaticBox(world, {4.6f, 0.5f, 0.0f}, {1.8f, 0.1f, 3.0f}, tilt); // ramp rising toward +x
+    addStaticBox(world, {8.0f, 0.55f, 0.0f}, {1.2f, 0.55f, 3.0f});     // platform, top 1.1
+    addStaticBox(world, {0.0f, 1.5f, 0.0f}, {0.4f, 2.0f, 3.0f});       // near wall
+    addStaticBox(world, {10.0f, 1.5f, 0.0f},
+                 {0.4f, 2.0f, 3.0f}); // far wall, meets the platform top
+
+    const PatrolStats s = runPatrol(world, Vec3{1.5f, 0.9f, 0.0f}, 40.0f);
+
+    INFO("minX=" << s.minX << " maxX=" << s.maxX << " maxY=" << s.maxY
+                 << " maxFrozen=" << s.maxFrozenStreak);
+    CHECK(s.maxY > 1.9f);           // climbed onto the platform (top 1.1 → centre ~2.0)
+    CHECK(s.maxX > 8.5f);           // reached the far wall on the platform
+    CHECK(s.minX < 2.0f);           // and returned to the near side
+    CHECK(s.maxFrozenStreak < 240); // no permanent wedge (a wall pause is ≤ the 3 s flip = 180)
 }
 
 TEST_CASE("CharacterController.WalksUpGentleRamp", "[CharacterController]")
