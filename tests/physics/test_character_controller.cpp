@@ -147,27 +147,33 @@ TEST_CASE("CharacterController.StepsUpLowLedgeAtWalkSpeed", "[CharacterControlle
 namespace
 {
 
-// Result of replaying the demo patrol over a course: the x/y extents reached and the longest
-// run of frames with no net movement (a permanent wedge shows up as never reaching the far
-// extents — a frozen capsule can't traverse).
+// Result of replaying the demo patrol over a course: the x/y extents reached, the longest run
+// of frames with no net movement (a permanent wedge → never reaches the far extents), and the
+// longest run of frames making no real *forward* progress while grounded (a temporary stall —
+// e.g. catching on a stair edge — that a freeze metric alone would miss).
 struct PatrolStats
 {
     float minX{1e9f};
     float maxX{-1e9f};
     float maxY{-1e9f};
     int maxFrozenStreak{0};
+    int maxStallStreak{0};
 };
 
-// Drives the controller like the demo (gravity only while airborne, fixed-speed walk) but with
-// a *timed* direction flip for `seconds` at 60 fps. The timer reverses at arbitrary points —
-// including partway up a climb — which is a deliberately harsher stress than the demo's
-// bounds-based turnaround, so traversing the whole course under it is a strong no-wedge gate.
-PatrolStats runPatrol(PhysicsWorld& world, Vec3 start, float seconds)
+// Replays the demo's updateCharacter (gravity only while airborne, fixed-speed walk) for
+// `seconds` at 60 fps. Turnaround mode: if `farBound > nearBound`, bounds-based like the demo
+// (reverse only on the flat ends, so the only low-progress frames are real stair stalls);
+// otherwise a *timed* 3 s flip (reverses at arbitrary points — a harsher no-wedge stress, but
+// its wall pauses make the stall metric meaningless, so the timed form ignores it).
+PatrolStats runPatrol(PhysicsWorld& world, Vec3 start, float seconds, float nearBound = 0.0f,
+                      float farBound = 0.0f)
 {
     constexpr float dt = 1.0f / 60.0f;
     constexpr float speed = 3.0f;
     constexpr float gravity = -9.8f;
     constexpr float period = 3.0f;
+    const bool bounds = farBound > nearBound;
+    const float stallThreshold = 0.4f * speed * dt; // <40% of walk speed = not really moving
 
     CharacterController cc{CharacterControllerConfig{}, start};
     PatrolStats s;
@@ -177,15 +183,31 @@ PatrolStats runPatrol(PhysicsWorld& world, Vec3 start, float seconds)
     bool grounded = true;
     Vec3 last = start;
     int frozen = 0;
+    int stall = 0;
 
     const int frames = static_cast<int>(seconds / dt);
     for (int f = 0; f < frames; ++f)
     {
-        timer += dt;
-        if (timer >= period)
+        if (bounds)
         {
-            dir = dir * -1.0f;
-            timer = 0.0f;
+            const float x = cc.position().x();
+            if (x > farBound)
+            {
+                dir = Vec3{-1.0f, 0.0f, 0.0f};
+            }
+            else if (x < nearBound)
+            {
+                dir = Vec3{1.0f, 0.0f, 0.0f};
+            }
+        }
+        else
+        {
+            timer += dt;
+            if (timer >= period)
+            {
+                dir = dir * -1.0f;
+                timer = 0.0f;
+            }
         }
         if (grounded)
         {
@@ -197,7 +219,6 @@ PatrolStats runPatrol(PhysicsWorld& world, Vec3 start, float seconds)
         }
         const Vec3 disp = dir * (speed * dt) + Vec3{0.0f, grounded ? 0.0f : vvel * dt, 0.0f};
         const CharacterMoveResult r = cc.move(world, disp);
-        grounded = r.grounded;
 
         if ((r.position - last).magnitude() < 1e-4f)
         {
@@ -208,6 +229,17 @@ PatrolStats runPatrol(PhysicsWorld& world, Vec3 start, float seconds)
             frozen = 0;
         }
         s.maxFrozenStreak = std::max(s.maxFrozenStreak, frozen);
+
+        // Forward progress along the walk direction. Only meaningful in bounds mode (timed mode
+        // legitimately pauses against walls). Track it only once past the initial settle.
+        if (bounds && f > 30)
+        {
+            const float forward = (r.position.x() - last.x()) * dir.x();
+            stall = forward < stallThreshold && grounded ? stall + 1 : 0;
+            s.maxStallStreak = std::max(s.maxStallStreak, stall);
+        }
+
+        grounded = r.grounded;
         last = r.position;
         if (f > 30) // skip the initial settle
         {
@@ -224,8 +256,9 @@ PatrolStats runPatrol(PhysicsWorld& world, Vec3 start, float seconds)
 TEST_CASE("CharacterController.PatrolsStepPyramidWithoutWedging", "[CharacterController]")
 {
     // A step pyramid the patrol must climb up and down at walk speed, walled at both ends on
-    // the floor. A permanent wedge (the climbing bug) shows up as failing to traverse the full
-    // course — a frozen capsule never reaches both far extents.
+    // the floor, with the demo's bounds-based turnaround (reverse only on the flat ends). It
+    // must traverse the whole course (no permanent wedge) AND keep moving over the steps (no
+    // multi-frame stall catching on a stair edge).
     PhysicsWorld world;
     addStaticBox(world, {5.0f, -0.5f, 0.0f}, {10.0f, 0.5f, 5.0f}); // floor, top 0
     // Up the pyramid (each step rises 0.3 ≤ stepOffset 0.35).
@@ -237,15 +270,19 @@ TEST_CASE("CharacterController.PatrolsStepPyramidWithoutWedging", "[CharacterCon
     addStaticBox(world, {0.0f, 1.0f, 0.0f}, {0.4f, 1.5f, 3.0f});   // near wall
     addStaticBox(world, {11.0f, 1.0f, 0.0f}, {0.4f, 1.5f, 3.0f});  // far wall
 
-    const PatrolStats s = runPatrol(world, Vec3{1.5f, 0.9f, 0.0f}, 30.0f);
+    // Bounds-based turnaround on the flat floor past the pyramid (x≈2.5–8.5).
+    const PatrolStats s = runPatrol(world, Vec3{1.5f, 0.9f, 0.0f}, 30.0f, 1.5f, 9.5f);
 
     INFO("minX=" << s.minX << " maxX=" << s.maxX << " maxY=" << s.maxY
-                 << " maxFrozen=" << s.maxFrozenStreak);
+                 << " maxFrozen=" << s.maxFrozenStreak << " maxStall=" << s.maxStallStreak);
     // Crossed the whole pyramid (the descending steps end at x = 8.5) and returned to the near
     // side, climbing the peak each way — a permanent wedge can do none of these.
     CHECK(s.maxX > 8.5f);
     CHECK(s.minX < 2.0f);
     CHECK(s.maxY > 1.7f); // peak top 0.9 → capsule centre ~1.8
+    // And never caught on a stair edge for long: a step's rounded-capsule edge crossing is
+    // ~radius/speed ≈ 0.12 s; a real wedge/stutter runs much longer.
+    CHECK(s.maxStallStreak < 18); // < 0.3 s
 }
 
 TEST_CASE("CharacterController.PatrolsRampToWalledPlatformWithoutWedging", "[CharacterController]")
