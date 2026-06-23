@@ -1,5 +1,9 @@
 #include <fire_engine/collision/gjk_epa.hpp>
 
+#include <algorithm>
+#include <cmath>
+#include <random>
+
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
@@ -10,6 +14,7 @@ using fire_engine::gjkEpaContact;
 using fire_engine::Quaternion;
 using fire_engine::Vec3;
 using fire_engine::WorldBox;
+using fire_engine::WorldCapsule;
 using fire_engine::WorldShape;
 using fire_engine::WorldSphere;
 
@@ -19,6 +24,14 @@ namespace
 WorldBox unitBox(Vec3 center)
 {
     return WorldBox{center, {1.0f, 1.0f, 1.0f}, Quaternion::identity()};
+}
+
+// Closest point on an axis-aligned box (centre/half) to p, per-axis clamp.
+Vec3 closestOnAabb(Vec3 p, Vec3 center, Vec3 half)
+{
+    return {std::clamp(p.x(), center.x() - half.x(), center.x() + half.x()),
+            std::clamp(p.y(), center.y() - half.y(), center.y() + half.y()),
+            std::clamp(p.z(), center.z() - half.z(), center.z() + half.z())};
 }
 
 } // namespace
@@ -89,5 +102,120 @@ TEST_CASE("GjkEpa.TouchingReportsColliding", "[GjkEpa]")
     if (!c.colliding)
     {
         CHECK(c.depth == Catch::Approx(0.0f).margin(1e-3f));
+    }
+}
+
+// --- Scale-invariance property/fuzz suite ----------------------------------------------
+//
+// gjkEpaContact must be correct across shape scales. Large shapes (half-extent >= 3) are
+// the regime where it previously failed (false collisions, inverted normals) — these
+// randomized cases at scales 0.01..100 cross-check against analytic ground truth.
+
+TEST_CASE("GjkEpa.Fuzz.SphereSphereAcrossScales", "[GjkEpa]")
+{
+    std::mt19937 rng{0xC0FFEEu};
+    std::uniform_real_distribution<float> pos{-2.5f, 2.5f};
+    std::uniform_real_distribution<float> rad{0.2f, 1.0f};
+
+    for (const float scale : {0.01f, 0.1f, 1.0f, 10.0f, 100.0f})
+    {
+        const float tol = 2e-3f * scale; // relative to the problem size
+        for (int i = 0; i < 200; ++i)
+        {
+            const Vec3 c1{pos(rng) * scale, pos(rng) * scale, pos(rng) * scale};
+            const Vec3 c2{pos(rng) * scale, pos(rng) * scale, pos(rng) * scale};
+            const float r1 = rad(rng) * scale;
+            const float r2 = rad(rng) * scale;
+
+            const ConvexContact c =
+                gjkEpaContact(WorldShape{WorldSphere{c1, r1}}, WorldShape{WorldSphere{c2, r2}});
+
+            const float dist = (c1 - c2).magnitude();
+            const float gap = dist - r1 - r2; // <0 overlapping
+            INFO("scale=" << scale << " dist=" << dist << " gap=" << gap << " depth=" << c.depth);
+
+            // Away from the touching boundary the collide flag is unambiguous.
+            if (std::abs(gap) > tol)
+            {
+                CHECK(c.colliding == (gap < 0.0f));
+            }
+            if (gap > tol)
+            {
+                // Separated: GJK distance is exact for any convex → assert gap + normal
+                // (B -> A = (c1 - c2) normalised). This is where the scale bug lives.
+                CHECK(c.depth == Catch::Approx(gap).margin(tol));
+                CHECK(c.normal.approxEqual((c1 - c2) * (1.0f / dist), 5e-3f));
+            }
+            else if (gap < -tol)
+            {
+                // Overlapping: EPA depth on a sphere is a polytope approximation, so only
+                // the sign is asserted here (depth accuracy for curved shapes is separate).
+                CHECK(c.depth > 0.0f);
+            }
+        }
+    }
+}
+
+TEST_CASE("GjkEpa.Fuzz.SphereBoxAcrossScales", "[GjkEpa]")
+{
+    std::mt19937 rng{0xBADF00Du};
+    std::uniform_real_distribution<float> pos{-2.5f, 2.5f};
+    std::uniform_real_distribution<float> half{0.5f, 2.0f};
+    std::uniform_real_distribution<float> rad{0.2f, 1.0f};
+
+    for (const float scale : {0.01f, 0.1f, 1.0f, 10.0f, 100.0f})
+    {
+        const float tol = 3e-3f * scale;
+        for (int i = 0; i < 200; ++i)
+        {
+            const Vec3 sc{pos(rng) * scale, pos(rng) * scale, pos(rng) * scale};
+            const float r = rad(rng) * scale;
+            const Vec3 bc{pos(rng) * scale, pos(rng) * scale, pos(rng) * scale};
+            const Vec3 bh{half(rng) * scale, half(rng) * scale, half(rng) * scale};
+
+            // a = sphere, b = box → normal points box -> sphere.
+            const ConvexContact c = gjkEpaContact(WorldShape{WorldSphere{sc, r}},
+                                                  WorldShape{WorldBox{bc, bh, Quaternion::identity()}});
+
+            const Vec3 cp = closestOnAabb(sc, bc, bh);
+            const float dist = (sc - cp).magnitude();
+            const bool inside = dist < 1e-6f * scale; // sphere centre inside the box
+            const float gap = dist - r;
+            INFO("scale=" << scale << " dist=" << dist << " gap=" << gap << " depth=" << c.depth);
+
+            if (!inside && std::abs(gap) > tol)
+            {
+                CHECK(c.colliding == (gap < 0.0f));
+            }
+            if (!inside && gap > tol)
+            {
+                // Separated: exact closest-distance + normal (box -> sphere).
+                CHECK(c.depth == Catch::Approx(gap).margin(tol));
+                CHECK(c.normal.approxEqual((sc - cp) * (1.0f / dist), 5e-3f));
+            }
+            CHECK(c.depth >= -tol);
+        }
+    }
+}
+
+TEST_CASE("GjkEpa.LargeFloorNormalRegression", "[GjkEpa]")
+{
+    // The character-controller bug: a capsule just *above* a large floor box must report a
+    // SEPARATED contact with an upward (+y) normal and the correct gap. Previously the
+    // witnesses/normal went garbage for large floors → an inverted (-y) normal that froze
+    // the controller. The capsule bottom sits 0.1 above the floor top (gap 0.1).
+    for (const float floorHalf : {0.5f, 2.0f, 5.0f, 10.0f, 20.0f})
+    {
+        const WorldBox floor{{0.0f, -floorHalf, 0.0f}, {floorHalf, floorHalf, floorHalf},
+                             Quaternion::identity()};                              // top at y = 0
+        const WorldCapsule capsule{{0.0f, 0.4f, 0.0f}, {0.0f, 1.4f, 0.0f}, 0.3f}; // bottom y=0.1
+
+        const ConvexContact c = gjkEpaContact(WorldShape{capsule}, WorldShape{floor});
+        INFO("floorHalf=" << floorHalf << " colliding=" << c.colliding << " depth=" << c.depth
+                          << " n=(" << c.normal.x() << "," << c.normal.y() << "," << c.normal.z()
+                          << ")");
+        CHECK_FALSE(c.colliding);
+        CHECK(c.depth == Catch::Approx(0.1f).margin(2e-3f));
+        CHECK(c.normal.approxEqual(Vec3{0.0f, 1.0f, 0.0f}, 5e-3f)); // floor -> capsule = +y
     }
 }
