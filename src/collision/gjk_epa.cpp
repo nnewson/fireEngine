@@ -447,6 +447,15 @@ ConvexContact gjkEpaContact(const WorldShape& a, const WorldShape& b) noexcept
     simplex[0] = minkowskiSupport(a, b, Vec3{1.0f, 0.0f, 0.0f});
 
     Closest closest = closestOnSimplex(simplex, count);
+
+    // Tightest lower bound on the separation seen so far, plus the direction that achieved
+    // it. The simplex-closest magnitude |v| is an *upper* bound on the gap; the support
+    // projection dot(w,v)/|v| is a *lower* bound (the separating plane through the closest
+    // feature). They coincide on clean convergence, but when the support tie-breaks on a flat
+    // face/edge the loop stalls with |v| over-estimating while dot(w,v)/|v| already holds the
+    // exact gap — so we report the projection rather than the stale simplex magnitude.
+    float bestGap = 0.0f;
+    Vec3 bestNormal{0.0f, 1.0f, 0.0f};
     for (int iter = 0; iter < kMaxGjkIterations; ++iter)
     {
         const Vec3 dir = closest.point * -1.0f; // toward the origin
@@ -460,6 +469,38 @@ ConvexContact gjkEpaContact(const WorldShape& a, const WorldShape& b) noexcept
         }
 
         const SimplexVertex p = minkowskiSupport(a, b, dir);
+
+        // Update the lower-bound separation from this support's projection onto the closest
+        // feature's direction. dot(p.v, closest)/|closest| is the signed distance of the
+        // separating plane through the closest feature; its max over iterations is the gap.
+        const float cmag = closest.point.magnitude();
+        if (cmag > 1e-12f)
+        {
+            const float lb = dot(p.v, closest.point) / cmag;
+            if (lb > bestGap)
+            {
+                bestGap = lb;
+                bestNormal = closest.point * (1.0f / cmag);
+            }
+        }
+
+        // Duplicate support → the closest feature can't be refined further from this
+        // direction (the simplex has stalled, e.g. a flat-face/edge support tie-break).
+        // Stop and report the lower-bound gap rather than spinning to the iteration cap.
+        bool duplicate = false;
+        for (int i = 0; i < count; ++i)
+        {
+            const Vec3 d = p.v - simplex[static_cast<std::size_t>(i)].v;
+            if (dot(d, d) <= kGjkRel * (cmag * cmag + 1e-20f))
+            {
+                duplicate = true;
+                break;
+            }
+        }
+        if (duplicate)
+        {
+            break;
+        }
 
         // No progress past the current closest feature toward the origin → converged
         // (separated). For overlap the support reaches past the origin, so progress
@@ -515,10 +556,21 @@ ConvexContact gjkEpaContact(const WorldShape& a, const WorldShape& b) noexcept
     const float dist = delta.magnitude();
     ConvexContact contact;
     contact.colliding = false;
-    contact.depth = dist;
     contact.pointA = pointA;
     contact.pointB = pointB;
-    contact.normal = dist > 1e-6f ? delta * (1.0f / dist) : Vec3{0.0f, 1.0f, 0.0f};
+    // Prefer the lower-bound projection (exact at the closest feature) over the simplex
+    // magnitude, which over-estimates when the support stalled on a flat face/edge. They
+    // agree on clean convergence; the projection wins only on the degenerate tie-break.
+    if (bestGap > 0.0f)
+    {
+        contact.depth = bestGap;
+        contact.normal = bestNormal;
+    }
+    else
+    {
+        contact.depth = dist;
+        contact.normal = dist > 1e-6f ? delta * (1.0f / dist) : Vec3{0.0f, 1.0f, 0.0f};
+    }
     return contact;
 }
 
