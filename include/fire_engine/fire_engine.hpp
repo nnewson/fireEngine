@@ -67,7 +67,6 @@ private:
     std::optional<CharacterController> character_;
     Node* characterNode_{nullptr};
     float characterVerticalVelocity_{0.0f};
-    float characterStepAccumulator_{0.0f};
     bool characterGrounded_{true};
     Vec3 characterWalkDir_{1.0f, 0.0f, 0.0f};
     std::unique_ptr<Geometry> characterGeometry_;

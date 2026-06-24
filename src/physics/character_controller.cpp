@@ -150,6 +150,17 @@ CharacterMoveResult CharacterController::move(const PhysicsWorld& world, Vec3 di
     }
     pos = walked;
 
+    // Collide-and-slide / depenetration can occasionally net a tiny *backward* horizontal step
+    // at a step riser (the grazing nudge pushes the capsule off the riser, against its travel).
+    // Clamp it: never end a frame with horizontal motion opposed to the requested direction —
+    // turn a visible step-back into a harmless no-progress frame. Lateral slides are unaffected
+    // (their motion is perpendicular to the request, not opposed).
+    const Vec3 horizMoved{pos.x() - position_.x(), 0.0f, pos.z() - position_.z()};
+    if (Vec3::dotProduct(horizMoved, horizontal) < 0.0f)
+    {
+        pos = Vec3{position_.x(), pos.y(), position_.z()};
+    }
+
     CharacterMoveResult result;
     result.position = pos;
 
