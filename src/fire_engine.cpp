@@ -307,8 +307,6 @@ void FireEngine::addCharacterDemo()
     addBox("CharPeak", {5.5f, 0.45f, 0.0f}, {1.0f, 0.45f, 3.0f}, Colour3{0.5f, 0.6f, 0.5f});
     addBox("CharStepC", {7.0f, 0.30f, 0.0f}, {0.5f, 0.30f, 3.0f}, Colour3{0.45f, 0.55f, 0.45f});
     addBox("CharStepD", {8.0f, 0.15f, 0.0f}, {0.5f, 0.15f, 3.0f}, Colour3{0.45f, 0.5f, 0.45f});
-    addBox("CharWallNear", {0.0f, 1.0f, 0.0f}, {0.4f, 1.5f, 3.0f}, Colour3{0.6f, 0.4f, 0.4f});
-    addBox("CharWallFar", {11.0f, 1.0f, 0.0f}, {0.4f, 1.5f, 3.0f}, Colour3{0.6f, 0.4f, 0.4f});
 
     // Visible character marker — a sphere; the controller's capsule is virtual (the
     // character has no physics body, so its own queries never self-hit).
@@ -345,15 +343,20 @@ void FireEngine::updateCharacter(float dt)
     }
     constexpr float kSpeed = 3.0f;
     constexpr float kGravity = -9.8f;
-
-    // Bounds-based patrol: turn around only at the flat ends of the course, *past* the step
-    // pyramid (which spans x≈2.5–8.5). Walking +x until the far end, then −x until the near
-    // end. Driving the turn from position rather than a fixed timer means the character never
-    // reverses partway up a stair (a timer could fire mid-climb, or during the brief pause
-    // while a step-up mounts, sending it back down). Setting the direction (rather than
-    // toggling) is idempotent, so it can't flip-flop while sitting past a bound.
     constexpr float kNearBound = 1.5f;
     constexpr float kFarBound = 9.5f;
+
+    // Advance once per render frame by the *real* frame time, so the visible motion is smooth at
+    // any refresh rate. (A fixed-timestep accumulator was tried, to make the climb deterministic;
+    // but above 60 fps it does 0 sim steps on some frames and 2 on others, so the ball advances
+    // in uneven 0/0.1/0.2 m chunks — a visible stutter, worst during the slow climb. The
+    // controller is robust to any per-frame distance, so stepping at the frame rate is both
+    // smoother and simpler.)
+
+    // Bounds-based patrol: turn around only at the flat ends of the course, *past* the step
+    // pyramid (which spans x≈2.5–8.5). Driving the turn from position rather than a fixed timer
+    // means the character never reverses partway up a stair. Setting the direction (rather than
+    // toggling) is idempotent, so it can't flip-flop while sitting past a bound.
     const float patrolX = character_->position().x();
     if (patrolX > kFarBound)
     {
@@ -364,11 +367,10 @@ void FireEngine::updateCharacter(float dt)
         characterWalkDir_ = Vec3{1.0f, 0.0f, 0.0f};
     }
 
-    // Gravity only while airborne. A grounded character must not push *down* into the floor
-    // every frame — that fights the resting contact and (with the rounded capsule grazing the
-    // ground) can wedge it in place. Vertical rest is owned by the controller's ground snap;
-    // gravity kicks in only once the snap reports the character has left the ground (e.g.
-    // walked off a ledge), and resets on landing.
+    // Gravity only while airborne. A grounded character must not push *down* into the floor every
+    // frame — that fights the resting contact and (with the rounded capsule grazing the ground)
+    // can wedge it. Vertical rest is owned by the controller's ground snap; gravity kicks in only
+    // once the snap reports the character has left the ground, and resets on landing.
     if (characterGrounded_)
     {
         characterVerticalVelocity_ = 0.0f;
@@ -379,12 +381,12 @@ void FireEngine::updateCharacter(float dt)
     }
     const Vec3 horizontal = characterWalkDir_ * (kSpeed * dt);
     const float verticalStep = characterGrounded_ ? 0.0f : characterVerticalVelocity_ * dt;
-    const Vec3 displacement = horizontal + Vec3{0.0f, verticalStep, 0.0f};
 
-    const CharacterMoveResult result = character_->move(physics_, displacement);
+    const CharacterMoveResult result =
+        character_->move(physics_, horizontal + Vec3{0.0f, verticalStep, 0.0f});
     characterGrounded_ = result.grounded;
 
-    characterNode_->transform().position(result.position);
+    characterNode_->transform().position(character_->position());
     characterNode_->transform().update(scene_.rootTransform());
 }
 

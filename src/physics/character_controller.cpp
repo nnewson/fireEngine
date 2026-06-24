@@ -53,6 +53,19 @@ Vec3 CharacterController::slide(const PhysicsWorld& world, Vec3 start, Vec3 moti
         pos += dir * advance;
         const Vec3 n = hit->normal;
 
+        // Walkable ground/edge underfoot must not block *horizontal* travel: height is owned by
+        // the ground snap, so the capsule walks freely across it and only walls (low n.y) stop
+        // it. Without this, descending a step wedges the rounded capsule against the step's top
+        // edge — it touches the edge (zero advance → the nudge below), the snap rests it back on
+        // the edge, and it jitters in place for many frames before escaping. (Horizontal slides
+        // pass keepGroundClimb=false; the deliberate vertical/lift slides pass true and are
+        // unaffected.)
+        if (!keepGroundClimb && n.y() >= config_.maxSlopeCosine)
+        {
+            pos += motion - dir * advance; // complete the horizontal travel over the ground
+            break;
+        }
+
         // Grazing a surface (no real advance) stalls collide-and-slide: every sweep along
         // the surface re-hits it at distance ~0. Nudge out along the contact normal so the
         // next sweep clears it (a cheap depenetration; the ground snap re-settles height).
@@ -136,6 +149,17 @@ CharacterMoveResult CharacterController::move(const PhysicsWorld& world, Vec3 di
         }
     }
     pos = walked;
+
+    // Collide-and-slide / depenetration can occasionally net a tiny *backward* horizontal step
+    // at a step riser (the grazing nudge pushes the capsule off the riser, against its travel).
+    // Clamp it: never end a frame with horizontal motion opposed to the requested direction —
+    // turn a visible step-back into a harmless no-progress frame. Lateral slides are unaffected
+    // (their motion is perpendicular to the request, not opposed).
+    const Vec3 horizMoved{pos.x() - position_.x(), 0.0f, pos.z() - position_.z()};
+    if (Vec3::dotProduct(horizMoved, horizontal) < 0.0f)
+    {
+        pos = Vec3{position_.x(), pos.y(), position_.z()};
+    }
 
     CharacterMoveResult result;
     result.position = pos;

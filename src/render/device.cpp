@@ -1,8 +1,12 @@
 #include <array>
+#include <cstdint>
+#include <cstring>
+#include <fstream>
 #include <iostream>
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 #include <fire_engine/render/device.hpp>
 
@@ -14,6 +18,58 @@ constexpr bool enableValidation = false;
 #else
 constexpr bool enableValidation = true;
 #endif
+
+namespace
+{
+
+// Pipeline cache blob, kept next to the working directory so it survives between runs.
+constexpr const char* kPipelineCacheFile = "pipeline_cache.bin";
+
+// Whole-file read as bytes; empty on any error (missing file, etc.).
+[[nodiscard]] std::vector<char> readBinaryFile(const char* path)
+{
+    std::ifstream in(path, std::ios::binary | std::ios::ate);
+    if (!in)
+    {
+        return {};
+    }
+    const std::streamsize size = in.tellg();
+    if (size <= 0)
+    {
+        return {};
+    }
+    std::vector<char> data(static_cast<std::size_t>(size));
+    in.seekg(0);
+    if (!in.read(data.data(), size))
+    {
+        return {};
+    }
+    return data;
+}
+
+// A persisted pipeline cache is only valid on the same driver + GPU it was written on. Validate
+// the VkPipelineCacheHeaderVersionOne header (version, vendor/device IDs, cache UUID) against the
+// current device before trusting it; a driver or GPU change invalidates it and we start cold.
+[[nodiscard]] bool cacheMatchesDevice(const std::vector<char>& data,
+                                      const vk::PhysicalDeviceProperties& props)
+{
+    constexpr std::size_t headerSize = 16 + VK_UUID_SIZE; // 4×u32 + 16-byte UUID
+    if (data.size() < headerSize)
+    {
+        return false;
+    }
+    std::uint32_t headerVersion = 0;
+    std::uint32_t vendorID = 0;
+    std::uint32_t deviceID = 0;
+    std::memcpy(&headerVersion, data.data() + 4, sizeof(headerVersion));
+    std::memcpy(&vendorID, data.data() + 8, sizeof(vendorID));
+    std::memcpy(&deviceID, data.data() + 12, sizeof(deviceID));
+    return headerVersion == VK_PIPELINE_CACHE_HEADER_VERSION_ONE && vendorID == props.vendorID &&
+           deviceID == props.deviceID &&
+           std::memcmp(data.data() + 16, props.pipelineCacheUUID.data(), VK_UUID_SIZE) == 0;
+}
+
+} // namespace
 
 constexpr std::array validationLayers{"VK_LAYER_KHRONOS_validation"};
 constexpr std::array deviceExtensions{
@@ -262,11 +318,49 @@ void Device::createLogicalDevice()
 
 void Device::createPipelineCache()
 {
-    // Empty (cold) cache shared by all pipeline creation. Not seeded from disk
-    // yet, so it pays off within a run — repeated/recreated pipelines (swapchain
-    // resize) reuse the driver's compiled artifacts.
-    constexpr vk::PipelineCacheCreateInfo ci{};
+    // Seed the cache from disk so the driver's shader compilation is paid once *across* runs,
+    // not on every cold start. On MoltenVK the Metal compile is deferred to a pipeline's first
+    // use, so a cold cache can stall mid-run the first time a pipeline draws; a warm cache from
+    // a previous run avoids that. The blob is GPU/driver-specific — if it doesn't match this
+    // device we discard it, start cold, and overwrite it on shutdown.
+    std::vector<char> data = readBinaryFile(kPipelineCacheFile);
+    if (!cacheMatchesDevice(data, physDevice_.getProperties()))
+    {
+        data.clear();
+    }
+    const vk::PipelineCacheCreateInfo ci{
+        .initialDataSize = data.size(),
+        .pInitialData = data.empty() ? nullptr : data.data(),
+    };
     pipelineCache_ = vk::raii::PipelineCache(device_, ci);
+}
+
+void Device::savePipelineCache() const noexcept
+{
+    // Best-effort: a failed cache write must never crash shutdown.
+    try
+    {
+        if (*pipelineCache_ == nullptr) // moved-from (or never created)
+        {
+            return;
+        }
+        const std::vector<uint8_t> data = pipelineCache_.getData();
+        if (data.empty())
+        {
+            return;
+        }
+        std::ofstream out(kPipelineCacheFile, std::ios::binary | std::ios::trunc);
+        out.write(reinterpret_cast<const char*>(data.data()),
+                  static_cast<std::streamsize>(data.size()));
+    }
+    catch (...)
+    {
+    }
+}
+
+Device::~Device()
+{
+    savePipelineCache();
 }
 
 uint32_t Device::findMemoryType(uint32_t filter, vk::MemoryPropertyFlags props) const

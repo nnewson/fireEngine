@@ -14,7 +14,7 @@ class Device
 {
 public:
     explicit Device(const Window& window);
-    ~Device() = default;
+    ~Device(); // persists the pipeline cache to disk
 
     Device(const Device&) = delete;
     Device& operator=(const Device&) = delete;
@@ -73,6 +73,7 @@ private:
     void pickPhysicalDevice();
     void createLogicalDevice();
     void createPipelineCache();
+    void savePipelineCache() const noexcept;
 
     [[nodiscard]] bool isDeviceSuitable(const vk::raii::PhysicalDevice& d);
     [[nodiscard]] std::pair<std::optional<uint32_t>, std::optional<uint32_t>>
