@@ -217,10 +217,10 @@ void Object::activeVariant(std::optional<std::size_t> variantIndex)
     for (auto& binding : bindings_)
     {
         const Material* nextMaterial = binding.defaultMaterial;
-        if (variantIndex.has_value() && variantIndex.value() < binding.variantMaterials.size() &&
-            binding.variantMaterials[variantIndex.value()] != nullptr)
+        if (variantIndex && *variantIndex < binding.variantMaterials.size() &&
+            binding.variantMaterials[*variantIndex] != nullptr)
         {
-            nextMaterial = binding.variantMaterials[variantIndex.value()];
+            nextMaterial = binding.variantMaterials[*variantIndex];
         }
 
         if (nextMaterial == binding.activeMaterial)
@@ -250,10 +250,10 @@ bool Object::wouldChangeVariant(std::optional<std::size_t> variantIndex) const n
     for (const auto& binding : bindings_)
     {
         const Material* candidate = binding.defaultMaterial;
-        if (variantIndex.has_value() && variantIndex.value() < binding.variantMaterials.size() &&
-            binding.variantMaterials[variantIndex.value()] != nullptr)
+        if (variantIndex && *variantIndex < binding.variantMaterials.size() &&
+            binding.variantMaterials[*variantIndex] != nullptr)
         {
-            candidate = binding.variantMaterials[variantIndex.value()];
+            candidate = binding.variantMaterials[*variantIndex];
         }
 
         if (!materialsEquivalent(*candidate, *binding.activeMaterial))

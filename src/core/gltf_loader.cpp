@@ -398,7 +398,7 @@ Node* GltfLoader::loadScene(const std::string& path, SceneGraph& scene, Resource
         clothGeometries.emplace_back(geoIdx, params);
     }
 
-    std::size_t sceneIndex = asset.defaultScene.has_value() ? asset.defaultScene.value() : 0;
+    const std::size_t sceneIndex = asset.defaultScene.value_or(0);
     if (sceneIndex >= asset.scenes.size())
     {
         throw std::runtime_error("glTF scene index out of range");
@@ -526,7 +526,7 @@ void GltfLoader::configureAnimatedNode(
     {
         for (const auto& channel : anim.channels)
         {
-            if (!channel.nodeIndex.has_value() || channel.nodeIndex.value() != nodeIndex)
+            if (!channel.nodeIndex || *channel.nodeIndex != nodeIndex)
             {
                 continue;
             }
@@ -564,7 +564,7 @@ void GltfLoader::configureAnimatedNode(
         bool touchesNode = false;
         for (const auto& channel : asset.animations[ai].channels)
         {
-            if (channel.nodeIndex.has_value() && channel.nodeIndex.value() == nodeIndex)
+            if (channel.nodeIndex && *channel.nodeIndex == nodeIndex)
             {
                 touchesNode = true;
                 break;

@@ -67,10 +67,7 @@ private:
         ColliderId second;
 
         [[nodiscard]]
-        friend bool operator==(PairKey lhs, PairKey rhs) noexcept
-        {
-            return lhs.first == rhs.first && lhs.second == rhs.second;
-        }
+        friend bool operator==(const PairKey&, const PairKey&) noexcept = default;
     };
 
     struct PairKeyHash

@@ -109,11 +109,11 @@ void DynamicAabbTreeBroadPhase::regeneratePairs()
     std::ranges::sort(possiblePairs_,
                       [](const CollisionPair& lhs, const CollisionPair& rhs)
                       {
-                          if (lhs.firstId.value() != rhs.firstId.value())
+                          if (lhs.firstId != rhs.firstId)
                           {
-                              return lhs.firstId.value() < rhs.firstId.value();
+                              return lhs.firstId < rhs.firstId;
                           }
-                          return lhs.secondId.value() < rhs.secondId.value();
+                          return lhs.secondId < rhs.secondId;
                       });
 }
 

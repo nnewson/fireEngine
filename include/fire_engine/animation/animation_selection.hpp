@@ -1,36 +1,36 @@
 #pragma once
 
+#include <algorithm>
 #include <cstddef>
+#include <optional>
 #include <span>
 
 namespace fire_engine
 {
 
 template <typename Entry>
-[[nodiscard]] std::size_t findAnimationEntryIndex(std::span<const Entry> entries,
-                                                  std::size_t id) noexcept
+[[nodiscard]] std::optional<std::size_t>
+findAnimationEntryIndex(std::span<const Entry> entries, std::size_t id) noexcept
 {
-    for (std::size_t i = 0; i < entries.size(); ++i)
+    const auto found = std::ranges::find(entries, id, &Entry::id);
+    if (found == entries.end())
     {
-        if (entries[i].id == id)
-        {
-            return i;
-        }
+        return std::nullopt;
     }
-    return entries.size();
+    return static_cast<std::size_t>(found - entries.begin());
 }
 
 template <typename Entry>
 bool selectAnimationEntry(std::span<const Entry> entries, std::size_t id, std::size_t& activeIndex,
                           std::size_t& activeId, bool& initialisedFlag) noexcept
 {
-    auto index = findAnimationEntryIndex(entries, id);
-    if (index >= entries.size())
+    const auto index = findAnimationEntryIndex(entries, id);
+    if (!index)
     {
         return false;
     }
 
-    activeIndex = index;
+    activeIndex = *index;
     activeId = id;
     initialisedFlag = false;
     return true;

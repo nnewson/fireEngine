@@ -263,11 +263,11 @@ std::optional<AABB> GltfLoader::primitiveBounds(const fastgltf::Asset& asset,
     const auto& posAccessor = asset.accessors[posAttr->accessorIndex];
     if (posAccessor.min.has_value() && posAccessor.max.has_value())
     {
-        auto min = boundsArrayVec3(posAccessor.min.value());
-        auto max = boundsArrayVec3(posAccessor.max.value());
-        if (min.has_value() && max.has_value())
+        auto min = boundsArrayVec3(*posAccessor.min);
+        auto max = boundsArrayVec3(*posAccessor.max);
+        if (min && max)
         {
-            return AABB{min.value(), max.value()};
+            return AABB{*min, *max};
         }
     }
 
@@ -305,8 +305,7 @@ std::optional<AABB> GltfLoader::meshBounds(const fastgltf::Asset& asset, const f
             continue;
         }
 
-        bounds =
-            bounds.has_value() ? mergeBounds(bounds.value(), primitiveBox.value()) : primitiveBox;
+        bounds = bounds ? mergeBounds(*bounds, *primitiveBox) : primitiveBox;
     }
 
     return bounds;

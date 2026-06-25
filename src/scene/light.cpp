@@ -1,4 +1,5 @@
 #include <cmath>
+#include <utility>
 
 #include <fire_engine/input/input_state.hpp>
 #include <fire_engine/scene/light.hpp>
@@ -10,7 +11,7 @@ namespace fire_engine
 Lighting Light::toLighting(const Light& light, const Mat4& world) noexcept
 {
     Lighting inst;
-    inst.type = static_cast<int>(light.type_);
+    inst.type = std::to_underlying(light.type_);
     inst.worldPosition = Vec3{world[0, 3], world[1, 3], world[2, 3]};
 
     // KHR_lights_punctual: light forward is the node's local -Z transformed

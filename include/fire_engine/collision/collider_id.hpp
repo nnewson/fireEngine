@@ -1,5 +1,6 @@
 #pragma once
 
+#include <compare>
 #include <cstdint>
 
 namespace fire_engine
@@ -36,22 +37,7 @@ public:
     }
 
     [[nodiscard]]
-    friend constexpr bool operator==(ColliderId lhs, ColliderId rhs) noexcept
-    {
-        return lhs.value_ == rhs.value_;
-    }
-
-    [[nodiscard]]
-    friend constexpr bool operator!=(ColliderId lhs, ColliderId rhs) noexcept
-    {
-        return !(lhs == rhs);
-    }
-
-    [[nodiscard]]
-    friend constexpr bool operator<(ColliderId lhs, ColliderId rhs) noexcept
-    {
-        return lhs.value_ < rhs.value_;
-    }
+    friend constexpr auto operator<=>(const ColliderId&, const ColliderId&) noexcept = default;
 
 private:
     std::uint32_t value_{invalidValue};

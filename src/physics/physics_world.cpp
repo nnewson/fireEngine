@@ -1333,11 +1333,11 @@ std::vector<PhysicsWorld::SolverContact> PhysicsWorld::contacts(float dt)
     std::sort(pairs.begin(), pairs.end(),
               [](const CollisionPair& lhs, const CollisionPair& rhs)
               {
-                  if (lhs.firstId.value() != rhs.firstId.value())
+                  if (lhs.firstId != rhs.firstId)
                   {
-                      return lhs.firstId.value() < rhs.firstId.value();
+                      return lhs.firstId < rhs.firstId;
                   }
-                  return lhs.secondId.value() < rhs.secondId.value();
+                  return lhs.secondId < rhs.secondId;
               });
 
     std::vector<SolverContact> result;

@@ -14,9 +14,9 @@ Mesh::Mesh(Object object)
 {
 }
 
-std::size_t Mesh::findMorphAnimationIndex(std::size_t id) const noexcept
+std::optional<std::size_t> Mesh::findMorphAnimationIndex(std::size_t id) const noexcept
 {
-    return findAnimationEntryIndex(std::span<const MorphAnimationEntry>{morphAnimations_}, id);
+    return findAnimationEntryIndex<MorphAnimationEntry>(morphAnimations_, id);
 }
 
 void Mesh::addMorphAnimation(std::size_t id, Animation* anim)
@@ -31,8 +31,8 @@ void Mesh::addMorphAnimation(std::size_t id, Animation* anim)
 
 void Mesh::activeMorphAnimation(std::size_t id) noexcept
 {
-    (void)selectAnimationEntry(std::span<const MorphAnimationEntry>{morphAnimations_}, id,
-                               activeMorphIndex_, activeMorphAnimationId_, morphInitialized_);
+    (void)selectAnimationEntry<MorphAnimationEntry>(morphAnimations_, id, activeMorphIndex_,
+                                                   activeMorphAnimationId_, morphInitialized_);
 }
 
 void Mesh::update(const InputState& input_state, const Transform& /*transform*/)
@@ -48,12 +48,12 @@ void Mesh::update(const InputState& input_state, const Transform& /*transform*/)
     if (animState.hasActiveAnimation())
     {
         auto id = *animState.activeAnimation();
-        auto index = findMorphAnimationIndex(id);
-        if (index < morphAnimations_.size() && index != activeMorphIndex_)
+        const auto index = findMorphAnimationIndex(id);
+        if (index && *index != activeMorphIndex_)
         {
-            (void)selectAnimationEntry(std::span<const MorphAnimationEntry>{morphAnimations_}, id,
-                                       activeMorphIndex_, activeMorphAnimationId_,
-                                       morphInitialized_);
+            (void)selectAnimationEntry<MorphAnimationEntry>(
+                morphAnimations_, id, activeMorphIndex_, activeMorphAnimationId_,
+                morphInitialized_);
         }
     }
 
@@ -84,8 +84,7 @@ void Mesh::cycleVariant(int delta) noexcept
     }
 
     const int stateCount = static_cast<int>(variantNames_.size()) + 1;
-    int currentState =
-        activeVariant_.has_value() ? static_cast<int>(activeVariant_.value()) + 1 : 0;
+    int currentState = activeVariant_ ? static_cast<int>(*activeVariant_) + 1 : 0;
     const int direction = delta > 0 ? 1 : -1;
 
     for (int step = 0; step < stateCount; ++step)

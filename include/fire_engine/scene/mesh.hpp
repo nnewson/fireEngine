@@ -99,7 +99,7 @@ public:
     }
 
 private:
-    [[nodiscard]] std::size_t findMorphAnimationIndex(std::size_t id) const noexcept;
+    [[nodiscard]] std::optional<std::size_t> findMorphAnimationIndex(std::size_t id) const noexcept;
     void cycleVariant(int delta) noexcept;
     [[nodiscard]] bool isSelectableVariantState(int state) const noexcept;
 

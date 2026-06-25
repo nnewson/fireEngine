@@ -39,16 +39,7 @@ public:
     }
 
     [[nodiscard]]
-    friend constexpr bool operator==(PhysicsHandle lhs, PhysicsHandle rhs) noexcept
-    {
-        return lhs.value_ == rhs.value_;
-    }
-
-    [[nodiscard]]
-    friend constexpr bool operator!=(PhysicsHandle lhs, PhysicsHandle rhs) noexcept
-    {
-        return !(lhs == rhs);
-    }
+    friend constexpr bool operator==(const PhysicsHandle&, const PhysicsHandle&) noexcept = default;
 
 private:
     std::uint32_t value_{0U};
