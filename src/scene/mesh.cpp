@@ -16,7 +16,7 @@ Mesh::Mesh(Object object)
 
 std::size_t Mesh::findMorphAnimationIndex(std::size_t id) const noexcept
 {
-    return findAnimationEntryIndex(morphAnimations_, id);
+    return findAnimationEntryIndex(std::span<const MorphAnimationEntry>{morphAnimations_}, id);
 }
 
 void Mesh::addMorphAnimation(std::size_t id, Animation* anim)
@@ -31,8 +31,8 @@ void Mesh::addMorphAnimation(std::size_t id, Animation* anim)
 
 void Mesh::activeMorphAnimation(std::size_t id) noexcept
 {
-    (void)selectAnimationEntry(morphAnimations_, id, activeMorphIndex_, activeMorphAnimationId_,
-                               morphInitialized_);
+    (void)selectAnimationEntry(std::span<const MorphAnimationEntry>{morphAnimations_}, id,
+                               activeMorphIndex_, activeMorphAnimationId_, morphInitialized_);
 }
 
 void Mesh::update(const InputState& input_state, const Transform& /*transform*/)
@@ -51,8 +51,9 @@ void Mesh::update(const InputState& input_state, const Transform& /*transform*/)
         auto index = findMorphAnimationIndex(id);
         if (index < morphAnimations_.size() && index != activeMorphIndex_)
         {
-            (void)selectAnimationEntry(morphAnimations_, id, activeMorphIndex_,
-                                       activeMorphAnimationId_, morphInitialized_);
+            (void)selectAnimationEntry(std::span<const MorphAnimationEntry>{morphAnimations_}, id,
+                                       activeMorphIndex_, activeMorphAnimationId_,
+                                       morphInitialized_);
         }
     }
 

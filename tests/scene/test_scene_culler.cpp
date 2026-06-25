@@ -64,7 +64,8 @@ std::unique_ptr<Node> makeCubeNode(Assets& assets, Vec3 position, bool deformabl
     object.addGeometry(geometry);
     if (deformable)
     {
-        object.morphWeights({0.0f}); // marks the object deformable → never tracked/culled
+        constexpr std::array morphWeights{0.0f};
+        object.morphWeights(morphWeights); // marks the object deformable → never tracked/culled
     }
 
     auto node = std::make_unique<Node>("cube");

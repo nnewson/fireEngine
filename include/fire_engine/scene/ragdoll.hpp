@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <span>
 #include <vector>
 
 #include <fire_engine/math/constants.hpp>
@@ -44,7 +45,7 @@ public:
     Ragdoll() = default;
 
     [[nodiscard]]
-    static Ragdoll make(PhysicsWorld& physics, const std::vector<Node*>& bones,
+    static Ragdoll make(PhysicsWorld& physics, std::span<Node* const> bones,
                         const RagdollParams& params = {});
 
     void activate();

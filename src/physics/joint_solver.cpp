@@ -201,8 +201,8 @@ void JointSolver::addConeTwistLimit(const SolverBody& a, const SolverBody& b,
     ++slot;
 }
 
-void JointSolver::prepare(const std::vector<SolverBody>& bodies,
-                          const std::vector<JointInput>& joints, float dt)
+void JointSolver::prepare(std::span<const SolverBody> bodies, std::span<const JointInput> joints,
+                          float dt)
 {
     dt_ = dt;
     rows_.clear();

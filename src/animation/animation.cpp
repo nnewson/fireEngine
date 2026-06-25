@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <optional>
+#include <span>
 #include <utility>
 
 namespace fire_engine
@@ -65,7 +66,7 @@ Vec3 hermiteVec3(const Vec3& p0, const Vec3& m0, const Vec3& p1, const Vec3& m1,
 // keyframes[i].time <= t < keyframes[i+1].time. Clamps at both ends — pre-first
 // or post-last samples take the boundary key value (glTF spec).
 template <typename KF>
-std::pair<std::size_t, float> findBracket(const std::vector<KF>& kf, float t) noexcept
+std::pair<std::size_t, float> findBracket(std::span<const KF> kf, float t) noexcept
 {
     if (t <= kf.front().time)
     {
@@ -101,8 +102,8 @@ std::pair<std::size_t, float> findBracket(const std::vector<KF>& kf, float t) no
 //                                           channel lacks tangent data (then we
 //                                           fall back to linear, not garbage)
 template <typename KF, typename V, typename ValueAt, typename Linear, typename Cubic>
-V sampleChannel(const std::vector<KF>& kf, Animation::Interpolation mode, float t,
-                const V& emptyValue, ValueAt valueAt, Linear linear, Cubic cubic)
+V sampleChannel(std::span<const KF> kf, Animation::Interpolation mode, float t, const V& emptyValue,
+                ValueAt valueAt, Linear linear, Cubic cubic)
 {
     if (kf.empty())
     {
@@ -138,9 +139,9 @@ V sampleChannel(const std::vector<KF>& kf, Animation::Interpolation mode, float 
     }
 }
 
-Quaternion sampleRotation(const std::vector<Animation::RotationKeyframe>& kf,
-                          Animation::Interpolation mode, const std::vector<Quaternion>& inTans,
-                          const std::vector<Quaternion>& outTans, float t) noexcept
+Quaternion sampleRotation(std::span<const Animation::RotationKeyframe> kf,
+                          Animation::Interpolation mode, std::span<const Quaternion> inTans,
+                          std::span<const Quaternion> outTans, float t) noexcept
 {
     return sampleChannel(
         kf, mode, t, Quaternion::identity(),
@@ -171,9 +172,9 @@ Quaternion sampleRotation(const std::vector<Animation::RotationKeyframe>& kf,
         });
 }
 
-Vec3 sampleTranslation(const std::vector<Animation::TranslationKeyframe>& kf,
-                       Animation::Interpolation mode, const std::vector<Vec3>& inTans,
-                       const std::vector<Vec3>& outTans, float t) noexcept
+Vec3 sampleTranslation(std::span<const Animation::TranslationKeyframe> kf,
+                       Animation::Interpolation mode, std::span<const Vec3> inTans,
+                       std::span<const Vec3> outTans, float t) noexcept
 {
     return sampleChannel(
         kf, mode, t, Vec3{}, [&](std::size_t i) { return kf[i].position; },
@@ -190,9 +191,8 @@ Vec3 sampleTranslation(const std::vector<Animation::TranslationKeyframe>& kf,
         });
 }
 
-Vec3 sampleScale(const std::vector<Animation::ScaleKeyframe>& kf, Animation::Interpolation mode,
-                 const std::vector<Vec3>& inTans, const std::vector<Vec3>& outTans,
-                 float t) noexcept
+Vec3 sampleScale(std::span<const Animation::ScaleKeyframe> kf, Animation::Interpolation mode,
+                 std::span<const Vec3> inTans, std::span<const Vec3> outTans, float t) noexcept
 {
     return sampleChannel(
         kf, mode, t, Vec3{1.0f, 1.0f, 1.0f}, [&](std::size_t i) { return kf[i].scale; },
@@ -259,7 +259,7 @@ std::vector<float> Animation::sampleWeights(float t, std::size_t numTargets) con
         return result;
     }
 
-    auto [i, alpha] = findBracket(weightKeyframes_, looped);
+    auto [i, alpha] = findBracket(std::span<const WeightKeyframe>{weightKeyframes_}, looped);
 
     const auto& w0 = weightKeyframes_[i].weights;
     if (alpha == 0.0f)

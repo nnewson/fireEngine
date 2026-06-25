@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdint>
+#include <span>
 #include <unordered_map>
 #include <vector>
 
@@ -56,8 +57,8 @@ public:
     // Build constraint rows from the contacts, compute effective masses and the
     // restitution bias from the current velocities. Clears any state from the
     // previous step.
-    void prepare(const std::vector<SolverBody>& bodies,
-                 const std::vector<SolverContactInput>& contacts, float dt);
+    void prepare(std::span<const SolverBody> bodies, std::span<const SolverContactInput> contacts,
+                 float dt);
 
     // Apply the (warm-started) accumulated impulses once before iterating.
     void warmStart(std::vector<SolverBody>& bodies) const;

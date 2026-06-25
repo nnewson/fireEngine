@@ -58,8 +58,8 @@ private:
 } // namespace
 
 std::vector<Island> buildIslands(std::size_t bodyCount, const std::vector<bool>& movable,
-                                 const std::vector<IslandEdge>& contactEdges,
-                                 const std::vector<IslandEdge>& jointEdges)
+                                 std::span<const IslandEdge> contactEdges,
+                                 std::span<const IslandEdge> jointEdges)
 {
     const auto bothMovable = [&](const IslandEdge& e)
     {

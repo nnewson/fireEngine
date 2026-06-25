@@ -127,11 +127,7 @@ public:
     }
 
     [[nodiscard]]
-    bool operator==(const Vertex& other) const noexcept
-    {
-        return position_ == other.position_ && colour_ == other.colour_ &&
-               normal_ == other.normal_ && texCoord_ == other.texCoord_;
-    }
+    bool operator==(const Vertex&) const noexcept = default;
 
     friend class Pipeline;
 

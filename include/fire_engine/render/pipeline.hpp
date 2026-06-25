@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -224,7 +225,7 @@ public:
     [[nodiscard]] static PipelineConfig debugLineConfig(vk::Format colourFormat);
 
 private:
-    void createDescriptorSetLayout(const std::vector<vk::DescriptorSetLayoutBinding>& bindings,
+    void createDescriptorSetLayout(std::span<const vk::DescriptorSetLayoutBinding> bindings,
                                    bool pushDescriptor);
     void createGraphicsPipeline(const PipelineConfig& config);
 

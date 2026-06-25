@@ -4,6 +4,7 @@
 #include <array>
 #include <cmath>
 #include <limits>
+#include <span>
 #include <type_traits>
 #include <variant>
 #include <vector>
@@ -508,7 +509,7 @@ struct PolyFace
     return std::holds_alternative<WorldBox>(s) || std::holds_alternative<WorldConvex>(s);
 }
 
-[[nodiscard]] int bestAlignedFace(const std::vector<PolyFace>& faces, const Vec3& dir) noexcept
+[[nodiscard]] int bestAlignedFace(std::span<const PolyFace> faces, const Vec3& dir) noexcept
 {
     int best = 0;
     float bestDot = -std::numeric_limits<float>::infinity();
@@ -528,8 +529,8 @@ struct PolyFace
 // against the reference face's side planes (reference = whichever face is most
 // aligned with the contact normal `n`, which points b -> a). Mirrors the box/box
 // face path, generalised to arbitrary convex faces.
-[[nodiscard]] ContactManifold clipFaceManifold(const std::vector<PolyFace>& facesA,
-                                               const std::vector<PolyFace>& facesB, const Vec3& n)
+[[nodiscard]] ContactManifold clipFaceManifold(std::span<const PolyFace> facesA,
+                                               std::span<const PolyFace> facesB, const Vec3& n)
 {
     // A's contact face points toward B (≈ -n); B's toward A (≈ +n).
     const int fa = bestAlignedFace(facesA, n * -1.0f);
@@ -539,7 +540,7 @@ struct PolyFace
     const float alignB =
         facesB.empty() ? -1.0f : dot(facesB[static_cast<std::size_t>(fb)].normal, n);
 
-    const std::vector<PolyFace>* incFaces = nullptr;
+    const std::span<const PolyFace>* incFaces = nullptr;
     const PolyFace* ref = nullptr;
     if (alignA >= alignB)
     {

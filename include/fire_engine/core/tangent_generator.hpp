@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -25,8 +26,8 @@ public:
 
     [[nodiscard]]
     static TangentGenerationResult
-    generate(const std::vector<Vec3>& positions, const std::vector<Vec3>& normals,
-             const std::vector<Vec2>& texcoords, const std::vector<uint32_t>& indices);
+    generate(std::span<const Vec3> positions, std::span<const Vec3> normals,
+             std::span<const Vec2> texcoords, std::span<const uint32_t> indices);
 };
 
 } // namespace fire_engine

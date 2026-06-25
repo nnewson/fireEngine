@@ -1,5 +1,6 @@
 #include <fire_engine/physics/contact_solver.hpp>
 
+#include <array>
 #include <cmath>
 #include <vector>
 
@@ -161,7 +162,8 @@ TEST_CASE("ContactSolver.PositionPassPushesOutOfPenetration", "[ContactSolver]")
     bodies[1].position = {0.0f, -1.0f, 0.0f};
 
     ContactSolver solver;
-    solver.prepare(bodies, {makeContact({0.0f, 1.0f, 0.0f}, 0.1f, 0.0f, 0.0f)}, 1.0f / 60.0f);
+    const std::array contacts{makeContact({0.0f, 1.0f, 0.0f}, 0.1f, 0.0f, 0.0f)};
+    solver.prepare(bodies, contacts, 1.0f / 60.0f);
     solver.solvePosition(bodies);
 
     CHECK(bodies[0].position.y() > 0.0f);                  // pushed out along +y

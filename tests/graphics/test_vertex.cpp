@@ -208,6 +208,41 @@ TEST_CASE("VertexEquality.DefaultVerticesAreEqual", "[VertexEquality]")
     CHECK(a == b);
 }
 
+TEST_CASE("VertexEquality.ComparesSkinningAndAdditionalAttributes", "[VertexEquality]")
+{
+    const Vertex base{
+        {1.0f, 2.0f, 3.0f}, {0.5f, 0.5f, 0.5f},       {0.0f, 1.0f, 0.0f},       {0.1f, 0.2f},
+        {1, 2, 3, 4},       {0.4f, 0.3f, 0.2f, 0.1f}, {1.0f, 0.0f, 0.0f, -1.0f}};
+
+    SECTION("joints")
+    {
+        Vertex other = base;
+        other.joints({4, 3, 2, 1});
+        CHECK_FALSE(base == other);
+    }
+
+    SECTION("weights")
+    {
+        Vertex other = base;
+        other.weights({0.1f, 0.2f, 0.3f, 0.4f});
+        CHECK_FALSE(base == other);
+    }
+
+    SECTION("tangent")
+    {
+        Vertex other = base;
+        other.tangent({0.0f, 1.0f, 0.0f, 1.0f});
+        CHECK_FALSE(base == other);
+    }
+
+    SECTION("second UV set")
+    {
+        Vertex other = base;
+        other.texCoord1({0.7f, 0.8f});
+        CHECK_FALSE(base == other);
+    }
+}
+
 // ==========================================================================
 // Second UV set (TEXCOORD_1) — defaults to (0, 0); round-trips via accessors.
 // ==========================================================================

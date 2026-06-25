@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <limits>
+#include <span>
 #include <unordered_map>
 #include <vector>
 
@@ -107,11 +108,11 @@ private:
     void sortAndIndexEndPoints(std::vector<EndPoint*>& endPoints);
     void rebuildPairStates();
     // Full-sweep every pair on this axis. Used only by rebuild() now.
-    void sweepAxis(const std::vector<EndPoint*>& endPoints);
+    void sweepAxis(std::span<EndPoint* const> endPoints);
     // Sweep only forming overlap pairs that involve `target`. Used by
     // addCollider to incrementally pair the new collider against the
     // already-tracked ones without rebuilding all pair states.
-    void sweepAxisForCollider(const std::vector<EndPoint*>& endPoints, const Collider* target);
+    void sweepAxisForCollider(std::span<EndPoint* const> endPoints, const Collider* target);
     void updateEndPoint(EndPoint& endPoint, bool refreshPairs);
     void updatePairAxis(const Collider* lhs, const Collider* rhs, CollisionAxis axis,
                         bool overlaps);

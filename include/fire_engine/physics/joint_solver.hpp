@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <span>
 #include <unordered_map>
 #include <vector>
 
@@ -36,8 +37,7 @@ public:
 
     // Build constraint rows from the joints, compute effective masses + the
     // Baumgarte position bias from the current anchor/axis error. Clears prior state.
-    void prepare(const std::vector<SolverBody>& bodies, const std::vector<JointInput>& joints,
-                 float dt);
+    void prepare(std::span<const SolverBody> bodies, std::span<const JointInput> joints, float dt);
 
     // Apply the (warm-started) accumulated impulses once before iterating.
     void warmStart(std::vector<SolverBody>& bodies) const;

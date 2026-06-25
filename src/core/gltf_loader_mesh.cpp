@@ -145,7 +145,7 @@ static std::vector<std::byte> readFileBytes(const std::filesystem::path& path)
     return bytes;
 }
 
-static std::vector<std::byte> sliceBytes(const std::vector<std::byte>& bytes, std::size_t offset,
+static std::vector<std::byte> sliceBytes(std::span<const std::byte> bytes, std::size_t offset,
                                          std::size_t length, const std::string& label)
 {
     if (offset > bytes.size() || offset + length > bytes.size())

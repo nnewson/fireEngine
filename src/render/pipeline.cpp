@@ -480,8 +480,8 @@ PipelineConfig Pipeline::brdfIntegrationConfig(vk::Format colourFormat)
     return fullscreenConfig("postprocess.vert.spv", "brdf_integration.frag.spv", colourFormat);
 }
 
-void Pipeline::createDescriptorSetLayout(
-    const std::vector<vk::DescriptorSetLayoutBinding>& bindings, bool pushDescriptor)
+void Pipeline::createDescriptorSetLayout(std::span<const vk::DescriptorSetLayoutBinding> bindings,
+                                         bool pushDescriptor)
 {
     vk::DescriptorSetLayoutCreateInfo ci{
         // A push-descriptor set 0 is written inline with vkCmdPushDescriptorSetKHR

@@ -43,9 +43,9 @@ public:
     // `shadowViewProjs` are the light/cascade matrices indexed by ShadowPushConstants::
     // matrixIndex; when `cullingEnabled` each iteration drops casters outside its
     // frustum.
-    void recordPass(vk::CommandBuffer cmd, const std::vector<DrawCommand>& shadowDraws,
-                    const std::vector<DrawCommand>& worldOnlyShadowDraws,
-                    const std::vector<DrawCommand>& selfShadowDraws, int activeSpotCasters,
+    void recordPass(vk::CommandBuffer cmd, std::span<const DrawCommand> shadowDraws,
+                    std::span<const DrawCommand> worldOnlyShadowDraws,
+                    std::span<const DrawCommand> selfShadowDraws, int activeSpotCasters,
                     std::span<const PointShadowCaster> pointCasters,
                     std::span<const Mat4> shadowViewProjs, bool cullingEnabled) const;
 
