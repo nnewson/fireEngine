@@ -2,6 +2,7 @@
 
 #include <array>
 #include <optional>
+#include <span>
 #include <vector>
 
 #include <fire_engine/graphics/draw_command.hpp>
@@ -49,9 +50,9 @@ public:
 
     void updateSkin();
 
-    void morphWeights(const std::vector<float>& weights) noexcept
+    void morphWeights(std::span<const float> weights)
     {
-        morphWeights_ = weights;
+        morphWeights_.assign(weights.begin(), weights.end());
     }
 
     [[nodiscard]]
@@ -95,7 +96,7 @@ private:
         std::array<BufferHandle, kMaxFramesInFlight> shadowBufs{NullBuffer, NullBuffer};
     };
 
-    [[nodiscard]] Bounds3 computeShadowBounds(const std::vector<Mat4>& jointMatrices, bool hasSkin,
+    [[nodiscard]] Bounds3 computeShadowBounds(std::span<const Mat4> jointMatrices, bool hasSkin,
                                               const Mat4& world) const noexcept;
 
     // load() phases: createForwardBindings allocates the per-geometry vertex-stage
@@ -108,7 +109,7 @@ private:
     // render() phases: write the per-frame UBOs (shared/skin/material/morph),
     // write the shadow UBO, then assemble forward + shadow draw commands.
     void writeForwardUniforms(const FrameInfo& frame, const Mat4& world, const Mat4& previousWorld,
-                              bool hasSkin, const std::vector<Mat4>& jointMatrices);
+                              bool hasSkin, std::span<const Mat4> jointMatrices);
     void writeShadowUniforms(const FrameInfo& frame, const Mat4& world, bool hasSkin);
     [[nodiscard]] std::vector<DrawCommand> buildDrawCommands(const FrameInfo& frame,
                                                              const Mat4& world, bool hasSkin,

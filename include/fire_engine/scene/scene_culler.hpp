@@ -35,7 +35,7 @@ public:
     // Refresh proxy bounds for every rigid renderable node reachable from `roots`,
     // creating proxies for newly cullable nodes and destroying proxies for nodes that
     // disappeared or became deformable/non-renderable.
-    void sync(const std::vector<std::unique_ptr<Node>>& roots);
+    void sync(std::span<const std::unique_ptr<Node>> roots);
 
     // Tracked nodes outside all `frustums`. The result is owned by the culler and reused
     // each frame; it stays valid until the next sync()/cull().

@@ -1,6 +1,7 @@
 #include <fire_engine/physics/island.hpp>
 
 #include <algorithm>
+#include <array>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -106,7 +107,8 @@ TEST_CASE("Island.OrderingIsDeterministic", "[Island]")
     const std::vector<bool> dynamic{true, true, true, true};
     const std::vector<IslandEdge> contacts{{3, 1}, {2, 0}};
     const auto a = buildIslands(4, dynamic, contacts, {});
-    const auto b = buildIslands(4, dynamic, {{2, 0}, {3, 1}}, {});
+    const std::array reorderedContacts{IslandEdge{2, 0}, IslandEdge{3, 1}};
+    const auto b = buildIslands(4, dynamic, reorderedContacts, {});
 
     REQUIRE(a.size() == 2U);
     // First island owns body 0 (lowest index), second owns body 1.

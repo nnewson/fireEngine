@@ -42,7 +42,7 @@ void imageLayerBarrier(vk::CommandBuffer cmd, vk::Image image, vk::ImageAspectFl
         vk::DependencyInfo{.imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &b});
 }
 
-void recordShadowDrawBucket(vk::CommandBuffer cmd, const std::vector<DrawCommand>& shadowDraws,
+void recordShadowDrawBucket(vk::CommandBuffer cmd, std::span<const DrawCommand> shadowDraws,
                             const Resources& resources, PipelineHandle pipelineHandle)
 {
     bool pipelineBound = false;
@@ -122,9 +122,9 @@ Shadows::Shadows(const Device& device, Resources& resources)
     shared.shadowDebugImage = shadowMapHandle_;
 }
 
-void Shadows::recordPass(vk::CommandBuffer cmd, const std::vector<DrawCommand>& shadowDraws,
-                         const std::vector<DrawCommand>& worldOnlyShadowDraws,
-                         const std::vector<DrawCommand>& selfShadowDraws, int activeSpotCasters,
+void Shadows::recordPass(vk::CommandBuffer cmd, std::span<const DrawCommand> shadowDraws,
+                         std::span<const DrawCommand> worldOnlyShadowDraws,
+                         std::span<const DrawCommand> selfShadowDraws, int activeSpotCasters,
                          std::span<const PointShadowCaster> pointCasters,
                          std::span<const Mat4> shadowViewProjs, bool cullingEnabled) const
 {
@@ -134,13 +134,13 @@ void Shadows::recordPass(vk::CommandBuffer cmd, const std::vector<DrawCommand>& 
     // Drop casters whose world bounds fall outside the light/cascade frustum at
     // `matrixIndex`. Returns the (possibly filtered) list; a self-shadow slot
     // (matrixIndex < 0) and disabled culling pass everything through.
-    const auto cullForFrustum =
-        [&](int matrixIndex, const std::vector<DrawCommand>& draws) -> std::vector<DrawCommand>
+    const auto cullForFrustum = [&](int matrixIndex,
+                                    std::span<const DrawCommand> draws) -> std::vector<DrawCommand>
     {
         if (!cullingEnabled || matrixIndex < 0 ||
             matrixIndex >= static_cast<int>(shadowViewProjs.size()))
         {
-            return draws;
+            return {draws.begin(), draws.end()};
         }
         const Frustum frustum =
             Frustum::fromViewProj(shadowViewProjs[static_cast<std::size_t>(matrixIndex)]);
@@ -164,7 +164,7 @@ void Shadows::recordPass(vk::CommandBuffer cmd, const std::vector<DrawCommand>& 
     // commits depth-only stores under dynamic rendering.
     auto recordShadowIteration =
         [&](vk::Image depthImage, uint32_t depthLayer, vk::ImageView depthView, uint32_t extent,
-            const ShadowPushConstants& pc, const std::vector<DrawCommand>& draws,
+            const ShadowPushConstants& pc, std::span<const DrawCommand> draws,
             PipelineHandle pipelineHandle, float depthBiasConstant, float depthBiasSlope)
     {
         vk::Viewport vp = makeFullViewport(static_cast<float>(extent), static_cast<float>(extent));
@@ -210,10 +210,10 @@ void Shadows::recordPass(vk::CommandBuffer cmd, const std::vector<DrawCommand>& 
     };
 
     // Layered maps (CSM/world/self): per-layer depth attachment view.
-    auto layeredIteration =
-        [&](TextureHandle depthHandle, uint32_t layer, uint32_t extent,
-            const ShadowPushConstants& pc, const std::vector<DrawCommand>& draws,
-            PipelineHandle pipelineHandle, float depthBiasConstant, float depthBiasSlope)
+    auto layeredIteration = [&](TextureHandle depthHandle, uint32_t layer, uint32_t extent,
+                                const ShadowPushConstants& pc, std::span<const DrawCommand> draws,
+                                PipelineHandle pipelineHandle, float depthBiasConstant,
+                                float depthBiasSlope)
     {
         recordShadowIteration(resources_->vulkanImage(depthHandle), layer,
                               resources_->vulkanShadowMapLayerView(depthHandle, layer), extent, pc,

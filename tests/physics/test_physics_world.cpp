@@ -10,6 +10,8 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
+#include <utility>
+
 #include <fire_engine/core/convex_hull_builder.hpp>
 
 using fire_engine::AabbShape;
@@ -630,7 +632,7 @@ TEST_CASE("PhysicsWorld.GatherCollidersComposesWorldSphere", "[PhysicsWorld]")
     const auto colliders = physics.gatherColliders();
     REQUIRE(colliders.size() == 1u);
     const auto& c = colliders.front();
-    CHECK(c.type == static_cast<int>(ClothColliderType::Sphere));
+    CHECK(c.type == std::to_underlying(ClothColliderType::Sphere));
     // a = (world center.xyz, world radius); body scale 2 → radius 0.5 * 2 = 1.0.
     CHECK(c.a[0] == Catch::Approx(2.0f).margin(1e-5f));
     CHECK(c.a[1] == Catch::Approx(3.0f).margin(1e-5f));

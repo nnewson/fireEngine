@@ -52,7 +52,7 @@ bool GltfLoader::nodeHasAnimation(const fastgltf::Asset& asset, std::size_t node
     {
         for (const auto& channel : anim.channels)
         {
-            if (channel.nodeIndex.has_value() && channel.nodeIndex.value() == nodeIndex)
+            if (channel.nodeIndex && *channel.nodeIndex == nodeIndex)
             {
                 return true;
             }
@@ -351,7 +351,7 @@ void GltfLoader::loadAnimation(const fastgltf::Asset& asset, std::size_t gltfAni
     const auto& anim = asset.animations[gltfAnimIndex];
     for (const auto& channel : anim.channels)
     {
-        if (!channel.nodeIndex.has_value() || channel.nodeIndex.value() != nodeIndex)
+        if (!channel.nodeIndex || *channel.nodeIndex != nodeIndex)
         {
             continue;
         }

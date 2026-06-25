@@ -33,8 +33,8 @@ void buildTangents(const Vec3& n, Vec3& t1, Vec3& t2) noexcept
 
 } // namespace
 
-void ContactSolver::prepare(const std::vector<SolverBody>& bodies,
-                            const std::vector<SolverContactInput>& contacts, float dt)
+void ContactSolver::prepare(std::span<const SolverBody> bodies,
+                            std::span<const SolverContactInput> contacts, float dt)
 {
     dt_ = dt;
     points_.clear();

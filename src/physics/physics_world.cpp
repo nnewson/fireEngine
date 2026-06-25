@@ -245,8 +245,8 @@ struct CompoundMassProperties
 // the parallel-axis sum of each child's (rotated) diagonal inertia about the body
 // COM; only the diagonal is kept (off-diagonal products of inertia are dropped —
 // exact for compounds symmetric about the body axes, approximate otherwise).
-[[nodiscard]] CompoundMassProperties
-compoundMassProperties(const std::vector<CompoundChild>& children, float totalMass, Vec3 scale)
+[[nodiscard]] CompoundMassProperties compoundMassProperties(std::span<const CompoundChild> children,
+                                                            float totalMass, Vec3 scale)
 {
     const std::size_t n = children.size();
     std::vector<float> mass(n, 0.0f);
@@ -355,10 +355,10 @@ PhysicsColliderHandle PhysicsWorld::createCollider(PhysicsBodyHandle bodyHandle,
     return handle;
 }
 
-PhysicsColliderHandle
-PhysicsWorld::createCompoundCollider(PhysicsBodyHandle bodyHandle,
-                                     const std::vector<CompoundChild>& children,
-                                     std::uint32_t collisionLayer, std::uint32_t collisionMask)
+PhysicsColliderHandle PhysicsWorld::createCompoundCollider(PhysicsBodyHandle bodyHandle,
+                                                           std::span<const CompoundChild> children,
+                                                           std::uint32_t collisionLayer,
+                                                           std::uint32_t collisionMask)
 {
     BodyEntry* owner = findBody(bodyHandle);
     if (owner == nullptr || children.empty())
@@ -594,7 +594,7 @@ void PhysicsWorld::step(float fixedDt)
     capturePreviousPositions();
 }
 
-void PhysicsWorld::captureDebugContacts(const std::vector<SolverContact>& contacts)
+void PhysicsWorld::captureDebugContacts(std::span<const SolverContact> contacts)
 {
     debugContacts_.clear();
     for (const SolverContact& contact : contacts)
@@ -1333,11 +1333,11 @@ std::vector<PhysicsWorld::SolverContact> PhysicsWorld::contacts(float dt)
     std::sort(pairs.begin(), pairs.end(),
               [](const CollisionPair& lhs, const CollisionPair& rhs)
               {
-                  if (lhs.firstId.value() != rhs.firstId.value())
+                  if (lhs.firstId != rhs.firstId)
                   {
-                      return lhs.firstId.value() < rhs.firstId.value();
+                      return lhs.firstId < rhs.firstId;
                   }
-                  return lhs.secondId.value() < rhs.secondId.value();
+                  return lhs.secondId < rhs.secondId;
               });
 
     std::vector<SolverContact> result;
@@ -1721,8 +1721,8 @@ std::vector<JointInput> PhysicsWorld::buildJointInputs() const
 }
 
 void PhysicsWorld::solveIsland(const Island& island, std::vector<SolverBody>& solverBodies,
-                               const std::vector<SolverContactInput>& contactInputs,
-                               const std::vector<JointInput>& jointInputs, float dt)
+                               std::span<const SolverContactInput> contactInputs,
+                               std::span<const JointInput> jointInputs, float dt)
 {
     // Narrow the global constraint inputs to this island's subset (the solvers index
     // the shared global SolverBody array, so only which constraints they build changes).
@@ -1832,7 +1832,7 @@ bool PhysicsWorld::islandShouldSleep(const Island& island) const
     return anyDynamic;
 }
 
-bool PhysicsWorld::solveAndIntegrate(const std::vector<SolverContact>& contacts, float dt)
+bool PhysicsWorld::solveAndIntegrate(std::span<const SolverContact> contacts, float dt)
 {
     // Flat solver-body view, indexed 1:1 with bodies_ (insertion order → stable
     // and deterministic). Static/Kinematic carry invMass 0 so contact impulses

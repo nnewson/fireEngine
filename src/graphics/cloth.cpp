@@ -7,6 +7,7 @@
 #include <tuple>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 
 namespace fire_engine
 {
@@ -14,7 +15,7 @@ namespace fire_engine
 ClothCollider makePlaneCollider(Vec3 normal, float offset)
 {
     ClothCollider c;
-    c.type = static_cast<int32_t>(ClothColliderType::Plane);
+    c.type = std::to_underlying(ClothColliderType::Plane);
     c.a[0] = normal.x();
     c.a[1] = normal.y();
     c.a[2] = normal.z();
@@ -25,7 +26,7 @@ ClothCollider makePlaneCollider(Vec3 normal, float offset)
 ClothCollider makeSphereCollider(Vec3 center, float radius)
 {
     ClothCollider c;
-    c.type = static_cast<int32_t>(ClothColliderType::Sphere);
+    c.type = std::to_underlying(ClothColliderType::Sphere);
     c.a[0] = center.x();
     c.a[1] = center.y();
     c.a[2] = center.z();
@@ -36,7 +37,7 @@ ClothCollider makeSphereCollider(Vec3 center, float radius)
 ClothCollider makeBoxCollider(Vec3 center, Vec3 halfExtents, Quaternion orientation)
 {
     ClothCollider c;
-    c.type = static_cast<int32_t>(ClothColliderType::Box);
+    c.type = std::to_underlying(ClothColliderType::Box);
     c.a[0] = center.x();
     c.a[1] = center.y();
     c.a[2] = center.z();
@@ -53,7 +54,7 @@ ClothCollider makeBoxCollider(Vec3 center, Vec3 halfExtents, Quaternion orientat
 ClothCollider makeCapsuleCollider(Vec3 p0, Vec3 p1, float radius)
 {
     ClothCollider c;
-    c.type = static_cast<int32_t>(ClothColliderType::Capsule);
+    c.type = std::to_underlying(ClothColliderType::Capsule);
     c.a[0] = p0.x();
     c.a[1] = p0.y();
     c.a[2] = p0.z();

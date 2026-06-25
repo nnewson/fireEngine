@@ -24,7 +24,7 @@ namespace
 
 } // namespace
 
-Ragdoll Ragdoll::make(PhysicsWorld& physics, const std::vector<Node*>& boneNodes,
+Ragdoll Ragdoll::make(PhysicsWorld& physics, std::span<Node* const> boneNodes,
                       const RagdollParams& params)
 {
     Ragdoll rag;

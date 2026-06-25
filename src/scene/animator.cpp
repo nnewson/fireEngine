@@ -8,9 +8,9 @@
 namespace fire_engine
 {
 
-std::size_t Animator::findAnimationIndex(std::size_t id) const noexcept
+std::optional<std::size_t> Animator::findAnimationIndex(std::size_t id) const noexcept
 {
-    return findAnimationEntryIndex(animations_, id);
+    return findAnimationEntryIndex<AnimationEntry>(animations_, id);
 }
 
 void Animator::addAnimation(std::size_t id, Animation* anim)
@@ -25,7 +25,8 @@ void Animator::addAnimation(std::size_t id, Animation* anim)
 
 void Animator::activeAnimation(std::size_t id) noexcept
 {
-    (void)selectAnimationEntry(animations_, id, activeIndex_, activeAnimationId_, initialized_);
+    (void)selectAnimationEntry<AnimationEntry>(animations_, id, activeIndex_, activeAnimationId_,
+                                               initialized_);
 }
 
 void Animator::update(const InputState& input_state, const Transform& /*transform*/)
@@ -39,11 +40,11 @@ void Animator::update(const InputState& input_state, const Transform& /*transfor
     if (animState.hasActiveAnimation())
     {
         auto id = *animState.activeAnimation();
-        auto index = findAnimationIndex(id);
-        if (index < animations_.size() && index != activeIndex_)
+        const auto index = findAnimationIndex(id);
+        if (index && *index != activeIndex_)
         {
-            (void)selectAnimationEntry(animations_, id, activeIndex_, activeAnimationId_,
-                                       initialized_);
+            (void)selectAnimationEntry<AnimationEntry>(animations_, id, activeIndex_,
+                                                       activeAnimationId_, initialized_);
         }
     }
 

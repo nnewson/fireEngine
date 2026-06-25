@@ -1,5 +1,6 @@
 #include <fire_engine/core/tangent_generator.hpp>
 
+#include <array>
 #include <cmath>
 #include <vector>
 
@@ -10,6 +11,31 @@ using fire_engine::TangentGenerator;
 using fire_engine::Vec2;
 using fire_engine::Vec3;
 using fire_engine::Vec4;
+
+TEST_CASE("TangentGenerator.AcceptsArrayInputs", "[TangentGenerator]")
+{
+    const std::array positions{
+        Vec3{0.0f, 0.0f, 0.0f},
+        Vec3{1.0f, 0.0f, 0.0f},
+        Vec3{0.0f, 1.0f, 0.0f},
+    };
+    const std::array normals{
+        Vec3{0.0f, 0.0f, 1.0f},
+        Vec3{0.0f, 0.0f, 1.0f},
+        Vec3{0.0f, 0.0f, 1.0f},
+    };
+    const std::array texcoords{
+        Vec2{0.0f, 0.0f},
+        Vec2{1.0f, 0.0f},
+        Vec2{0.0f, 1.0f},
+    };
+    constexpr std::array<uint32_t, 3> indices{0, 1, 2};
+
+    const auto result = TangentGenerator::generate(positions, normals, texcoords, indices);
+
+    REQUIRE(result.succeeded);
+    CHECK(result.tangents.size() == positions.size());
+}
 
 TEST_CASE("TangentGenerator.GeneratesTangentsForPlanarQuad", "[TangentGenerator]")
 {

@@ -5,6 +5,7 @@
 #include <deque>
 #include <memory>
 #include <optional>
+#include <span>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -64,7 +65,7 @@ public:
     // the first child's handle (or a null handle if `children` is empty / body invalid).
     [[nodiscard]]
     PhysicsColliderHandle
-    createCompoundCollider(PhysicsBodyHandle bodyHandle, const std::vector<CompoundChild>& children,
+    createCompoundCollider(PhysicsBodyHandle bodyHandle, std::span<const CompoundChild> children,
                            std::uint32_t collisionLayer = 1U, std::uint32_t collisionMask = ~0U);
 
     // Create a static triangle-mesh collider. A moving body is resolved against the
@@ -392,7 +393,7 @@ private:
 
     // Rebuild debugContacts_ from this step's solver contacts (real manifold
     // points + normal), before the solver mutates positions.
-    void captureDebugContacts(const std::vector<SolverContact>& contacts);
+    void captureDebugContacts(std::span<const SolverContact> contacts);
 
     // Append the solver contact(s) for one broadphase pair to `out`: a single manifold
     // for a primitive/convex pair, or one per overlapping triangle for a static-mesh
@@ -417,14 +418,14 @@ private:
     // SolverBody view + contact/joint inputs from the frame's contacts, partition the
     // dynamic bodies into islands, solve + integrate each island independently, then
     // write the results back onto the bodies. Returns true if any body moved.
-    bool solveAndIntegrate(const std::vector<SolverContact>& contacts, float dt);
+    bool solveAndIntegrate(std::span<const SolverContact> contacts, float dt);
 
     // Solve one island: run the contact + joint solvers over the island's input
     // subset (indexing the shared `solverBodies` array), then integrate the island's
     // dynamic bodies' velocities into positions/orientations and position-correct.
     void solveIsland(const Island& island, std::vector<SolverBody>& solverBodies,
-                     const std::vector<SolverContactInput>& contactInputs,
-                     const std::vector<JointInput>& jointInputs, float dt);
+                     std::span<const SolverContactInput> contactInputs,
+                     std::span<const JointInput> jointInputs, float dt);
 
     // Whether the whole island may sleep this step: sleeping enabled, every dynamic
     // member allows sleeping and has been below the thresholds for kSleepTime, and no

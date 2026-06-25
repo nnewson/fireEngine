@@ -503,7 +503,7 @@ void Renderer::assignSelfShadowSlots(std::vector<DrawCommand>& drawCommands)
     std::memcpy(lightUbo_.mapped[currentFrame_], &lightData_, sizeof(lightData_));
 }
 
-Renderer::DrawBuckets Renderer::buildDrawBuckets(const std::vector<DrawCommand>& drawCommands) const
+Renderer::DrawBuckets Renderer::buildDrawBuckets(std::span<const DrawCommand> drawCommands) const
 {
     DrawBuckets buckets;
     buckets.opaque.reserve(drawCommands.size());
@@ -555,7 +555,7 @@ Renderer::DrawBuckets Renderer::buildDrawBuckets(const std::vector<DrawCommand>&
     return buckets;
 }
 
-void Renderer::recordDrawBucket(vk::CommandBuffer cmd, const std::vector<DrawCommand>& bucket,
+void Renderer::recordDrawBucket(vk::CommandBuffer cmd, std::span<const DrawCommand> bucket,
                                 PipelineHandle& lastBoundPipeline) const
 {
     for (const auto& dc : bucket)

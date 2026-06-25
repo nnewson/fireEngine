@@ -3,6 +3,7 @@
 #include <array>
 #include <cmath>
 #include <limits>
+#include <span>
 #include <utility>
 #include <vector>
 
@@ -237,7 +238,7 @@ struct Face
     float dist{0.0f};
 };
 
-[[nodiscard]] Face makeFace(const std::vector<SimplexVertex>& verts, int a, int b, int c) noexcept
+[[nodiscard]] Face makeFace(std::span<const SimplexVertex> verts, int a, int b, int c) noexcept
 {
     Vec3 n = cross(verts[static_cast<std::size_t>(b)].v - verts[static_cast<std::size_t>(a)].v,
                    verts[static_cast<std::size_t>(c)].v - verts[static_cast<std::size_t>(a)].v);

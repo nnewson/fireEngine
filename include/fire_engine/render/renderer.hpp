@@ -197,8 +197,8 @@ private:
     // engine-wide constants plus the debug-flag members.
     void writeIblAndDebugParams(LightUBO& out) const;
     void assignSelfShadowSlots(std::vector<DrawCommand>& drawCommands);
-    [[nodiscard]] DrawBuckets buildDrawBuckets(const std::vector<DrawCommand>& drawCommands) const;
-    void recordDrawBucket(vk::CommandBuffer cmd, const std::vector<DrawCommand>& bucket,
+    [[nodiscard]] DrawBuckets buildDrawBuckets(std::span<const DrawCommand> drawCommands) const;
+    void recordDrawBucket(vk::CommandBuffer cmd, std::span<const DrawCommand> bucket,
                           PipelineHandle& lastBoundPipeline) const;
 
     // drawFrame() phases, in per-frame execution order. Each records into the

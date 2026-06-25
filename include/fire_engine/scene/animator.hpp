@@ -5,6 +5,7 @@
 #include <fire_engine/scene/transform.hpp>
 
 #include <cstddef>
+#include <optional>
 #include <vector>
 
 namespace fire_engine
@@ -81,7 +82,7 @@ public:
     }
 
 private:
-    [[nodiscard]] std::size_t findAnimationIndex(std::size_t id) const noexcept;
+    [[nodiscard]] std::optional<std::size_t> findAnimationIndex(std::size_t id) const noexcept;
 
     std::vector<AnimationEntry> animations_;
     std::size_t activeIndex_{0};

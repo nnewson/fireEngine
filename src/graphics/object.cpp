@@ -27,7 +27,7 @@ std::vector<float> packMorphTargetDeltas(const Geometry& geometry)
     std::vector<float> ssboData(totalEntries * 4, 0.0f);
     float* dst = ssboData.data();
 
-    auto writeDeltas = [&](const std::vector<std::vector<Vec3>>& src)
+    auto writeDeltas = [&](std::span<const std::vector<Vec3>> src)
     {
         for (std::size_t t = 0; t < numTargets; ++t)
         {
@@ -49,7 +49,7 @@ std::vector<float> packMorphTargetDeltas(const Geometry& geometry)
 }
 
 [[nodiscard]]
-Vec3 skinnedPosition(const Vertex& vertex, Vec3 position, const std::vector<Mat4>& joints) noexcept
+Vec3 skinnedPosition(const Vertex& vertex, Vec3 position, std::span<const Mat4> joints) noexcept
 {
     const Joints4 jointIds = vertex.joints();
     const Vec4 weights = vertex.weights();
@@ -217,10 +217,10 @@ void Object::activeVariant(std::optional<std::size_t> variantIndex)
     for (auto& binding : bindings_)
     {
         const Material* nextMaterial = binding.defaultMaterial;
-        if (variantIndex.has_value() && variantIndex.value() < binding.variantMaterials.size() &&
-            binding.variantMaterials[variantIndex.value()] != nullptr)
+        if (variantIndex && *variantIndex < binding.variantMaterials.size() &&
+            binding.variantMaterials[*variantIndex] != nullptr)
         {
-            nextMaterial = binding.variantMaterials[variantIndex.value()];
+            nextMaterial = binding.variantMaterials[*variantIndex];
         }
 
         if (nextMaterial == binding.activeMaterial)
@@ -250,10 +250,10 @@ bool Object::wouldChangeVariant(std::optional<std::size_t> variantIndex) const n
     for (const auto& binding : bindings_)
     {
         const Material* candidate = binding.defaultMaterial;
-        if (variantIndex.has_value() && variantIndex.value() < binding.variantMaterials.size() &&
-            binding.variantMaterials[variantIndex.value()] != nullptr)
+        if (variantIndex && *variantIndex < binding.variantMaterials.size() &&
+            binding.variantMaterials[*variantIndex] != nullptr)
         {
-            candidate = binding.variantMaterials[variantIndex.value()];
+            candidate = binding.variantMaterials[*variantIndex];
         }
 
         if (!materialsEquivalent(*candidate, *binding.activeMaterial))
@@ -296,7 +296,7 @@ const Bounds3& Object::localBounds() const noexcept
     return localBounds_.value();
 }
 
-Bounds3 Object::computeShadowBounds(const std::vector<Mat4>& jointMatrices, bool hasSkin,
+Bounds3 Object::computeShadowBounds(std::span<const Mat4> jointMatrices, bool hasSkin,
                                     const Mat4& world) const noexcept
 {
     Bounds3 bounds;
@@ -349,7 +349,7 @@ std::vector<DrawCommand> Object::render(const FrameInfo& frame, const Mat4& worl
 
 void Object::writeForwardUniforms(const FrameInfo& frame, const Mat4& world,
                                   const Mat4& previousWorld, bool hasSkin,
-                                  const std::vector<Mat4>& jointMatrices)
+                                  std::span<const Mat4> jointMatrices)
 {
     // Shared per-object UBO. view/proj are computed once per frame and carried
     // on FrameInfo (see RenderContext::frameInfo), not recomputed here.

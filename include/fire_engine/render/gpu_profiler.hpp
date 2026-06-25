@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdint>
+#include <utility>
 
 #include <vulkan/vulkan_raii.hpp>
 
@@ -32,7 +33,7 @@ enum class ProfilePass : uint32_t
     Count
 };
 
-inline constexpr uint32_t kProfilePassCount = static_cast<uint32_t>(ProfilePass::Count);
+inline constexpr uint32_t kProfilePassCount = std::to_underlying(ProfilePass::Count);
 
 // Resolved per-frame timings consumed by the overlay.
 struct FrameStats

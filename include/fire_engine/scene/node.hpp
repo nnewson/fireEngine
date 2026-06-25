@@ -89,11 +89,11 @@ public:
     }
     [[nodiscard]] Controllable* controllable() noexcept
     {
-        return controllable_ ? &controllable_.value() : nullptr;
+        return controllable_ ? &*controllable_ : nullptr;
     }
     [[nodiscard]] const Controllable* controllable() const noexcept
     {
-        return controllable_ ? &controllable_.value() : nullptr;
+        return controllable_ ? &*controllable_ : nullptr;
     }
     Controllable& emplaceControllable()
     {
@@ -148,7 +148,7 @@ public:
     [[nodiscard]]
     const Mat4* worldOverride() const noexcept
     {
-        return worldOverride_ ? &worldOverride_.value() : nullptr;
+        return worldOverride_ ? &*worldOverride_ : nullptr;
     }
 
     void worldOverride(const Mat4& world) noexcept

@@ -83,7 +83,7 @@ void SceneCuller::syncNode(Node& node, std::unordered_set<const Node*>& seen)
     }
 }
 
-void SceneCuller::sync(const std::vector<std::unique_ptr<Node>>& roots)
+void SceneCuller::sync(std::span<const std::unique_ptr<Node>> roots)
 {
     std::unordered_set<const Node*> seen;
     for (const auto& root : roots)

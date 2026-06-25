@@ -238,7 +238,7 @@ void SweepAndPruneBroadPhase::insertEndPointSorted(EndPoint* endPoint,
     }
 }
 
-void SweepAndPruneBroadPhase::sweepAxisForCollider(const std::vector<EndPoint*>& endPoints,
+void SweepAndPruneBroadPhase::sweepAxisForCollider(std::span<EndPoint* const> endPoints,
                                                    const Collider* target)
 {
     std::vector<const Collider*> active;
@@ -322,7 +322,7 @@ void SweepAndPruneBroadPhase::rebuildPairStates()
     sweepAxis(zEndPoints_);
 }
 
-void SweepAndPruneBroadPhase::sweepAxis(const std::vector<EndPoint*>& endPoints)
+void SweepAndPruneBroadPhase::sweepAxis(std::span<EndPoint* const> endPoints)
 {
     std::vector<const Collider*> active;
     active.reserve(colliders_.size());

@@ -4,6 +4,7 @@
 #include <fstream>
 #include <iostream>
 #include <set>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -50,7 +51,7 @@ constexpr const char* kPipelineCacheFile = "pipeline_cache.bin";
 // A persisted pipeline cache is only valid on the same driver + GPU it was written on. Validate
 // the VkPipelineCacheHeaderVersionOne header (version, vendor/device IDs, cache UUID) against the
 // current device before trusting it; a driver or GPU change invalidates it and we start cold.
-[[nodiscard]] bool cacheMatchesDevice(const std::vector<char>& data,
+[[nodiscard]] bool cacheMatchesDevice(std::span<const char> data,
                                       const vk::PhysicalDeviceProperties& props)
 {
     constexpr std::size_t headerSize = 16 + VK_UUID_SIZE; // 4×u32 + 16-byte UUID

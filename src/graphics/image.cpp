@@ -1,5 +1,6 @@
 #include <fire_engine/graphics/image.hpp>
 
+#include <memory>
 #include <stdexcept>
 #include <string>
 
@@ -49,7 +50,9 @@ Image Image::load_from_file(const std::string& path)
 
     if (isHdrPath(path))
     {
-        float* raw = stbi_loadf(path.c_str(), &width, &height, &fileChannels, desiredChannels);
+        std::unique_ptr<float, decltype(&stbi_image_free)> raw{
+            stbi_loadf(path.c_str(), &width, &height, &fileChannels, desiredChannels),
+            stbi_image_free};
         if (raw == nullptr)
         {
             throw std::runtime_error("Failed to load image: " + path + " (" + stbFailureDetail() +
@@ -61,12 +64,12 @@ Image Image::load_from_file(const std::string& path)
         img.channels_ = desiredChannels;
         img.pixelType_ = ImagePixelType::Float32;
         std::size_t pixelCount = static_cast<std::size_t>(width) * height * desiredChannels;
-        img.pixels32f_.assign(raw, raw + pixelCount);
-        stbi_image_free(raw);
+        img.pixels32f_.assign(raw.get(), raw.get() + pixelCount);
         return img;
     }
 
-    stbi_uc* raw = stbi_load(path.c_str(), &width, &height, &fileChannels, desiredChannels);
+    std::unique_ptr<stbi_uc, decltype(&stbi_image_free)> raw{
+        stbi_load(path.c_str(), &width, &height, &fileChannels, desiredChannels), stbi_image_free};
     if (raw == nullptr)
     {
         throw std::runtime_error("Failed to load image: " + path + " (" + stbFailureDetail() + ")");
@@ -77,8 +80,7 @@ Image Image::load_from_file(const std::string& path)
     img.channels_ = desiredChannels;
     img.pixelType_ = ImagePixelType::Uint8;
     std::size_t byteCount = static_cast<std::size_t>(width) * height * desiredChannels;
-    img.pixels8_.assign(raw, raw + byteCount);
-    stbi_image_free(raw);
+    img.pixels8_.assign(raw.get(), raw.get() + byteCount);
     return img;
 }
 
@@ -92,8 +94,10 @@ Image Image::load_from_memory(const uint8_t* data, std::size_t size_bytes, const
 
     if (isHdrMemory(data, size_bytes))
     {
-        float* raw = stbi_loadf_from_memory(data, static_cast<int>(size_bytes), &width, &height,
-                                            &fileChannels, desiredChannels);
+        std::unique_ptr<float, decltype(&stbi_image_free)> raw{
+            stbi_loadf_from_memory(data, static_cast<int>(size_bytes), &width, &height,
+                                   &fileChannels, desiredChannels),
+            stbi_image_free};
         if (raw == nullptr)
         {
             throw std::runtime_error("Failed to decode image: " + label + " (" +
@@ -105,13 +109,14 @@ Image Image::load_from_memory(const uint8_t* data, std::size_t size_bytes, const
         img.channels_ = desiredChannels;
         img.pixelType_ = ImagePixelType::Float32;
         std::size_t pixelCount = static_cast<std::size_t>(width) * height * desiredChannels;
-        img.pixels32f_.assign(raw, raw + pixelCount);
-        stbi_image_free(raw);
+        img.pixels32f_.assign(raw.get(), raw.get() + pixelCount);
         return img;
     }
 
-    stbi_uc* raw = stbi_load_from_memory(data, static_cast<int>(size_bytes), &width, &height,
-                                         &fileChannels, desiredChannels);
+    std::unique_ptr<stbi_uc, decltype(&stbi_image_free)> raw{
+        stbi_load_from_memory(data, static_cast<int>(size_bytes), &width, &height, &fileChannels,
+                              desiredChannels),
+        stbi_image_free};
     if (raw == nullptr)
     {
         throw std::runtime_error("Failed to decode image: " + label + " (" + stbFailureDetail() +
@@ -123,8 +128,7 @@ Image Image::load_from_memory(const uint8_t* data, std::size_t size_bytes, const
     img.channels_ = desiredChannels;
     img.pixelType_ = ImagePixelType::Uint8;
     std::size_t byteCount = static_cast<std::size_t>(width) * height * desiredChannels;
-    img.pixels8_.assign(raw, raw + byteCount);
-    stbi_image_free(raw);
+    img.pixels8_.assign(raw.get(), raw.get() + byteCount);
     return img;
 }
 
