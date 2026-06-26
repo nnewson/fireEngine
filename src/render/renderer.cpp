@@ -5,7 +5,6 @@
 #include <cmath>
 #include <cstring>
 #include <span>
-#include <unordered_map>
 
 #include <fire_engine/graphics/frustum.hpp>
 #include <fire_engine/graphics/image.hpp>
@@ -463,9 +462,11 @@ void Renderer::writeIblAndDebugParams(LightUBO& out) const
     out.environmentParams[3] = tunables_.noShadows ? 1.0f : 0.0f;
 }
 
-void Renderer::assignSelfShadowSlots(std::vector<DrawCommand>& drawCommands)
+void Renderer::assignSelfShadowSlots(std::span<DrawCommand> drawCommands)
 {
-    std::unordered_map<uint32_t, int> objectSlots;
+    selfShadowSlotsScratch_.clear();
+    selfShadowSlotsScratch_.reserve(
+        std::min<std::size_t>(drawCommands.size(), kMaxSkinnedSelfShadowCasters));
     int nextSlot = 0;
     for (const auto& dc : drawCommands)
     {
@@ -473,7 +474,7 @@ void Renderer::assignSelfShadowSlots(std::vector<DrawCommand>& drawCommands)
         {
             continue;
         }
-        if (objectSlots.contains(dc.objectId))
+        if (selfShadowSlotsScratch_.contains(dc.objectId))
         {
             continue;
         }
@@ -481,7 +482,7 @@ void Renderer::assignSelfShadowSlots(std::vector<DrawCommand>& drawCommands)
         {
             break;
         }
-        objectSlots.emplace(dc.objectId, nextSlot);
+        selfShadowSlotsScratch_.emplace(dc.objectId, nextSlot);
         lightData_.selfShadowViewProj[nextSlot] =
             fitSelfShadowMatrix(dc.shadowBounds, directionalLightDir_);
         ++nextSlot;
@@ -489,8 +490,8 @@ void Renderer::assignSelfShadowSlots(std::vector<DrawCommand>& drawCommands)
 
     for (auto& dc : drawCommands)
     {
-        auto it = objectSlots.find(dc.objectId);
-        if (it == objectSlots.end())
+        auto it = selfShadowSlotsScratch_.find(dc.objectId);
+        if (it == selfShadowSlotsScratch_.end())
         {
             dc.selfShadowSlot = -1;
             dc.selfShadowViewProj = Mat4::identity();
@@ -503,10 +504,27 @@ void Renderer::assignSelfShadowSlots(std::vector<DrawCommand>& drawCommands)
     std::memcpy(lightUbo_.mapped[currentFrame_], &lightData_, sizeof(lightData_));
 }
 
-Renderer::DrawBuckets Renderer::buildDrawBuckets(std::span<const DrawCommand> drawCommands) const
+void Renderer::clearDrawBuckets(DrawBuckets& buckets) noexcept
 {
-    DrawBuckets buckets;
+    buckets.shadow.clear();
+    buckets.worldShadow.clear();
+    buckets.selfShadow.clear();
+    buckets.opaque.clear();
+    buckets.blend.clear();
+    buckets.transmissive.clear();
+}
+
+void Renderer::buildDrawBuckets(std::span<const DrawCommand> drawCommands,
+                                DrawBuckets& buckets) const
+{
+    clearDrawBuckets(buckets);
+    buckets.shadow.reserve(drawCommands.size());
+    buckets.worldShadow.reserve(drawCommands.size());
+    buckets.selfShadow.reserve(
+        std::min<std::size_t>(drawCommands.size(), kMaxSkinnedSelfShadowCasters));
     buckets.opaque.reserve(drawCommands.size());
+    buckets.blend.reserve(drawCommands.size());
+    buckets.transmissive.reserve(drawCommands.size());
     // Camera-frustum cull the forward (non-shadow) draws; shadow draws are culled
     // per-cascade/-light in the shadow pass. A draw with invalid bounds (the skybox) is
     // never culled. The shadow buckets carry every caster — the shadow pass filters them.
@@ -552,7 +570,6 @@ Renderer::DrawBuckets Renderer::buildDrawBuckets(std::span<const DrawCommand> dr
               [](const DrawCommand& a, const DrawCommand& b) { return a.sortDepth > b.sortDepth; });
     std::sort(buckets.transmissive.begin(), buckets.transmissive.end(),
               [](const DrawCommand& a, const DrawCommand& b) { return a.sortDepth > b.sortDepth; });
-    return buckets;
 }
 
 void Renderer::recordDrawBucket(vk::CommandBuffer cmd, std::span<const DrawCommand> bucket,
@@ -709,15 +726,15 @@ void Renderer::updateFrameLighting(SceneGraph& scene, Vec3 cameraPosition, Vec3 
     const auto extent = swapchain_.extent();
     const float aspect = static_cast<float>(extent.width) / static_cast<float>(extent.height);
 
-    auto lights = scene.gatherLights();
-    updateLightData(cameraPosition, cameraTarget, aspect, lights);
+    scene.gatherLights(lightScratch_);
+    updateLightData(cameraPosition, cameraTarget, aspect, lightScratch_);
 }
 
-Renderer::DrawBuckets Renderer::collectDrawCommands(vk::CommandBuffer cmd, SceneGraph& scene,
-                                                    Vec3 cameraPosition, Vec3 cameraTarget)
+const Renderer::DrawBuckets& Renderer::collectDrawCommands(vk::CommandBuffer cmd, SceneGraph& scene,
+                                                           Vec3 cameraPosition, Vec3 cameraTarget)
 {
-    std::vector<DrawCommand> drawCommands;
-    recordSkybox(cameraPosition, cameraTarget, drawCommands);
+    drawCommandScratch_.clear();
+    recordSkybox(cameraPosition, cameraTarget, drawCommandScratch_);
 
     AlphaPipelines pipelines{forwardOpaqueHandle_, forwardBlendHandle_};
     RenderContext ctx{device_,
@@ -732,7 +749,7 @@ Renderer::DrawBuckets Renderer::collectDrawCommands(vk::CommandBuffer cmd, Scene
                       jitteredProj_,
                       currentViewProj_,
                       previousViewProj_,
-                      &drawCommands,
+                      &drawCommandScratch_,
                       pipelines,
                       shadows_.pipelineHandle(),
                       shadowViewProjs_};
@@ -742,16 +759,16 @@ Renderer::DrawBuckets Renderer::collectDrawCommands(vk::CommandBuffer cmd, Scene
     // shadows_ keep per pass, so a node dropped here is never wanted downstream. Inactive
     // shadow slots are identity matrices — harmless degenerate frustums that can only add
     // visibility, never remove it. Disabled toggle leaves culledNodes null (render all).
-    std::vector<Frustum> frustums;
+    frustumScratch_.clear();
     if (tunables_.cullingEnabled)
     {
-        frustums.reserve(1 + shadowViewProjs_.size());
-        frustums.push_back(Frustum::fromViewProj(currentViewProj_));
+        frustumScratch_.reserve(1 + shadowViewProjs_.size());
+        frustumScratch_.push_back(Frustum::fromViewProj(currentViewProj_));
         for (const Mat4& shadowViewProj : shadowViewProjs_)
         {
-            frustums.push_back(Frustum::fromViewProj(shadowViewProj));
+            frustumScratch_.push_back(Frustum::fromViewProj(shadowViewProj));
         }
-        ctx.culledNodes = &scene.cull(frustums);
+        ctx.culledNodes = &scene.cull(frustumScratch_);
         stats_.trackedNodes = static_cast<int>(scene.culler().trackedCount());
         stats_.culledNodes = static_cast<int>(scene.culler().culledCount());
     }
@@ -763,8 +780,9 @@ Renderer::DrawBuckets Renderer::collectDrawCommands(vk::CommandBuffer cmd, Scene
 
     scene.render(ctx);
 
-    assignSelfShadowSlots(drawCommands);
-    return buildDrawBuckets(drawCommands);
+    assignSelfShadowSlots(drawCommandScratch_);
+    buildDrawBuckets(drawCommandScratch_, drawBucketsScratch_);
+    return drawBucketsScratch_;
 }
 
 void Renderer::recordShadowPass(vk::CommandBuffer cmd, const DrawBuckets& buckets)
@@ -853,18 +871,18 @@ void Renderer::drawFrame(Window& display, SceneGraph& scene, Vec3 cameraPosition
     currentViewProj_ = unjitteredProj * view_;
 
     updateFrameLighting(scene, cameraPosition, cameraTarget);
-    DrawBuckets buckets = collectDrawCommands(cmd, scene, cameraPosition, cameraTarget);
+    const DrawBuckets& buckets = collectDrawCommands(cmd, scene, cameraPosition, cameraTarget);
 
     // Particles render un-jittered (after TAA); feed them the plain proj. The
     // overlay's emitter scales are applied to a local copy of the gather.
-    auto emitters = scene.gatherEmitters();
-    for (auto& e : emitters)
+    scene.gatherEmitters(emitterScratch_);
+    for (auto& e : emitterScratch_)
     {
         e.spawnRate *= tunables_.particleRateScale;
         e.lifetime *= tunables_.particleLifetimeScale;
         e.size *= tunables_.particleSizeScale;
     }
-    particles_.update(emitters, view_, unjitteredProj, dt, currentFrame_);
+    particles_.update(emitterScratch_, view_, unjitteredProj, dt, currentFrame_);
 
     profiler_.begin(cmd, currentFrame_, ProfilePass::Shadow);
     recordShadowPass(cmd, buckets);

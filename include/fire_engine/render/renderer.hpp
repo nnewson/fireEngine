@@ -4,11 +4,14 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include <fire_engine/graphics/draw_command.hpp>
+#include <fire_engine/graphics/frustum.hpp>
 #include <fire_engine/graphics/gpu_handle.hpp>
 #include <fire_engine/graphics/lighting.hpp>
+#include <fire_engine/graphics/particle.hpp>
 #include <fire_engine/math/mat4.hpp>
 #include <fire_engine/math/vec3.hpp>
 #include <fire_engine/render/constants.hpp>
@@ -196,16 +199,17 @@ private:
     // Fills out.iblParams / out.shadowParams / out.environmentParams from the
     // engine-wide constants plus the debug-flag members.
     void writeIblAndDebugParams(LightUBO& out) const;
-    void assignSelfShadowSlots(std::vector<DrawCommand>& drawCommands);
-    [[nodiscard]] DrawBuckets buildDrawBuckets(std::span<const DrawCommand> drawCommands) const;
+    void assignSelfShadowSlots(std::span<DrawCommand> drawCommands);
+    static void clearDrawBuckets(DrawBuckets& buckets) noexcept;
+    void buildDrawBuckets(std::span<const DrawCommand> drawCommands, DrawBuckets& buckets) const;
     void recordDrawBucket(vk::CommandBuffer cmd, std::span<const DrawCommand> bucket,
                           PipelineHandle& lastBoundPipeline) const;
 
     // drawFrame() phases, in per-frame execution order. Each records into the
     // supplied command buffer (already in the recording state).
     void updateFrameLighting(SceneGraph& scene, Vec3 cameraPosition, Vec3 cameraTarget);
-    [[nodiscard]] DrawBuckets collectDrawCommands(vk::CommandBuffer cmd, SceneGraph& scene,
-                                                  Vec3 cameraPosition, Vec3 cameraTarget);
+    [[nodiscard]] const DrawBuckets& collectDrawCommands(vk::CommandBuffer cmd, SceneGraph& scene,
+                                                         Vec3 cameraPosition, Vec3 cameraTarget);
     void recordShadowPass(vk::CommandBuffer cmd, const DrawBuckets& buckets);
     // Depth-only prepass over the opaque bucket, before the forward pass, so the
     // shared depth buffer is filled for SSAO and the forward pass gets early-Z.
@@ -302,6 +306,12 @@ private:
     Mat4 currentViewProj_{Mat4::identity()};
     Mat4 previousViewProj_{Mat4::identity()};
     uint32_t taaJitterIndex_{0};
+    std::vector<DrawCommand> drawCommandScratch_;
+    DrawBuckets drawBucketsScratch_;
+    std::vector<Frustum> frustumScratch_;
+    std::vector<Lighting> lightScratch_;
+    std::vector<EmitterState> emitterScratch_;
+    std::unordered_map<uint32_t, int> selfShadowSlotsScratch_;
     std::string environmentPath_;
 };
 

@@ -76,6 +76,24 @@ TEST_CASE("ParticleEmitter.GatherEmittersFindsWorldPosition", "[ParticleEmitter]
     CHECK(emitters[0].worldPosition.z() == Catch::Approx(-3.0f).margin(1e-5f));
 }
 
+TEST_CASE("ParticleEmitter.GatherEmittersOutputVectorIsClearedAndReused", "[ParticleEmitter]")
+{
+    SceneGraph sg;
+    auto node = std::make_unique<Node>("Fountain");
+    node->component().emplace<ParticleEmitter>().spawnRate(64.0f);
+    sg.addNode(std::move(node));
+
+    sg.resolve();
+
+    std::vector<EmitterState> emitters(2);
+    const auto previousCapacity = emitters.capacity();
+    sg.gatherEmitters(emitters);
+
+    REQUIRE(emitters.size() == 1u);
+    CHECK(emitters.capacity() >= previousCapacity);
+    CHECK(emitters[0].spawnRate == Catch::Approx(64.0f).margin(1e-5f));
+}
+
 TEST_CASE("ParticleEmitter.GatherEmittersIgnoresNonEmitters", "[ParticleEmitter]")
 {
     SceneGraph sg;

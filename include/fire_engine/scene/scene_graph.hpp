@@ -66,12 +66,14 @@ public:
     // Lighting. Composed world matrices are taken from each Node's cached
     // composedWorld_ (populated by the most recent update() call). Cheap —
     // light counts are tiny compared to draw counts.
+    void gatherLights(std::vector<Lighting>& out) const;
     [[nodiscard]] std::vector<Lighting> gatherLights() const;
 
     // Walk the scene tree and resolve every ParticleEmitter component into a
     // world-space EmitterState (translation + node-rotated velocity from the
     // cached composedWorld_). Mirrors gatherLights; the renderer's ParticleSystem
     // consumes the result each frame.
+    void gatherEmitters(std::vector<EmitterState>& out) const;
     [[nodiscard]] std::vector<EmitterState> gatherEmitters() const;
 
     // True when at least one node in the tree carries a directional Light.
