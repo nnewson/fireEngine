@@ -26,10 +26,10 @@ ComputePipeline::ComputePipeline(const Device& device, const ComputePipelineConf
     };
     pipelineLayout_ = vk::raii::PipelineLayout(*device_, plci);
 
-    auto code = ShaderLoader::load_from_file(config.compShaderPath);
+    auto code = ShaderLoader::load_spirv_from_file(config.compShaderPath);
     vk::ShaderModuleCreateInfo smci{
-        .codeSize = code.size(),
-        .pCode = reinterpret_cast<const uint32_t*>(code.data()),
+        .codeSize = code.size() * sizeof(std::uint32_t),
+        .pCode = code.data(),
     };
     vk::raii::ShaderModule module(*device_, smci);
 

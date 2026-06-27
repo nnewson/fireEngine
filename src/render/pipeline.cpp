@@ -1,4 +1,5 @@
 #include <cstddef>
+#include <cstdint>
 #include <utility>
 
 #include <fire_engine/core/shader_loader.hpp>
@@ -698,15 +699,15 @@ std::array<vk::PipelineShaderStageCreateInfo, 2>
 Pipeline::createShaderStages(const PipelineConfig& config, vk::raii::ShaderModule& vertMod,
                              vk::raii::ShaderModule& fragMod) const
 {
-    auto vertCode = ShaderLoader::load_from_file(config.vertShaderPath);
-    auto fragCode = ShaderLoader::load_from_file(config.fragShaderPath);
+    auto vertCode = ShaderLoader::load_spirv_from_file(config.vertShaderPath);
+    auto fragCode = ShaderLoader::load_spirv_from_file(config.fragShaderPath);
     vk::ShaderModuleCreateInfo vertCi{
-        .codeSize = vertCode.size(),
-        .pCode = reinterpret_cast<const uint32_t*>(vertCode.data()),
+        .codeSize = vertCode.size() * sizeof(std::uint32_t),
+        .pCode = vertCode.data(),
     };
     vk::ShaderModuleCreateInfo fragCi{
-        .codeSize = fragCode.size(),
-        .pCode = reinterpret_cast<const uint32_t*>(fragCode.data()),
+        .codeSize = fragCode.size() * sizeof(std::uint32_t),
+        .pCode = fragCode.data(),
     };
     vertMod = vk::raii::ShaderModule(*device_, vertCi);
     fragMod = vk::raii::ShaderModule(*device_, fragCi);
