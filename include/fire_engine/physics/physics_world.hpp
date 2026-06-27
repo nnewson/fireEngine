@@ -301,8 +301,8 @@ private:
     std::vector<JointEntry> joints_;
     // Side-tables for O(1) lookup into the entry containers, keyed by handle
     // value and (for the broadphase's pair pointers) by Collider address.
-    // Entries are tombstoned, never erased before clear(), so the stored indices
-    // stay valid for the container's lifetime; find* still checks `active`.
+    // Backing entries stay in place so solver indices and broadphase pointers remain
+    // stable; lookup maps contain only live handles/pointers.
     std::unordered_map<std::uint32_t, std::size_t> bodyIndexByHandle_;
     std::unordered_map<std::uint32_t, std::size_t> colliderIndexByHandle_;
     std::unordered_map<std::uint32_t, std::size_t> jointIndexByHandle_;
@@ -331,9 +331,13 @@ private:
     // Record an overlapping collider pair (ordered key) into the current trigger /
     // collision set.
     void recordOverlap(PhysicsColliderHandle first, PhysicsColliderHandle second, bool trigger);
+    void removeOverlapPairsForCollider(PhysicsColliderHandle collider);
     // Diff current vs previous overlap sets into enter/stay/exit events, then roll
     // current → previous for the next step.
     void updateOverlapEvents();
+    void deactivateCollider(ColliderEntry& collider);
+    void deactivateJoint(std::size_t jointIndex);
+    void deactivateJointsForBody(PhysicsBodyHandle body);
 
     // Create a Collider + ColliderEntry for `shape` at a local offset within `owner`,
     // register it with the broadphase, and return its handle. Shared by createCollider

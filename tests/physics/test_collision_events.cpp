@@ -88,6 +88,34 @@ TEST_CASE("CollisionEvents.TriggerEnterStayExit", "[CollisionEvents]")
     CHECK(world.triggerEvents().empty());
 }
 
+TEST_CASE("CollisionEvents.DestroyedColliderDoesNotEmitStaleTriggerExit", "[CollisionEvents]")
+{
+    PhysicsWorld world;
+
+    PhysicsBodyDesc zoneDesc;
+    zoneDesc.type = PhysicsBodyType::Static;
+    const PhysicsBodyHandle zoneBody = world.createBody(zoneDesc);
+    ColliderDesc zoneCol;
+    zoneCol.shape = BoxShape{Vec3{1.0f, 1.0f, 1.0f}, Vec3{}};
+    zoneCol.isTrigger = true;
+    const PhysicsColliderHandle trigger = world.createCollider(zoneBody, zoneCol);
+
+    PhysicsBodyDesc moverDesc;
+    moverDesc.type = PhysicsBodyType::Kinematic;
+    const PhysicsBodyHandle moverBody = world.createBody(moverDesc);
+    const PhysicsColliderHandle mover =
+        world.createCollider(moverBody, ColliderDesc{.shape = SphereShape{0.3f, Vec3{}}});
+
+    world.step(kDt);
+    REQUIRE(hasEvent(world.triggerEvents(), trigger, mover, EventPhase::Enter));
+
+    CHECK(world.destroyBody(moverBody));
+    CHECK_FALSE(world.valid(mover));
+
+    world.step(kDt);
+    CHECK_FALSE(hasEvent(world.triggerEvents(), trigger, mover, EventPhase::Exit));
+}
+
 TEST_CASE("CollisionEvents.TriggerHasNoSolverResponse", "[CollisionEvents]")
 {
     PhysicsWorld world;
