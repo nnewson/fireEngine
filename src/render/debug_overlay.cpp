@@ -207,6 +207,11 @@ void DebugOverlay::buildUi(const FrameStats& stats, RenderTunables& tunables)
 void DebugOverlay::record(vk::CommandBuffer cmd, vk::ImageView swapView, vk::Extent2D extent)
 {
     ImGui::Render();
+    ImDrawData* drawData = ImGui::GetDrawData();
+    if (!visible_ || drawData == nullptr || drawData->TotalVtxCount == 0)
+    {
+        return;
+    }
 
     vk::RenderingAttachmentInfo colour{
         .imageView = swapView,
@@ -216,7 +221,7 @@ void DebugOverlay::record(vk::CommandBuffer cmd, vk::ImageView swapView, vk::Ext
     };
     vk::Rect2D area{.offset = vk::Offset2D{.x = 0, .y = 0}, .extent = extent};
     cmd.beginRendering(makeRenderingInfo(area, {&colour, 1}, nullptr));
-    ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), static_cast<VkCommandBuffer>(cmd));
+    ImGui_ImplVulkan_RenderDrawData(drawData, static_cast<VkCommandBuffer>(cmd));
     cmd.endRendering();
 }
 

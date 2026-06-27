@@ -153,23 +153,35 @@ const std::unordered_set<const Node*>& SceneGraph::cull(std::span<const Frustum>
     return culler_.cull(frustums);
 }
 
-std::vector<Lighting> SceneGraph::gatherLights() const
+void SceneGraph::gatherLights(std::vector<Lighting>& out) const
 {
-    std::vector<Lighting> out;
+    out.clear();
     for (const auto& node : nodes_)
     {
         gatherLightsRecursive(*node, out);
     }
+}
+
+std::vector<Lighting> SceneGraph::gatherLights() const
+{
+    std::vector<Lighting> out;
+    gatherLights(out);
     return out;
+}
+
+void SceneGraph::gatherEmitters(std::vector<EmitterState>& out) const
+{
+    out.clear();
+    for (const auto& node : nodes_)
+    {
+        gatherEmittersRecursive(*node, out);
+    }
 }
 
 std::vector<EmitterState> SceneGraph::gatherEmitters() const
 {
     std::vector<EmitterState> out;
-    for (const auto& node : nodes_)
-    {
-        gatherEmittersRecursive(*node, out);
-    }
+    gatherEmitters(out);
     return out;
 }
 

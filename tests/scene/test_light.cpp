@@ -205,6 +205,25 @@ TEST_CASE("GatherLights.SingleDirectionalAtRoot", "[GatherLights]")
     CHECK(lights[0].intensity == Catch::Approx(2.5f).margin(1e-5f));
 }
 
+TEST_CASE("GatherLights.OutputVectorIsClearedAndReused", "[GatherLights]")
+{
+    SceneGraph scene;
+    auto node = std::make_unique<Node>("Sun");
+    node->component().emplace<Light>().intensity(4.0f);
+    scene.addNode(std::move(node));
+
+    InputState input;
+    scene.update(input);
+
+    std::vector<Lighting> lights(3);
+    const auto previousCapacity = lights.capacity();
+    scene.gatherLights(lights);
+
+    REQUIRE(lights.size() == 1u);
+    CHECK(lights.capacity() >= previousCapacity);
+    CHECK(lights[0].intensity == Catch::Approx(4.0f).margin(1e-5f));
+}
+
 TEST_CASE("GatherLights.NestedLightUsesComposedWorldPosition", "[GatherLights]")
 {
     SceneGraph scene;
