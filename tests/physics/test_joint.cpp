@@ -98,6 +98,30 @@ TEST_CASE("Joint.CreateAndDestroyTracksCount", "[Joint]")
     CHECK_FALSE(physics.destroyJoint(joint));
 }
 
+TEST_CASE("Joint.DestroyBodyInvalidatesConnectedJoints", "[Joint]")
+{
+    PhysicsWorld physics;
+    const PhysicsBodyHandle a = makeBall(physics, PhysicsBodyType::Static, {});
+    const PhysicsBodyHandle b = makeBall(physics, PhysicsBodyType::Dynamic, {0.0f, -2.0f, 0.0f});
+
+    JointDesc desc;
+    desc.type = JointType::Distance;
+    desc.bodyA = a;
+    desc.bodyB = b;
+    desc.restLength = 2.0f;
+
+    const PhysicsConstraintHandle joint = physics.createJoint(desc);
+    REQUIRE(joint.valid());
+    REQUIRE(physics.valid(joint));
+    REQUIRE(physics.jointCount() == 1U);
+
+    CHECK(physics.destroyBody(a));
+
+    CHECK_FALSE(physics.valid(joint));
+    CHECK(physics.jointCount() == 0U);
+    CHECK_FALSE(physics.destroyJoint(joint));
+}
+
 TEST_CASE("Joint.CreateRejectsMissingBody", "[Joint]")
 {
     PhysicsWorld physics;

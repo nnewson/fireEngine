@@ -121,7 +121,7 @@ TEST_CASE("PhysicsWorld.CreatesBodiesAndCollidersWithStableHandles", "[PhysicsWo
     CHECK(physics.validateBroadPhase());
 }
 
-TEST_CASE("PhysicsWorld.DestroyBodyTombstonesBodyAndItsColliders", "[PhysicsWorld]")
+TEST_CASE("PhysicsWorld.DestroyBodyInvalidatesBodyAndItsColliders", "[PhysicsWorld]")
 {
     PhysicsWorld physics;
 
@@ -142,7 +142,7 @@ TEST_CASE("PhysicsWorld.DestroyBodyTombstonesBodyAndItsColliders", "[PhysicsWorl
     CHECK(physics.destroyBody(first));
 
     // The first body and its collider are gone; the second entry is untouched
-    // even though both share the same backing containers and side-tables.
+    // even though backing storage remains stable for live solver indices.
     CHECK_FALSE(physics.valid(first));
     CHECK_FALSE(physics.valid(firstCollider));
     CHECK(physics.valid(second));
@@ -166,7 +166,7 @@ TEST_CASE("PhysicsWorld.DestroyBodyRejectsUnknownAndAlreadyDestroyedHandles", "[
 
     const auto body = createBox(physics, PhysicsBodyType::Static, {});
     CHECK(physics.destroyBody(body));
-    CHECK_FALSE(physics.destroyBody(body)); // already tombstoned
+    CHECK_FALSE(physics.destroyBody(body)); // already inactive
 }
 
 TEST_CASE("PhysicsWorld.DynamicBodyIntegratesVelocityOnStep", "[PhysicsWorld]")

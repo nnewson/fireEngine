@@ -478,6 +478,44 @@ PhysicsWorld::addColliderEntry(BodyEntry& owner, const ColliderShape& shape,
     return handle;
 }
 
+void PhysicsWorld::deactivateCollider(ColliderEntry& collider)
+{
+    if (!collider.active)
+    {
+        return;
+    }
+
+    [[maybe_unused]] const bool removed = broadPhase_->removeCollider(collider.collider);
+    colliderIndexByHandle_.erase(collider.handle.value());
+    colliderIndexByPointer_.erase(&collider.collider);
+    removeOverlapPairsForCollider(collider.handle);
+    collider.active = false;
+}
+
+void PhysicsWorld::deactivateJoint(std::size_t jointIndex)
+{
+    JointEntry& joint = joints_[jointIndex];
+    if (!joint.active)
+    {
+        return;
+    }
+
+    jointIndexByHandle_.erase(joint.handle.value());
+    joint.active = false;
+}
+
+void PhysicsWorld::deactivateJointsForBody(PhysicsBodyHandle body)
+{
+    for (std::size_t i = 0; i < joints_.size(); ++i)
+    {
+        const JointEntry& joint = joints_[i];
+        if (joint.active && (joint.desc.bodyA == body || joint.desc.bodyB == body))
+        {
+            deactivateJoint(i);
+        }
+    }
+}
+
 bool PhysicsWorld::destroyBody(PhysicsBodyHandle handle)
 {
     BodyEntry* bodyEntry = findBody(handle);
@@ -486,17 +524,17 @@ bool PhysicsWorld::destroyBody(PhysicsBodyHandle handle)
         return false;
     }
 
+    deactivateJointsForBody(handle);
     for (PhysicsColliderHandle colliderHandle : bodyEntry->colliders)
     {
         ColliderEntry* colliderEntry = findCollider(colliderHandle);
-        if (colliderEntry != nullptr && colliderEntry->active)
+        if (colliderEntry != nullptr)
         {
-            [[maybe_unused]] const bool removed =
-                broadPhase_->removeCollider(colliderEntry->collider);
-            colliderEntry->active = false;
+            deactivateCollider(*colliderEntry);
         }
     }
 
+    bodyIndexByHandle_.erase(handle.value());
     bodyEntry->active = false;
     return true;
 }
@@ -528,7 +566,7 @@ bool PhysicsWorld::destroyJoint(PhysicsConstraintHandle handle)
     {
         return false;
     }
-    joints_[it->second].active = false;
+    deactivateJoint(it->second);
     return true;
 }
 
@@ -617,7 +655,7 @@ void PhysicsWorld::captureDebugContacts(std::span<const SolverContact> contacts)
 std::vector<AABB> PhysicsWorld::debugColliderBounds() const
 {
     std::vector<AABB> bounds;
-    bounds.reserve(colliders_.size());
+    bounds.reserve(colliderCount());
     for (const ColliderEntry& entry : colliders_)
     {
         if (entry.active)
@@ -1052,7 +1090,7 @@ std::vector<OverlapHit> PhysicsWorld::overlapSphere(Vec3 center, float radius,
 std::vector<ClothCollider> PhysicsWorld::gatherColliders() const
 {
     std::vector<ClothCollider> out;
-    out.reserve(colliders_.size());
+    out.reserve(colliderCount());
 
     for (const ColliderEntry& entry : colliders_)
     {
@@ -1591,6 +1629,34 @@ void PhysicsWorld::recordOverlap(PhysicsColliderHandle first, PhysicsColliderHan
     (trigger ? triggerOverlaps_ : collisionOverlaps_).insert(key);
 }
 
+void PhysicsWorld::removeOverlapPairsForCollider(PhysicsColliderHandle collider)
+{
+    const auto containsCollider = [value = collider.value()](std::uint64_t key)
+    {
+        return static_cast<std::uint32_t>(key >> 32) == value ||
+               static_cast<std::uint32_t>(key & 0xFFFFFFFFULL) == value;
+    };
+    const auto eraseMatching = [&containsCollider](std::unordered_set<std::uint64_t>& set)
+    {
+        for (auto it = set.begin(); it != set.end();)
+        {
+            if (containsCollider(*it))
+            {
+                it = set.erase(it);
+            }
+            else
+            {
+                ++it;
+            }
+        }
+    };
+
+    eraseMatching(triggerOverlaps_);
+    eraseMatching(previousTriggerOverlaps_);
+    eraseMatching(collisionOverlaps_);
+    eraseMatching(previousCollisionOverlaps_);
+}
+
 void PhysicsWorld::updateOverlapEvents()
 {
     const auto build = [](const std::unordered_set<std::uint64_t>& previous,
@@ -1676,7 +1742,7 @@ std::vector<JointInput> PhysicsWorld::buildJointInputs() const
     // are relative to the body centre of mass (assumed unit scale, as for ragdoll
     // bodies); the indices match the solver-body array (1:1 with bodies_).
     std::vector<JointInput> inputs;
-    inputs.reserve(joints_.size());
+    inputs.reserve(jointCount());
     for (const JointEntry& entry : joints_)
     {
         if (!entry.active)
