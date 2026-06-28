@@ -487,7 +487,8 @@ void FireEngine::mainLoop()
         if (renderer_->physicsDebugWanted())
         {
             renderer_->setPhysicsDebug(PhysicsDebugData{physics_.debugColliderBounds(), colliders,
-                                                        physics_.debugContacts()});
+                                                        physics_.debugContacts(),
+                                                        physics_.debugColliderSleeping()});
         }
         colliders.push_back(makePlaneCollider(Vec3{0.0f, 1.0f, 0.0f}, 0.0f));
         renderer_->setClothColliders(colliders);

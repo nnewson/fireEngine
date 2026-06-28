@@ -541,6 +541,39 @@ def demo_convex_hull():
     return s
 
 
+def demo_sleep():
+    """P5: a small stack settles and goes to sleep (frozen — with --debug-physics its
+    colliders dim to the asleep colour), then a striker flies in horizontally (no
+    gravity) and wakes the island on impact, scattering it. Three boxes so the stack
+    sleeps quickly and cleanly (see demo_stack on taller towers)."""
+    s = Scene()
+    s.static_floor(half_xz=8.0)
+    palette = [(0.80, 0.35, 0.30), (0.35, 0.55, 0.80), (0.80, 0.65, 0.30)]
+    for i in range(3):
+        s.box_body(
+            f"Box{i}",
+            (0.5, 0.5, 0.5),
+            (0.0, 0.55 + i * 1.05, 0.0),
+            palette[i],
+            {"BodyType": "Dynamic", "Shape": "Box", "Mass": 1.0,
+             "Restitution": 0.0, "Friction": 0.5},
+        )
+    # Striker: a low-friction box sliding in along the floor. It reaches the stack
+    # after the stack has slept, bumps it awake, then friction brings the striker to
+    # rest against the stack and it too sleeps — so the whole scene ends asleep on the
+    # floor (a gravity-free striker would just coast off-screen forever).
+    s.box_body(
+        "Striker",
+        (0.5, 0.5, 0.5),
+        (-8.0, 0.5, 0.0),
+        (0.95, 0.55, 0.15),
+        {"BodyType": "Dynamic", "Shape": "Box", "Mass": 2.0, "Restitution": 0.1,
+         "Friction": 0.1, "Velocity": [6.0, 0.0, 0.0]},
+    )
+    s.camera(eye=(5.0, 3.0, 11.0), target=(-2.0, 0.8, 0.0))
+    return s
+
+
 DEMOS = {
     "FallRestDemo": demo_fall_rest,
     "RestitutionDemo": demo_restitution,
@@ -548,6 +581,7 @@ DEMOS = {
     "StackDemo": demo_stack,
     "ToppleDemo": demo_topple,
     "ConvexHullDemo": demo_convex_hull,
+    "SleepDemo": demo_sleep,
 }
 
 

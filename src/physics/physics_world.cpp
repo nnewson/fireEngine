@@ -1087,6 +1087,32 @@ std::vector<OverlapHit> PhysicsWorld::overlapSphere(Vec3 center, float radius,
     return overlapWorldShape(query, aabbOfWorldShape(query), filter);
 }
 
+std::vector<std::uint8_t> PhysicsWorld::debugColliderSleeping() const
+{
+    // Mirror gatherColliders()'s iteration + skip conditions exactly so the flags
+    // line up one-to-one with its emitted shapes. Keep the two in sync.
+    std::vector<std::uint8_t> out;
+    out.reserve(colliderCount());
+    for (const ColliderEntry& entry : colliders_)
+    {
+        if (!entry.active || entry.mesh != nullptr || findBody(entry.body) == nullptr)
+        {
+            continue;
+        }
+        // Convex hulls have no ClothCollider encoding (gatherColliders skips them).
+        const bool encodable =
+            std::visit([](const auto& shape)
+                       { return !std::is_same_v<std::decay_t<decltype(shape)>, WorldConvex>; },
+                       worldShape(entry));
+        if (!encodable)
+        {
+            continue;
+        }
+        out.push_back(sleeping(entry.body) ? std::uint8_t{1} : std::uint8_t{0});
+    }
+    return out;
+}
+
 std::vector<ClothCollider> PhysicsWorld::gatherColliders() const
 {
     std::vector<ClothCollider> out;

@@ -93,6 +93,7 @@ Physics can be authored in glTF through node `extras.Physics`. The loader create
 | `StackDemo.gltf` | A tower of three boxes dropped with small gaps settles into a resting stack and stays still (warm-started impulse solver, then sleeps) rather than buzzing apart. | `Demos.Stack.SettlesAndStaysStill` |
 | `ToppleDemo.gltf` | A tall box tilted 30° — past its ~16.7° balance angle — topples onto its long side and comes to rest (full rotational dynamics: inertia + lever-arm torque). | `Demos.Topple.TallBoxTopplesOntoSide` |
 | `ConvexHullDemo.gltf` | Tetrahedra (collider = `ConvexHull` built from the mesh) tumble through the GJK/EPA convex narrowphase, land on a face, and settle into a loose pile. | `Demos.ConvexHull.PileSettlesAtRest` |
+| `SleepDemo.gltf` | A small stack settles and the island goes to **sleep** (with `--debug-physics` its colliders dim to the asleep colour); a striker then slides in along the floor, **wakes** it on impact, and friction stops the striker against the stack — so everything ends asleep on the floor. | `Demos.Sleep.StackSleepsThenWakesOnImpact` |
 
 Run a demo (add `--debug-physics` to overlay collider/contact wireframes); paths are relative to `build/`:
 
@@ -104,6 +105,7 @@ cd build
 ./fireEngineApp physics_demos/StackDemo.gltf         skybox.hdr --debug-physics
 ./fireEngineApp physics_demos/ToppleDemo.gltf        skybox.hdr --debug-physics
 ./fireEngineApp physics_demos/ConvexHullDemo.gltf    skybox.hdr --debug-physics
+./fireEngineApp physics_demos/SleepDemo.gltf         skybox.hdr --debug-physics
 ```
 
 Run all the demo behaviour tests headlessly:

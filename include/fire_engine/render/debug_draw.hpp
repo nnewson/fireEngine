@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <vector>
 
 #include <vulkan/vulkan_raii.hpp>
@@ -30,6 +31,8 @@ struct PhysicsDebugData
     std::vector<AABB> aabbs;
     std::vector<ClothCollider> shapes;
     std::vector<DebugContact> contacts;
+    // Parallel to `shapes` (1 = asleep): sleeping bodies draw in a distinct colour.
+    std::vector<std::uint8_t> shapesAsleep;
 };
 
 // Renderer-owned immediate-mode wireframe debug pass. Each frame it builds

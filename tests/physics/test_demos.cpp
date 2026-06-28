@@ -136,6 +136,25 @@ PhysicsBodyHandle addConvexHull(PhysicsWorld& world, Vec3 pos, Quaternion rotati
     return body;
 }
 
+// The SleepDemo striker: a low-friction box that slides in along the floor (under
+// gravity), bumps the stack awake, then friction stops it against the stack.
+PhysicsBodyHandle addStriker(PhysicsWorld& world, Vec3 pos, Vec3 velocity)
+{
+    PhysicsBodyDesc desc;
+    desc.type = PhysicsBodyType::Dynamic;
+    desc.position = pos;
+    desc.linearVelocity = velocity;
+    desc.gravityScale = 1.0f;
+    desc.mass = 2.0f;
+    desc.material = PhysicsMaterial{.restitution = 0.1f, .friction = 0.1f};
+    const PhysicsBodyHandle body = world.createBody(desc);
+    ColliderDesc collider;
+    collider.shape = BoxShape{Vec3{0.5f, 0.5f, 0.5f}, {}};
+    collider.material = desc.material;
+    static_cast<void>(world.createCollider(body, collider));
+    return body;
+}
+
 void step(PhysicsWorld& world, int steps)
 {
     for (int i = 0; i < steps; ++i)
@@ -339,4 +358,48 @@ TEST_CASE("Demos.ConvexHull.PileSettlesAtRest", "[Demos]")
         CHECK(pos.y() < 1.0f);                     // not perched on a tall pile / exploded
         CHECK(Vec3::dotProduct(vel, vel) < 0.04f); // |v| < 0.2 — settled
     }
+}
+
+TEST_CASE("Demos.Sleep.StackSleepsThenWakesOnImpact", "[Demos]")
+{
+    // SleepDemo.gltf: a 3-box stack settles and the island sleeps; a striker slides
+    // in along the floor, wakes it on impact (~step 103), then friction stops the
+    // striker against the stack so the whole scene ends asleep on the floor. Verifies
+    // the full sleep -> wake -> re-sleep cycle, including the striker coming to rest.
+    PhysicsWorld world;
+    addStaticFloor(world, 8.0f);
+    std::array<PhysicsBodyHandle, 3> stack{};
+    for (int i = 0; i < 3; ++i)
+    {
+        stack[static_cast<std::size_t>(i)] =
+            addDynamicBox(world, {0.0f, 0.55f + static_cast<float>(i) * 1.05f, 0.0f},
+                          {0.5f, 0.5f, 0.5f}, 0.0f, 0.5f);
+    }
+    const PhysicsBodyHandle striker = addStriker(world, {-8.0f, 0.5f, 0.0f}, {6.0f, 0.0f, 0.0f});
+
+    // Before the striker arrives, the stack has settled and slept (striker still moving).
+    step(world, 90);
+    for (const PhysicsBodyHandle h : stack)
+    {
+        CHECK(world.sleeping(h));
+    }
+    CHECK_FALSE(world.sleeping(striker));
+
+    // The striker bumps the stack awake.
+    step(world, 60); // -> step 150
+    bool anyAwake = false;
+    for (const PhysicsBodyHandle h : stack)
+    {
+        anyAwake = anyAwake || !world.sleeping(h);
+    }
+    CHECK(anyAwake);
+
+    // Clean end state: the disturbance damps out and everything — stack and striker —
+    // comes to rest and sleeps on the floor.
+    step(world, 450); // -> step 600
+    for (const PhysicsBodyHandle h : stack)
+    {
+        CHECK(world.sleeping(h));
+    }
+    CHECK(world.sleeping(striker));
 }
