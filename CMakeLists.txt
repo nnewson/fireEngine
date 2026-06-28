@@ -33,6 +33,7 @@ add_library(fireengine SHARED
     src/core/convex_hull_builder.cpp
     src/core/gltf_loader.cpp
     src/core/gltf_loader_assets.cpp
+    src/core/gltf_loader_extras.cpp
     src/core/gltf_loader_geometry.cpp
     src/core/gltf_loader_images.cpp
     src/core/gltf_loader_material.cpp
