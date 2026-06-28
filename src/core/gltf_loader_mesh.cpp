@@ -430,6 +430,288 @@ KtxImage GltfLoader::loadKtxImage(const fastgltf::Asset& asset, std::size_t imag
                                       source.bytes.size(), source.label);
 }
 
+namespace
+{
+
+template <typename Value>
+std::vector<Value> readAccessorValues(const fastgltf::Asset& asset, std::size_t accessorIndex)
+{
+    const auto& accessor = asset.accessors[accessorIndex];
+    std::vector<Value> values(accessor.count);
+    fastgltf::iterateAccessorWithIndex<Value>(asset, accessor, [&](Value value, std::size_t index)
+                                              { values[index] = value; });
+    return values;
+}
+
+std::vector<std::uint32_t> readPrimitiveIndices(const fastgltf::Asset& asset,
+                                                const fastgltf::Primitive& primitive,
+                                                std::size_t vertexCount)
+{
+    std::vector<std::uint32_t> indices;
+    if (primitive.indicesAccessor.has_value())
+    {
+        const auto& indexAccessor = asset.accessors[primitive.indicesAccessor.value()];
+        indices.reserve(indexAccessor.count);
+        fastgltf::iterateAccessor<std::uint32_t>(asset, indexAccessor, [&](std::uint32_t index)
+                                                 { indices.push_back(index); });
+        return indices;
+    }
+
+    indices.reserve(vertexCount);
+    for (std::size_t i = 0; i < vertexCount; ++i)
+    {
+        indices.push_back(static_cast<std::uint32_t>(i));
+    }
+    return indices;
+}
+
+struct PrimitiveGeometryData
+{
+    std::vector<fastgltf::math::fvec3> positions;
+    std::vector<fastgltf::math::fvec3> normals;
+    std::vector<fastgltf::math::fvec2> texcoords;
+    std::vector<fastgltf::math::fvec2> texcoords1;
+    std::vector<std::array<std::uint32_t, 4>> joints;
+    std::vector<fastgltf::math::fvec4> weights;
+    std::vector<fastgltf::math::fvec4> sourceTangents;
+    std::vector<fastgltf::math::fvec4> colours;
+    std::vector<std::uint32_t> indices;
+    bool hasSourceTangents{false};
+};
+
+PrimitiveGeometryData readPrimitiveGeometryData(const fastgltf::Asset& asset,
+                                                const fastgltf::Primitive& primitive)
+{
+    const auto* posAttr = primitive.findAttribute("POSITION");
+    const auto* normAttr = primitive.findAttribute("NORMAL");
+    const auto* uvAttr = primitive.findAttribute("TEXCOORD_0");
+    const auto* uv1Attr = primitive.findAttribute("TEXCOORD_1");
+    const auto* colourAttr = primitive.findAttribute("COLOR_0");
+    const auto* jointsAttr = primitive.findAttribute("JOINTS_0");
+    const auto* weightsAttr = primitive.findAttribute("WEIGHTS_0");
+    const auto* tangentAttr = primitive.findAttribute("TANGENT");
+
+    if (posAttr == primitive.attributes.end())
+    {
+        throw std::runtime_error("glTF primitive missing POSITION attribute");
+    }
+
+    PrimitiveGeometryData data;
+    data.positions = readAccessorValues<fastgltf::math::fvec3>(asset, posAttr->accessorIndex);
+
+    if (normAttr != primitive.attributes.end())
+    {
+        data.normals = readAccessorValues<fastgltf::math::fvec3>(asset, normAttr->accessorIndex);
+    }
+    if (uvAttr != primitive.attributes.end())
+    {
+        data.texcoords = readAccessorValues<fastgltf::math::fvec2>(asset, uvAttr->accessorIndex);
+    }
+    if (uv1Attr != primitive.attributes.end())
+    {
+        data.texcoords1 = readAccessorValues<fastgltf::math::fvec2>(asset, uv1Attr->accessorIndex);
+    }
+    if (jointsAttr != primitive.attributes.end())
+    {
+        const auto& jointsAccessor = asset.accessors[jointsAttr->accessorIndex];
+        data.joints.resize(jointsAccessor.count);
+        fastgltf::iterateAccessorWithIndex<fastgltf::math::u16vec4>(
+            asset, jointsAccessor, [&](fastgltf::math::u16vec4 joints, std::size_t index)
+            { data.joints[index] = {joints.x(), joints.y(), joints.z(), joints.w()}; });
+    }
+    if (weightsAttr != primitive.attributes.end())
+    {
+        data.weights = readAccessorValues<fastgltf::math::fvec4>(asset, weightsAttr->accessorIndex);
+    }
+    if (tangentAttr != primitive.attributes.end())
+    {
+        data.hasSourceTangents = true;
+        data.sourceTangents =
+            readAccessorValues<fastgltf::math::fvec4>(asset, tangentAttr->accessorIndex);
+    }
+    if (colourAttr != primitive.attributes.end())
+    {
+        data.colours = readAccessorValues<fastgltf::math::fvec4>(asset, colourAttr->accessorIndex);
+    }
+
+    data.indices = readPrimitiveIndices(asset, primitive, data.positions.size());
+    return data;
+}
+
+void generateMissingNormals(PrimitiveGeometryData& data)
+{
+    if (!data.normals.empty() || data.positions.empty())
+    {
+        return;
+    }
+
+    std::vector<Vec3> enginePositions;
+    enginePositions.reserve(data.positions.size());
+    for (const auto& position : data.positions)
+    {
+        enginePositions.emplace_back(position.x(), position.y(), position.z());
+    }
+
+    const auto generated = GltfLoader::generateSmoothNormals(enginePositions, data.indices);
+    data.normals.resize(data.positions.size());
+    for (std::size_t i = 0; i < generated.size(); ++i)
+    {
+        data.normals[i] = {generated[i].x(), generated[i].y(), generated[i].z()};
+    }
+}
+
+std::vector<Vec4> buildTangents(const PrimitiveGeometryData& data, bool needsTangents,
+                                TangentGenerationResult& tangentResult)
+{
+    std::vector<Vec4> tangents;
+    if (data.hasSourceTangents)
+    {
+        tangents.reserve(data.sourceTangents.size());
+        for (const auto& tangent : data.sourceTangents)
+        {
+            tangents.emplace_back(tangent.x(), tangent.y(), tangent.z(), tangent.w());
+        }
+        tangentResult.succeeded = true;
+        return tangents;
+    }
+
+    if (!needsTangents)
+    {
+        return tangents;
+    }
+
+    std::vector<Vec3> positionData;
+    positionData.reserve(data.positions.size());
+    for (const auto& position : data.positions)
+    {
+        positionData.emplace_back(position.x(), position.y(), position.z());
+    }
+
+    std::vector<Vec3> normalData;
+    normalData.reserve(data.normals.size());
+    for (const auto& normal : data.normals)
+    {
+        normalData.emplace_back(normal.x(), normal.y(), normal.z());
+    }
+
+    std::vector<Vec2> texcoordData;
+    texcoordData.reserve(data.texcoords.size());
+    for (const auto& texcoord : data.texcoords)
+    {
+        texcoordData.emplace_back(texcoord.x(), texcoord.y());
+    }
+
+    tangentResult =
+        TangentGenerator::generate(positionData, normalData, texcoordData, data.indices);
+    if (tangentResult.succeeded)
+    {
+        tangents = tangentResult.tangents;
+    }
+    return tangents;
+}
+
+std::vector<Vertex> buildVertices(const PrimitiveGeometryData& data, std::span<const Vec4> tangents)
+{
+    std::vector<Vertex> vertices;
+    vertices.reserve(data.positions.size());
+    for (std::size_t i = 0; i < data.positions.size(); ++i)
+    {
+        Vec3 position{data.positions[i].x(), data.positions[i].y(), data.positions[i].z()};
+        Vec3 normal = (i < data.normals.size())
+                          ? Vec3{data.normals[i].x(), data.normals[i].y(), data.normals[i].z()}
+                          : Vec3{0.0f, 1.0f, 0.0f};
+        float u = (i < data.texcoords.size()) ? data.texcoords[i].x() : 0.0f;
+        float v = (i < data.texcoords.size()) ? data.texcoords[i].y() : 0.0f;
+
+        Colour3 vertexColour{1.0f, 1.0f, 1.0f};
+        if (i < data.colours.size())
+        {
+            vertexColour = Colour3{data.colours[i].x(), data.colours[i].y(), data.colours[i].z()};
+        }
+
+        Joints4 joints{};
+        if (i < data.joints.size())
+        {
+            joints =
+                Joints4{data.joints[i][0], data.joints[i][1], data.joints[i][2], data.joints[i][3]};
+        }
+
+        Vec4 weights{};
+        if (i < data.weights.size())
+        {
+            weights = Vec4{data.weights[i].x(), data.weights[i].y(), data.weights[i].z(),
+                           data.weights[i].w()};
+        }
+
+        Vec4 tangent{0.0f, 0.0f, 0.0f, 1.0f};
+        if (i < tangents.size())
+        {
+            tangent = tangents[i];
+        }
+
+        const float u1 = (i < data.texcoords1.size()) ? data.texcoords1[i].x() : u;
+        const float v1 = (i < data.texcoords1.size()) ? data.texcoords1[i].y() : v;
+
+        Vertex vertex{position, vertexColour, normal, Vec2{u, v}, joints, weights, tangent};
+        vertex.texCoord1(Vec2{u1, v1});
+        vertices.push_back(vertex);
+    }
+    return vertices;
+}
+
+void loadMorphTargets(const fastgltf::Asset& asset, const fastgltf::Primitive& primitive,
+                      std::size_t vertexCount, Geometry& geometry)
+{
+    if (primitive.targets.empty())
+    {
+        return;
+    }
+
+    std::vector<std::vector<Vec3>> morphPositions;
+    std::vector<std::vector<Vec3>> morphNormals;
+    std::vector<std::vector<Vec3>> morphTangents;
+
+    for (const auto& target : primitive.targets)
+    {
+        std::vector<Vec3> targetPos(vertexCount);
+        std::vector<Vec3> targetNorm(vertexCount);
+        std::vector<Vec3> targetTang(vertexCount);
+
+        for (const auto& attr : target)
+        {
+            const auto& accessor = asset.accessors[attr.accessorIndex];
+            if (attr.name == "POSITION")
+            {
+                fastgltf::iterateAccessorWithIndex<fastgltf::math::fvec3>(
+                    asset, accessor, [&](fastgltf::math::fvec3 position, std::size_t index)
+                    { targetPos[index] = Vec3{position.x(), position.y(), position.z()}; });
+            }
+            else if (attr.name == "NORMAL")
+            {
+                fastgltf::iterateAccessorWithIndex<fastgltf::math::fvec3>(
+                    asset, accessor, [&](fastgltf::math::fvec3 normal, std::size_t index)
+                    { targetNorm[index] = Vec3{normal.x(), normal.y(), normal.z()}; });
+            }
+            else if (attr.name == "TANGENT")
+            {
+                fastgltf::iterateAccessorWithIndex<fastgltf::math::fvec3>(
+                    asset, accessor, [&](fastgltf::math::fvec3 tangent, std::size_t index)
+                    { targetTang[index] = Vec3{tangent.x(), tangent.y(), tangent.z()}; });
+            }
+        }
+
+        morphPositions.push_back(std::move(targetPos));
+        morphNormals.push_back(std::move(targetNorm));
+        morphTangents.push_back(std::move(targetTang));
+    }
+
+    geometry.morphPositions(std::move(morphPositions));
+    geometry.morphNormals(std::move(morphNormals));
+    geometry.morphTangents(std::move(morphTangents));
+}
+
+} // namespace
+
 const Texture* GltfLoader::resolveTextureIndex(const fastgltf::Asset& asset,
                                                std::size_t textureIndex, const std::string& baseDir,
                                                Resources& resources, Assets& assets,
@@ -522,270 +804,14 @@ TangentGenerationResult GltfLoader::loadGeometry(const fastgltf::Asset& asset,
         return {};
     }
 
-    const auto* posAttr = primitive.findAttribute("POSITION");
-    const auto* normAttr = primitive.findAttribute("NORMAL");
-    const auto* uvAttr = primitive.findAttribute("TEXCOORD_0");
-    const auto* uv1Attr = primitive.findAttribute("TEXCOORD_1");
-    const auto* colourAttr = primitive.findAttribute("COLOR_0");
-    const auto* jointsAttr = primitive.findAttribute("JOINTS_0");
-    const auto* weightsAttr = primitive.findAttribute("WEIGHTS_0");
-    const auto* tangentAttr = primitive.findAttribute("TANGENT");
+    auto data = readPrimitiveGeometryData(asset, primitive);
+    generateMissingNormals(data);
 
-    if (posAttr == primitive.attributes.end())
-    {
-        throw std::runtime_error("glTF primitive missing POSITION attribute");
-    }
-
-    const auto& posAccessor = asset.accessors[posAttr->accessorIndex];
-    std::vector<fastgltf::math::fvec3> positions(posAccessor.count);
-    fastgltf::iterateAccessorWithIndex<fastgltf::math::fvec3>(
-        asset, posAccessor,
-        [&](fastgltf::math::fvec3 pos, std::size_t idx) { positions[idx] = pos; });
-
-    std::vector<fastgltf::math::fvec3> normals;
-    if (normAttr != primitive.attributes.end())
-    {
-        const auto& normAccessor = asset.accessors[normAttr->accessorIndex];
-        normals.resize(normAccessor.count);
-        fastgltf::iterateAccessorWithIndex<fastgltf::math::fvec3>(
-            asset, normAccessor,
-            [&](fastgltf::math::fvec3 n, std::size_t idx) { normals[idx] = n; });
-    }
-
-    std::vector<fastgltf::math::fvec2> texcoords;
-    if (uvAttr != primitive.attributes.end())
-    {
-        const auto& uvAccessor = asset.accessors[uvAttr->accessorIndex];
-        texcoords.resize(uvAccessor.count);
-        fastgltf::iterateAccessorWithIndex<fastgltf::math::fvec2>(
-            asset, uvAccessor,
-            [&](fastgltf::math::fvec2 uv, std::size_t idx) { texcoords[idx] = uv; });
-    }
-
-    // Optional second UV set. Stage B will let materials sample either set
-    // per texture slot; for now we just round-trip the data into the GPU
-    // buffer so the shader path can pick it up later.
-    std::vector<fastgltf::math::fvec2> texcoords1;
-    if (uv1Attr != primitive.attributes.end())
-    {
-        const auto& uv1Accessor = asset.accessors[uv1Attr->accessorIndex];
-        texcoords1.resize(uv1Accessor.count);
-        fastgltf::iterateAccessorWithIndex<fastgltf::math::fvec2>(
-            asset, uv1Accessor,
-            [&](fastgltf::math::fvec2 uv, std::size_t idx) { texcoords1[idx] = uv; });
-    }
-
-    // Joint indices — may be uint8 or uint16 in glTF, stored as uint32
-    std::vector<std::array<uint32_t, 4>> joints;
-    if (jointsAttr != primitive.attributes.end())
-    {
-        const auto& jointsAccessor = asset.accessors[jointsAttr->accessorIndex];
-        joints.resize(jointsAccessor.count);
-        fastgltf::iterateAccessorWithIndex<fastgltf::math::u16vec4>(
-            asset, jointsAccessor, [&](fastgltf::math::u16vec4 j, std::size_t idx)
-            { joints[idx] = {j.x(), j.y(), j.z(), j.w()}; });
-    }
-
-    std::vector<fastgltf::math::fvec4> weights;
-    if (weightsAttr != primitive.attributes.end())
-    {
-        const auto& weightsAccessor = asset.accessors[weightsAttr->accessorIndex];
-        weights.resize(weightsAccessor.count);
-        fastgltf::iterateAccessorWithIndex<fastgltf::math::fvec4>(
-            asset, weightsAccessor,
-            [&](fastgltf::math::fvec4 w, std::size_t idx) { weights[idx] = w; });
-    }
-
-    std::vector<fastgltf::math::fvec4> sourceTangents;
-    if (tangentAttr != primitive.attributes.end())
-    {
-        const auto& tangentAccessor = asset.accessors[tangentAttr->accessorIndex];
-        sourceTangents.resize(tangentAccessor.count);
-        fastgltf::iterateAccessorWithIndex<fastgltf::math::fvec4>(
-            asset, tangentAccessor,
-            [&](fastgltf::math::fvec4 t, std::size_t idx) { sourceTangents[idx] = t; });
-    }
-
-    std::vector<fastgltf::math::fvec4> colours;
-    if (colourAttr != primitive.attributes.end())
-    {
-        const auto& colourAccessor = asset.accessors[colourAttr->accessorIndex];
-        colours.resize(colourAccessor.count);
-        fastgltf::iterateAccessorWithIndex<fastgltf::math::fvec4>(
-            asset, colourAccessor,
-            [&](fastgltf::math::fvec4 c, std::size_t idx) { colours[idx] = c; });
-    }
-
-    std::vector<uint32_t> idxs;
-    if (primitive.indicesAccessor.has_value())
-    {
-        const auto& indexAccessor = asset.accessors[primitive.indicesAccessor.value()];
-        idxs.reserve(indexAccessor.count);
-        fastgltf::iterateAccessor<std::uint32_t>(asset, indexAccessor,
-                                                 [&](std::uint32_t idx) { idxs.push_back(idx); });
-    }
-    else
-    {
-        for (std::size_t i = 0; i < positions.size(); ++i)
-        {
-            idxs.push_back(static_cast<uint32_t>(i));
-        }
-    }
-
-    // glTF 2.0 spec: when NORMAL is absent the implementation must compute
-    // normals. Smooth (area-weighted) variant — matches glTF reference viewer
-    // output and avoids the ugly faceted look on curved meshes like Fox.
-    if (normals.empty() && !positions.empty())
-    {
-        std::vector<Vec3> enginePositions;
-        enginePositions.reserve(positions.size());
-        for (const auto& p : positions)
-        {
-            enginePositions.emplace_back(p.x(), p.y(), p.z());
-        }
-        const auto generated = GltfLoader::generateSmoothNormals(enginePositions, idxs);
-        normals.resize(positions.size());
-        for (std::size_t i = 0; i < generated.size(); ++i)
-        {
-            normals[i] = {generated[i].x(), generated[i].y(), generated[i].z()};
-        }
-    }
-
-    std::vector<Vec4> tangents;
     TangentGenerationResult tangentResult;
-    if (tangentAttr != primitive.attributes.end())
-    {
-        tangents.reserve(sourceTangents.size());
-        for (const auto& tangent : sourceTangents)
-        {
-            tangents.emplace_back(tangent.x(), tangent.y(), tangent.z(), tangent.w());
-        }
-        tangentResult.succeeded = true;
-    }
-    else if (needsTangents)
-    {
-        std::vector<Vec3> positionData;
-        positionData.reserve(positions.size());
-        for (const auto& position : positions)
-        {
-            positionData.emplace_back(position.x(), position.y(), position.z());
-        }
-
-        std::vector<Vec3> normalData;
-        normalData.reserve(normals.size());
-        for (const auto& normal : normals)
-        {
-            normalData.emplace_back(normal.x(), normal.y(), normal.z());
-        }
-
-        std::vector<Vec2> texcoordData;
-        texcoordData.reserve(texcoords.size());
-        for (const auto& texcoord : texcoords)
-        {
-            texcoordData.emplace_back(texcoord.x(), texcoord.y());
-        }
-
-        tangentResult = TangentGenerator::generate(positionData, normalData, texcoordData, idxs);
-        if (tangentResult.succeeded)
-        {
-            tangents = tangentResult.tangents;
-        }
-    }
-
-    std::vector<Vertex> verts;
-    verts.reserve(positions.size());
-    for (std::size_t i = 0; i < positions.size(); ++i)
-    {
-        Vec3 pos{positions[i].x(), positions[i].y(), positions[i].z()};
-        Vec3 norm = (i < normals.size()) ? Vec3{normals[i].x(), normals[i].y(), normals[i].z()}
-                                         : Vec3{0.0f, 1.0f, 0.0f};
-        float u = (i < texcoords.size()) ? texcoords[i].x() : 0.0f;
-        float v = (i < texcoords.size()) ? texcoords[i].y() : 0.0f;
-
-        Colour3 vertexColour{1.0f, 1.0f, 1.0f};
-        if (i < colours.size())
-        {
-            vertexColour = Colour3{colours[i].x(), colours[i].y(), colours[i].z()};
-        }
-
-        Joints4 jt{};
-        if (i < joints.size())
-        {
-            jt = Joints4{joints[i][0], joints[i][1], joints[i][2], joints[i][3]};
-        }
-
-        Vec4 wt{};
-        if (i < weights.size())
-        {
-            wt = Vec4{weights[i].x(), weights[i].y(), weights[i].z(), weights[i].w()};
-        }
-
-        Vec4 tang{0.0f, 0.0f, 0.0f, 1.0f};
-        if (i < tangents.size())
-        {
-            tang = tangents[i];
-        }
-
-        // Second UV set falls back to the first when the source mesh only
-        // has TEXCOORD_0 — keeps the shader path uniform.
-        const float u1 = (i < texcoords1.size()) ? texcoords1[i].x() : u;
-        const float v1 = (i < texcoords1.size()) ? texcoords1[i].y() : v;
-
-        Vertex vertex{pos, vertexColour, norm, Vec2{u, v}, jt, wt, tang};
-        vertex.texCoord1(Vec2{u1, v1});
-        verts.push_back(vertex);
-    }
-    geometry.vertices(std::move(verts));
-    geometry.indices(std::move(idxs));
-
-    // Load morph targets
-    if (!primitive.targets.empty())
-    {
-        std::vector<std::vector<Vec3>> morphPositions;
-        std::vector<std::vector<Vec3>> morphNormals;
-        std::vector<std::vector<Vec3>> morphTangents;
-
-        for (std::size_t ti = 0; ti < primitive.targets.size(); ++ti)
-        {
-            const auto& target = primitive.targets[ti];
-            std::vector<Vec3> targetPos(positions.size());
-            std::vector<Vec3> targetNorm(positions.size());
-            std::vector<Vec3> targetTang(positions.size());
-
-            for (const auto& attr : target)
-            {
-                const auto& accessor = asset.accessors[attr.accessorIndex];
-                if (attr.name == "POSITION")
-                {
-                    fastgltf::iterateAccessorWithIndex<fastgltf::math::fvec3>(
-                        asset, accessor, [&](fastgltf::math::fvec3 p, std::size_t idx)
-                        { targetPos[idx] = Vec3{p.x(), p.y(), p.z()}; });
-                }
-                else if (attr.name == "NORMAL")
-                {
-                    fastgltf::iterateAccessorWithIndex<fastgltf::math::fvec3>(
-                        asset, accessor, [&](fastgltf::math::fvec3 n, std::size_t idx)
-                        { targetNorm[idx] = Vec3{n.x(), n.y(), n.z()}; });
-                }
-                else if (attr.name == "TANGENT")
-                {
-                    // glTF spec: morph TANGENT deltas are vec3 (xyz only —
-                    // handedness in the base tangent's .w stays unchanged).
-                    fastgltf::iterateAccessorWithIndex<fastgltf::math::fvec3>(
-                        asset, accessor, [&](fastgltf::math::fvec3 t, std::size_t idx)
-                        { targetTang[idx] = Vec3{t.x(), t.y(), t.z()}; });
-                }
-            }
-
-            morphPositions.push_back(std::move(targetPos));
-            morphNormals.push_back(std::move(targetNorm));
-            morphTangents.push_back(std::move(targetTang));
-        }
-
-        geometry.morphPositions(std::move(morphPositions));
-        geometry.morphNormals(std::move(morphNormals));
-        geometry.morphTangents(std::move(morphTangents));
-    }
+    auto tangents = buildTangents(data, needsTangents, tangentResult);
+    geometry.vertices(buildVertices(data, tangents));
+    geometry.indices(std::move(data.indices));
+    loadMorphTargets(asset, primitive, data.positions.size(), geometry);
 
     geometry.load(resources);
     return tangentResult;
