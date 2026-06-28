@@ -199,6 +199,40 @@ TEST_CASE("Animation.TranslationInterpolatesLinearly", "[Animation]")
     CHECK((m[2, 3]) == Catch::Approx(3.0f).margin(1e-5f));
 }
 
+TEST_CASE("Animation.TranslationExactInteriorKeyUsesThatKeyframe", "[Animation]")
+{
+    Animation anim;
+    anim.translationKeyframes({
+        {0.0f, Vec3{0.0f, 0.0f, 0.0f}},
+        {1.0f, Vec3{10.0f, 20.0f, 30.0f}},
+        {2.0f, Vec3{20.0f, 40.0f, 60.0f}},
+    });
+    anim.duration(3.0f);
+
+    Mat4 m = anim.sample(1.0f);
+    CHECK((m[0, 3]) == Catch::Approx(10.0f).margin(1e-5f));
+    CHECK((m[1, 3]) == Catch::Approx(20.0f).margin(1e-5f));
+    CHECK((m[2, 3]) == Catch::Approx(30.0f).margin(1e-5f));
+}
+
+TEST_CASE("Animation.TranslationDuplicateTimesUseLastMatchingKeyframe", "[Animation]")
+{
+    Animation anim;
+    anim.translationKeyframes({
+        {0.0f, Vec3{0.0f, 0.0f, 0.0f}},
+        {1.0f, Vec3{10.0f, 0.0f, 0.0f}},
+        {1.0f, Vec3{20.0f, 0.0f, 0.0f}},
+        {2.0f, Vec3{30.0f, 0.0f, 0.0f}},
+    });
+    anim.duration(3.0f);
+
+    Mat4 exact = anim.sample(1.0f);
+    CHECK((exact[0, 3]) == Catch::Approx(20.0f).margin(1e-5f));
+
+    Mat4 afterDuplicate = anim.sample(1.5f);
+    CHECK((afterDuplicate[0, 3]) == Catch::Approx(25.0f).margin(1e-5f));
+}
+
 // ==========================================================================
 // Duration = max across channels
 // ==========================================================================

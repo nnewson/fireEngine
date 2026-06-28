@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <functional>
 #include <optional>
 #include <span>
 #include <utility>
@@ -73,19 +74,13 @@ std::pair<std::size_t, float> findBracket(std::span<const KF> kf, float t) noexc
         return {0, 0.0f};
     }
 
-    std::size_t i = 0;
-    for (; i < kf.size() - 1; ++i)
-    {
-        if (t < kf[i + 1].time)
-        {
-            break;
-        }
-    }
-    if (i >= kf.size() - 1)
+    const auto upper = std::ranges::upper_bound(kf, t, std::less<>{}, &KF::time);
+    if (upper == kf.end())
     {
         return {kf.size() - 1, 0.0f};
     }
 
+    const std::size_t i = static_cast<std::size_t>(upper - kf.begin() - 1);
     float dt = kf[i + 1].time - kf[i].time;
     float alpha = (dt > 0.0f) ? (t - kf[i].time) / dt : 0.0f;
     return {i, alpha};
