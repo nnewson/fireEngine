@@ -163,6 +163,10 @@ private:
     static void presizeAssets(const fastgltf::Asset& asset, Assets& assets);
 
     // Node helpers
+    static void applyControllable(std::size_t nodeIndex,
+                                  const std::unordered_set<std::size_t>& controllableNodeIndices,
+                                  Node& node);
+
     static void applyTRS(const fastgltf::Node& gltfNode, Node& node);
 
     [[nodiscard]]

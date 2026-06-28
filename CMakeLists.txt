@@ -37,6 +37,7 @@ add_library(fireengine SHARED
     src/core/gltf_loader_images.cpp
     src/core/gltf_loader_material.cpp
     src/core/gltf_loader_mesh.cpp
+    src/core/gltf_loader_nodes.cpp
     src/core/gltf_loader_scene.cpp
     src/core/gltf_loader_animation.cpp
     src/core/shader_loader.cpp
