@@ -1,5 +1,7 @@
 #include <fire_engine/scene/node.hpp>
 
+#include <cstdint>
+
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
@@ -146,6 +148,24 @@ TEST_CASE("NodeMotion.PreviousComposedWorldLagsOneFrame", "[NodeMotion]")
     // Current is this frame's position; previous is last frame's.
     CHECK((n.composedWorld()[0, 3]) == Catch::Approx(4.0f).margin(1e-5f));
     CHECK((n.previousComposedWorld()[0, 3]) == Catch::Approx(1.0f).margin(1e-5f));
+}
+
+TEST_CASE("NodeMotion.WorldRevisionTracksComposedWorldChanges", "[NodeMotion]")
+{
+    Node n("Node");
+    CHECK(n.worldRevision() == 0U);
+
+    n.transform().position({1.0f, 0.0f, 0.0f});
+    n.resolve(Mat4::identity());
+    const std::uint64_t initialRevision = n.worldRevision();
+    CHECK(initialRevision == 1U);
+
+    n.resolve(Mat4::identity());
+    CHECK(n.worldRevision() == initialRevision);
+
+    n.transform().position({4.0f, 0.0f, 0.0f});
+    n.resolve(Mat4::identity());
+    CHECK(n.worldRevision() == initialRevision + 1U);
 }
 
 TEST_CASE("NodeUpdate.ControllableMovesTransformFromControllerState", "[NodeUpdate]")

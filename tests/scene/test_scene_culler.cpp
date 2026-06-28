@@ -166,6 +166,27 @@ TEST_CASE("SceneCuller.MovingANodeUpdatesItsCullState", "[SceneCuller]")
     CHECK(culler.cull(frustums).contains(node));
 }
 
+TEST_CASE("SceneCuller.UnchangedSyncDoesNotPreventLaterMoveRefit", "[SceneCuller]")
+{
+    Assets assets;
+    std::vector<std::unique_ptr<Node>> nodes;
+    Node* node = nodes.emplace_back(makeCubeNode(assets, {0.0f, 0.0f, -5.0f})).get();
+
+    SceneCuller culler;
+    const std::array<Frustum, 1> frustums{cameraFrustum()};
+
+    culler.sync(nodes);
+    CHECK_FALSE(culler.cull(frustums).contains(node));
+
+    culler.sync(nodes);
+    CHECK_FALSE(culler.cull(frustums).contains(node));
+
+    node->transform().position({0.0f, 0.0f, 50.0f});
+    node->resolve(Mat4::identity());
+    culler.sync(nodes);
+    CHECK(culler.cull(frustums).contains(node));
+}
+
 TEST_CASE("SceneCuller.RemovingANodeDestroysItsProxy", "[SceneCuller]")
 {
     Assets assets;

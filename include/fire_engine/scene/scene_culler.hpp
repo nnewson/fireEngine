@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <span>
 #include <unordered_map>
@@ -53,12 +54,20 @@ public:
     void clear();
 
 private:
-    void syncNode(Node& node, std::unordered_set<const Node*>& seen);
+    struct Proxy
+    {
+        int id{0};
+        std::uint64_t worldRevision{0};
+        std::uint64_t seenGeneration{0};
+    };
+
+    void syncNode(Node& node);
 
     AabbBvh<Node*> bvh_{0.1f};
-    std::unordered_map<const Node*, int> proxies_;
+    std::unordered_map<const Node*, Proxy> proxies_;
     std::unordered_set<const Node*> culled_;
     std::unordered_set<const Node*> visible_;
+    std::uint64_t syncGeneration_{0};
 };
 
 } // namespace fire_engine

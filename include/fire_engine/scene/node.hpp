@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
@@ -184,6 +185,11 @@ public:
         return previousComposedWorld_;
     }
 
+    [[nodiscard]] std::uint64_t worldRevision() const noexcept
+    {
+        return worldRevision_;
+    }
+
     Node& addChild(std::unique_ptr<Node> child);
 
     void update(const InputState& input_state, const Mat4& parentComposedWorld);
@@ -204,6 +210,7 @@ private:
     std::optional<Mat4> worldOverride_;
     Mat4 composedWorld_{Mat4::identity()};
     Mat4 previousComposedWorld_{Mat4::identity()};
+    std::uint64_t worldRevision_{0};
     bool hasComposedWorld_{false};
     Node* parent_{nullptr};
     std::vector<std::unique_ptr<Node>> children_;
