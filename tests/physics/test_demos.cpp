@@ -155,6 +155,35 @@ PhysicsBodyHandle addStriker(PhysicsWorld& world, Vec3 pos, Vec3 velocity)
     return body;
 }
 
+// The trapezoidal valley mesh (matches _VALLEY_VERTS/_VALLEY_TRIS in generate.py).
+StaticMeshShape valleyMesh()
+{
+    StaticMeshShape m;
+    m.vertices = {{-7.0f, 1.5f, -5.0f}, {7.0f, 1.5f, -5.0f}, {-7.0f, 0.0f, -3.0f},
+                  {7.0f, 0.0f, -3.0f},  {-7.0f, 0.0f, 3.0f}, {7.0f, 0.0f, 3.0f},
+                  {-7.0f, 1.5f, 5.0f},  {7.0f, 1.5f, 5.0f}};
+    m.indices = {2, 3, 0, 0, 3, 1, 4, 5, 2, 2, 5, 3, 5, 4, 6, 5, 6, 7};
+    return m;
+}
+
+PhysicsBodyHandle addStaticMesh(PhysicsWorld& world, const StaticMeshShape& mesh, float friction)
+{
+    PhysicsBodyDesc desc;
+    desc.type = PhysicsBodyType::Static;
+    const PhysicsBodyHandle body = world.createBody(desc);
+    static_cast<void>(world.createMeshCollider(
+        body, mesh, PhysicsMaterial{.restitution = 0.0f, .friction = friction}));
+    return body;
+}
+
+CompoundChild boxChild(Vec3 halfExtents, Vec3 position)
+{
+    CompoundChild child;
+    child.shape = BoxShape{halfExtents, Vec3{}};
+    child.localPosition = position;
+    return child;
+}
+
 void step(PhysicsWorld& world, int steps)
 {
     for (int i = 0; i < steps; ++i)
@@ -402,4 +431,63 @@ TEST_CASE("Demos.Sleep.StackSleepsThenWakesOnImpact", "[Demos]")
         CHECK(world.sleeping(h));
     }
     CHECK(world.sleeping(striker));
+}
+
+TEST_CASE("Demos.StaticMesh.BodiesSettleInValley", "[Demos]")
+{
+    // StaticMeshDemo.gltf: boxes + a sphere dropped onto a triangulated valley (a
+    // Static triangle-mesh collider, not a box) land on the flat bottom (y = 0) and
+    // settle — proving contacts against the mesh's actual triangles.
+    PhysicsWorld world;
+    addStaticMesh(world, valleyMesh(), 0.6f);
+    const std::array<PhysicsBodyHandle, 3> bodies{
+        addDynamicBox(world, {-3.0f, 1.3f, -1.5f}, {0.4f, 0.4f, 0.4f}, 0.0f, 0.5f),
+        addDynamicBox(world, {3.0f, 1.3f, 1.5f}, {0.4f, 0.4f, 0.4f}, 0.0f, 0.5f),
+        addDynamicSphere(world, {0.0f, 1.3f, 0.0f}, 0.4f, 0.1f, 0.4f),
+    };
+
+    step(world, 480); // 8 s — drop onto the mesh surface and settle
+
+    for (const PhysicsBodyHandle h : bodies)
+    {
+        const Vec3 pos = world.bodyTransform(h)->position();
+        const Vec3 vel = world.body(h)->linearVelocity();
+        CHECK(std::isfinite(pos.y()));
+        CHECK(pos.y() == Catch::Approx(0.4f).margin(0.12f)); // resting on the mesh (half 0.4)
+        CHECK(std::abs(pos.z()) < 3.0f);                     // on the flat bottom
+        CHECK(Vec3::dotProduct(vel, vel) < 0.04f);           // |v| < 0.2 — at rest
+    }
+}
+
+TEST_CASE("Demos.Compound.LShapeRestsOnFloor", "[Demos]")
+{
+    // CompoundDemo.gltf: an L-shaped compound (bar + upright) has its centre of mass
+    // offset toward the corner (engine-aggregated, volume-weighted), so it rests
+    // stably flat on its bar instead of tipping.
+    PhysicsWorld world;
+    addStaticFloor(world, 6.0f);
+    PhysicsBodyDesc desc;
+    desc.type = PhysicsBodyType::Dynamic;
+    desc.position = {0.0f, 2.0f, 0.0f};
+    desc.gravityScale = 1.0f;
+    desc.mass = 3.0f;
+    desc.material = PhysicsMaterial{.restitution = 0.0f, .friction = 0.5f};
+    const PhysicsBodyHandle body = world.createBody(desc);
+    const std::vector<CompoundChild> children{
+        boxChild({1.2f, 0.4f, 0.4f}, {0.0f, 0.0f, 0.0f}),
+        boxChild({0.4f, 1.0f, 0.4f}, {-0.8f, 1.0f, 0.0f}),
+    };
+    static_cast<void>(world.createCompoundCollider(body, children));
+
+    // The aggregated COM is offset toward the corner (−x, +y), not the body origin.
+    const Vec3 com = world.body(body)->centerOfMassLocal();
+    CHECK(com.x() < -0.2f);
+    CHECK(com.y() > 0.2f);
+
+    step(world, 300); // 5 s — fall and settle on the bar
+
+    const auto t = world.bodyTransform(body).value();
+    CHECK(t.position().y() == Catch::Approx(0.4f).margin(0.08f));  // bar (half 0.4) on the floor
+    CHECK(t.rotation().approxEqual(Quaternion::identity(), 0.1f)); // upright, did not tip
+    CHECK(world.sleeping(body));
 }

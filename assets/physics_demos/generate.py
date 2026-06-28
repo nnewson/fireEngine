@@ -90,6 +90,35 @@ def tetrahedron_geometry(scale):
     return positions, normals, indices
 
 
+def mesh_from_triangles(vertices, triangles):
+    """Flat-shaded geometry (3 verts per triangle, per-face normal) from a vertex
+    list + triangle index triples. Used for static triangle-mesh colliders."""
+    positions, normals, indices = [], [], []
+    for tri in triangles:
+        p = [vertices[i] for i in tri]
+        n = _normalise(_cross(_sub(p[1], p[0]), _sub(p[2], p[0])))
+        base = len(positions)
+        for q in p:
+            positions.append(q)
+            normals.append(n)
+        indices += [base, base + 1, base + 2]
+    return positions, normals, indices
+
+
+def combine_geometry(parts):
+    """Concatenate (positions, normals, indices) geometries, each translated by its
+    offset — builds one mesh for a multi-box compound's visual."""
+    positions, normals, indices = [], [], []
+    for geo, offset in parts:
+        gp, gn, gi = geo
+        base = len(positions)
+        for p in gp:
+            positions.append((p[0] + offset[0], p[1] + offset[1], p[2] + offset[2]))
+        normals += gn
+        indices += [base + i for i in gi]
+    return positions, normals, indices
+
+
 def sphere_geometry(radius, stacks=16, slices=24):
     """UV sphere centred at the origin (normals = normalised position)."""
     positions, normals, indices = [], [], []
@@ -243,6 +272,25 @@ class Scene:
         mesh = self.mesh(positions, normals, indices, self.material(colour), name)
         cfg = dict(physics)
         cfg["Shape"] = "ConvexHull"
+        return self.node(name, mesh, position, cfg, rotation)
+
+    def static_mesh_body(self, name, vertices, triangles, colour, friction=0.6):
+        """A Static body whose collider is a triangle mesh built from its own geometry
+        (Shape: "Mesh"). Vertices are in world space; the node sits at the origin."""
+        geo = mesh_from_triangles(vertices, triangles)
+        mesh = self.mesh(*geo, self.material(colour), name)
+        return self.node(
+            name, mesh, (0.0, 0.0, 0.0),
+            {"BodyType": "Static", "Shape": "Mesh", "Restitution": 0.0, "Friction": friction})
+
+    def compound_body(self, name, geometry, position, colour, children, physics, rotation=None):
+        """A Dynamic body whose collider is a Compound of child boxes; `geometry` is the
+        matching visual mesh and `children` the authored Compound child list."""
+        positions, normals, indices = geometry
+        mesh = self.mesh(positions, normals, indices, self.material(colour), name)
+        cfg = dict(physics)
+        cfg["Shape"] = "Compound"
+        cfg["Children"] = children
         return self.node(name, mesh, position, cfg, rotation)
 
     def static_floor(self, name="Floor", half_xz=6.0, thickness=0.25,
@@ -574,6 +622,70 @@ def demo_sleep():
     return s
 
 
+# Trapezoidal valley: a wide flat bottom (z in [-3, 3] at y=0) with gentle slopes rising
+# to walls at z=+-5. One-sided triangles wound so every normal faces up into the valley.
+# Bodies are dropped low onto the flat bottom (a steep narrow trough makes them slosh /
+# a sphere roll for many seconds; a wide flat bottom settles cleanly).
+_VALLEY_VERTS = [
+    (-7.0, 1.5, -5.0), (7.0, 1.5, -5.0),  # 0,1 back wall top
+    (-7.0, 0.0, -3.0), (7.0, 0.0, -3.0),  # 2,3 bottom near
+    (-7.0, 0.0, 3.0), (7.0, 0.0, 3.0),    # 4,5 bottom far
+    (-7.0, 1.5, 5.0), (7.0, 1.5, 5.0),    # 6,7 front wall top
+]
+_VALLEY_TRIS = [
+    (2, 3, 0), (0, 3, 1),  # left slope (normal up +z)
+    (4, 5, 2), (2, 5, 3),  # flat bottom (normal +y)
+    (5, 4, 6), (5, 6, 7),  # right slope (normal up -z)
+]
+
+
+def demo_static_mesh():
+    """P6: a triangulated valley (Static Shape:"Mesh" — a triangle-mesh collider, not a
+    box) catches dropped boxes and a sphere; they land on the mesh surface and settle.
+    Proves contacts are generated against the mesh's actual triangles."""
+    s = Scene()
+    s.static_mesh_body("Valley", _VALLEY_VERTS, _VALLEY_TRIS, (0.40, 0.42, 0.48), friction=0.6)
+    box = {"BodyType": "Dynamic", "Shape": "Box", "Mass": 1.0, "Restitution": 0.0, "Friction": 0.5}
+    s.box_body("Box0", (0.4, 0.4, 0.4), (-3.0, 1.3, -1.5), (0.80, 0.40, 0.30), box)
+    s.box_body("Box1", (0.4, 0.4, 0.4), (3.0, 1.3, 1.5), (0.35, 0.55, 0.80), box)
+    s.sphere_body(
+        "Ball", 0.4, (0.0, 1.3, 0.0), (0.80, 0.65, 0.30),
+        {"BodyType": "Dynamic", "Shape": "Sphere", "Mass": 1.0, "Restitution": 0.1,
+         "Friction": 0.4})
+    s.camera(eye=(9.0, 5.0, 9.0), target=(0.0, 0.4, 0.0))
+    return s
+
+
+# L-shaped compound: a horizontal bar + a vertical upright at its left end. The two
+# children and the matching visual mesh share these dimensions/offsets.
+_L_BAR_HALF = (1.2, 0.4, 0.4)
+_L_BAR_POS = (0.0, 0.0, 0.0)
+_L_UPRIGHT_HALF = (0.4, 1.0, 0.4)
+_L_UPRIGHT_POS = (-0.8, 1.0, 0.0)
+
+
+def demo_compound():
+    """P6: an L-shaped Dynamic body whose collider is a Compound of two boxes. Its true
+    centre of mass is offset toward the corner (volume-weighted), computed by the engine
+    — so it rests stably on its bar instead of tipping (a naive origin-as-COM would get
+    the balance wrong)."""
+    s = Scene()
+    s.static_floor(half_xz=6.0)
+    geo = combine_geometry([
+        (box_geometry(_L_BAR_HALF), _L_BAR_POS),
+        (box_geometry(_L_UPRIGHT_HALF), _L_UPRIGHT_POS),
+    ])
+    children = [
+        {"Shape": "Box", "HalfExtents": list(_L_BAR_HALF), "Position": list(_L_BAR_POS)},
+        {"Shape": "Box", "HalfExtents": list(_L_UPRIGHT_HALF), "Position": list(_L_UPRIGHT_POS)},
+    ]
+    s.compound_body(
+        "LBlock", geo, (0.0, 2.0, 0.0), (0.75, 0.55, 0.35), children,
+        {"BodyType": "Dynamic", "Mass": 3.0, "Restitution": 0.0, "Friction": 0.5})
+    s.camera(eye=(5.0, 3.0, 6.0), target=(-0.3, 0.8, 0.0))
+    return s
+
+
 DEMOS = {
     "FallRestDemo": demo_fall_rest,
     "RestitutionDemo": demo_restitution,
@@ -582,6 +694,8 @@ DEMOS = {
     "ToppleDemo": demo_topple,
     "ConvexHullDemo": demo_convex_hull,
     "SleepDemo": demo_sleep,
+    "StaticMeshDemo": demo_static_mesh,
+    "CompoundDemo": demo_compound,
 }
 
 

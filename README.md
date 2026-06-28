@@ -94,6 +94,8 @@ Physics can be authored in glTF through node `extras.Physics`. The loader create
 | `ToppleDemo.gltf` | A tall box tilted 30° — past its ~16.7° balance angle — topples onto its long side and comes to rest (full rotational dynamics: inertia + lever-arm torque). | `Demos.Topple.TallBoxTopplesOntoSide` |
 | `ConvexHullDemo.gltf` | Tetrahedra (collider = `ConvexHull` built from the mesh) tumble through the GJK/EPA convex narrowphase, land on a face, and settle into a loose pile. | `Demos.ConvexHull.PileSettlesAtRest` |
 | `SleepDemo.gltf` | A small stack settles and the island goes to **sleep** (with `--debug-physics` its colliders dim to the asleep colour); a striker then slides in along the floor, **wakes** it on impact, and friction stops the striker against the stack — so everything ends asleep on the floor. | `Demos.Sleep.StackSleepsThenWakesOnImpact` |
+| `StaticMeshDemo.gltf` | Boxes + a sphere dropped into a triangulated valley (a Static `Shape:"Mesh"` triangle-mesh collider, not a box) land on the mesh surface and settle — contacts against the mesh's actual triangles. | `Demos.StaticMesh.BodiesSettleInValley` |
+| `CompoundDemo.gltf` | An L-shaped body whose collider is a `Shape:"Compound"` of two boxes; its engine-aggregated centre of mass is offset toward the corner, so it rests stably on its bar instead of tipping. | `Demos.Compound.LShapeRestsOnFloor` |
 
 Run a demo (add `--debug-physics` to overlay collider/contact wireframes); paths are relative to `build/`:
 
@@ -106,6 +108,8 @@ cd build
 ./fireEngineApp physics_demos/ToppleDemo.gltf        skybox.hdr --debug-physics
 ./fireEngineApp physics_demos/ConvexHullDemo.gltf    skybox.hdr --debug-physics
 ./fireEngineApp physics_demos/SleepDemo.gltf         skybox.hdr --debug-physics
+./fireEngineApp physics_demos/StaticMeshDemo.gltf    skybox.hdr --debug-physics
+./fireEngineApp physics_demos/CompoundDemo.gltf      skybox.hdr --debug-physics
 ```
 
 Run all the demo behaviour tests headlessly:
