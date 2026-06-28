@@ -1,43 +1,34 @@
 #include <fire_engine/core/gltf_loader.hpp>
 
-#include <fire_engine/render/resources.hpp>
-
-#include <algorithm>
-#include <array>
-#include <cstdint>
 #include <filesystem>
-#include <fstream>
 #include <iostream>
-#include <limits>
+#include <memory>
 #include <stdexcept>
-#include <string_view>
+#include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <variant>
+#include <vector>
 
 #include <fastgltf/core.hpp>
 #include <fastgltf/math.hpp>
-#include <fastgltf/tools.hpp>
 #include <fastgltf/types.hpp>
-#include <simdjson.h>
 
 #include <fire_engine/animation/animation.hpp>
 #include <fire_engine/graphics/assets.hpp>
 #include <fire_engine/graphics/geometry.hpp>
-#include <fire_engine/graphics/ktx_image.hpp>
-#include <fire_engine/graphics/material.hpp>
 #include <fire_engine/graphics/object.hpp>
-#include <fire_engine/graphics/sampler_settings.hpp>
-#include <fire_engine/graphics/skin.hpp>
-#include <fire_engine/graphics/texture.hpp>
 #include <fire_engine/math/constants.hpp>
-#include <fire_engine/math/quaternion.hpp>
+#include <fire_engine/math/mat4.hpp>
+#include <fire_engine/physics/physics_world.hpp>
 #include <fire_engine/scene/animator.hpp>
 #include <fire_engine/scene/camera.hpp>
 #include <fire_engine/scene/empty.hpp>
 #include <fire_engine/scene/light.hpp>
 #include <fire_engine/scene/mesh.hpp>
 #include <fire_engine/scene/node.hpp>
+#include <fire_engine/scene/ragdoll.hpp>
 #include <fire_engine/scene/scene_graph.hpp>
 
 namespace fire_engine
@@ -240,37 +231,6 @@ void GltfLoader::applyTRS(const fastgltf::Node& gltfNode, Node& node)
         node.transform().position({translation.x(), translation.y(), translation.z()});
         node.transform().rotation({rotation.x(), rotation.y(), rotation.z(), rotation.w()});
         node.transform().scale({scale.x(), scale.y(), scale.z()});
-    }
-}
-
-void GltfLoader::applyRestTRS(const fastgltf::Node& gltfNode, Animation& anim)
-{
-    fastgltf::math::fvec3 t{0.0f, 0.0f, 0.0f};
-    fastgltf::math::fquat r{0.0f, 0.0f, 0.0f, 1.0f};
-    fastgltf::math::fvec3 s{1.0f, 1.0f, 1.0f};
-
-    if (auto* trs = std::get_if<fastgltf::TRS>(&gltfNode.transform))
-    {
-        t = trs->translation;
-        r = trs->rotation;
-        s = trs->scale;
-    }
-    else if (auto* mat = std::get_if<fastgltf::math::fmat4x4>(&gltfNode.transform))
-    {
-        fastgltf::math::decomposeTransformMatrix(*mat, s, r, t);
-    }
-
-    if (anim.translationKeyframes().empty())
-    {
-        anim.translationKeyframes({{0.0f, {t.x(), t.y(), t.z()}}});
-    }
-    if (anim.rotationKeyframes().empty())
-    {
-        anim.rotationKeyframes({{0.0f, r.x(), r.y(), r.z(), r.w()}});
-    }
-    if (anim.scaleKeyframes().empty())
-    {
-        anim.scaleKeyframes({{0.0f, {s.x(), s.y(), s.z()}}});
     }
 }
 
