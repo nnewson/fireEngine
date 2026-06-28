@@ -430,6 +430,288 @@ KtxImage GltfLoader::loadKtxImage(const fastgltf::Asset& asset, std::size_t imag
                                       source.bytes.size(), source.label);
 }
 
+namespace
+{
+
+template <typename Value>
+std::vector<Value> readAccessorValues(const fastgltf::Asset& asset, std::size_t accessorIndex)
+{
+    const auto& accessor = asset.accessors[accessorIndex];
+    std::vector<Value> values(accessor.count);
+    fastgltf::iterateAccessorWithIndex<Value>(asset, accessor, [&](Value value, std::size_t index)
+                                              { values[index] = value; });
+    return values;
+}
+
+std::vector<std::uint32_t> readPrimitiveIndices(const fastgltf::Asset& asset,
+                                                const fastgltf::Primitive& primitive,
+                                                std::size_t vertexCount)
+{
+    std::vector<std::uint32_t> indices;
+    if (primitive.indicesAccessor.has_value())
+    {
+        const auto& indexAccessor = asset.accessors[primitive.indicesAccessor.value()];
+        indices.reserve(indexAccessor.count);
+        fastgltf::iterateAccessor<std::uint32_t>(asset, indexAccessor, [&](std::uint32_t index)
+                                                 { indices.push_back(index); });
+        return indices;
+    }
+
+    indices.reserve(vertexCount);
+    for (std::size_t i = 0; i < vertexCount; ++i)
+    {
+        indices.push_back(static_cast<std::uint32_t>(i));
+    }
+    return indices;
+}
+
+struct PrimitiveGeometryData
+{
+    std::vector<fastgltf::math::fvec3> positions;
+    std::vector<fastgltf::math::fvec3> normals;
+    std::vector<fastgltf::math::fvec2> texcoords;
+    std::vector<fastgltf::math::fvec2> texcoords1;
+    std::vector<std::array<std::uint32_t, 4>> joints;
+    std::vector<fastgltf::math::fvec4> weights;
+    std::vector<fastgltf::math::fvec4> sourceTangents;
+    std::vector<fastgltf::math::fvec4> colours;
+    std::vector<std::uint32_t> indices;
+    bool hasSourceTangents{false};
+};
+
+PrimitiveGeometryData readPrimitiveGeometryData(const fastgltf::Asset& asset,
+                                                const fastgltf::Primitive& primitive)
+{
+    const auto* posAttr = primitive.findAttribute("POSITION");
+    const auto* normAttr = primitive.findAttribute("NORMAL");
+    const auto* uvAttr = primitive.findAttribute("TEXCOORD_0");
+    const auto* uv1Attr = primitive.findAttribute("TEXCOORD_1");
+    const auto* colourAttr = primitive.findAttribute("COLOR_0");
+    const auto* jointsAttr = primitive.findAttribute("JOINTS_0");
+    const auto* weightsAttr = primitive.findAttribute("WEIGHTS_0");
+    const auto* tangentAttr = primitive.findAttribute("TANGENT");
+
+    if (posAttr == primitive.attributes.end())
+    {
+        throw std::runtime_error("glTF primitive missing POSITION attribute");
+    }
+
+    PrimitiveGeometryData data;
+    data.positions = readAccessorValues<fastgltf::math::fvec3>(asset, posAttr->accessorIndex);
+
+    if (normAttr != primitive.attributes.end())
+    {
+        data.normals = readAccessorValues<fastgltf::math::fvec3>(asset, normAttr->accessorIndex);
+    }
+    if (uvAttr != primitive.attributes.end())
+    {
+        data.texcoords = readAccessorValues<fastgltf::math::fvec2>(asset, uvAttr->accessorIndex);
+    }
+    if (uv1Attr != primitive.attributes.end())
+    {
+        data.texcoords1 = readAccessorValues<fastgltf::math::fvec2>(asset, uv1Attr->accessorIndex);
+    }
+    if (jointsAttr != primitive.attributes.end())
+    {
+        const auto& jointsAccessor = asset.accessors[jointsAttr->accessorIndex];
+        data.joints.resize(jointsAccessor.count);
+        fastgltf::iterateAccessorWithIndex<fastgltf::math::u16vec4>(
+            asset, jointsAccessor, [&](fastgltf::math::u16vec4 joints, std::size_t index)
+            { data.joints[index] = {joints.x(), joints.y(), joints.z(), joints.w()}; });
+    }
+    if (weightsAttr != primitive.attributes.end())
+    {
+        data.weights = readAccessorValues<fastgltf::math::fvec4>(asset, weightsAttr->accessorIndex);
+    }
+    if (tangentAttr != primitive.attributes.end())
+    {
+        data.hasSourceTangents = true;
+        data.sourceTangents =
+            readAccessorValues<fastgltf::math::fvec4>(asset, tangentAttr->accessorIndex);
+    }
+    if (colourAttr != primitive.attributes.end())
+    {
+        data.colours = readAccessorValues<fastgltf::math::fvec4>(asset, colourAttr->accessorIndex);
+    }
+
+    data.indices = readPrimitiveIndices(asset, primitive, data.positions.size());
+    return data;
+}
+
+void generateMissingNormals(PrimitiveGeometryData& data)
+{
+    if (!data.normals.empty() || data.positions.empty())
+    {
+        return;
+    }
+
+    std::vector<Vec3> enginePositions;
+    enginePositions.reserve(data.positions.size());
+    for (const auto& position : data.positions)
+    {
+        enginePositions.emplace_back(position.x(), position.y(), position.z());
+    }
+
+    const auto generated = GltfLoader::generateSmoothNormals(enginePositions, data.indices);
+    data.normals.resize(data.positions.size());
+    for (std::size_t i = 0; i < generated.size(); ++i)
+    {
+        data.normals[i] = {generated[i].x(), generated[i].y(), generated[i].z()};
+    }
+}
+
+std::vector<Vec4> buildTangents(const PrimitiveGeometryData& data, bool needsTangents,
+                                TangentGenerationResult& tangentResult)
+{
+    std::vector<Vec4> tangents;
+    if (data.hasSourceTangents)
+    {
+        tangents.reserve(data.sourceTangents.size());
+        for (const auto& tangent : data.sourceTangents)
+        {
+            tangents.emplace_back(tangent.x(), tangent.y(), tangent.z(), tangent.w());
+        }
+        tangentResult.succeeded = true;
+        return tangents;
+    }
+
+    if (!needsTangents)
+    {
+        return tangents;
+    }
+
+    std::vector<Vec3> positionData;
+    positionData.reserve(data.positions.size());
+    for (const auto& position : data.positions)
+    {
+        positionData.emplace_back(position.x(), position.y(), position.z());
+    }
+
+    std::vector<Vec3> normalData;
+    normalData.reserve(data.normals.size());
+    for (const auto& normal : data.normals)
+    {
+        normalData.emplace_back(normal.x(), normal.y(), normal.z());
+    }
+
+    std::vector<Vec2> texcoordData;
+    texcoordData.reserve(data.texcoords.size());
+    for (const auto& texcoord : data.texcoords)
+    {
+        texcoordData.emplace_back(texcoord.x(), texcoord.y());
+    }
+
+    tangentResult =
+        TangentGenerator::generate(positionData, normalData, texcoordData, data.indices);
+    if (tangentResult.succeeded)
+    {
+        tangents = tangentResult.tangents;
+    }
+    return tangents;
+}
+
+std::vector<Vertex> buildVertices(const PrimitiveGeometryData& data, std::span<const Vec4> tangents)
+{
+    std::vector<Vertex> vertices;
+    vertices.reserve(data.positions.size());
+    for (std::size_t i = 0; i < data.positions.size(); ++i)
+    {
+        Vec3 position{data.positions[i].x(), data.positions[i].y(), data.positions[i].z()};
+        Vec3 normal = (i < data.normals.size())
+                          ? Vec3{data.normals[i].x(), data.normals[i].y(), data.normals[i].z()}
+                          : Vec3{0.0f, 1.0f, 0.0f};
+        float u = (i < data.texcoords.size()) ? data.texcoords[i].x() : 0.0f;
+        float v = (i < data.texcoords.size()) ? data.texcoords[i].y() : 0.0f;
+
+        Colour3 vertexColour{1.0f, 1.0f, 1.0f};
+        if (i < data.colours.size())
+        {
+            vertexColour = Colour3{data.colours[i].x(), data.colours[i].y(), data.colours[i].z()};
+        }
+
+        Joints4 joints{};
+        if (i < data.joints.size())
+        {
+            joints =
+                Joints4{data.joints[i][0], data.joints[i][1], data.joints[i][2], data.joints[i][3]};
+        }
+
+        Vec4 weights{};
+        if (i < data.weights.size())
+        {
+            weights = Vec4{data.weights[i].x(), data.weights[i].y(), data.weights[i].z(),
+                           data.weights[i].w()};
+        }
+
+        Vec4 tangent{0.0f, 0.0f, 0.0f, 1.0f};
+        if (i < tangents.size())
+        {
+            tangent = tangents[i];
+        }
+
+        const float u1 = (i < data.texcoords1.size()) ? data.texcoords1[i].x() : u;
+        const float v1 = (i < data.texcoords1.size()) ? data.texcoords1[i].y() : v;
+
+        Vertex vertex{position, vertexColour, normal, Vec2{u, v}, joints, weights, tangent};
+        vertex.texCoord1(Vec2{u1, v1});
+        vertices.push_back(vertex);
+    }
+    return vertices;
+}
+
+void loadMorphTargets(const fastgltf::Asset& asset, const fastgltf::Primitive& primitive,
+                      std::size_t vertexCount, Geometry& geometry)
+{
+    if (primitive.targets.empty())
+    {
+        return;
+    }
+
+    std::vector<std::vector<Vec3>> morphPositions;
+    std::vector<std::vector<Vec3>> morphNormals;
+    std::vector<std::vector<Vec3>> morphTangents;
+
+    for (const auto& target : primitive.targets)
+    {
+        std::vector<Vec3> targetPos(vertexCount);
+        std::vector<Vec3> targetNorm(vertexCount);
+        std::vector<Vec3> targetTang(vertexCount);
+
+        for (const auto& attr : target)
+        {
+            const auto& accessor = asset.accessors[attr.accessorIndex];
+            if (attr.name == "POSITION")
+            {
+                fastgltf::iterateAccessorWithIndex<fastgltf::math::fvec3>(
+                    asset, accessor, [&](fastgltf::math::fvec3 position, std::size_t index)
+                    { targetPos[index] = Vec3{position.x(), position.y(), position.z()}; });
+            }
+            else if (attr.name == "NORMAL")
+            {
+                fastgltf::iterateAccessorWithIndex<fastgltf::math::fvec3>(
+                    asset, accessor, [&](fastgltf::math::fvec3 normal, std::size_t index)
+                    { targetNorm[index] = Vec3{normal.x(), normal.y(), normal.z()}; });
+            }
+            else if (attr.name == "TANGENT")
+            {
+                fastgltf::iterateAccessorWithIndex<fastgltf::math::fvec3>(
+                    asset, accessor, [&](fastgltf::math::fvec3 tangent, std::size_t index)
+                    { targetTang[index] = Vec3{tangent.x(), tangent.y(), tangent.z()}; });
+            }
+        }
+
+        morphPositions.push_back(std::move(targetPos));
+        morphNormals.push_back(std::move(targetNorm));
+        morphTangents.push_back(std::move(targetTang));
+    }
+
+    geometry.morphPositions(std::move(morphPositions));
+    geometry.morphNormals(std::move(morphNormals));
+    geometry.morphTangents(std::move(morphTangents));
+}
+
+} // namespace
+
 const Texture* GltfLoader::resolveTextureIndex(const fastgltf::Asset& asset,
                                                std::size_t textureIndex, const std::string& baseDir,
                                                Resources& resources, Assets& assets,
@@ -522,270 +804,14 @@ TangentGenerationResult GltfLoader::loadGeometry(const fastgltf::Asset& asset,
         return {};
     }
 
-    const auto* posAttr = primitive.findAttribute("POSITION");
-    const auto* normAttr = primitive.findAttribute("NORMAL");
-    const auto* uvAttr = primitive.findAttribute("TEXCOORD_0");
-    const auto* uv1Attr = primitive.findAttribute("TEXCOORD_1");
-    const auto* colourAttr = primitive.findAttribute("COLOR_0");
-    const auto* jointsAttr = primitive.findAttribute("JOINTS_0");
-    const auto* weightsAttr = primitive.findAttribute("WEIGHTS_0");
-    const auto* tangentAttr = primitive.findAttribute("TANGENT");
+    auto data = readPrimitiveGeometryData(asset, primitive);
+    generateMissingNormals(data);
 
-    if (posAttr == primitive.attributes.end())
-    {
-        throw std::runtime_error("glTF primitive missing POSITION attribute");
-    }
-
-    const auto& posAccessor = asset.accessors[posAttr->accessorIndex];
-    std::vector<fastgltf::math::fvec3> positions(posAccessor.count);
-    fastgltf::iterateAccessorWithIndex<fastgltf::math::fvec3>(
-        asset, posAccessor,
-        [&](fastgltf::math::fvec3 pos, std::size_t idx) { positions[idx] = pos; });
-
-    std::vector<fastgltf::math::fvec3> normals;
-    if (normAttr != primitive.attributes.end())
-    {
-        const auto& normAccessor = asset.accessors[normAttr->accessorIndex];
-        normals.resize(normAccessor.count);
-        fastgltf::iterateAccessorWithIndex<fastgltf::math::fvec3>(
-            asset, normAccessor,
-            [&](fastgltf::math::fvec3 n, std::size_t idx) { normals[idx] = n; });
-    }
-
-    std::vector<fastgltf::math::fvec2> texcoords;
-    if (uvAttr != primitive.attributes.end())
-    {
-        const auto& uvAccessor = asset.accessors[uvAttr->accessorIndex];
-        texcoords.resize(uvAccessor.count);
-        fastgltf::iterateAccessorWithIndex<fastgltf::math::fvec2>(
-            asset, uvAccessor,
-            [&](fastgltf::math::fvec2 uv, std::size_t idx) { texcoords[idx] = uv; });
-    }
-
-    // Optional second UV set. Stage B will let materials sample either set
-    // per texture slot; for now we just round-trip the data into the GPU
-    // buffer so the shader path can pick it up later.
-    std::vector<fastgltf::math::fvec2> texcoords1;
-    if (uv1Attr != primitive.attributes.end())
-    {
-        const auto& uv1Accessor = asset.accessors[uv1Attr->accessorIndex];
-        texcoords1.resize(uv1Accessor.count);
-        fastgltf::iterateAccessorWithIndex<fastgltf::math::fvec2>(
-            asset, uv1Accessor,
-            [&](fastgltf::math::fvec2 uv, std::size_t idx) { texcoords1[idx] = uv; });
-    }
-
-    // Joint indices — may be uint8 or uint16 in glTF, stored as uint32
-    std::vector<std::array<uint32_t, 4>> joints;
-    if (jointsAttr != primitive.attributes.end())
-    {
-        const auto& jointsAccessor = asset.accessors[jointsAttr->accessorIndex];
-        joints.resize(jointsAccessor.count);
-        fastgltf::iterateAccessorWithIndex<fastgltf::math::u16vec4>(
-            asset, jointsAccessor, [&](fastgltf::math::u16vec4 j, std::size_t idx)
-            { joints[idx] = {j.x(), j.y(), j.z(), j.w()}; });
-    }
-
-    std::vector<fastgltf::math::fvec4> weights;
-    if (weightsAttr != primitive.attributes.end())
-    {
-        const auto& weightsAccessor = asset.accessors[weightsAttr->accessorIndex];
-        weights.resize(weightsAccessor.count);
-        fastgltf::iterateAccessorWithIndex<fastgltf::math::fvec4>(
-            asset, weightsAccessor,
-            [&](fastgltf::math::fvec4 w, std::size_t idx) { weights[idx] = w; });
-    }
-
-    std::vector<fastgltf::math::fvec4> sourceTangents;
-    if (tangentAttr != primitive.attributes.end())
-    {
-        const auto& tangentAccessor = asset.accessors[tangentAttr->accessorIndex];
-        sourceTangents.resize(tangentAccessor.count);
-        fastgltf::iterateAccessorWithIndex<fastgltf::math::fvec4>(
-            asset, tangentAccessor,
-            [&](fastgltf::math::fvec4 t, std::size_t idx) { sourceTangents[idx] = t; });
-    }
-
-    std::vector<fastgltf::math::fvec4> colours;
-    if (colourAttr != primitive.attributes.end())
-    {
-        const auto& colourAccessor = asset.accessors[colourAttr->accessorIndex];
-        colours.resize(colourAccessor.count);
-        fastgltf::iterateAccessorWithIndex<fastgltf::math::fvec4>(
-            asset, colourAccessor,
-            [&](fastgltf::math::fvec4 c, std::size_t idx) { colours[idx] = c; });
-    }
-
-    std::vector<uint32_t> idxs;
-    if (primitive.indicesAccessor.has_value())
-    {
-        const auto& indexAccessor = asset.accessors[primitive.indicesAccessor.value()];
-        idxs.reserve(indexAccessor.count);
-        fastgltf::iterateAccessor<std::uint32_t>(asset, indexAccessor,
-                                                 [&](std::uint32_t idx) { idxs.push_back(idx); });
-    }
-    else
-    {
-        for (std::size_t i = 0; i < positions.size(); ++i)
-        {
-            idxs.push_back(static_cast<uint32_t>(i));
-        }
-    }
-
-    // glTF 2.0 spec: when NORMAL is absent the implementation must compute
-    // normals. Smooth (area-weighted) variant — matches glTF reference viewer
-    // output and avoids the ugly faceted look on curved meshes like Fox.
-    if (normals.empty() && !positions.empty())
-    {
-        std::vector<Vec3> enginePositions;
-        enginePositions.reserve(positions.size());
-        for (const auto& p : positions)
-        {
-            enginePositions.emplace_back(p.x(), p.y(), p.z());
-        }
-        const auto generated = GltfLoader::generateSmoothNormals(enginePositions, idxs);
-        normals.resize(positions.size());
-        for (std::size_t i = 0; i < generated.size(); ++i)
-        {
-            normals[i] = {generated[i].x(), generated[i].y(), generated[i].z()};
-        }
-    }
-
-    std::vector<Vec4> tangents;
     TangentGenerationResult tangentResult;
-    if (tangentAttr != primitive.attributes.end())
-    {
-        tangents.reserve(sourceTangents.size());
-        for (const auto& tangent : sourceTangents)
-        {
-            tangents.emplace_back(tangent.x(), tangent.y(), tangent.z(), tangent.w());
-        }
-        tangentResult.succeeded = true;
-    }
-    else if (needsTangents)
-    {
-        std::vector<Vec3> positionData;
-        positionData.reserve(positions.size());
-        for (const auto& position : positions)
-        {
-            positionData.emplace_back(position.x(), position.y(), position.z());
-        }
-
-        std::vector<Vec3> normalData;
-        normalData.reserve(normals.size());
-        for (const auto& normal : normals)
-        {
-            normalData.emplace_back(normal.x(), normal.y(), normal.z());
-        }
-
-        std::vector<Vec2> texcoordData;
-        texcoordData.reserve(texcoords.size());
-        for (const auto& texcoord : texcoords)
-        {
-            texcoordData.emplace_back(texcoord.x(), texcoord.y());
-        }
-
-        tangentResult = TangentGenerator::generate(positionData, normalData, texcoordData, idxs);
-        if (tangentResult.succeeded)
-        {
-            tangents = tangentResult.tangents;
-        }
-    }
-
-    std::vector<Vertex> verts;
-    verts.reserve(positions.size());
-    for (std::size_t i = 0; i < positions.size(); ++i)
-    {
-        Vec3 pos{positions[i].x(), positions[i].y(), positions[i].z()};
-        Vec3 norm = (i < normals.size()) ? Vec3{normals[i].x(), normals[i].y(), normals[i].z()}
-                                         : Vec3{0.0f, 1.0f, 0.0f};
-        float u = (i < texcoords.size()) ? texcoords[i].x() : 0.0f;
-        float v = (i < texcoords.size()) ? texcoords[i].y() : 0.0f;
-
-        Colour3 vertexColour{1.0f, 1.0f, 1.0f};
-        if (i < colours.size())
-        {
-            vertexColour = Colour3{colours[i].x(), colours[i].y(), colours[i].z()};
-        }
-
-        Joints4 jt{};
-        if (i < joints.size())
-        {
-            jt = Joints4{joints[i][0], joints[i][1], joints[i][2], joints[i][3]};
-        }
-
-        Vec4 wt{};
-        if (i < weights.size())
-        {
-            wt = Vec4{weights[i].x(), weights[i].y(), weights[i].z(), weights[i].w()};
-        }
-
-        Vec4 tang{0.0f, 0.0f, 0.0f, 1.0f};
-        if (i < tangents.size())
-        {
-            tang = tangents[i];
-        }
-
-        // Second UV set falls back to the first when the source mesh only
-        // has TEXCOORD_0 — keeps the shader path uniform.
-        const float u1 = (i < texcoords1.size()) ? texcoords1[i].x() : u;
-        const float v1 = (i < texcoords1.size()) ? texcoords1[i].y() : v;
-
-        Vertex vertex{pos, vertexColour, norm, Vec2{u, v}, jt, wt, tang};
-        vertex.texCoord1(Vec2{u1, v1});
-        verts.push_back(vertex);
-    }
-    geometry.vertices(std::move(verts));
-    geometry.indices(std::move(idxs));
-
-    // Load morph targets
-    if (!primitive.targets.empty())
-    {
-        std::vector<std::vector<Vec3>> morphPositions;
-        std::vector<std::vector<Vec3>> morphNormals;
-        std::vector<std::vector<Vec3>> morphTangents;
-
-        for (std::size_t ti = 0; ti < primitive.targets.size(); ++ti)
-        {
-            const auto& target = primitive.targets[ti];
-            std::vector<Vec3> targetPos(positions.size());
-            std::vector<Vec3> targetNorm(positions.size());
-            std::vector<Vec3> targetTang(positions.size());
-
-            for (const auto& attr : target)
-            {
-                const auto& accessor = asset.accessors[attr.accessorIndex];
-                if (attr.name == "POSITION")
-                {
-                    fastgltf::iterateAccessorWithIndex<fastgltf::math::fvec3>(
-                        asset, accessor, [&](fastgltf::math::fvec3 p, std::size_t idx)
-                        { targetPos[idx] = Vec3{p.x(), p.y(), p.z()}; });
-                }
-                else if (attr.name == "NORMAL")
-                {
-                    fastgltf::iterateAccessorWithIndex<fastgltf::math::fvec3>(
-                        asset, accessor, [&](fastgltf::math::fvec3 n, std::size_t idx)
-                        { targetNorm[idx] = Vec3{n.x(), n.y(), n.z()}; });
-                }
-                else if (attr.name == "TANGENT")
-                {
-                    // glTF spec: morph TANGENT deltas are vec3 (xyz only —
-                    // handedness in the base tangent's .w stays unchanged).
-                    fastgltf::iterateAccessorWithIndex<fastgltf::math::fvec3>(
-                        asset, accessor, [&](fastgltf::math::fvec3 t, std::size_t idx)
-                        { targetTang[idx] = Vec3{t.x(), t.y(), t.z()}; });
-                }
-            }
-
-            morphPositions.push_back(std::move(targetPos));
-            morphNormals.push_back(std::move(targetNorm));
-            morphTangents.push_back(std::move(targetTang));
-        }
-
-        geometry.morphPositions(std::move(morphPositions));
-        geometry.morphNormals(std::move(morphNormals));
-        geometry.morphTangents(std::move(morphTangents));
-    }
+    auto tangents = buildTangents(data, needsTangents, tangentResult);
+    geometry.vertices(buildVertices(data, tangents));
+    geometry.indices(std::move(data.indices));
+    loadMorphTargets(asset, primitive, data.positions.size(), geometry);
 
     geometry.load(resources);
     return tangentResult;
@@ -806,6 +832,172 @@ struct ResolvedMaterialTextures
     const Texture* clearcoatNormal{nullptr};
     const Texture* thickness{nullptr};
 };
+
+UvTransform readUvTransform(const fastgltf::TextureInfo& info) noexcept
+{
+    UvTransform transform;
+    if (info.transform)
+    {
+        const auto& source = *info.transform;
+        transform.offsetX = static_cast<float>(source.uvOffset.x());
+        transform.offsetY = static_cast<float>(source.uvOffset.y());
+        transform.scaleX = static_cast<float>(source.uvScale.x());
+        transform.scaleY = static_cast<float>(source.uvScale.y());
+        transform.rotation = static_cast<float>(source.rotation);
+    }
+    return transform;
+}
+
+void applyTextureSlotUv(Material& material, MaterialTextureSlot slot,
+                        const fastgltf::TextureInfo& info) noexcept
+{
+    material.texture(slot).texCoord = static_cast<int>(info.texCoordIndex);
+    material.texture(slot).transform = readUvTransform(info);
+}
+
+void applyBaseMaterialFields(Material& material, const fastgltf::Material& gltfMat)
+{
+    material.name(std::string(gltfMat.name));
+
+    const auto& pbr = gltfMat.pbrData;
+    material.baseColor({static_cast<float>(pbr.baseColorFactor.x()),
+                        static_cast<float>(pbr.baseColorFactor.y()),
+                        static_cast<float>(pbr.baseColorFactor.z())});
+    material.alpha(static_cast<float>(pbr.baseColorFactor.w()));
+    material.metallic(static_cast<float>(pbr.metallicFactor));
+    material.roughness(static_cast<float>(pbr.roughnessFactor));
+
+    // KHR_materials_emissive_strength: multiplies emissiveFactor at load time.
+    const float emissiveStrength = static_cast<float>(gltfMat.emissiveStrength);
+    material.emissive({static_cast<float>(gltfMat.emissiveFactor.x()) * emissiveStrength,
+                       static_cast<float>(gltfMat.emissiveFactor.y()) * emissiveStrength,
+                       static_cast<float>(gltfMat.emissiveFactor.z()) * emissiveStrength});
+
+    if (gltfMat.normalTexture.has_value())
+    {
+        material.normalScale(static_cast<float>(gltfMat.normalTexture.value().scale));
+    }
+    if (gltfMat.occlusionTexture.has_value())
+    {
+        material.occlusionStrength(static_cast<float>(gltfMat.occlusionTexture.value().strength));
+    }
+}
+
+void applyBaseTextureSlotUv(Material& material, const fastgltf::Material& gltfMat)
+{
+    using Slot = MaterialTextureSlot;
+    if (gltfMat.pbrData.baseColorTexture.has_value())
+    {
+        applyTextureSlotUv(material, Slot::BaseColour, gltfMat.pbrData.baseColorTexture.value());
+    }
+    if (gltfMat.emissiveTexture.has_value())
+    {
+        applyTextureSlotUv(material, Slot::Emissive, gltfMat.emissiveTexture.value());
+    }
+    if (gltfMat.normalTexture.has_value())
+    {
+        applyTextureSlotUv(material, Slot::Normal, gltfMat.normalTexture.value());
+    }
+    if (gltfMat.pbrData.metallicRoughnessTexture.has_value())
+    {
+        applyTextureSlotUv(material, Slot::MetallicRoughness,
+                           gltfMat.pbrData.metallicRoughnessTexture.value());
+    }
+    if (gltfMat.occlusionTexture.has_value())
+    {
+        applyTextureSlotUv(material, Slot::Occlusion, gltfMat.occlusionTexture.value());
+    }
+}
+
+void applyTransmission(Material& material, const fastgltf::Material& gltfMat)
+{
+    const float ior = static_cast<float>(gltfMat.ior);
+    if (gltfMat.transmission != nullptr || ior != 1.5f)
+    {
+        TransmissionParams transmission;
+        transmission.ior = ior;
+        if (gltfMat.transmission != nullptr)
+        {
+            transmission.factor = static_cast<float>(gltfMat.transmission->transmissionFactor);
+        }
+        material.transmission(transmission);
+    }
+    if (gltfMat.transmission != nullptr && gltfMat.transmission->transmissionTexture.has_value())
+    {
+        applyTextureSlotUv(material, MaterialTextureSlot::Transmission,
+                           gltfMat.transmission->transmissionTexture.value());
+    }
+}
+
+void applyClearcoat(Material& material, const fastgltf::Material& gltfMat)
+{
+    if (gltfMat.clearcoat == nullptr)
+    {
+        return;
+    }
+
+    const auto& source = *gltfMat.clearcoat;
+    ClearcoatParams clearcoat;
+    clearcoat.factor = static_cast<float>(source.clearcoatFactor);
+    clearcoat.roughness = static_cast<float>(source.clearcoatRoughnessFactor);
+    if (source.clearcoatTexture.has_value())
+    {
+        applyTextureSlotUv(material, MaterialTextureSlot::Clearcoat,
+                           source.clearcoatTexture.value());
+    }
+    if (source.clearcoatRoughnessTexture.has_value())
+    {
+        applyTextureSlotUv(material, MaterialTextureSlot::ClearcoatRoughness,
+                           source.clearcoatRoughnessTexture.value());
+    }
+    if (source.clearcoatNormalTexture.has_value())
+    {
+        const auto& info = source.clearcoatNormalTexture.value();
+        applyTextureSlotUv(material, MaterialTextureSlot::ClearcoatNormal, info);
+        clearcoat.normalScale = static_cast<float>(info.scale);
+    }
+    material.clearcoat(clearcoat);
+}
+
+void applyVolume(Material& material, const fastgltf::Material& gltfMat)
+{
+    if (gltfMat.volume == nullptr)
+    {
+        return;
+    }
+
+    const auto& source = *gltfMat.volume;
+    VolumeParams volume;
+    volume.thicknessFactor = static_cast<float>(source.thicknessFactor);
+    volume.attenuationColor = Colour3{static_cast<float>(source.attenuationColor.x()),
+                                      static_cast<float>(source.attenuationColor.y()),
+                                      static_cast<float>(source.attenuationColor.z())};
+    volume.attenuationDistance = static_cast<float>(source.attenuationDistance);
+    material.volume(volume);
+    if (source.thicknessTexture.has_value())
+    {
+        applyTextureSlotUv(material, MaterialTextureSlot::Thickness,
+                           source.thicknessTexture.value());
+    }
+}
+
+void applyAlphaFields(Material& material, const fastgltf::Material& gltfMat) noexcept
+{
+    switch (gltfMat.alphaMode)
+    {
+    case fastgltf::AlphaMode::Opaque:
+        material.alphaMode(AlphaMode::Opaque);
+        break;
+    case fastgltf::AlphaMode::Mask:
+        material.alphaMode(AlphaMode::Mask);
+        break;
+    case fastgltf::AlphaMode::Blend:
+        material.alphaMode(AlphaMode::Blend);
+        break;
+    }
+    material.alphaCutoff(static_cast<float>(gltfMat.alphaCutoff));
+    material.doubleSided(gltfMat.doubleSided);
+}
 
 bool materialNeedsTangents(const fastgltf::Asset& asset, std::optional<std::size_t> materialIndex)
 {
@@ -896,118 +1088,134 @@ void applyResolvedMaterialTextures(Material& material, const ResolvedMaterialTex
         }
     }
 }
+
+template <typename ResolveTexture>
+ResolvedMaterialTextures resolveMaterialTextures(std::optional<std::size_t> materialIndex,
+                                                 const fastgltf::Asset& asset,
+                                                 ResolveTexture&& resolveTexture)
+{
+    ResolvedMaterialTextures result;
+    if (!materialIndex.has_value())
+    {
+        return result;
+    }
+
+    const auto& material = asset.materials[materialIndex.value()];
+    if (material.pbrData.baseColorTexture.has_value())
+    {
+        result.baseColour =
+            resolveTexture(material.pbrData.baseColorTexture->textureIndex, TextureEncoding::Srgb);
+    }
+    if (material.emissiveTexture.has_value())
+    {
+        result.emissive =
+            resolveTexture(material.emissiveTexture->textureIndex, TextureEncoding::Srgb);
+    }
+    if (material.normalTexture.has_value())
+    {
+        result.normal =
+            resolveTexture(material.normalTexture->textureIndex, TextureEncoding::Linear);
+    }
+    if (material.pbrData.metallicRoughnessTexture.has_value())
+    {
+        result.metallicRoughness = resolveTexture(
+            material.pbrData.metallicRoughnessTexture->textureIndex, TextureEncoding::Linear);
+    }
+    if (material.occlusionTexture.has_value())
+    {
+        result.occlusion =
+            resolveTexture(material.occlusionTexture->textureIndex, TextureEncoding::Linear);
+    }
+    if (material.transmission != nullptr && material.transmission->transmissionTexture.has_value())
+    {
+        result.transmission = resolveTexture(
+            material.transmission->transmissionTexture->textureIndex, TextureEncoding::Linear);
+    }
+    if (material.clearcoat != nullptr)
+    {
+        const auto& clearcoat = *material.clearcoat;
+        if (clearcoat.clearcoatTexture.has_value())
+        {
+            result.clearcoat =
+                resolveTexture(clearcoat.clearcoatTexture->textureIndex, TextureEncoding::Linear);
+        }
+        if (clearcoat.clearcoatRoughnessTexture.has_value())
+        {
+            result.clearcoatRoughness = resolveTexture(
+                clearcoat.clearcoatRoughnessTexture->textureIndex, TextureEncoding::Linear);
+        }
+        if (clearcoat.clearcoatNormalTexture.has_value())
+        {
+            result.clearcoatNormal = resolveTexture(clearcoat.clearcoatNormalTexture->textureIndex,
+                                                    TextureEncoding::Linear);
+        }
+    }
+    if (material.volume != nullptr && material.volume->thicknessTexture.has_value())
+    {
+        result.thickness = resolveTexture(material.volume->thicknessTexture->textureIndex,
+                                          TextureEncoding::Linear);
+    }
+    return result;
+}
+
+std::size_t firstGeometryIndexForMesh(const fastgltf::Asset& asset, std::size_t meshIndex)
+{
+    std::size_t geometryIndex = 0;
+    for (std::size_t i = 0; i < meshIndex; ++i)
+    {
+        geometryIndex += asset.meshes[i].primitives.size();
+    }
+    return geometryIndex;
+}
+
+std::string meshDisplayName(const fastgltf::Mesh& mesh, std::size_t meshIndex)
+{
+    return mesh.name.empty() ? "mesh[" + std::to_string(meshIndex) + "]" : std::string(mesh.name);
+}
+
+bool primitiveNeedsTangents(const fastgltf::Asset& asset, const fastgltf::Primitive& primitive)
+{
+    bool needsTangents = materialNeedsTangents(asset, primitive.materialIndex);
+    for (const auto& mappedMaterialIndex : primitive.mappings)
+    {
+        needsTangents = needsTangents || materialNeedsTangents(asset, mappedMaterialIndex);
+    }
+    return needsTangents;
+}
 } // namespace
 
 Object GltfLoader::loadMesh(const fastgltf::Asset& asset, const fastgltf::Mesh& mesh,
                             const std::string& baseDir, Resources& resources, Assets& assets,
                             std::size_t meshIndex)
 {
-    std::size_t geoStartIdx = 0;
-    for (std::size_t m = 0; m < meshIndex; ++m)
-    {
-        geoStartIdx += asset.meshes[m].primitives.size();
-    }
-
     Object object;
+    const std::size_t geoStartIdx = firstGeometryIndexForMesh(asset, meshIndex);
+    const std::string meshName = meshDisplayName(mesh, meshIndex);
+
+    auto resolveTexture = [&](std::size_t textureIndex, TextureEncoding encoding)
+    { return resolveTextureIndex(asset, textureIndex, baseDir, resources, assets, encoding); };
 
     for (std::size_t primIdx = 0; primIdx < mesh.primitives.size(); ++primIdx)
     {
         const auto& primitive = mesh.primitives[primIdx];
         const auto baseMaterialIndex = primitive.materialIndex;
-        auto materialData = loadMaterial(asset, baseMaterialIndex);
-        const std::string meshName =
-            mesh.name.empty() ? "mesh[" + std::to_string(meshIndex) + "]" : std::string(mesh.name);
+        std::size_t geoIdx = geoStartIdx + primIdx;
 
-        auto resolveTextures = [&](std::optional<std::size_t> materialIndex)
+        auto tangentResult = loadGeometry(
+            asset, primitive, primitiveNeedsTangents(asset, primitive), resources, assets, geoIdx);
+
+        auto loadMaterialWithTextures = [&](std::optional<std::size_t> materialIndex,
+                                            std::optional<std::size_t> variantIndex = std::nullopt)
         {
-            ResolvedMaterialTextures result;
-            if (!materialIndex.has_value())
-            {
-                return result;
-            }
-
-            const auto& gltfMat = asset.materials[materialIndex.value()];
-            if (gltfMat.pbrData.baseColorTexture.has_value())
-            {
-                result.baseColour =
-                    resolveTextureIndex(asset, gltfMat.pbrData.baseColorTexture->textureIndex,
-                                        baseDir, resources, assets, TextureEncoding::Srgb);
-            }
-            if (gltfMat.emissiveTexture.has_value())
-            {
-                result.emissive =
-                    resolveTextureIndex(asset, gltfMat.emissiveTexture->textureIndex, baseDir,
-                                        resources, assets, TextureEncoding::Srgb);
-            }
-            if (gltfMat.normalTexture.has_value())
-            {
-                result.normal =
-                    resolveTextureIndex(asset, gltfMat.normalTexture->textureIndex, baseDir,
-                                        resources, assets, TextureEncoding::Linear);
-            }
-            if (gltfMat.pbrData.metallicRoughnessTexture.has_value())
-            {
-                result.metallicRoughness = resolveTextureIndex(
-                    asset, gltfMat.pbrData.metallicRoughnessTexture->textureIndex, baseDir,
-                    resources, assets, TextureEncoding::Linear);
-            }
-            if (gltfMat.occlusionTexture.has_value())
-            {
-                result.occlusion =
-                    resolveTextureIndex(asset, gltfMat.occlusionTexture->textureIndex, baseDir,
-                                        resources, assets, TextureEncoding::Linear);
-            }
-            if (gltfMat.transmission != nullptr &&
-                gltfMat.transmission->transmissionTexture.has_value())
-            {
-                result.transmission = resolveTextureIndex(
-                    asset, gltfMat.transmission->transmissionTexture->textureIndex, baseDir,
-                    resources, assets, TextureEncoding::Linear);
-            }
-            if (gltfMat.clearcoat != nullptr)
-            {
-                const auto& clearcoat = *gltfMat.clearcoat;
-                if (clearcoat.clearcoatTexture.has_value())
-                {
-                    result.clearcoat =
-                        resolveTextureIndex(asset, clearcoat.clearcoatTexture->textureIndex,
-                                            baseDir, resources, assets, TextureEncoding::Linear);
-                }
-                if (clearcoat.clearcoatRoughnessTexture.has_value())
-                {
-                    result.clearcoatRoughness = resolveTextureIndex(
-                        asset, clearcoat.clearcoatRoughnessTexture->textureIndex, baseDir,
-                        resources, assets, TextureEncoding::Linear);
-                }
-                if (clearcoat.clearcoatNormalTexture.has_value())
-                {
-                    result.clearcoatNormal =
-                        resolveTextureIndex(asset, clearcoat.clearcoatNormalTexture->textureIndex,
-                                            baseDir, resources, assets, TextureEncoding::Linear);
-                }
-            }
-            if (gltfMat.volume != nullptr && gltfMat.volume->thicknessTexture.has_value())
-            {
-                result.thickness =
-                    resolveTextureIndex(asset, gltfMat.volume->thicknessTexture->textureIndex,
-                                        baseDir, resources, assets, TextureEncoding::Linear);
-            }
-            return result;
+            auto material = loadMaterial(asset, materialIndex);
+            const ResolvedMaterialTextures textures =
+                resolveMaterialTextures(materialIndex, asset, resolveTexture);
+            applyResolvedMaterialTextures(material, textures, tangentResult, meshName, primIdx,
+                                          variantIndex);
+            return material;
         };
 
-        const ResolvedMaterialTextures baseTextures = resolveTextures(baseMaterialIndex);
-
-        std::size_t geoIdx = geoStartIdx + primIdx;
-        bool needsTangents = materialNeedsTangents(asset, baseMaterialIndex);
-        for (const auto& mappedMaterialIndex : primitive.mappings)
-        {
-            needsTangents = needsTangents || materialNeedsTangents(asset, mappedMaterialIndex);
-        }
-        auto tangentResult =
-            loadGeometry(asset, primitive, needsTangents, resources, assets, geoIdx);
-
-        applyResolvedMaterialTextures(materialData, baseTextures, tangentResult, meshName, primIdx);
-
+        auto materialData = loadMaterialWithTextures(baseMaterialIndex);
         Material* matPtr = &assets.addMaterial(std::move(materialData));
         assets.geometry(geoIdx).material(matPtr);
         object.addGeometry(assets.geometry(geoIdx));
@@ -1020,11 +1228,7 @@ Object GltfLoader::loadMesh(const fastgltf::Asset& asset, const fastgltf::Mesh& 
                 continue;
             }
 
-            auto variantMaterial = loadMaterial(asset, mappedMaterialIndex);
-            const ResolvedMaterialTextures variantTextures = resolveTextures(mappedMaterialIndex);
-            applyResolvedMaterialTextures(variantMaterial, variantTextures, tangentResult, meshName,
-                                          primIdx, variantIndex);
-
+            auto variantMaterial = loadMaterialWithTextures(mappedMaterialIndex, variantIndex);
             Material* variantMatPtr = &assets.addMaterial(std::move(variantMaterial));
             object.addVariantMaterial(primIdx, variantIndex, variantMatPtr);
         }
@@ -1038,173 +1242,19 @@ Material GltfLoader::loadMaterial(const fastgltf::Asset& asset,
                                   std::optional<std::size_t> materialIndex)
 {
     Material material;
-
-    if (materialIndex.has_value())
+    if (!materialIndex.has_value())
     {
-        const auto& gltfMat = asset.materials[materialIndex.value()];
-        material.name(std::string(gltfMat.name));
-
-        const auto& pbr = gltfMat.pbrData;
-        material.baseColor({static_cast<float>(pbr.baseColorFactor.x()),
-                            static_cast<float>(pbr.baseColorFactor.y()),
-                            static_cast<float>(pbr.baseColorFactor.z())});
-        material.alpha(static_cast<float>(pbr.baseColorFactor.w()));
-        material.metallic(static_cast<float>(pbr.metallicFactor));
-        material.roughness(static_cast<float>(pbr.roughnessFactor));
-
-        // KHR_materials_emissive_strength: multiplies emissiveFactor at load
-        // time. Default 1.0 = unchanged. Authored values >1.0 produce HDR
-        // emissives that read correctly through the bloom chain.
-        const float emissiveStrength = static_cast<float>(gltfMat.emissiveStrength);
-        material.emissive({static_cast<float>(gltfMat.emissiveFactor.x()) * emissiveStrength,
-                           static_cast<float>(gltfMat.emissiveFactor.y()) * emissiveStrength,
-                           static_cast<float>(gltfMat.emissiveFactor.z()) * emissiveStrength});
-
-        if (gltfMat.normalTexture.has_value())
-        {
-            material.normalScale(static_cast<float>(gltfMat.normalTexture.value().scale));
-        }
-        if (gltfMat.occlusionTexture.has_value())
-        {
-            material.occlusionStrength(
-                static_cast<float>(gltfMat.occlusionTexture.value().strength));
-        }
-
-        // KHR_texture_transform per-slot UV transform reader. fastgltf parses
-        // the extension into TextureInfo::transform when the parser opts in;
-        // absent → identity transform → no behaviour change for old assets.
-        auto readUvTransform = [](const fastgltf::TextureInfo& info) noexcept -> UvTransform
-        {
-            UvTransform t;
-            if (info.transform)
-            {
-                const auto& src = *info.transform;
-                t.offsetX = static_cast<float>(src.uvOffset.x());
-                t.offsetY = static_cast<float>(src.uvOffset.y());
-                t.scaleX = static_cast<float>(src.uvScale.x());
-                t.scaleY = static_cast<float>(src.uvScale.y());
-                t.rotation = static_cast<float>(src.rotation);
-            }
-            return t;
-        };
-
-        // Per-slot UV-set index + KHR_texture_transform. glTF allows each
-        // texture to point at TEXCOORD_0 or TEXCOORD_1 (default 0). The shader
-        // picks the stream via material.texCoordIndices and applies the transform.
-        using Slot = MaterialTextureSlot;
-        auto loadSlotUv = [&](Slot slot, const fastgltf::TextureInfo& info)
-        {
-            material.texture(slot).texCoord = static_cast<int>(info.texCoordIndex);
-            material.texture(slot).transform = readUvTransform(info);
-        };
-        if (gltfMat.pbrData.baseColorTexture.has_value())
-        {
-            loadSlotUv(Slot::BaseColour, gltfMat.pbrData.baseColorTexture.value());
-        }
-        if (gltfMat.emissiveTexture.has_value())
-        {
-            loadSlotUv(Slot::Emissive, gltfMat.emissiveTexture.value());
-        }
-        if (gltfMat.normalTexture.has_value())
-        {
-            loadSlotUv(Slot::Normal, gltfMat.normalTexture.value());
-        }
-        if (gltfMat.pbrData.metallicRoughnessTexture.has_value())
-        {
-            loadSlotUv(Slot::MetallicRoughness, gltfMat.pbrData.metallicRoughnessTexture.value());
-        }
-        if (gltfMat.occlusionTexture.has_value())
-        {
-            loadSlotUv(Slot::Occlusion, gltfMat.occlusionTexture.value());
-        }
-
-        // KHR_materials_transmission + KHR_materials_ior, grouped into the
-        // optional Transmission block. Engage it when transmission is authored
-        // or ior differs from the spec default (1.5) — so an ior-only material
-        // still carries its value; otherwise leave it unset and the defaults
-        // (factor 0 / ior 1.5) apply. The transmission texture lives in the slot.
-        const float ior = static_cast<float>(gltfMat.ior);
-        if (gltfMat.transmission != nullptr || ior != 1.5f)
-        {
-            TransmissionParams transmission;
-            transmission.ior = ior;
-            if (gltfMat.transmission != nullptr)
-            {
-                transmission.factor = static_cast<float>(gltfMat.transmission->transmissionFactor);
-            }
-            material.transmission(transmission);
-        }
-        if (gltfMat.transmission != nullptr &&
-            gltfMat.transmission->transmissionTexture.has_value())
-        {
-            loadSlotUv(Slot::Transmission, gltfMat.transmission->transmissionTexture.value());
-        }
-
-        // KHR_materials_clearcoat. fastgltf surfaces clearcoat via a
-        // unique_ptr<MaterialClearcoat>; null when the extension isn't on the
-        // asset. clearcoatNormalTexture carries its own scale (NormalTextureInfo).
-        if (gltfMat.clearcoat != nullptr)
-        {
-            const auto& cc = *gltfMat.clearcoat;
-            ClearcoatParams clearcoat;
-            clearcoat.factor = static_cast<float>(cc.clearcoatFactor);
-            clearcoat.roughness = static_cast<float>(cc.clearcoatRoughnessFactor);
-            if (cc.clearcoatTexture.has_value())
-            {
-                loadSlotUv(Slot::Clearcoat, cc.clearcoatTexture.value());
-            }
-            if (cc.clearcoatRoughnessTexture.has_value())
-            {
-                loadSlotUv(Slot::ClearcoatRoughness, cc.clearcoatRoughnessTexture.value());
-            }
-            if (cc.clearcoatNormalTexture.has_value())
-            {
-                const auto& info = cc.clearcoatNormalTexture.value();
-                loadSlotUv(Slot::ClearcoatNormal, info);
-                clearcoat.normalScale = static_cast<float>(info.scale);
-            }
-            material.clearcoat(clearcoat);
-        }
-
-        // KHR_materials_volume. Beer-Lambert absorption + thickness-driven
-        // refraction sampling. Absent (volume == nullptr) leaves the optional
-        // unset → thicknessFactor 0 and attenuationDistance +inf at UBO time,
-        // collapsing to F3 thin-surface behaviour at sample time.
-        if (gltfMat.volume != nullptr)
-        {
-            const auto& vol = *gltfMat.volume;
-            VolumeParams volume;
-            volume.thicknessFactor = static_cast<float>(vol.thicknessFactor);
-            volume.attenuationColor = Colour3{static_cast<float>(vol.attenuationColor.x()),
-                                              static_cast<float>(vol.attenuationColor.y()),
-                                              static_cast<float>(vol.attenuationColor.z())};
-            volume.attenuationDistance = static_cast<float>(vol.attenuationDistance);
-            material.volume(volume);
-            if (vol.thicknessTexture.has_value())
-            {
-                loadSlotUv(Slot::Thickness, vol.thicknessTexture.value());
-            }
-        }
-
-        // KHR_materials_unlit. fastgltf surfaces this as a plain bool that
-        // stays false unless the extension is present + enabled on the parser.
-        material.unlit(gltfMat.unlit);
-
-        switch (gltfMat.alphaMode)
-        {
-        case fastgltf::AlphaMode::Opaque:
-            material.alphaMode(AlphaMode::Opaque);
-            break;
-        case fastgltf::AlphaMode::Mask:
-            material.alphaMode(AlphaMode::Mask);
-            break;
-        case fastgltf::AlphaMode::Blend:
-            material.alphaMode(AlphaMode::Blend);
-            break;
-        }
-        material.alphaCutoff(static_cast<float>(gltfMat.alphaCutoff));
-        material.doubleSided(gltfMat.doubleSided);
+        return material;
     }
+
+    const auto& gltfMat = asset.materials[materialIndex.value()];
+    applyBaseMaterialFields(material, gltfMat);
+    applyBaseTextureSlotUv(material, gltfMat);
+    applyTransmission(material, gltfMat);
+    applyClearcoat(material, gltfMat);
+    applyVolume(material, gltfMat);
+    material.unlit(gltfMat.unlit);
+    applyAlphaFields(material, gltfMat);
 
     return material;
 }
