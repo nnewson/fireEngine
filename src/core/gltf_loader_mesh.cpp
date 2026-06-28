@@ -807,6 +807,172 @@ struct ResolvedMaterialTextures
     const Texture* thickness{nullptr};
 };
 
+UvTransform readUvTransform(const fastgltf::TextureInfo& info) noexcept
+{
+    UvTransform transform;
+    if (info.transform)
+    {
+        const auto& source = *info.transform;
+        transform.offsetX = static_cast<float>(source.uvOffset.x());
+        transform.offsetY = static_cast<float>(source.uvOffset.y());
+        transform.scaleX = static_cast<float>(source.uvScale.x());
+        transform.scaleY = static_cast<float>(source.uvScale.y());
+        transform.rotation = static_cast<float>(source.rotation);
+    }
+    return transform;
+}
+
+void applyTextureSlotUv(Material& material, MaterialTextureSlot slot,
+                        const fastgltf::TextureInfo& info) noexcept
+{
+    material.texture(slot).texCoord = static_cast<int>(info.texCoordIndex);
+    material.texture(slot).transform = readUvTransform(info);
+}
+
+void applyBaseMaterialFields(Material& material, const fastgltf::Material& gltfMat)
+{
+    material.name(std::string(gltfMat.name));
+
+    const auto& pbr = gltfMat.pbrData;
+    material.baseColor({static_cast<float>(pbr.baseColorFactor.x()),
+                        static_cast<float>(pbr.baseColorFactor.y()),
+                        static_cast<float>(pbr.baseColorFactor.z())});
+    material.alpha(static_cast<float>(pbr.baseColorFactor.w()));
+    material.metallic(static_cast<float>(pbr.metallicFactor));
+    material.roughness(static_cast<float>(pbr.roughnessFactor));
+
+    // KHR_materials_emissive_strength: multiplies emissiveFactor at load time.
+    const float emissiveStrength = static_cast<float>(gltfMat.emissiveStrength);
+    material.emissive({static_cast<float>(gltfMat.emissiveFactor.x()) * emissiveStrength,
+                       static_cast<float>(gltfMat.emissiveFactor.y()) * emissiveStrength,
+                       static_cast<float>(gltfMat.emissiveFactor.z()) * emissiveStrength});
+
+    if (gltfMat.normalTexture.has_value())
+    {
+        material.normalScale(static_cast<float>(gltfMat.normalTexture.value().scale));
+    }
+    if (gltfMat.occlusionTexture.has_value())
+    {
+        material.occlusionStrength(static_cast<float>(gltfMat.occlusionTexture.value().strength));
+    }
+}
+
+void applyBaseTextureSlotUv(Material& material, const fastgltf::Material& gltfMat)
+{
+    using Slot = MaterialTextureSlot;
+    if (gltfMat.pbrData.baseColorTexture.has_value())
+    {
+        applyTextureSlotUv(material, Slot::BaseColour, gltfMat.pbrData.baseColorTexture.value());
+    }
+    if (gltfMat.emissiveTexture.has_value())
+    {
+        applyTextureSlotUv(material, Slot::Emissive, gltfMat.emissiveTexture.value());
+    }
+    if (gltfMat.normalTexture.has_value())
+    {
+        applyTextureSlotUv(material, Slot::Normal, gltfMat.normalTexture.value());
+    }
+    if (gltfMat.pbrData.metallicRoughnessTexture.has_value())
+    {
+        applyTextureSlotUv(material, Slot::MetallicRoughness,
+                           gltfMat.pbrData.metallicRoughnessTexture.value());
+    }
+    if (gltfMat.occlusionTexture.has_value())
+    {
+        applyTextureSlotUv(material, Slot::Occlusion, gltfMat.occlusionTexture.value());
+    }
+}
+
+void applyTransmission(Material& material, const fastgltf::Material& gltfMat)
+{
+    const float ior = static_cast<float>(gltfMat.ior);
+    if (gltfMat.transmission != nullptr || ior != 1.5f)
+    {
+        TransmissionParams transmission;
+        transmission.ior = ior;
+        if (gltfMat.transmission != nullptr)
+        {
+            transmission.factor = static_cast<float>(gltfMat.transmission->transmissionFactor);
+        }
+        material.transmission(transmission);
+    }
+    if (gltfMat.transmission != nullptr && gltfMat.transmission->transmissionTexture.has_value())
+    {
+        applyTextureSlotUv(material, MaterialTextureSlot::Transmission,
+                           gltfMat.transmission->transmissionTexture.value());
+    }
+}
+
+void applyClearcoat(Material& material, const fastgltf::Material& gltfMat)
+{
+    if (gltfMat.clearcoat == nullptr)
+    {
+        return;
+    }
+
+    const auto& source = *gltfMat.clearcoat;
+    ClearcoatParams clearcoat;
+    clearcoat.factor = static_cast<float>(source.clearcoatFactor);
+    clearcoat.roughness = static_cast<float>(source.clearcoatRoughnessFactor);
+    if (source.clearcoatTexture.has_value())
+    {
+        applyTextureSlotUv(material, MaterialTextureSlot::Clearcoat,
+                           source.clearcoatTexture.value());
+    }
+    if (source.clearcoatRoughnessTexture.has_value())
+    {
+        applyTextureSlotUv(material, MaterialTextureSlot::ClearcoatRoughness,
+                           source.clearcoatRoughnessTexture.value());
+    }
+    if (source.clearcoatNormalTexture.has_value())
+    {
+        const auto& info = source.clearcoatNormalTexture.value();
+        applyTextureSlotUv(material, MaterialTextureSlot::ClearcoatNormal, info);
+        clearcoat.normalScale = static_cast<float>(info.scale);
+    }
+    material.clearcoat(clearcoat);
+}
+
+void applyVolume(Material& material, const fastgltf::Material& gltfMat)
+{
+    if (gltfMat.volume == nullptr)
+    {
+        return;
+    }
+
+    const auto& source = *gltfMat.volume;
+    VolumeParams volume;
+    volume.thicknessFactor = static_cast<float>(source.thicknessFactor);
+    volume.attenuationColor = Colour3{static_cast<float>(source.attenuationColor.x()),
+                                      static_cast<float>(source.attenuationColor.y()),
+                                      static_cast<float>(source.attenuationColor.z())};
+    volume.attenuationDistance = static_cast<float>(source.attenuationDistance);
+    material.volume(volume);
+    if (source.thicknessTexture.has_value())
+    {
+        applyTextureSlotUv(material, MaterialTextureSlot::Thickness,
+                           source.thicknessTexture.value());
+    }
+}
+
+void applyAlphaFields(Material& material, const fastgltf::Material& gltfMat) noexcept
+{
+    switch (gltfMat.alphaMode)
+    {
+    case fastgltf::AlphaMode::Opaque:
+        material.alphaMode(AlphaMode::Opaque);
+        break;
+    case fastgltf::AlphaMode::Mask:
+        material.alphaMode(AlphaMode::Mask);
+        break;
+    case fastgltf::AlphaMode::Blend:
+        material.alphaMode(AlphaMode::Blend);
+        break;
+    }
+    material.alphaCutoff(static_cast<float>(gltfMat.alphaCutoff));
+    material.doubleSided(gltfMat.doubleSided);
+}
+
 bool materialNeedsTangents(const fastgltf::Asset& asset, std::optional<std::size_t> materialIndex)
 {
     if (!materialIndex.has_value())
@@ -896,6 +1062,75 @@ void applyResolvedMaterialTextures(Material& material, const ResolvedMaterialTex
         }
     }
 }
+
+template <typename ResolveTexture>
+ResolvedMaterialTextures resolveMaterialTextures(std::optional<std::size_t> materialIndex,
+                                                 const fastgltf::Asset& asset,
+                                                 ResolveTexture&& resolveTexture)
+{
+    ResolvedMaterialTextures result;
+    if (!materialIndex.has_value())
+    {
+        return result;
+    }
+
+    const auto& material = asset.materials[materialIndex.value()];
+    if (material.pbrData.baseColorTexture.has_value())
+    {
+        result.baseColour =
+            resolveTexture(material.pbrData.baseColorTexture->textureIndex, TextureEncoding::Srgb);
+    }
+    if (material.emissiveTexture.has_value())
+    {
+        result.emissive =
+            resolveTexture(material.emissiveTexture->textureIndex, TextureEncoding::Srgb);
+    }
+    if (material.normalTexture.has_value())
+    {
+        result.normal =
+            resolveTexture(material.normalTexture->textureIndex, TextureEncoding::Linear);
+    }
+    if (material.pbrData.metallicRoughnessTexture.has_value())
+    {
+        result.metallicRoughness = resolveTexture(
+            material.pbrData.metallicRoughnessTexture->textureIndex, TextureEncoding::Linear);
+    }
+    if (material.occlusionTexture.has_value())
+    {
+        result.occlusion =
+            resolveTexture(material.occlusionTexture->textureIndex, TextureEncoding::Linear);
+    }
+    if (material.transmission != nullptr && material.transmission->transmissionTexture.has_value())
+    {
+        result.transmission = resolveTexture(
+            material.transmission->transmissionTexture->textureIndex, TextureEncoding::Linear);
+    }
+    if (material.clearcoat != nullptr)
+    {
+        const auto& clearcoat = *material.clearcoat;
+        if (clearcoat.clearcoatTexture.has_value())
+        {
+            result.clearcoat =
+                resolveTexture(clearcoat.clearcoatTexture->textureIndex, TextureEncoding::Linear);
+        }
+        if (clearcoat.clearcoatRoughnessTexture.has_value())
+        {
+            result.clearcoatRoughness = resolveTexture(
+                clearcoat.clearcoatRoughnessTexture->textureIndex, TextureEncoding::Linear);
+        }
+        if (clearcoat.clearcoatNormalTexture.has_value())
+        {
+            result.clearcoatNormal = resolveTexture(clearcoat.clearcoatNormalTexture->textureIndex,
+                                                    TextureEncoding::Linear);
+        }
+    }
+    if (material.volume != nullptr && material.volume->thicknessTexture.has_value())
+    {
+        result.thickness = resolveTexture(material.volume->thicknessTexture->textureIndex,
+                                          TextureEncoding::Linear);
+    }
+    return result;
+}
 } // namespace
 
 Object GltfLoader::loadMesh(const fastgltf::Asset& asset, const fastgltf::Mesh& mesh,
@@ -918,84 +1153,10 @@ Object GltfLoader::loadMesh(const fastgltf::Asset& asset, const fastgltf::Mesh& 
         const std::string meshName =
             mesh.name.empty() ? "mesh[" + std::to_string(meshIndex) + "]" : std::string(mesh.name);
 
-        auto resolveTextures = [&](std::optional<std::size_t> materialIndex)
-        {
-            ResolvedMaterialTextures result;
-            if (!materialIndex.has_value())
-            {
-                return result;
-            }
-
-            const auto& gltfMat = asset.materials[materialIndex.value()];
-            if (gltfMat.pbrData.baseColorTexture.has_value())
-            {
-                result.baseColour =
-                    resolveTextureIndex(asset, gltfMat.pbrData.baseColorTexture->textureIndex,
-                                        baseDir, resources, assets, TextureEncoding::Srgb);
-            }
-            if (gltfMat.emissiveTexture.has_value())
-            {
-                result.emissive =
-                    resolveTextureIndex(asset, gltfMat.emissiveTexture->textureIndex, baseDir,
-                                        resources, assets, TextureEncoding::Srgb);
-            }
-            if (gltfMat.normalTexture.has_value())
-            {
-                result.normal =
-                    resolveTextureIndex(asset, gltfMat.normalTexture->textureIndex, baseDir,
-                                        resources, assets, TextureEncoding::Linear);
-            }
-            if (gltfMat.pbrData.metallicRoughnessTexture.has_value())
-            {
-                result.metallicRoughness = resolveTextureIndex(
-                    asset, gltfMat.pbrData.metallicRoughnessTexture->textureIndex, baseDir,
-                    resources, assets, TextureEncoding::Linear);
-            }
-            if (gltfMat.occlusionTexture.has_value())
-            {
-                result.occlusion =
-                    resolveTextureIndex(asset, gltfMat.occlusionTexture->textureIndex, baseDir,
-                                        resources, assets, TextureEncoding::Linear);
-            }
-            if (gltfMat.transmission != nullptr &&
-                gltfMat.transmission->transmissionTexture.has_value())
-            {
-                result.transmission = resolveTextureIndex(
-                    asset, gltfMat.transmission->transmissionTexture->textureIndex, baseDir,
-                    resources, assets, TextureEncoding::Linear);
-            }
-            if (gltfMat.clearcoat != nullptr)
-            {
-                const auto& clearcoat = *gltfMat.clearcoat;
-                if (clearcoat.clearcoatTexture.has_value())
-                {
-                    result.clearcoat =
-                        resolveTextureIndex(asset, clearcoat.clearcoatTexture->textureIndex,
-                                            baseDir, resources, assets, TextureEncoding::Linear);
-                }
-                if (clearcoat.clearcoatRoughnessTexture.has_value())
-                {
-                    result.clearcoatRoughness = resolveTextureIndex(
-                        asset, clearcoat.clearcoatRoughnessTexture->textureIndex, baseDir,
-                        resources, assets, TextureEncoding::Linear);
-                }
-                if (clearcoat.clearcoatNormalTexture.has_value())
-                {
-                    result.clearcoatNormal =
-                        resolveTextureIndex(asset, clearcoat.clearcoatNormalTexture->textureIndex,
-                                            baseDir, resources, assets, TextureEncoding::Linear);
-                }
-            }
-            if (gltfMat.volume != nullptr && gltfMat.volume->thicknessTexture.has_value())
-            {
-                result.thickness =
-                    resolveTextureIndex(asset, gltfMat.volume->thicknessTexture->textureIndex,
-                                        baseDir, resources, assets, TextureEncoding::Linear);
-            }
-            return result;
-        };
-
-        const ResolvedMaterialTextures baseTextures = resolveTextures(baseMaterialIndex);
+        auto resolveTexture = [&](std::size_t textureIndex, TextureEncoding encoding)
+        { return resolveTextureIndex(asset, textureIndex, baseDir, resources, assets, encoding); };
+        const ResolvedMaterialTextures baseTextures =
+            resolveMaterialTextures(baseMaterialIndex, asset, resolveTexture);
 
         std::size_t geoIdx = geoStartIdx + primIdx;
         bool needsTangents = materialNeedsTangents(asset, baseMaterialIndex);
@@ -1021,7 +1182,8 @@ Object GltfLoader::loadMesh(const fastgltf::Asset& asset, const fastgltf::Mesh& 
             }
 
             auto variantMaterial = loadMaterial(asset, mappedMaterialIndex);
-            const ResolvedMaterialTextures variantTextures = resolveTextures(mappedMaterialIndex);
+            const ResolvedMaterialTextures variantTextures =
+                resolveMaterialTextures(mappedMaterialIndex, asset, resolveTexture);
             applyResolvedMaterialTextures(variantMaterial, variantTextures, tangentResult, meshName,
                                           primIdx, variantIndex);
 
@@ -1038,173 +1200,19 @@ Material GltfLoader::loadMaterial(const fastgltf::Asset& asset,
                                   std::optional<std::size_t> materialIndex)
 {
     Material material;
-
-    if (materialIndex.has_value())
+    if (!materialIndex.has_value())
     {
-        const auto& gltfMat = asset.materials[materialIndex.value()];
-        material.name(std::string(gltfMat.name));
-
-        const auto& pbr = gltfMat.pbrData;
-        material.baseColor({static_cast<float>(pbr.baseColorFactor.x()),
-                            static_cast<float>(pbr.baseColorFactor.y()),
-                            static_cast<float>(pbr.baseColorFactor.z())});
-        material.alpha(static_cast<float>(pbr.baseColorFactor.w()));
-        material.metallic(static_cast<float>(pbr.metallicFactor));
-        material.roughness(static_cast<float>(pbr.roughnessFactor));
-
-        // KHR_materials_emissive_strength: multiplies emissiveFactor at load
-        // time. Default 1.0 = unchanged. Authored values >1.0 produce HDR
-        // emissives that read correctly through the bloom chain.
-        const float emissiveStrength = static_cast<float>(gltfMat.emissiveStrength);
-        material.emissive({static_cast<float>(gltfMat.emissiveFactor.x()) * emissiveStrength,
-                           static_cast<float>(gltfMat.emissiveFactor.y()) * emissiveStrength,
-                           static_cast<float>(gltfMat.emissiveFactor.z()) * emissiveStrength});
-
-        if (gltfMat.normalTexture.has_value())
-        {
-            material.normalScale(static_cast<float>(gltfMat.normalTexture.value().scale));
-        }
-        if (gltfMat.occlusionTexture.has_value())
-        {
-            material.occlusionStrength(
-                static_cast<float>(gltfMat.occlusionTexture.value().strength));
-        }
-
-        // KHR_texture_transform per-slot UV transform reader. fastgltf parses
-        // the extension into TextureInfo::transform when the parser opts in;
-        // absent → identity transform → no behaviour change for old assets.
-        auto readUvTransform = [](const fastgltf::TextureInfo& info) noexcept -> UvTransform
-        {
-            UvTransform t;
-            if (info.transform)
-            {
-                const auto& src = *info.transform;
-                t.offsetX = static_cast<float>(src.uvOffset.x());
-                t.offsetY = static_cast<float>(src.uvOffset.y());
-                t.scaleX = static_cast<float>(src.uvScale.x());
-                t.scaleY = static_cast<float>(src.uvScale.y());
-                t.rotation = static_cast<float>(src.rotation);
-            }
-            return t;
-        };
-
-        // Per-slot UV-set index + KHR_texture_transform. glTF allows each
-        // texture to point at TEXCOORD_0 or TEXCOORD_1 (default 0). The shader
-        // picks the stream via material.texCoordIndices and applies the transform.
-        using Slot = MaterialTextureSlot;
-        auto loadSlotUv = [&](Slot slot, const fastgltf::TextureInfo& info)
-        {
-            material.texture(slot).texCoord = static_cast<int>(info.texCoordIndex);
-            material.texture(slot).transform = readUvTransform(info);
-        };
-        if (gltfMat.pbrData.baseColorTexture.has_value())
-        {
-            loadSlotUv(Slot::BaseColour, gltfMat.pbrData.baseColorTexture.value());
-        }
-        if (gltfMat.emissiveTexture.has_value())
-        {
-            loadSlotUv(Slot::Emissive, gltfMat.emissiveTexture.value());
-        }
-        if (gltfMat.normalTexture.has_value())
-        {
-            loadSlotUv(Slot::Normal, gltfMat.normalTexture.value());
-        }
-        if (gltfMat.pbrData.metallicRoughnessTexture.has_value())
-        {
-            loadSlotUv(Slot::MetallicRoughness, gltfMat.pbrData.metallicRoughnessTexture.value());
-        }
-        if (gltfMat.occlusionTexture.has_value())
-        {
-            loadSlotUv(Slot::Occlusion, gltfMat.occlusionTexture.value());
-        }
-
-        // KHR_materials_transmission + KHR_materials_ior, grouped into the
-        // optional Transmission block. Engage it when transmission is authored
-        // or ior differs from the spec default (1.5) — so an ior-only material
-        // still carries its value; otherwise leave it unset and the defaults
-        // (factor 0 / ior 1.5) apply. The transmission texture lives in the slot.
-        const float ior = static_cast<float>(gltfMat.ior);
-        if (gltfMat.transmission != nullptr || ior != 1.5f)
-        {
-            TransmissionParams transmission;
-            transmission.ior = ior;
-            if (gltfMat.transmission != nullptr)
-            {
-                transmission.factor = static_cast<float>(gltfMat.transmission->transmissionFactor);
-            }
-            material.transmission(transmission);
-        }
-        if (gltfMat.transmission != nullptr &&
-            gltfMat.transmission->transmissionTexture.has_value())
-        {
-            loadSlotUv(Slot::Transmission, gltfMat.transmission->transmissionTexture.value());
-        }
-
-        // KHR_materials_clearcoat. fastgltf surfaces clearcoat via a
-        // unique_ptr<MaterialClearcoat>; null when the extension isn't on the
-        // asset. clearcoatNormalTexture carries its own scale (NormalTextureInfo).
-        if (gltfMat.clearcoat != nullptr)
-        {
-            const auto& cc = *gltfMat.clearcoat;
-            ClearcoatParams clearcoat;
-            clearcoat.factor = static_cast<float>(cc.clearcoatFactor);
-            clearcoat.roughness = static_cast<float>(cc.clearcoatRoughnessFactor);
-            if (cc.clearcoatTexture.has_value())
-            {
-                loadSlotUv(Slot::Clearcoat, cc.clearcoatTexture.value());
-            }
-            if (cc.clearcoatRoughnessTexture.has_value())
-            {
-                loadSlotUv(Slot::ClearcoatRoughness, cc.clearcoatRoughnessTexture.value());
-            }
-            if (cc.clearcoatNormalTexture.has_value())
-            {
-                const auto& info = cc.clearcoatNormalTexture.value();
-                loadSlotUv(Slot::ClearcoatNormal, info);
-                clearcoat.normalScale = static_cast<float>(info.scale);
-            }
-            material.clearcoat(clearcoat);
-        }
-
-        // KHR_materials_volume. Beer-Lambert absorption + thickness-driven
-        // refraction sampling. Absent (volume == nullptr) leaves the optional
-        // unset → thicknessFactor 0 and attenuationDistance +inf at UBO time,
-        // collapsing to F3 thin-surface behaviour at sample time.
-        if (gltfMat.volume != nullptr)
-        {
-            const auto& vol = *gltfMat.volume;
-            VolumeParams volume;
-            volume.thicknessFactor = static_cast<float>(vol.thicknessFactor);
-            volume.attenuationColor = Colour3{static_cast<float>(vol.attenuationColor.x()),
-                                              static_cast<float>(vol.attenuationColor.y()),
-                                              static_cast<float>(vol.attenuationColor.z())};
-            volume.attenuationDistance = static_cast<float>(vol.attenuationDistance);
-            material.volume(volume);
-            if (vol.thicknessTexture.has_value())
-            {
-                loadSlotUv(Slot::Thickness, vol.thicknessTexture.value());
-            }
-        }
-
-        // KHR_materials_unlit. fastgltf surfaces this as a plain bool that
-        // stays false unless the extension is present + enabled on the parser.
-        material.unlit(gltfMat.unlit);
-
-        switch (gltfMat.alphaMode)
-        {
-        case fastgltf::AlphaMode::Opaque:
-            material.alphaMode(AlphaMode::Opaque);
-            break;
-        case fastgltf::AlphaMode::Mask:
-            material.alphaMode(AlphaMode::Mask);
-            break;
-        case fastgltf::AlphaMode::Blend:
-            material.alphaMode(AlphaMode::Blend);
-            break;
-        }
-        material.alphaCutoff(static_cast<float>(gltfMat.alphaCutoff));
-        material.doubleSided(gltfMat.doubleSided);
+        return material;
     }
+
+    const auto& gltfMat = asset.materials[materialIndex.value()];
+    applyBaseMaterialFields(material, gltfMat);
+    applyBaseTextureSlotUv(material, gltfMat);
+    applyTransmission(material, gltfMat);
+    applyClearcoat(material, gltfMat);
+    applyVolume(material, gltfMat);
+    material.unlit(gltfMat.unlit);
+    applyAlphaFields(material, gltfMat);
 
     return material;
 }
