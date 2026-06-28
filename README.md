@@ -118,6 +118,15 @@ Run all the demo behaviour tests headlessly:
 ./test_fire_engine "[Demos]"
 ```
 
+Two **query/character** demos are driven programmatically (the queries and the controller are issued from the main loop, not authored in glTF), so they run behind CLI flags rather than a `.gltf`:
+
+```bash
+./fireEngineApp -k skybox.hdr   # kinematic character controller walking a step-pyramid course
+./fireEngineApp -q skybox.hdr   # query probe: a rotating fan of raycasts + overlap on a ring of bodies
+```
+
+Their physics is covered headlessly by `tests/physics/test_character_controller.cpp`, `test_physics_query.cpp`, and `Demos.Query.RaycastAndOverlapFindBodies`.
+
 ### Graphics/Render Boundary
 
 The `graphics/` layer is fully decoupled from Vulkan:

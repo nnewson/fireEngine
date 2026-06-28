@@ -5,9 +5,11 @@
 #include <memory>
 #include <numbers>
 #include <print>
+#include <string>
 
 #include <fire_engine/fire_engine.hpp>
 
+#include <fire_engine/collision/ray.hpp>
 #include <fire_engine/core/gltf_loader.hpp>
 #include <fire_engine/core/system.hpp>
 #include <fire_engine/graphics/cloth.hpp>
@@ -41,7 +43,8 @@ FireEngine::~FireEngine()
 
 void FireEngine::run(size_t width, size_t height, std::string_view app_name,
                      std::string_view scene_path, std::string_view skybox_path, bool addFloor,
-                     bool addParticles, bool addCloth, bool addCharacter, RendererDebug debug)
+                     bool addParticles, bool addCloth, bool addCharacter, bool addQueryProbe,
+                     RendererDebug debug)
 {
     window_ = std::make_unique<Window>(width, height, app_name);
 
@@ -63,6 +66,10 @@ void FireEngine::run(size_t width, size_t height, std::string_view app_name,
     if (addCharacter)
     {
         addCharacterDemo();
+    }
+    if (addQueryProbe)
+    {
+        addQueryProbeDemo();
     }
     mainLoop();
 }
@@ -335,6 +342,95 @@ void FireEngine::addCharacterDemo()
     character_.emplace(CharacterControllerConfig{}, start);
 }
 
+void FireEngine::addQueryProbeDemo()
+{
+    Resources& res = renderer_->resources();
+
+    // A ring of static sphere bodies (visible meshes + physics colliders) for the
+    // raycasts to hit.
+    const auto addSphere = [&](const char* name, Vec3 center, float radius, Colour3 colour)
+    {
+        auto& mat = assets_.addMaterial(Material{});
+        mat.name(name);
+        mat.baseColor(colour);
+        mat.alpha(1.0f);
+        mat.roughness(0.5f);
+        mat.metallic(0.0f);
+
+        auto geo = std::make_unique<Geometry>();
+        buildUvSphere(*geo, radius, 16, 24, Colour3{1.0f, 1.0f, 1.0f});
+        geo->material(&mat);
+        geo->load(res);
+
+        Object obj;
+        obj.addGeometry(*geo);
+        obj.load(res);
+        queryProbeGeometries_.push_back(std::move(geo));
+
+        auto node = std::make_unique<Node>(name);
+        node->component().emplace<Mesh>(std::move(obj));
+        node->transform().position(center);
+        scene_.addNode(std::move(node));
+
+        PhysicsBodyDesc body;
+        body.type = PhysicsBodyType::Static;
+        body.position = center;
+        const PhysicsBodyHandle handle = physics_.createBody(body);
+        (void)physics_.createCollider(handle, ColliderDesc{.shape = SphereShape{radius, Vec3{}}});
+    };
+
+    // Eight spheres at varied radii/positions around the origin (some gaps, so some
+    // rays hit and some miss). Heights all at y = 0.7 so the planar ray fan reaches them.
+    constexpr int kCount = 8;
+    for (int i = 0; i < kCount; ++i)
+    {
+        const float ang = static_cast<float>(i) * (2.0f * std::numbers::pi_v<float> / kCount);
+        const float dist = 3.5f + 0.6f * static_cast<float>(i % 3); // 3.5 / 4.1 / 4.7
+        const float r = 0.45f + 0.15f * static_cast<float>(i % 2);
+        const Vec3 c{dist * std::cos(ang), 0.7f, dist * std::sin(ang)};
+        const Colour3 col{0.35f + 0.07f * static_cast<float>(i % 3), 0.45f, 0.6f};
+        addSphere(("Probe" + std::to_string(i)).c_str(), c, r, col);
+    }
+    queryProbeActive_ = true;
+}
+
+std::vector<DebugLine> FireEngine::queryProbeLines(double time) const
+{
+    // A rotating fan of raycasts sweeping the XZ plane from a central origin: each ray
+    // draws green to its hit (with a small marker) or faint to its max range on a miss.
+    std::vector<DebugLine> lines;
+    if (!queryProbeActive_)
+    {
+        return lines;
+    }
+    constexpr int kRays = 64;
+    constexpr float kRange = 8.0f;
+    const Vec3 origin{0.0f, 0.7f, 0.0f};
+    const float sweep = static_cast<float>(time) * 0.4f; // slow rotation
+    for (int i = 0; i < kRays; ++i)
+    {
+        const float ang =
+            sweep + static_cast<float>(i) * (2.0f * std::numbers::pi_v<float> / kRays);
+        const Vec3 dir{std::cos(ang), 0.0f, std::sin(ang)};
+        const auto hit = physics_.raycast(Ray{origin, dir, kRange});
+        if (hit.has_value())
+        {
+            lines.push_back({origin, hit->point, Colour3{0.2f, 0.9f, 0.35f}});
+            // A small cross marking the hit point.
+            const Colour3 mark{1.0f, 0.85f, 0.1f};
+            lines.push_back(
+                {hit->point - Vec3{0.12f, 0.0f, 0.0f}, hit->point + Vec3{0.12f, 0.0f, 0.0f}, mark});
+            lines.push_back(
+                {hit->point - Vec3{0.0f, 0.0f, 0.12f}, hit->point + Vec3{0.0f, 0.0f, 0.12f}, mark});
+        }
+        else
+        {
+            lines.push_back({origin, origin + dir * kRange, Colour3{0.22f, 0.25f, 0.32f}});
+        }
+    }
+    return lines;
+}
+
 void FireEngine::updateCharacter(float dt)
 {
     if (!character_.has_value() || characterNode_ == nullptr)
@@ -483,12 +579,20 @@ void FireEngine::mainLoop()
         // World colliders for the cloth solver: physics bodies + the ground plane.
         auto colliders = physics_.gatherColliders();
         // Physics debug draw uses the authored shapes (pre-plane); only gather the
-        // rest of the debug data when a debug-draw category is enabled.
-        if (renderer_->physicsDebugWanted())
+        // rest of the debug data when a debug-draw category is enabled. The query-probe
+        // rays draw independently of the --debug-physics categories.
+        if (renderer_->physicsDebugWanted() || queryProbeActive_)
         {
-            renderer_->setPhysicsDebug(PhysicsDebugData{physics_.debugColliderBounds(), colliders,
-                                                        physics_.debugContacts(),
-                                                        physics_.debugColliderSleeping()});
+            PhysicsDebugData debugData;
+            if (renderer_->physicsDebugWanted())
+            {
+                debugData.aabbs = physics_.debugColliderBounds();
+                debugData.shapes = colliders;
+                debugData.contacts = physics_.debugContacts();
+                debugData.shapesAsleep = physics_.debugColliderSleeping();
+            }
+            debugData.queryLines = queryProbeLines(now);
+            renderer_->setPhysicsDebug(std::move(debugData));
         }
         colliders.push_back(makePlaneCollider(Vec3{0.0f, 1.0f, 0.0f}, 0.0f));
         renderer_->setClothColliders(colliders);

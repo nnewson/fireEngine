@@ -252,6 +252,12 @@ void DebugDraw::buildLines(const PhysicsDebugData& data, const RenderTunables& t
             addContact(contact);
         }
     }
+    // Query rays / overlap markers (the query-probe demo) — always drawn when present,
+    // independent of the category toggles above.
+    for (const DebugLine& line : data.queryLines)
+    {
+        addLine(line.a, line.b, line.colour);
+    }
     if (lines_.size() > kMaxDebugLineVertices)
     {
         lines_.resize(kMaxDebugLineVertices);

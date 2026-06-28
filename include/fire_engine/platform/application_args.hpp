@@ -25,6 +25,9 @@ struct ApplicationArgs
     // -k flag: drop a kinematic character-controller demo (a capsule that auto-walks an
     // obstacle course — floor, ramp, step, wall — sliding, climbing, and stepping).
     bool addCharacter{false};
+    // -q flag: drop a query-probe demo — a ring of static bodies with a rotating fan of
+    // raycasts + a pulsing overlap sphere, drawn each frame from PhysicsWorld queries.
+    bool addQueryProbe{false};
     // Forwarded straight to the Renderer. Multiple --debug-* flags collapse to
     // the last one parsed (single debug view at a time); --no-shadows is
     // independent and combines with any view.
@@ -68,6 +71,11 @@ struct ApplicationArgs
         if (arg == "-c")
         {
             args.addCloth = true;
+            continue;
+        }
+        if (arg == "-q")
+        {
+            args.addQueryProbe = true;
             continue;
         }
         if (arg == "-k")

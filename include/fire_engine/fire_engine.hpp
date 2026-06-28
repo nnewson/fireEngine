@@ -36,7 +36,7 @@ public:
     void run(size_t width, size_t height, std::string_view app_name,
              std::string_view scene_path = "", std::string_view skybox_path = "",
              bool addFloor = false, bool addParticles = false, bool addCloth = false,
-             bool addCharacter = false, RendererDebug debug = {});
+             bool addCharacter = false, bool addQueryProbe = false, RendererDebug debug = {});
 
 private:
     std::unique_ptr<Window> window_;
@@ -72,11 +72,17 @@ private:
     std::unique_ptr<Geometry> characterGeometry_;
     std::vector<std::unique_ptr<Geometry>> courseGeometries_;
 
+    // Query-probe demo (-q): a ring of static bodies queried each frame.
+    bool queryProbeActive_{false};
+    std::vector<std::unique_ptr<Geometry>> queryProbeGeometries_;
+
     void loadScene(std::string_view scene_path);
     void addFloorPlane();
     void addParticleFountain();
     void addClothDemo();
     void addCharacterDemo();
+    void addQueryProbeDemo();
+    [[nodiscard]] std::vector<DebugLine> queryProbeLines(double time) const;
     void updateCharacter(float dt);
     void addTestCube();
     void mainLoop();

@@ -7,6 +7,7 @@
 
 #include <fire_engine/collision/aabb.hpp>
 #include <fire_engine/graphics/cloth.hpp>
+#include <fire_engine/graphics/colour3.hpp>
 #include <fire_engine/graphics/vertex.hpp>
 #include <fire_engine/math/mat4.hpp>
 #include <fire_engine/math/quaternion.hpp>
@@ -26,6 +27,15 @@ class Swapchain;
 // AABBs (broadphase bounds), authored collider shapes (from
 // PhysicsWorld::gatherColliders), and the last step's approximate contacts. All
 // Vulkan-free.
+// An arbitrary coloured line segment — used by the query-probe demo to draw rays and
+// overlap markers from PhysicsWorld queries.
+struct DebugLine
+{
+    Vec3 a{};
+    Vec3 b{};
+    Colour3 colour{1.0f, 1.0f, 1.0f};
+};
+
 struct PhysicsDebugData
 {
     std::vector<AABB> aabbs;
@@ -33,6 +43,8 @@ struct PhysicsDebugData
     std::vector<DebugContact> contacts;
     // Parallel to `shapes` (1 = asleep): sleeping bodies draw in a distinct colour.
     std::vector<std::uint8_t> shapesAsleep;
+    // Free-form coloured lines (query rays / overlap markers); always drawn when present.
+    std::vector<DebugLine> queryLines;
 };
 
 // Renderer-owned immediate-mode wireframe debug pass. Each frame it builds

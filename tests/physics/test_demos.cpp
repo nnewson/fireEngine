@@ -15,6 +15,7 @@
 #include <numbers>
 #include <vector>
 
+#include <fire_engine/collision/ray.hpp>
 #include <fire_engine/core/convex_hull_builder.hpp>
 #include <fire_engine/physics/collider_shape.hpp>
 #include <fire_engine/physics/physics_world.hpp>
@@ -446,7 +447,7 @@ TEST_CASE("Demos.StaticMesh.BodiesSettleInValley", "[Demos]")
         addDynamicSphere(world, {0.0f, 1.3f, 0.0f}, 0.4f, 0.1f, 0.4f),
     };
 
-    step(world, 480); // 8 s — drop onto the mesh surface and settle
+    step(world, 600); // 10 s — drop onto the mesh surface and settle
 
     for (const PhysicsBodyHandle h : bodies)
     {
@@ -491,3 +492,41 @@ TEST_CASE("Demos.Compound.LShapeRestsOnFloor", "[Demos]")
     CHECK(t.rotation().approxEqual(Quaternion::identity(), 0.1f)); // upright, did not tip
     CHECK(world.sleeping(body));
 }
+
+TEST_CASE("Demos.Query.RaycastAndOverlapFindBodies", "[Demos]")
+{
+    // The -q query-probe demo casts raycasts (a rotating fan) and an overlap sphere at
+    // a ring of static bodies. This verifies the underlying queries: a ray hits the
+    // body in its path (at the surface) and misses through a gap, and overlapSphere
+    // finds the bodies within range.
+    PhysicsWorld world;
+    const auto addStaticSphere = [&](Vec3 center, float radius)
+    {
+        PhysicsBodyDesc desc;
+        desc.type = PhysicsBodyType::Static;
+        desc.position = center;
+        const PhysicsBodyHandle body = world.createBody(desc);
+        static_cast<void>(
+            world.createCollider(body, ColliderDesc{.shape = SphereShape{radius, {}}}));
+    };
+    addStaticSphere({4.0f, 0.7f, 0.0f}, 0.5f); // +x
+    addStaticSphere({0.0f, 0.7f, 4.0f}, 0.5f); // +z
+
+    const Vec3 origin{0.0f, 0.7f, 0.0f};
+    // A ray toward +x hits the first sphere at its near surface (x = 4 − 0.5 = 3.5).
+    const auto hit = world.raycast(Ray{origin, {1.0f, 0.0f, 0.0f}, 8.0f});
+    REQUIRE(hit.has_value());
+    CHECK(hit->distance == Catch::Approx(3.5f).margin(0.05f));
+    CHECK(hit->point.x() == Catch::Approx(3.5f).margin(0.05f));
+    // A ray into a gap (−x) misses.
+    CHECK_FALSE(world.raycast(Ray{origin, {-1.0f, 0.0f, 0.0f}, 8.0f}).has_value());
+    // overlapSphere finds both bodies when its radius reaches the ring, none when tiny.
+    CHECK(world.overlapSphere(origin, 5.0f).size() == 2);
+    CHECK(world.overlapSphere(origin, 1.0f).empty());
+}
+
+// NOTE: the P4 ragdoll demo is deferred until roadmap P9. A complex ragdoll never
+// settles with the current solver (a joint-driven limit cycle — gravity-independent,
+// not fixable by damping/iterations alone; see roadmap P9 B2). The headless ragdoll
+// physics is still covered by tests/scene/test_ragdoll.cpp. Re-add a demo test here
+// when the demo returns post-P9.

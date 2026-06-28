@@ -413,6 +413,96 @@ def _look_at_quat(eye, target, up):
     return (qx, qy, qz, w)
 
 
+def _append_static_floor_box(doc, half_xz=4.0, thickness=0.25):
+    """Append a Static box-floor (own data-URI buffer + mesh + node) to an existing glTF
+    document; returns the new floor node index. Used by the ragdoll demo, which reuses an
+    external skinned asset and needs ground to land on."""
+    half = (half_xz, thickness, half_xz)
+    positions, normals, indices = box_geometry(half)
+    pos_b = b"".join(struct.pack("<3f", *p) for p in positions)
+    nrm_b = b"".join(struct.pack("<3f", *n) for n in normals)
+    idx_b = b"".join(struct.pack("<H", i) for i in indices)
+    blob = bytearray()
+
+    def put(data):
+        while len(blob) % 4 != 0:
+            blob.append(0)
+        off = len(blob)
+        blob.extend(data)
+        return off
+
+    pos_off, nrm_off, idx_off = put(pos_b), put(nrm_b), put(idx_b)
+    buf = len(doc["buffers"])
+    doc["buffers"].append(
+        {"byteLength": len(blob),
+         "uri": "data:application/octet-stream;base64," + base64.b64encode(bytes(blob)).decode()})
+    bv = len(doc["bufferViews"])
+    doc["bufferViews"] += [
+        {"buffer": buf, "byteOffset": pos_off, "byteLength": len(pos_b), "target": 34962},
+        {"buffer": buf, "byteOffset": nrm_off, "byteLength": len(nrm_b), "target": 34962},
+        {"buffer": buf, "byteOffset": idx_off, "byteLength": len(idx_b), "target": 34963}]
+    mn = [min(p[k] for p in positions) for k in range(3)]
+    mx = [max(p[k] for p in positions) for k in range(3)]
+    ac = len(doc["accessors"])
+    doc["accessors"] += [
+        {"bufferView": bv, "componentType": 5126, "count": len(positions), "type": "VEC3",
+         "min": mn, "max": mx},
+        {"bufferView": bv + 1, "componentType": 5126, "count": len(normals), "type": "VEC3"},
+        {"bufferView": bv + 2, "componentType": 5123, "count": len(indices), "type": "SCALAR"}]
+    mat = len(doc["materials"])
+    doc["materials"].append(
+        {"name": "FloorMat", "doubleSided": True,
+         "pbrMetallicRoughness": {"baseColorFactor": [0.45, 0.45, 0.48, 1.0],
+                                  "metallicFactor": 0.0, "roughnessFactor": 0.7}})
+    mesh = len(doc["meshes"])
+    doc["meshes"].append(
+        {"name": "Floor",
+         "primitives": [{"attributes": {"POSITION": ac, "NORMAL": ac + 1}, "indices": ac + 2,
+                         "material": mat}]})
+    node = len(doc["nodes"])
+    doc["nodes"].append(
+        {"name": "Floor", "mesh": mesh, "translation": [0.0, -thickness, 0.0],
+         "extras": {"Physics": {"BodyType": "Static", "Shape": "Box",
+                                "HalfExtents": list(half), "Restitution": 0.0, "Friction": 0.6}}})
+    return node
+
+
+def build_ragdoll_demo():
+    """P4: reuse the skinned CesiumMan humanoid, author extras.Ragdoll on it, lift it
+    above a floor, and let the ragdoll (capsule body + cone-twist joint per bone)
+    activate at load — the figure drops and crumples onto the floor. The generator can't
+    emit a skinned mesh, so this rewrites the existing asset rather than building one.
+
+    DEFERRED (not called from main()): a complex ragdoll never settles with the current
+    solver — it sits in a joint-driven limit cycle (see roadmap P9 B2). Re-enable this
+    (add the main() call back) once P9's stability state machine lets it come to rest."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    with open(os.path.join(here, "..", "CesiumMan", "CesiumMan.gltf")) as f:
+        d = json.load(f)
+    # Character data/image stay external, resolved relative to physics_demos/.
+    d["buffers"][0]["uri"] = "../CesiumMan/CesiumMan_data.bin"
+    if d.get("images"):
+        d["images"][0]["uri"] = "../CesiumMan/CesiumMan_img0.jpg"
+    # Drop the walk animation so it doesn't fight the ragdoll's world-override drive.
+    d.pop("animations", None)
+    # Ragdoll on the skinned node (built from skin 0's joints at load).
+    skinned = next(i for i, n in enumerate(d["nodes"]) if "skin" in n)
+    d["nodes"][skinned].setdefault("extras", {})["Ragdoll"] = {
+        "Mass": 1.0, "Radius": 0.06, "BoneLength": 0.15,
+        "ConeTwist": True, "SwingLimit": 0.7, "TwistLimit": 0.5}
+    # Lift the whole figure above the floor (node 0 has a matrix, so wrap it).
+    scene = d["scenes"][d.get("scene", 0)]
+    root = scene["nodes"][0]
+    lift = len(d["nodes"])
+    d["nodes"].append({"name": "RagdollLift", "translation": [0.0, 1.8, 0.0], "children": [root]})
+    scene["nodes"] = [lift, _append_static_floor_box(d)]
+    out = os.path.join(here, "RagdollDemo.gltf")
+    with open(out, "w") as f:
+        json.dump(d, f, indent=2)
+        f.write("\n")
+    print(f"wrote {os.path.relpath(out)}  (from CesiumMan + ragdoll + floor)")
+
+
 def write_demo(name, scene):
     out_dir = os.path.dirname(os.path.abspath(__file__))
     path = os.path.join(out_dir, f"{name}.gltf")
@@ -702,6 +792,7 @@ DEMOS = {
 def main():
     for name, builder in DEMOS.items():
         write_demo(name, builder())
+    # build_ragdoll_demo()  # deferred until roadmap P9 (complex ragdolls don't settle yet)
 
 
 if __name__ == "__main__":
