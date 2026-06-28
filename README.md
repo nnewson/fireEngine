@@ -81,6 +81,31 @@ scene_.applyPhysics(physics_);
 
 Physics can be authored in glTF through node `extras.Physics`. The loader creates bodies/colliders, assigns handles to the node, and rejects unsupported combinations such as a `Dynamic` body on a `Controllable` node.
 
+### Physics Demos
+
+`assets/physics_demos/` holds one minimal, self-contained glTF scene per physics capability — simple untextured geometry whose dimensions match its collider, authored purely to *show* a feature behaving. The scenes are emitted by `assets/physics_demos/generate.py` (regenerated automatically at build time) and each is mirrored by a headless replay test in `tests/physics/test_demos.cpp` that rebuilds an equivalent `PhysicsWorld`, steps the fixed-step solver, and asserts the labelled outcome — so each demo is both a visual showcase and an automated regression guard.
+
+| Demo (`physics_demos/…`) | What it verifies | Headless test (`tests/physics/test_demos.cpp`) |
+|---|---|---|
+| `FallRestDemo.gltf` | A Dynamic box falls onto a Static floor, settles flat, and goes fully still (it sleeps). End-to-end author→simulate smoke. | `Demos.FallRest.BoxComesToRestOnFloor` |
+| `RestitutionDemo.gltf` | Three spheres with restitution 0.0 / 0.5 / 0.9 dropped from the same height bounce to visibly different rebound heights. | `Demos.Restitution.HigherRestitutionBouncesHigher` |
+| `FrictionRampDemo.gltf` | Two boxes on a 25° ramp: a high-friction box holds while a low-friction box slides off and grinds to a halt on the rough floor (combined friction is `sqrt(a·b)`). | `Demos.Friction.HighFrictionStaysLowFrictionSlides` |
+
+Run a demo (add `--debug-physics` to overlay collider/contact wireframes); paths are relative to `build/`:
+
+```bash
+cd build
+./fireEngineApp physics_demos/FallRestDemo.gltf      skybox.hdr --debug-physics
+./fireEngineApp physics_demos/RestitutionDemo.gltf   skybox.hdr --debug-physics
+./fireEngineApp physics_demos/FrictionRampDemo.gltf  skybox.hdr --debug-physics
+```
+
+Run all the demo behaviour tests headlessly:
+
+```bash
+./test_fire_engine "[Demos]"
+```
+
 ### Graphics/Render Boundary
 
 The `graphics/` layer is fully decoupled from Vulkan:

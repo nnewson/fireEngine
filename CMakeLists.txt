@@ -181,6 +181,21 @@ add_custom_target(shaders ALL DEPENDS ${SHADER_SPVS} COMMENT "Building shaders")
 
 # --- Assets -------------------------------------------------------------
 
+# Regenerate the P8 physics demo glTF from their generator so editing the script
+# can never leave a stale .gltf behind (the copy step below feeds off the result).
+# The generator is deterministic, so this produces no spurious churn; skipped with a
+# warning if Python is unavailable (the committed .gltf are then used as-is).
+find_program(PYTHON3_EXECUTABLE NAMES python3 python)
+if(PYTHON3_EXECUTABLE)
+  add_custom_target(physics_demos ALL
+    COMMAND ${PYTHON3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/assets/physics_demos/generate.py
+    COMMENT "Generating physics demo glTF assets"
+    VERBATIM
+  )
+else()
+  message(WARNING "python3 not found — physics demo .gltf will not be regenerated")
+endif()
+
 add_custom_target(assets ALL
   COMMAND ${CMAKE_COMMAND}
     -DASSET_DIR=${PROJECT_SOURCE_DIR}/assets
@@ -189,6 +204,11 @@ add_custom_target(assets ALL
   COMMENT "Copying assets to build directory"
   VERBATIM
 )
+
+# Generate before copying so the build dir always has the fresh .gltf.
+if(PYTHON3_EXECUTABLE)
+  add_dependencies(assets physics_demos)
+endif()
 
 # --- Tests --------------------------------------------------------------
 
@@ -215,6 +235,7 @@ add_executable(test_fire_engine
     tests/physics/test_joint.cpp
     tests/physics/test_physics_handle.cpp
     tests/physics/test_physics_determinism.cpp
+    tests/physics/test_demos.cpp
     tests/math/test_mat3.cpp
     tests/math/test_mat4.cpp
     tests/math/test_quaternion.cpp
