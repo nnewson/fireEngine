@@ -1157,44 +1157,65 @@ ResolvedMaterialTextures resolveMaterialTextures(std::optional<std::size_t> mate
     }
     return result;
 }
+
+std::size_t firstGeometryIndexForMesh(const fastgltf::Asset& asset, std::size_t meshIndex)
+{
+    std::size_t geometryIndex = 0;
+    for (std::size_t i = 0; i < meshIndex; ++i)
+    {
+        geometryIndex += asset.meshes[i].primitives.size();
+    }
+    return geometryIndex;
+}
+
+std::string meshDisplayName(const fastgltf::Mesh& mesh, std::size_t meshIndex)
+{
+    return mesh.name.empty() ? "mesh[" + std::to_string(meshIndex) + "]" : std::string(mesh.name);
+}
+
+bool primitiveNeedsTangents(const fastgltf::Asset& asset, const fastgltf::Primitive& primitive)
+{
+    bool needsTangents = materialNeedsTangents(asset, primitive.materialIndex);
+    for (const auto& mappedMaterialIndex : primitive.mappings)
+    {
+        needsTangents = needsTangents || materialNeedsTangents(asset, mappedMaterialIndex);
+    }
+    return needsTangents;
+}
 } // namespace
 
 Object GltfLoader::loadMesh(const fastgltf::Asset& asset, const fastgltf::Mesh& mesh,
                             const std::string& baseDir, Resources& resources, Assets& assets,
                             std::size_t meshIndex)
 {
-    std::size_t geoStartIdx = 0;
-    for (std::size_t m = 0; m < meshIndex; ++m)
-    {
-        geoStartIdx += asset.meshes[m].primitives.size();
-    }
-
     Object object;
+    const std::size_t geoStartIdx = firstGeometryIndexForMesh(asset, meshIndex);
+    const std::string meshName = meshDisplayName(mesh, meshIndex);
+
+    auto resolveTexture = [&](std::size_t textureIndex, TextureEncoding encoding)
+    { return resolveTextureIndex(asset, textureIndex, baseDir, resources, assets, encoding); };
 
     for (std::size_t primIdx = 0; primIdx < mesh.primitives.size(); ++primIdx)
     {
         const auto& primitive = mesh.primitives[primIdx];
         const auto baseMaterialIndex = primitive.materialIndex;
-        auto materialData = loadMaterial(asset, baseMaterialIndex);
-        const std::string meshName =
-            mesh.name.empty() ? "mesh[" + std::to_string(meshIndex) + "]" : std::string(mesh.name);
-
-        auto resolveTexture = [&](std::size_t textureIndex, TextureEncoding encoding)
-        { return resolveTextureIndex(asset, textureIndex, baseDir, resources, assets, encoding); };
-        const ResolvedMaterialTextures baseTextures =
-            resolveMaterialTextures(baseMaterialIndex, asset, resolveTexture);
-
         std::size_t geoIdx = geoStartIdx + primIdx;
-        bool needsTangents = materialNeedsTangents(asset, baseMaterialIndex);
-        for (const auto& mappedMaterialIndex : primitive.mappings)
+
+        auto tangentResult = loadGeometry(
+            asset, primitive, primitiveNeedsTangents(asset, primitive), resources, assets, geoIdx);
+
+        auto loadMaterialWithTextures = [&](std::optional<std::size_t> materialIndex,
+                                            std::optional<std::size_t> variantIndex = std::nullopt)
         {
-            needsTangents = needsTangents || materialNeedsTangents(asset, mappedMaterialIndex);
-        }
-        auto tangentResult =
-            loadGeometry(asset, primitive, needsTangents, resources, assets, geoIdx);
+            auto material = loadMaterial(asset, materialIndex);
+            const ResolvedMaterialTextures textures =
+                resolveMaterialTextures(materialIndex, asset, resolveTexture);
+            applyResolvedMaterialTextures(material, textures, tangentResult, meshName, primIdx,
+                                          variantIndex);
+            return material;
+        };
 
-        applyResolvedMaterialTextures(materialData, baseTextures, tangentResult, meshName, primIdx);
-
+        auto materialData = loadMaterialWithTextures(baseMaterialIndex);
         Material* matPtr = &assets.addMaterial(std::move(materialData));
         assets.geometry(geoIdx).material(matPtr);
         object.addGeometry(assets.geometry(geoIdx));
@@ -1207,12 +1228,7 @@ Object GltfLoader::loadMesh(const fastgltf::Asset& asset, const fastgltf::Mesh& 
                 continue;
             }
 
-            auto variantMaterial = loadMaterial(asset, mappedMaterialIndex);
-            const ResolvedMaterialTextures variantTextures =
-                resolveMaterialTextures(mappedMaterialIndex, asset, resolveTexture);
-            applyResolvedMaterialTextures(variantMaterial, variantTextures, tangentResult, meshName,
-                                          primIdx, variantIndex);
-
+            auto variantMaterial = loadMaterialWithTextures(mappedMaterialIndex, variantIndex);
             Material* variantMatPtr = &assets.addMaterial(std::move(variantMaterial));
             object.addVariantMaterial(primIdx, variantIndex, variantMatPtr);
         }
