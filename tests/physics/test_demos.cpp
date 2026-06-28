@@ -11,8 +11,11 @@
 
 #include <array>
 #include <cmath>
+#include <cstdint>
 #include <numbers>
+#include <vector>
 
+#include <fire_engine/core/convex_hull_builder.hpp>
 #include <fire_engine/physics/collider_shape.hpp>
 #include <fire_engine/physics/physics_world.hpp>
 
@@ -94,6 +97,40 @@ PhysicsBodyHandle addOrientedBox(PhysicsWorld& world, PhysicsBodyType type, Vec3
     const PhysicsBodyHandle body = world.createBody(desc);
     ColliderDesc collider;
     collider.shape = BoxShape{halfExtents, {}};
+    collider.material = desc.material;
+    static_cast<void>(world.createCollider(body, collider));
+    return body;
+}
+
+// Regular tetrahedron hull (matches tetrahedron_geometry in generate.py).
+ConvexHullShape tetraHull(float s)
+{
+    const std::vector<Vec3> verts{{s, s, s}, {s, -s, -s}, {-s, s, -s}, {-s, -s, s}};
+    const std::vector<std::uint32_t> idx{0, 1, 2, 0, 3, 1, 0, 2, 3, 1, 3, 2};
+    return buildConvexHull(verts, idx);
+}
+
+// Axis-angle quaternion (matches generate.py quat_axis_angle).
+Quaternion axisAngle(Vec3 axis, float angle)
+{
+    const Vec3 a = Vec3::normalise(axis);
+    const float s = std::sin(angle * 0.5f);
+    return Quaternion{a.x() * s, a.y() * s, a.z() * s, std::cos(angle * 0.5f)};
+}
+
+PhysicsBodyHandle addConvexHull(PhysicsWorld& world, Vec3 pos, Quaternion rotation,
+                                const ConvexHullShape& hull, float friction)
+{
+    PhysicsBodyDesc desc;
+    desc.type = PhysicsBodyType::Dynamic;
+    desc.position = pos;
+    desc.rotation = rotation;
+    desc.gravityScale = 1.0f;
+    desc.mass = 1.0f;
+    desc.material = PhysicsMaterial{.restitution = 0.0f, .friction = friction};
+    const PhysicsBodyHandle body = world.createBody(desc);
+    ColliderDesc collider;
+    collider.shape = hull;
     collider.material = desc.material;
     static_cast<void>(world.createCollider(body, collider));
     return body;
@@ -272,4 +309,34 @@ TEST_CASE("Demos.Topple.TallBoxTopplesOntoSide", "[Demos]")
     const Vec3 up = t->rotation().rotate(Vec3{0.0f, 1.0f, 0.0f});
     CHECK(std::abs(up.y()) < 0.2f); // local +y now ~horizontal → toppled onto its side
     CHECK(world.body(box)->angularVelocity().approxEqual(Vec3{0.0f, 0.0f, 0.0f}, 0.1f));
+}
+
+TEST_CASE("Demos.ConvexHull.PileSettlesAtRest", "[Demos]")
+{
+    // ConvexHullDemo.gltf: tetrahedra (built as ConvexHullShape from their mesh)
+    // dropped onto the floor tumble through the GJK/EPA convex narrowphase, land on a
+    // face, and come to rest — finite, settled, sitting on the floor (not exploded or
+    // sunk through). Spread out in x so they rest mostly side by side.
+    PhysicsWorld world;
+    addStaticFloor(world, 6.0f);
+    const ConvexHullShape hull = tetraHull(0.6f);
+    const std::array<PhysicsBodyHandle, 3> tetra{
+        addConvexHull(world, {-1.6f, 2.0f, 0.2f}, axisAngle({1.0f, 0.0f, 0.0f}, 0.3f), hull, 0.5f),
+        addConvexHull(world, {0.0f, 3.0f, -0.2f}, axisAngle({0.0f, 0.0f, 1.0f}, 0.5f), hull, 0.5f),
+        addConvexHull(world, {1.6f, 2.4f, 0.3f}, axisAngle({1.0f, 1.0f, 0.0f}, 0.4f), hull, 0.5f),
+    };
+
+    step(world, 480); // 8 s — tumble, land, settle
+
+    for (const PhysicsBodyHandle h : tetra)
+    {
+        const Vec3 pos = world.bodyTransform(h)->position();
+        const Vec3 vel = world.body(h)->linearVelocity();
+        CHECK(std::isfinite(pos.x()));
+        CHECK(std::isfinite(pos.y()));
+        CHECK(std::isfinite(pos.z()));
+        CHECK(pos.y() > 0.15f);                    // resting on the floor, not sunk through
+        CHECK(pos.y() < 1.0f);                     // not perched on a tall pile / exploded
+        CHECK(Vec3::dotProduct(vel, vel) < 0.04f); // |v| < 0.2 — settled
+    }
 }

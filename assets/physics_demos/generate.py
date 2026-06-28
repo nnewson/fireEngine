@@ -57,6 +57,39 @@ def box_geometry(half):
     return positions, normals, indices
 
 
+def _sub(a, b):
+    return (a[0] - b[0], a[1] - b[1], a[2] - b[2])
+
+
+def _cross(a, b):
+    return (a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0])
+
+
+def _normalise(v):
+    m = math.sqrt(sum(c * c for c in v)) or 1.0
+    return (v[0] / m, v[1] / m, v[2] / m)
+
+
+# Regular tetrahedron at alternating cube corners (centroid at origin); the four
+# outward CCW faces. Built flat-shaded (3 verts per face, per-face normal).
+_TETRA_CORNERS = [(1, 1, 1), (1, -1, -1), (-1, 1, -1), (-1, -1, 1)]
+_TETRA_FACES = [(0, 1, 2), (0, 3, 1), (0, 2, 3), (1, 3, 2)]
+
+
+def tetrahedron_geometry(scale):
+    corners = [(x * scale, y * scale, z * scale) for x, y, z in _TETRA_CORNERS]
+    positions, normals, indices = [], [], []
+    for tri in _TETRA_FACES:
+        p0, p1, p2 = (corners[tri[0]], corners[tri[1]], corners[tri[2]])
+        n = _normalise(_cross(_sub(p1, p0), _sub(p2, p0)))
+        base = len(positions)
+        for p in (p0, p1, p2):
+            positions.append(p)
+            normals.append(n)
+        indices += [base, base + 1, base + 2]
+    return positions, normals, indices
+
+
 def sphere_geometry(radius, stacks=16, slices=24):
     """UV sphere centred at the origin (normals = normalised position)."""
     positions, normals, indices = [], [], []
@@ -202,6 +235,15 @@ class Scene:
         if cfg.get("Shape", "Sphere") == "Sphere" and "Radius" not in cfg:
             cfg["Radius"] = radius
         return self.node(name, mesh, position, cfg)
+
+    def convex_body(self, name, geometry, position, colour, physics, rotation=None):
+        """A Dynamic body whose collider is a ConvexHull built from its own mesh
+        (the loader runs buildConvexHull on the node geometry)."""
+        positions, normals, indices = geometry
+        mesh = self.mesh(positions, normals, indices, self.material(colour), name)
+        cfg = dict(physics)
+        cfg["Shape"] = "ConvexHull"
+        return self.node(name, mesh, position, cfg, rotation)
 
     def static_floor(self, name="Floor", half_xz=6.0, thickness=0.25,
                      colour=(0.45, 0.45, 0.48), friction=0.5):
@@ -478,12 +520,34 @@ def demo_topple():
     return s
 
 
+def demo_convex_hull():
+    """P3.5: tetrahedra (clearly not primitives) dropped onto the floor exercise the
+    GJK/EPA convex narrowphase + face-clip manifold — they tumble, land on a face, and
+    settle into a loose pile. Spread out in x so they rest mostly side by side rather
+    than in a precarious tower (tall piles sit near the solver's stability margin —
+    see demo_stack)."""
+    s = Scene()
+    s.static_floor(half_xz=6.0)
+    geo = tetrahedron_geometry(0.6)
+    phys = {"BodyType": "Dynamic", "Mass": 1.0, "Restitution": 0.0, "Friction": 0.5}
+    drops = [
+        ("Tetra0", (-1.6, 2.0, 0.2), quat_axis_angle((1.0, 0.0, 0.0), 0.3), (0.80, 0.45, 0.30)),
+        ("Tetra1", (0.0, 3.0, -0.2), quat_axis_angle((0.0, 0.0, 1.0), 0.5), (0.35, 0.60, 0.80)),
+        ("Tetra2", (1.6, 2.4, 0.3), quat_axis_angle((1.0, 1.0, 0.0), 0.4), (0.55, 0.75, 0.40)),
+    ]
+    for name, pos, rot, colour in drops:
+        s.convex_body(name, geo, pos, colour, phys, rotation=rot)
+    s.camera(eye=(5.0, 3.5, 7.0), target=(0.0, 0.7, 0.0))
+    return s
+
+
 DEMOS = {
     "FallRestDemo": demo_fall_rest,
     "RestitutionDemo": demo_restitution,
     "FrictionRampDemo": demo_friction_ramp,
     "StackDemo": demo_stack,
     "ToppleDemo": demo_topple,
+    "ConvexHullDemo": demo_convex_hull,
 }
 
 
