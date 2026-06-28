@@ -1,0 +1,447 @@
+{
+  "asset": {
+    "version": "2.0",
+    "generator": "fireEngine physics_demos generate.py"
+  },
+  "scene": 0,
+  "scenes": [
+    {
+      "name": "Scene",
+      "nodes": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ]
+    }
+  ],
+  "nodes": [
+    {
+      "name": "Floor",
+      "mesh": 0,
+      "translation": [
+        0.0,
+        -0.25,
+        0.0
+      ],
+      "extras": {
+        "Physics": {
+          "BodyType": "Static",
+          "Shape": "Box",
+          "Restitution": 0.0,
+          "Friction": 0.5,
+          "HalfExtents": [
+            6.0,
+            0.25,
+            6.0
+          ]
+        }
+      }
+    },
+    {
+      "name": "Tetra0",
+      "mesh": 1,
+      "translation": [
+        -1.6,
+        2.0,
+        0.2
+      ],
+      "rotation": [
+        0.14943813247359922,
+        0.0,
+        0.0,
+        0.9887710779360422
+      ],
+      "extras": {
+        "Physics": {
+          "BodyType": "Dynamic",
+          "Mass": 1.0,
+          "Restitution": 0.0,
+          "Friction": 0.5,
+          "Shape": "ConvexHull"
+        }
+      }
+    },
+    {
+      "name": "Tetra1",
+      "mesh": 2,
+      "translation": [
+        0.0,
+        3.0,
+        -0.2
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.24740395925452294,
+        0.9689124217106447
+      ],
+      "extras": {
+        "Physics": {
+          "BodyType": "Dynamic",
+          "Mass": 1.0,
+          "Restitution": 0.0,
+          "Friction": 0.5,
+          "Shape": "ConvexHull"
+        }
+      }
+    },
+    {
+      "name": "Tetra2",
+      "mesh": 3,
+      "translation": [
+        1.6,
+        2.4,
+        0.3
+      ],
+      "rotation": [
+        0.14048043101898117,
+        0.14048043101898117,
+        0.0,
+        0.9800665778412416
+      ],
+      "extras": {
+        "Physics": {
+          "BodyType": "Dynamic",
+          "Mass": 1.0,
+          "Restitution": 0.0,
+          "Friction": 0.5,
+          "Shape": "ConvexHull"
+        }
+      }
+    },
+    {
+      "name": "Camera",
+      "camera": 0,
+      "translation": [
+        5.0,
+        3.5,
+        7.0
+      ],
+      "rotation": [
+        -0.149215827929456,
+        0.3014077959270759,
+        0.04781845826681046,
+        0.9405324940153288
+      ]
+    }
+  ],
+  "meshes": [
+    {
+      "name": "Floor",
+      "primitives": [
+        {
+          "attributes": {
+            "POSITION": 0,
+            "NORMAL": 1
+          },
+          "indices": 2,
+          "material": 0
+        }
+      ]
+    },
+    {
+      "name": "Tetra0",
+      "primitives": [
+        {
+          "attributes": {
+            "POSITION": 3,
+            "NORMAL": 4
+          },
+          "indices": 5,
+          "material": 1
+        }
+      ]
+    },
+    {
+      "name": "Tetra1",
+      "primitives": [
+        {
+          "attributes": {
+            "POSITION": 6,
+            "NORMAL": 7
+          },
+          "indices": 8,
+          "material": 2
+        }
+      ]
+    },
+    {
+      "name": "Tetra2",
+      "primitives": [
+        {
+          "attributes": {
+            "POSITION": 9,
+            "NORMAL": 10
+          },
+          "indices": 11,
+          "material": 3
+        }
+      ]
+    }
+  ],
+  "materials": [
+    {
+      "name": "Mat0",
+      "doubleSided": true,
+      "pbrMetallicRoughness": {
+        "baseColorFactor": [
+          0.45,
+          0.45,
+          0.48,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.6
+      }
+    },
+    {
+      "name": "Mat1",
+      "doubleSided": true,
+      "pbrMetallicRoughness": {
+        "baseColorFactor": [
+          0.8,
+          0.45,
+          0.3,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.6
+      }
+    },
+    {
+      "name": "Mat2",
+      "doubleSided": true,
+      "pbrMetallicRoughness": {
+        "baseColorFactor": [
+          0.35,
+          0.6,
+          0.8,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.6
+      }
+    },
+    {
+      "name": "Mat3",
+      "doubleSided": true,
+      "pbrMetallicRoughness": {
+        "baseColorFactor": [
+          0.55,
+          0.75,
+          0.4,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.6
+      }
+    }
+  ],
+  "accessors": [
+    {
+      "bufferView": 0,
+      "componentType": 5126,
+      "count": 24,
+      "type": "VEC3",
+      "min": [
+        -6.0,
+        -0.25,
+        -6.0
+      ],
+      "max": [
+        6.0,
+        0.25,
+        6.0
+      ]
+    },
+    {
+      "bufferView": 1,
+      "componentType": 5126,
+      "count": 24,
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 2,
+      "componentType": 5123,
+      "count": 36,
+      "type": "SCALAR"
+    },
+    {
+      "bufferView": 3,
+      "componentType": 5126,
+      "count": 12,
+      "type": "VEC3",
+      "min": [
+        -0.6,
+        -0.6,
+        -0.6
+      ],
+      "max": [
+        0.6,
+        0.6,
+        0.6
+      ]
+    },
+    {
+      "bufferView": 4,
+      "componentType": 5126,
+      "count": 12,
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 5,
+      "componentType": 5123,
+      "count": 12,
+      "type": "SCALAR"
+    },
+    {
+      "bufferView": 6,
+      "componentType": 5126,
+      "count": 12,
+      "type": "VEC3",
+      "min": [
+        -0.6,
+        -0.6,
+        -0.6
+      ],
+      "max": [
+        0.6,
+        0.6,
+        0.6
+      ]
+    },
+    {
+      "bufferView": 7,
+      "componentType": 5126,
+      "count": 12,
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 8,
+      "componentType": 5123,
+      "count": 12,
+      "type": "SCALAR"
+    },
+    {
+      "bufferView": 9,
+      "componentType": 5126,
+      "count": 12,
+      "type": "VEC3",
+      "min": [
+        -0.6,
+        -0.6,
+        -0.6
+      ],
+      "max": [
+        0.6,
+        0.6,
+        0.6
+      ]
+    },
+    {
+      "bufferView": 10,
+      "componentType": 5126,
+      "count": 12,
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 11,
+      "componentType": 5123,
+      "count": 12,
+      "type": "SCALAR"
+    }
+  ],
+  "bufferViews": [
+    {
+      "buffer": 0,
+      "byteOffset": 0,
+      "byteLength": 288,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 288,
+      "byteLength": 288,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 576,
+      "byteLength": 72,
+      "target": 34963
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 648,
+      "byteLength": 144,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 792,
+      "byteLength": 144,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 936,
+      "byteLength": 24,
+      "target": 34963
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 960,
+      "byteLength": 144,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 1104,
+      "byteLength": 144,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 1248,
+      "byteLength": 24,
+      "target": 34963
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 1272,
+      "byteLength": 144,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 1416,
+      "byteLength": 144,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 1560,
+      "byteLength": 24,
+      "target": 34963
+    }
+  ],
+  "buffers": [
+    {
+      "byteLength": 1584,
+      "uri": "data:application/octet-stream;base64,AADAQAAAgL4AAMDAAADAQAAAgD4AAMDAAADAQAAAgD4AAMBAAADAQAAAgL4AAMBAAADAwAAAgL4AAMBAAADAwAAAgD4AAMBAAADAwAAAgD4AAMDAAADAwAAAgL4AAMDAAADAwAAAgD4AAMDAAADAwAAAgD4AAMBAAADAQAAAgD4AAMBAAADAQAAAgD4AAMDAAADAwAAAgL4AAMBAAADAwAAAgL4AAMDAAADAQAAAgL4AAMDAAADAQAAAgL4AAMBAAADAQAAAgL4AAMBAAADAQAAAgD4AAMBAAADAwAAAgD4AAMBAAADAwAAAgL4AAMBAAADAwAAAgL4AAMDAAADAwAAAgD4AAMDAAADAQAAAgD4AAMDAAADAQAAAgL4AAMDAAACAPwAAAAAAAAAAAACAPwAAAAAAAAAAAACAPwAAAAAAAAAAAACAPwAAAAAAAAAAAACAvwAAAAAAAAAAAACAvwAAAAAAAAAAAACAvwAAAAAAAAAAAACAvwAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIC/AAAAAAAAAAAAAIC/AAAAAAAAAAAAAIC/AAAAAAAAAAAAAIC/AAABAAIAAAACAAMABAAFAAYABAAGAAcACAAJAAoACAAKAAsADAANAA4ADAAOAA8AEAARABIAEAASABMAFAAVABYAFAAWABcAmpkZP5qZGT+amRk/mpkZP5qZGb+amRm/mpkZv5qZGT+amRm/mpkZP5qZGT+amRk/mpkZv5qZGb+amRk/mpkZP5qZGb+amRm/mpkZP5qZGT+amRk/mpkZv5qZGT+amRm/mpkZv5qZGb+amRk/mpkZP5qZGb+amRm/mpkZv5qZGb+amRk/mpkZv5qZGT+amRm/Os0TPzrNEz86zRO/Os0TPzrNEz86zRO/Os0TPzrNEz86zRO/Os0TPzrNE786zRM/Os0TPzrNE786zRM/Os0TPzrNE786zRM/Os0TvzrNEz86zRM/Os0TvzrNEz86zRM/Os0TvzrNEz86zRM/Os0TvzrNE786zRO/Os0TvzrNE786zRO/Os0TvzrNE786zRO/AAABAAIAAwAEAAUABgAHAAgACQAKAAsAmpkZP5qZGT+amRk/mpkZP5qZGb+amRm/mpkZv5qZGT+amRm/mpkZP5qZGT+amRk/mpkZv5qZGb+amRk/mpkZP5qZGb+amRm/mpkZP5qZGT+amRk/mpkZv5qZGT+amRm/mpkZv5qZGb+amRk/mpkZP5qZGb+amRm/mpkZv5qZGb+amRk/mpkZv5qZGT+amRm/Os0TPzrNEz86zRO/Os0TPzrNEz86zRO/Os0TPzrNEz86zRO/Os0TPzrNE786zRM/Os0TPzrNE786zRM/Os0TPzrNE786zRM/Os0TvzrNEz86zRM/Os0TvzrNEz86zRM/Os0TvzrNEz86zRM/Os0TvzrNE786zRO/Os0TvzrNE786zRO/Os0TvzrNE786zRO/AAABAAIAAwAEAAUABgAHAAgACQAKAAsAmpkZP5qZGT+amRk/mpkZP5qZGb+amRm/mpkZv5qZGT+amRm/mpkZP5qZGT+amRk/mpkZv5qZGb+amRk/mpkZP5qZGb+amRm/mpkZP5qZGT+amRk/mpkZv5qZGT+amRm/mpkZv5qZGb+amRk/mpkZP5qZGb+amRm/mpkZv5qZGb+amRk/mpkZv5qZGT+amRm/Os0TPzrNEz86zRO/Os0TPzrNEz86zRO/Os0TPzrNEz86zRO/Os0TPzrNE786zRM/Os0TPzrNE786zRM/Os0TPzrNE786zRM/Os0TvzrNEz86zRM/Os0TvzrNEz86zRM/Os0TvzrNEz86zRM/Os0TvzrNE786zRO/Os0TvzrNE786zRO/Os0TvzrNE786zRO/AAABAAIAAwAEAAUABgAHAAgACQAKAAsA"
+    }
+  ],
+  "cameras": [
+    {
+      "name": "Camera",
+      "type": "perspective",
+      "perspective": {
+        "yfov": 0.7,
+        "znear": 0.05,
+        "zfar": 500.0
+      }
+    }
+  ]
+}

@@ -1,0 +1,273 @@
+{
+  "asset": {
+    "version": "2.0",
+    "generator": "fireEngine physics_demos generate.py"
+  },
+  "scene": 0,
+  "scenes": [
+    {
+      "name": "Scene",
+      "nodes": [
+        0,
+        1,
+        2
+      ]
+    }
+  ],
+  "nodes": [
+    {
+      "name": "Floor",
+      "mesh": 0,
+      "translation": [
+        0.0,
+        -0.25,
+        0.0
+      ],
+      "extras": {
+        "Physics": {
+          "BodyType": "Static",
+          "Shape": "Box",
+          "Restitution": 0.0,
+          "Friction": 0.5,
+          "HalfExtents": [
+            6.0,
+            0.25,
+            6.0
+          ]
+        }
+      }
+    },
+    {
+      "name": "LBlock",
+      "mesh": 1,
+      "translation": [
+        0.0,
+        2.0,
+        0.0
+      ],
+      "extras": {
+        "Physics": {
+          "BodyType": "Dynamic",
+          "Mass": 3.0,
+          "Restitution": 0.0,
+          "Friction": 0.5,
+          "Shape": "Compound",
+          "Children": [
+            {
+              "Shape": "Box",
+              "HalfExtents": [
+                1.2,
+                0.4,
+                0.4
+              ],
+              "Position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "Shape": "Box",
+              "HalfExtents": [
+                0.4,
+                1.0,
+                0.4
+              ],
+              "Position": [
+                -0.8,
+                1.0,
+                0.0
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "Camera",
+      "camera": 0,
+      "translation": [
+        5.0,
+        3.0,
+        6.0
+      ],
+      "rotation": [
+        -0.1250384214624699,
+        0.3507484832916215,
+        0.047316969236039876,
+        0.9268775534282382
+      ]
+    }
+  ],
+  "meshes": [
+    {
+      "name": "Floor",
+      "primitives": [
+        {
+          "attributes": {
+            "POSITION": 0,
+            "NORMAL": 1
+          },
+          "indices": 2,
+          "material": 0
+        }
+      ]
+    },
+    {
+      "name": "LBlock",
+      "primitives": [
+        {
+          "attributes": {
+            "POSITION": 3,
+            "NORMAL": 4
+          },
+          "indices": 5,
+          "material": 1
+        }
+      ]
+    }
+  ],
+  "materials": [
+    {
+      "name": "Mat0",
+      "doubleSided": true,
+      "pbrMetallicRoughness": {
+        "baseColorFactor": [
+          0.45,
+          0.45,
+          0.48,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.6
+      }
+    },
+    {
+      "name": "Mat1",
+      "doubleSided": true,
+      "pbrMetallicRoughness": {
+        "baseColorFactor": [
+          0.75,
+          0.55,
+          0.35,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.6
+      }
+    }
+  ],
+  "accessors": [
+    {
+      "bufferView": 0,
+      "componentType": 5126,
+      "count": 24,
+      "type": "VEC3",
+      "min": [
+        -6.0,
+        -0.25,
+        -6.0
+      ],
+      "max": [
+        6.0,
+        0.25,
+        6.0
+      ]
+    },
+    {
+      "bufferView": 1,
+      "componentType": 5126,
+      "count": 24,
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 2,
+      "componentType": 5123,
+      "count": 36,
+      "type": "SCALAR"
+    },
+    {
+      "bufferView": 3,
+      "componentType": 5126,
+      "count": 48,
+      "type": "VEC3",
+      "min": [
+        -1.2000000000000002,
+        -0.4,
+        -0.4
+      ],
+      "max": [
+        1.2,
+        2.0,
+        0.4
+      ]
+    },
+    {
+      "bufferView": 4,
+      "componentType": 5126,
+      "count": 48,
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 5,
+      "componentType": 5123,
+      "count": 72,
+      "type": "SCALAR"
+    }
+  ],
+  "bufferViews": [
+    {
+      "buffer": 0,
+      "byteOffset": 0,
+      "byteLength": 288,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 288,
+      "byteLength": 288,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 576,
+      "byteLength": 72,
+      "target": 34963
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 648,
+      "byteLength": 576,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 1224,
+      "byteLength": 576,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 1800,
+      "byteLength": 144,
+      "target": 34963
+    }
+  ],
+  "buffers": [
+    {
+      "byteLength": 1944,
+      "uri": "data:application/octet-stream;base64,AADAQAAAgL4AAMDAAADAQAAAgD4AAMDAAADAQAAAgD4AAMBAAADAQAAAgL4AAMBAAADAwAAAgL4AAMBAAADAwAAAgD4AAMBAAADAwAAAgD4AAMDAAADAwAAAgL4AAMDAAADAwAAAgD4AAMDAAADAwAAAgD4AAMBAAADAQAAAgD4AAMBAAADAQAAAgD4AAMDAAADAwAAAgL4AAMBAAADAwAAAgL4AAMDAAADAQAAAgL4AAMDAAADAQAAAgL4AAMBAAADAQAAAgL4AAMBAAADAQAAAgD4AAMBAAADAwAAAgD4AAMBAAADAwAAAgL4AAMBAAADAwAAAgL4AAMDAAADAwAAAgD4AAMDAAADAQAAAgD4AAMDAAADAQAAAgL4AAMDAAACAPwAAAAAAAAAAAACAPwAAAAAAAAAAAACAPwAAAAAAAAAAAACAPwAAAAAAAAAAAACAvwAAAAAAAAAAAACAvwAAAAAAAAAAAACAvwAAAAAAAAAAAACAvwAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIC/AAAAAAAAAAAAAIC/AAAAAAAAAAAAAIC/AAAAAAAAAAAAAIC/AAABAAIAAAACAAMABAAFAAYABAAGAAcACAAJAAoACAAKAAsADAANAA4ADAAOAA8AEAARABIAEAASABMAFAAVABYAFAAWABcAmpmZP83MzL7NzMy+mpmZP83MzD7NzMy+mpmZP83MzD7NzMw+mpmZP83MzL7NzMw+mpmZv83MzL7NzMw+mpmZv83MzD7NzMw+mpmZv83MzD7NzMy+mpmZv83MzL7NzMy+mpmZv83MzD7NzMy+mpmZv83MzD7NzMw+mpmZP83MzD7NzMw+mpmZP83MzD7NzMy+mpmZv83MzL7NzMw+mpmZv83MzL7NzMy+mpmZP83MzL7NzMy+mpmZP83MzL7NzMw+mpmZP83MzL7NzMw+mpmZP83MzD7NzMw+mpmZv83MzD7NzMw+mpmZv83MzL7NzMw+mpmZv83MzL7NzMy+mpmZv83MzD7NzMy+mpmZP83MzD7NzMy+mpmZP83MzL7NzMy+zczMvgAAAADNzMy+zczMvgAAAEDNzMy+zczMvgAAAEDNzMw+zczMvgAAAADNzMw+mpmZvwAAAADNzMw+mpmZvwAAAEDNzMw+mpmZvwAAAEDNzMy+mpmZvwAAAADNzMy+mpmZvwAAAEDNzMy+mpmZvwAAAEDNzMw+zczMvgAAAEDNzMw+zczMvgAAAEDNzMy+mpmZvwAAAADNzMw+mpmZvwAAAADNzMy+zczMvgAAAADNzMy+zczMvgAAAADNzMw+zczMvgAAAADNzMw+zczMvgAAAEDNzMw+mpmZvwAAAEDNzMw+mpmZvwAAAADNzMw+mpmZvwAAAADNzMy+mpmZvwAAAEDNzMy+zczMvgAAAEDNzMy+zczMvgAAAADNzMy+AACAPwAAAAAAAAAAAACAPwAAAAAAAAAAAACAPwAAAAAAAAAAAACAPwAAAAAAAAAAAACAvwAAAAAAAAAAAACAvwAAAAAAAAAAAACAvwAAAAAAAAAAAACAvwAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIC/AAAAAAAAAAAAAIC/AAAAAAAAAAAAAIC/AAAAAAAAAAAAAIC/AACAPwAAAAAAAAAAAACAPwAAAAAAAAAAAACAPwAAAAAAAAAAAACAPwAAAAAAAAAAAACAvwAAAAAAAAAAAACAvwAAAAAAAAAAAACAvwAAAAAAAAAAAACAvwAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIC/AAAAAAAAAAAAAIC/AAAAAAAAAAAAAIC/AAAAAAAAAAAAAIC/AAABAAIAAAACAAMABAAFAAYABAAGAAcACAAJAAoACAAKAAsADAANAA4ADAAOAA8AEAARABIAEAASABMAFAAVABYAFAAWABcAGAAZABoAGAAaABsAHAAdAB4AHAAeAB8AIAAhACIAIAAiACMAJAAlACYAJAAmACcAKAApACoAKAAqACsALAAtAC4ALAAuAC8A"
+    }
+  ],
+  "cameras": [
+    {
+      "name": "Camera",
+      "type": "perspective",
+      "perspective": {
+        "yfov": 0.7,
+        "znear": 0.05,
+        "zfar": 500.0
+      }
+    }
+  ]
+}

@@ -81,6 +81,52 @@ scene_.applyPhysics(physics_);
 
 Physics can be authored in glTF through node `extras.Physics`. The loader creates bodies/colliders, assigns handles to the node, and rejects unsupported combinations such as a `Dynamic` body on a `Controllable` node.
 
+### Physics Demos
+
+`assets/physics_demos/` holds one minimal, self-contained glTF scene per physics capability — simple untextured geometry whose dimensions match its collider, authored purely to *show* a feature behaving. The scenes are emitted by `assets/physics_demos/generate.py` (regenerated automatically at build time) and each is mirrored by a headless replay test in `tests/physics/test_demos.cpp` that rebuilds an equivalent `PhysicsWorld`, steps the fixed-step solver, and asserts the labelled outcome — so each demo is both a visual showcase and an automated regression guard.
+
+| Demo (`physics_demos/…`) | What it verifies | Headless test (`tests/physics/test_demos.cpp`) |
+|---|---|---|
+| `FallRestDemo.gltf` | A Dynamic box falls onto a Static floor, settles flat, and goes fully still (it sleeps). End-to-end author→simulate smoke. | `Demos.FallRest.BoxComesToRestOnFloor` |
+| `RestitutionDemo.gltf` | Three spheres with restitution 0.0 / 0.5 / 0.9 dropped from the same height bounce to visibly different rebound heights. | `Demos.Restitution.HigherRestitutionBouncesHigher` |
+| `FrictionRampDemo.gltf` | Two boxes on a 25° ramp: a high-friction box holds while a low-friction box slides off and grinds to a halt on the rough floor (combined friction is `sqrt(a·b)`). | `Demos.Friction.HighFrictionStaysLowFrictionSlides` |
+| `StackDemo.gltf` | A tower of three boxes dropped with small gaps settles into a resting stack and stays still (warm-started impulse solver, then sleeps) rather than buzzing apart. | `Demos.Stack.SettlesAndStaysStill` |
+| `ToppleDemo.gltf` | A tall box tilted 30° — past its ~16.7° balance angle — topples onto its long side and comes to rest (full rotational dynamics: inertia + lever-arm torque). | `Demos.Topple.TallBoxTopplesOntoSide` |
+| `ConvexHullDemo.gltf` | Tetrahedra (collider = `ConvexHull` built from the mesh) tumble through the GJK/EPA convex narrowphase, land on a face, and settle into a loose pile. | `Demos.ConvexHull.PileSettlesAtRest` |
+| `SleepDemo.gltf` | A small stack settles and the island goes to **sleep** (with `--debug-physics` its colliders dim to the asleep colour); a striker then slides in along the floor, **wakes** it on impact, and friction stops the striker against the stack — so everything ends asleep on the floor. | `Demos.Sleep.StackSleepsThenWakesOnImpact` |
+| `StaticMeshDemo.gltf` | Boxes + a sphere dropped into a triangulated valley (a Static `Shape:"Mesh"` triangle-mesh collider, not a box) land on the mesh surface and settle — contacts against the mesh's actual triangles. | `Demos.StaticMesh.BodiesSettleInValley` |
+| `CompoundDemo.gltf` | An L-shaped body whose collider is a `Shape:"Compound"` of two boxes; its engine-aggregated centre of mass is offset toward the corner, so it rests stably on its bar instead of tipping. | `Demos.Compound.LShapeRestsOnFloor` |
+
+Run a demo (add `--debug-physics` to overlay collider/contact wireframes); paths are relative to `build/`:
+
+```bash
+cd build
+./fireEngineApp physics_demos/FallRestDemo.gltf      skybox.hdr --debug-physics
+./fireEngineApp physics_demos/RestitutionDemo.gltf   skybox.hdr --debug-physics
+./fireEngineApp physics_demos/FrictionRampDemo.gltf  skybox.hdr --debug-physics
+./fireEngineApp physics_demos/StackDemo.gltf         skybox.hdr --debug-physics
+./fireEngineApp physics_demos/ToppleDemo.gltf        skybox.hdr --debug-physics
+./fireEngineApp physics_demos/ConvexHullDemo.gltf    skybox.hdr --debug-physics
+./fireEngineApp physics_demos/SleepDemo.gltf         skybox.hdr --debug-physics
+./fireEngineApp physics_demos/StaticMeshDemo.gltf    skybox.hdr --debug-physics
+./fireEngineApp physics_demos/CompoundDemo.gltf      skybox.hdr --debug-physics
+```
+
+Run all the demo behaviour tests headlessly:
+
+```bash
+./test_fire_engine "[Demos]"
+```
+
+Two **query/character** demos are driven programmatically (the queries and the controller are issued from the main loop, not authored in glTF), so they run behind CLI flags rather than a `.gltf`:
+
+```bash
+./fireEngineApp -k skybox.hdr   # kinematic character controller walking a step-pyramid course
+./fireEngineApp -q skybox.hdr   # query probe: a rotating fan of raycasts + overlap on a ring of bodies
+```
+
+Their physics is covered headlessly by `tests/physics/test_character_controller.cpp`, `test_physics_query.cpp`, and `Demos.Query.RaycastAndOverlapFindBodies`.
+
 ### Graphics/Render Boundary
 
 The `graphics/` layer is fully decoupled from Vulkan:

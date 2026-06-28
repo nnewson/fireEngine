@@ -704,7 +704,9 @@ void Renderer::recordSsaoPass(vk::CommandBuffer cmd)
 
 void Renderer::recordDebugDrawPass(vk::CommandBuffer cmd)
 {
-    if (!physicsDebugWanted())
+    // Query lines (the -q probe) draw independently of the --debug-physics categories,
+    // so run the pass when either is present.
+    if (!physicsDebugWanted() && physicsDebug_.queryLines.empty())
     {
         return;
     }

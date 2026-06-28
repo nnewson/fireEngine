@@ -126,6 +126,11 @@ public:
     [[nodiscard]]
     std::vector<AABB> debugColliderBounds() const;
 
+    // Sleep flag (1 = asleep) per shape emitted by gatherColliders(), in the SAME
+    // order, so the debug draw can colour sleeping bodies distinctly.
+    [[nodiscard]]
+    std::vector<std::uint8_t> debugColliderSleeping() const;
+
     [[nodiscard]]
     const std::vector<DebugContact>& debugContacts() const noexcept
     {

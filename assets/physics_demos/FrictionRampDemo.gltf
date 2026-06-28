@@ -1,0 +1,461 @@
+{
+  "asset": {
+    "version": "2.0",
+    "generator": "fireEngine physics_demos generate.py"
+  },
+  "scene": 0,
+  "scenes": [
+    {
+      "name": "Scene",
+      "nodes": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ]
+    }
+  ],
+  "nodes": [
+    {
+      "name": "Floor",
+      "mesh": 0,
+      "translation": [
+        0.0,
+        -0.25,
+        0.0
+      ],
+      "extras": {
+        "Physics": {
+          "BodyType": "Static",
+          "Shape": "Box",
+          "Restitution": 0.0,
+          "Friction": 0.9,
+          "HalfExtents": [
+            8.0,
+            0.25,
+            8.0
+          ]
+        }
+      }
+    },
+    {
+      "name": "Ramp",
+      "mesh": 1,
+      "translation": [
+        0.0,
+        2.5,
+        0.0
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.21643961393810288,
+        0.9762960071199334
+      ],
+      "extras": {
+        "Physics": {
+          "BodyType": "Static",
+          "Shape": "Box",
+          "Restitution": 0.0,
+          "Friction": 1.0,
+          "HalfExtents": [
+            4.0,
+            0.15,
+            2.0
+          ]
+        }
+      }
+    },
+    {
+      "name": "StickyBox",
+      "mesh": 2,
+      "translation": [
+        1.5717231648811012,
+        3.8618319620922894,
+        -1.0
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.21643961393810288,
+        0.9762960071199334
+      ],
+      "extras": {
+        "Physics": {
+          "BodyType": "Dynamic",
+          "Shape": "Box",
+          "Mass": 1.0,
+          "Restitution": 0.0,
+          "Friction": 1.0,
+          "HalfExtents": [
+            0.4,
+            0.4,
+            0.4
+          ]
+        }
+      }
+    },
+    {
+      "name": "SlipperyBox",
+      "mesh": 3,
+      "translation": [
+        1.5717231648811012,
+        3.8618319620922894,
+        1.0
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.21643961393810288,
+        0.9762960071199334
+      ],
+      "extras": {
+        "Physics": {
+          "BodyType": "Dynamic",
+          "Shape": "Box",
+          "Mass": 1.0,
+          "Restitution": 0.0,
+          "Friction": 0.08,
+          "HalfExtents": [
+            0.4,
+            0.4,
+            0.4
+          ]
+        }
+      }
+    },
+    {
+      "name": "Camera",
+      "camera": 0,
+      "translation": [
+        9.0,
+        5.0,
+        9.0
+      ],
+      "rotation": [
+        -0.10641581278088602,
+        0.40406865833889744,
+        0.047393602278984794,
+        0.9072805743547077
+      ]
+    }
+  ],
+  "meshes": [
+    {
+      "name": "Floor",
+      "primitives": [
+        {
+          "attributes": {
+            "POSITION": 0,
+            "NORMAL": 1
+          },
+          "indices": 2,
+          "material": 0
+        }
+      ]
+    },
+    {
+      "name": "Ramp",
+      "primitives": [
+        {
+          "attributes": {
+            "POSITION": 3,
+            "NORMAL": 4
+          },
+          "indices": 5,
+          "material": 1
+        }
+      ]
+    },
+    {
+      "name": "StickyBox",
+      "primitives": [
+        {
+          "attributes": {
+            "POSITION": 6,
+            "NORMAL": 7
+          },
+          "indices": 8,
+          "material": 2
+        }
+      ]
+    },
+    {
+      "name": "SlipperyBox",
+      "primitives": [
+        {
+          "attributes": {
+            "POSITION": 9,
+            "NORMAL": 10
+          },
+          "indices": 11,
+          "material": 3
+        }
+      ]
+    }
+  ],
+  "materials": [
+    {
+      "name": "Mat0",
+      "doubleSided": true,
+      "pbrMetallicRoughness": {
+        "baseColorFactor": [
+          0.45,
+          0.45,
+          0.48,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.6
+      }
+    },
+    {
+      "name": "Mat1",
+      "doubleSided": true,
+      "pbrMetallicRoughness": {
+        "baseColorFactor": [
+          0.4,
+          0.42,
+          0.48,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.6
+      }
+    },
+    {
+      "name": "Mat2",
+      "doubleSided": true,
+      "pbrMetallicRoughness": {
+        "baseColorFactor": [
+          0.3,
+          0.65,
+          0.35,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.6
+      }
+    },
+    {
+      "name": "Mat3",
+      "doubleSided": true,
+      "pbrMetallicRoughness": {
+        "baseColorFactor": [
+          0.8,
+          0.3,
+          0.3,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.6
+      }
+    }
+  ],
+  "accessors": [
+    {
+      "bufferView": 0,
+      "componentType": 5126,
+      "count": 24,
+      "type": "VEC3",
+      "min": [
+        -8.0,
+        -0.25,
+        -8.0
+      ],
+      "max": [
+        8.0,
+        0.25,
+        8.0
+      ]
+    },
+    {
+      "bufferView": 1,
+      "componentType": 5126,
+      "count": 24,
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 2,
+      "componentType": 5123,
+      "count": 36,
+      "type": "SCALAR"
+    },
+    {
+      "bufferView": 3,
+      "componentType": 5126,
+      "count": 24,
+      "type": "VEC3",
+      "min": [
+        -4.0,
+        -0.15,
+        -2.0
+      ],
+      "max": [
+        4.0,
+        0.15,
+        2.0
+      ]
+    },
+    {
+      "bufferView": 4,
+      "componentType": 5126,
+      "count": 24,
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 5,
+      "componentType": 5123,
+      "count": 36,
+      "type": "SCALAR"
+    },
+    {
+      "bufferView": 6,
+      "componentType": 5126,
+      "count": 24,
+      "type": "VEC3",
+      "min": [
+        -0.4,
+        -0.4,
+        -0.4
+      ],
+      "max": [
+        0.4,
+        0.4,
+        0.4
+      ]
+    },
+    {
+      "bufferView": 7,
+      "componentType": 5126,
+      "count": 24,
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 8,
+      "componentType": 5123,
+      "count": 36,
+      "type": "SCALAR"
+    },
+    {
+      "bufferView": 9,
+      "componentType": 5126,
+      "count": 24,
+      "type": "VEC3",
+      "min": [
+        -0.4,
+        -0.4,
+        -0.4
+      ],
+      "max": [
+        0.4,
+        0.4,
+        0.4
+      ]
+    },
+    {
+      "bufferView": 10,
+      "componentType": 5126,
+      "count": 24,
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 11,
+      "componentType": 5123,
+      "count": 36,
+      "type": "SCALAR"
+    }
+  ],
+  "bufferViews": [
+    {
+      "buffer": 0,
+      "byteOffset": 0,
+      "byteLength": 288,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 288,
+      "byteLength": 288,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 576,
+      "byteLength": 72,
+      "target": 34963
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 648,
+      "byteLength": 288,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 936,
+      "byteLength": 288,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 1224,
+      "byteLength": 72,
+      "target": 34963
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 1296,
+      "byteLength": 288,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 1584,
+      "byteLength": 288,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 1872,
+      "byteLength": 72,
+      "target": 34963
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 1944,
+      "byteLength": 288,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 2232,
+      "byteLength": 288,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 2520,
+      "byteLength": 72,
+      "target": 34963
+    }
+  ],
+  "buffers": [
+    {
+      "byteLength": 2592,
+      "uri": "data:application/octet-stream;base64,AAAAQQAAgL4AAADBAAAAQQAAgD4AAADBAAAAQQAAgD4AAABBAAAAQQAAgL4AAABBAAAAwQAAgL4AAABBAAAAwQAAgD4AAABBAAAAwQAAgD4AAADBAAAAwQAAgL4AAADBAAAAwQAAgD4AAADBAAAAwQAAgD4AAABBAAAAQQAAgD4AAABBAAAAQQAAgD4AAADBAAAAwQAAgL4AAABBAAAAwQAAgL4AAADBAAAAQQAAgL4AAADBAAAAQQAAgL4AAABBAAAAQQAAgL4AAABBAAAAQQAAgD4AAABBAAAAwQAAgD4AAABBAAAAwQAAgL4AAABBAAAAwQAAgL4AAADBAAAAwQAAgD4AAADBAAAAQQAAgD4AAADBAAAAQQAAgL4AAADBAACAPwAAAAAAAAAAAACAPwAAAAAAAAAAAACAPwAAAAAAAAAAAACAPwAAAAAAAAAAAACAvwAAAAAAAAAAAACAvwAAAAAAAAAAAACAvwAAAAAAAAAAAACAvwAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIC/AAAAAAAAAAAAAIC/AAAAAAAAAAAAAIC/AAAAAAAAAAAAAIC/AAABAAIAAAACAAMABAAFAAYABAAGAAcACAAJAAoACAAKAAsADAANAA4ADAAOAA8AEAARABIAEAASABMAFAAVABYAFAAWABcAAACAQJqZGb4AAADAAACAQJqZGT4AAADAAACAQJqZGT4AAABAAACAQJqZGb4AAABAAACAwJqZGb4AAABAAACAwJqZGT4AAABAAACAwJqZGT4AAADAAACAwJqZGb4AAADAAACAwJqZGT4AAADAAACAwJqZGT4AAABAAACAQJqZGT4AAABAAACAQJqZGT4AAADAAACAwJqZGb4AAABAAACAwJqZGb4AAADAAACAQJqZGb4AAADAAACAQJqZGb4AAABAAACAQJqZGb4AAABAAACAQJqZGT4AAABAAACAwJqZGT4AAABAAACAwJqZGb4AAABAAACAwJqZGb4AAADAAACAwJqZGT4AAADAAACAQJqZGT4AAADAAACAQJqZGb4AAADAAACAPwAAAAAAAAAAAACAPwAAAAAAAAAAAACAPwAAAAAAAAAAAACAPwAAAAAAAAAAAACAvwAAAAAAAAAAAACAvwAAAAAAAAAAAACAvwAAAAAAAAAAAACAvwAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIC/AAAAAAAAAAAAAIC/AAAAAAAAAAAAAIC/AAAAAAAAAAAAAIC/AAABAAIAAAACAAMABAAFAAYABAAGAAcACAAJAAoACAAKAAsADAANAA4ADAAOAA8AEAARABIAEAASABMAFAAVABYAFAAWABcAzczMPs3MzL7NzMy+zczMPs3MzD7NzMy+zczMPs3MzD7NzMw+zczMPs3MzL7NzMw+zczMvs3MzL7NzMw+zczMvs3MzD7NzMw+zczMvs3MzD7NzMy+zczMvs3MzL7NzMy+zczMvs3MzD7NzMy+zczMvs3MzD7NzMw+zczMPs3MzD7NzMw+zczMPs3MzD7NzMy+zczMvs3MzL7NzMw+zczMvs3MzL7NzMy+zczMPs3MzL7NzMy+zczMPs3MzL7NzMw+zczMPs3MzL7NzMw+zczMPs3MzD7NzMw+zczMvs3MzD7NzMw+zczMvs3MzL7NzMw+zczMvs3MzL7NzMy+zczMvs3MzD7NzMy+zczMPs3MzD7NzMy+zczMPs3MzL7NzMy+AACAPwAAAAAAAAAAAACAPwAAAAAAAAAAAACAPwAAAAAAAAAAAACAPwAAAAAAAAAAAACAvwAAAAAAAAAAAACAvwAAAAAAAAAAAACAvwAAAAAAAAAAAACAvwAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIC/AAAAAAAAAAAAAIC/AAAAAAAAAAAAAIC/AAAAAAAAAAAAAIC/AAABAAIAAAACAAMABAAFAAYABAAGAAcACAAJAAoACAAKAAsADAANAA4ADAAOAA8AEAARABIAEAASABMAFAAVABYAFAAWABcAzczMPs3MzL7NzMy+zczMPs3MzD7NzMy+zczMPs3MzD7NzMw+zczMPs3MzL7NzMw+zczMvs3MzL7NzMw+zczMvs3MzD7NzMw+zczMvs3MzD7NzMy+zczMvs3MzL7NzMy+zczMvs3MzD7NzMy+zczMvs3MzD7NzMw+zczMPs3MzD7NzMw+zczMPs3MzD7NzMy+zczMvs3MzL7NzMw+zczMvs3MzL7NzMy+zczMPs3MzL7NzMy+zczMPs3MzL7NzMw+zczMPs3MzL7NzMw+zczMPs3MzD7NzMw+zczMvs3MzD7NzMw+zczMvs3MzL7NzMw+zczMvs3MzL7NzMy+zczMvs3MzD7NzMy+zczMPs3MzD7NzMy+zczMPs3MzL7NzMy+AACAPwAAAAAAAAAAAACAPwAAAAAAAAAAAACAPwAAAAAAAAAAAACAPwAAAAAAAAAAAACAvwAAAAAAAAAAAACAvwAAAAAAAAAAAACAvwAAAAAAAAAAAACAvwAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIC/AAAAAAAAAAAAAIC/AAAAAAAAAAAAAIC/AAAAAAAAAAAAAIC/AAABAAIAAAACAAMABAAFAAYABAAGAAcACAAJAAoACAAKAAsADAANAA4ADAAOAA8AEAARABIAEAASABMAFAAVABYAFAAWABcA"
+    }
+  ],
+  "cameras": [
+    {
+      "name": "Camera",
+      "type": "perspective",
+      "perspective": {
+        "yfov": 0.7,
+        "znear": 0.05,
+        "zfar": 500.0
+      }
+    }
+  ]
+}

@@ -27,6 +27,7 @@ constexpr int kCircleSegments = 24;
 // Category colours.
 constexpr Colour3 kAabbColour{0.2f, 0.9f, 0.2f};
 constexpr Colour3 kShapeColour{0.2f, 0.8f, 1.0f};
+constexpr Colour3 kShapeAsleepColour{0.4f, 0.4f, 0.55f}; // dimmed: body is asleep
 constexpr Colour3 kContactNormalColour{1.0f, 0.85f, 0.1f};
 constexpr Colour3 kContactPointColour{1.0f, 0.2f, 0.2f};
 
@@ -221,21 +222,23 @@ void DebugDraw::buildLines(const PhysicsDebugData& data, const RenderTunables& t
     }
     if (tunables.debugDrawColliders)
     {
-        for (const ClothCollider& shape : data.shapes)
+        for (std::size_t i = 0; i < data.shapes.size(); ++i)
         {
+            const ClothCollider& shape = data.shapes[i];
+            const bool asleep = i < data.shapesAsleep.size() && data.shapesAsleep[i] != 0;
+            const Colour3 colour = asleep ? kShapeAsleepColour : kShapeColour;
             const Vec3 a{shape.a[0], shape.a[1], shape.a[2]};
             const Vec3 b{shape.b[0], shape.b[1], shape.b[2]};
             switch (shape.type)
             {
             case 1: // sphere: a = center, a.w = radius
-                addSphere(a, shape.a[3], kShapeColour);
+                addSphere(a, shape.a[3], colour);
                 break;
             case 2: // box: a = center, b = halfExtents, c = orientation quat
-                addBox(a, b, Quaternion{shape.c[0], shape.c[1], shape.c[2], shape.c[3]},
-                       kShapeColour);
+                addBox(a, b, Quaternion{shape.c[0], shape.c[1], shape.c[2], shape.c[3]}, colour);
                 break;
             case 3: // capsule: a = (p0, radius), b = (p1, _)
-                addCapsule(a, b, shape.a[3], kShapeColour);
+                addCapsule(a, b, shape.a[3], colour);
                 break;
             default: // plane (type 0) has no bounded extent — skip
                 break;
@@ -248,6 +251,12 @@ void DebugDraw::buildLines(const PhysicsDebugData& data, const RenderTunables& t
         {
             addContact(contact);
         }
+    }
+    // Query rays / overlap markers (the query-probe demo) — always drawn when present,
+    // independent of the category toggles above.
+    for (const DebugLine& line : data.queryLines)
+    {
+        addLine(line.a, line.b, line.colour);
     }
     if (lines_.size() > kMaxDebugLineVertices)
     {
