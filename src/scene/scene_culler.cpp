@@ -61,42 +61,52 @@ namespace
 
 } // namespace
 
-void SceneCuller::syncNode(Node& node, std::unordered_set<const Node*>& seen)
+void SceneCuller::syncNode(Node& node)
 {
     if (const Mesh* mesh = cullableMesh(node); mesh != nullptr)
     {
-        seen.insert(&node);
-        const AABB worldBox = transformBounds(node.composedWorld(), mesh->object().localBounds());
         if (const auto it = proxies_.find(&node); it != proxies_.end())
         {
-            bvh_.moveProxy(it->second, worldBox);
+            Proxy& proxy = it->second;
+            proxy.seenGeneration = syncGeneration_;
+            if (proxy.worldRevision != node.worldRevision())
+            {
+                const AABB worldBox =
+                    transformBounds(node.composedWorld(), mesh->object().localBounds());
+                bvh_.moveProxy(proxy.id, worldBox);
+                proxy.worldRevision = node.worldRevision();
+            }
         }
         else
         {
-            proxies_.emplace(&node, bvh_.createProxy(worldBox, &node));
+            const AABB worldBox =
+                transformBounds(node.composedWorld(), mesh->object().localBounds());
+            proxies_.emplace(&node, Proxy{.id = bvh_.createProxy(worldBox, &node),
+                                          .worldRevision = node.worldRevision(),
+                                          .seenGeneration = syncGeneration_});
         }
     }
 
     for (const auto& child : node.children())
     {
-        syncNode(*child, seen);
+        syncNode(*child);
     }
 }
 
 void SceneCuller::sync(std::span<const std::unique_ptr<Node>> roots)
 {
-    std::unordered_set<const Node*> seen;
+    ++syncGeneration_;
     for (const auto& root : roots)
     {
-        syncNode(*root, seen);
+        syncNode(*root);
     }
 
     // Drop proxies for nodes that vanished or stopped being cullable this frame.
     for (auto it = proxies_.begin(); it != proxies_.end();)
     {
-        if (!seen.contains(it->first))
+        if (it->second.seenGeneration != syncGeneration_)
         {
-            bvh_.destroyProxy(it->second);
+            bvh_.destroyProxy(it->second.id);
             it = proxies_.erase(it);
         }
         else
@@ -135,6 +145,7 @@ void SceneCuller::clear()
     proxies_.clear();
     culled_.clear();
     visible_.clear();
+    syncGeneration_ = 0;
 }
 
 } // namespace fire_engine

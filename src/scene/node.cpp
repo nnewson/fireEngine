@@ -79,9 +79,14 @@ void Node::setComposedWorld(const Mat4& newComposedWorld) noexcept
     // Carry last frame's world for motion vectors (TAA) and continuous
     // collision / constraint solving. First frame: previous == current so the
     // motion vector is zero rather than a jump from the identity default.
+    const bool changed = !hasComposedWorld_ || composedWorld_ != newComposedWorld;
     previousComposedWorld_ = hasComposedWorld_ ? composedWorld_ : newComposedWorld;
     hasComposedWorld_ = true;
     composedWorld_ = newComposedWorld;
+    if (changed)
+    {
+        ++worldRevision_;
+    }
 }
 
 void Node::render(const RenderContext& ctx, const Mat4& parentWorld)
