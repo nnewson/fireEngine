@@ -9,6 +9,7 @@
 // The authored numbers here are the shared source of truth with
 // assets/physics_demos/generate.py — keep the two in sync when a demo changes.
 
+#include <array>
 #include <cmath>
 #include <numbers>
 
@@ -220,4 +221,55 @@ TEST_CASE("Demos.Friction.HighFrictionStaysLowFrictionSlides", "[Demos]")
     CHECK(slipPos.y() == Catch::Approx(0.4f).margin(0.15f));
     CHECK(std::abs(slipPos.x()) < 7.5f);
     CHECK(Vec3::dotProduct(slipVel, slipVel) < 0.09f); // |v| < 0.3
+}
+
+TEST_CASE("Demos.Stack.SettlesAndStaysStill", "[Demos]")
+{
+    // StackDemo.gltf: a tower of three boxes dropped with small gaps settles into a
+    // resting stack at centres 0.5, 1.5, 2.5 and stays still (no collapse, no drift)
+    // rather than buzzing apart — the warm-started impulse solver's headline win.
+    // (Three, not more: a taller tower sits near the fixed-iteration solver's
+    // stability margin and quiesces only slowly — see generate.py demo_stack.)
+    PhysicsWorld world;
+    addStaticFloor(world, 6.0f);
+    std::array<PhysicsBodyHandle, 3> boxes{};
+    for (int i = 0; i < 3; ++i)
+    {
+        boxes[static_cast<std::size_t>(i)] =
+            addDynamicBox(world, {0.0f, 0.55f + static_cast<float>(i) * 1.05f, 0.0f},
+                          {0.5f, 0.5f, 0.5f}, 0.0f, 0.5f);
+    }
+
+    step(world, 240); // 4 s — fall, settle, sleep
+
+    for (std::size_t k = 0; k < boxes.size(); ++k)
+    {
+        const Vec3 pos = world.bodyTransform(boxes[k])->position();
+        const Vec3 vel = world.body(boxes[k])->linearVelocity();
+        // Each box rests at its tier height and did not topple sideways.
+        CHECK(pos.y() == Catch::Approx(0.5f + static_cast<float>(k)).margin(0.12f));
+        CHECK(std::abs(pos.x()) < 0.2f);
+        CHECK(std::abs(pos.z()) < 0.2f);
+        CHECK(Vec3::dotProduct(vel, vel) < 0.0025f); // |v| < 0.05 — fully settled
+    }
+}
+
+TEST_CASE("Demos.Topple.TallBoxTopplesOntoSide", "[Demos]")
+{
+    // ToppleDemo.gltf: a tall box (half 0.3 x 1.0 x 0.3) tilted 30 deg — past its
+    // ~16.7 deg balance angle — topples onto its long side (local +y ends up
+    // horizontal) and comes to rest. The P3 rotational-dynamics headline.
+    PhysicsWorld world;
+    addStaticFloor(world, 6.0f, 0.6f);
+    const float tilt = 30.0f * std::numbers::pi_v<float> / 180.0f;
+    const Quaternion rotation{0.0f, 0.0f, std::sin(tilt * 0.5f), std::cos(tilt * 0.5f)};
+    const PhysicsBodyHandle box = addOrientedBox(
+        world, PhysicsBodyType::Dynamic, {0.0f, 2.0f, 0.0f}, rotation, {0.3f, 1.0f, 0.3f}, 0.6f);
+
+    step(world, 360); // 6 s
+
+    const auto t = world.bodyTransform(box);
+    const Vec3 up = t->rotation().rotate(Vec3{0.0f, 1.0f, 0.0f});
+    CHECK(std::abs(up.y()) < 0.2f); // local +y now ~horizontal → toppled onto its side
+    CHECK(world.body(box)->angularVelocity().approxEqual(Vec3{0.0f, 0.0f, 0.0f}, 0.1f));
 }

@@ -431,10 +431,59 @@ def demo_friction_ramp():
     return s
 
 
+def demo_stack():
+    """P3: a tower of boxes dropped with small gaps settles into a resting stack
+    and stays still (warm-started impulse solver, then sleeps) instead of buzzing
+    apart. Three boxes — a taller tower quiesces much more slowly because the
+    fixed-iteration sequential-impulse solver propagates the settle down the stack
+    gradually (the bottom box bears the whole load), so a 5-high tower shuffles for
+    several seconds before sleeping; three settles in ~1 s."""
+    s = Scene()
+    s.static_floor(half_xz=6.0)
+    palette = [(0.80, 0.35, 0.30), (0.35, 0.55, 0.80), (0.80, 0.65, 0.30)]
+    # Half 0.5 boxes; centres start at 0.55, 1.60, 2.65 (a small gap above the floor
+    # top at y=0) so they fall a little and settle into contact at 0.5, 1.5, 2.5.
+    for i in range(3):
+        s.box_body(
+            f"Box{i}",
+            (0.5, 0.5, 0.5),
+            (0.0, 0.55 + i * 1.05, 0.0),
+            palette[i],
+            {"BodyType": "Dynamic", "Shape": "Box", "Mass": 1.0,
+             "Restitution": 0.0, "Friction": 0.5},
+        )
+    s.camera(eye=(6.0, 4.0, 8.0), target=(0.0, 2.5, 0.0))
+    return s
+
+
+def demo_topple():
+    """P3 headline: a tall box tilted past its balance angle topples onto its long
+    side and comes to rest (full rotational dynamics — inertia + lever-arm torque)."""
+    s = Scene()
+    # Friction 0.6 so the toppling box pivots on its edge rather than sliding.
+    s.static_floor(half_xz=6.0, friction=0.6)
+    box_half = (0.3, 1.0, 0.3)
+    # Topple angle ~ atan(0.3/1.0) ~ 16.7 deg; a 30 deg tilt is safely past it.
+    tilt = quat_axis_angle((0.0, 0.0, 1.0), math.radians(30.0))
+    s.box_body(
+        "TallBox",
+        box_half,
+        (0.0, 2.0, 0.0),
+        (0.80, 0.50, 0.25),
+        {"BodyType": "Dynamic", "Shape": "Box", "Mass": 1.0,
+         "Restitution": 0.0, "Friction": 0.6},
+        rotation=tilt,
+    )
+    s.camera(eye=(5.0, 3.0, 6.0), target=(0.0, 1.0, 0.0))
+    return s
+
+
 DEMOS = {
     "FallRestDemo": demo_fall_rest,
     "RestitutionDemo": demo_restitution,
     "FrictionRampDemo": demo_friction_ramp,
+    "StackDemo": demo_stack,
+    "ToppleDemo": demo_topple,
 }
 
 

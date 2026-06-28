@@ -90,6 +90,8 @@ Physics can be authored in glTF through node `extras.Physics`. The loader create
 | `FallRestDemo.gltf` | A Dynamic box falls onto a Static floor, settles flat, and goes fully still (it sleeps). End-to-end author→simulate smoke. | `Demos.FallRest.BoxComesToRestOnFloor` |
 | `RestitutionDemo.gltf` | Three spheres with restitution 0.0 / 0.5 / 0.9 dropped from the same height bounce to visibly different rebound heights. | `Demos.Restitution.HigherRestitutionBouncesHigher` |
 | `FrictionRampDemo.gltf` | Two boxes on a 25° ramp: a high-friction box holds while a low-friction box slides off and grinds to a halt on the rough floor (combined friction is `sqrt(a·b)`). | `Demos.Friction.HighFrictionStaysLowFrictionSlides` |
+| `StackDemo.gltf` | A tower of three boxes dropped with small gaps settles into a resting stack and stays still (warm-started impulse solver, then sleeps) rather than buzzing apart. | `Demos.Stack.SettlesAndStaysStill` |
+| `ToppleDemo.gltf` | A tall box tilted 30° — past its ~16.7° balance angle — topples onto its long side and comes to rest (full rotational dynamics: inertia + lever-arm torque). | `Demos.Topple.TallBoxTopplesOntoSide` |
 
 Run a demo (add `--debug-physics` to overlay collider/contact wireframes); paths are relative to `build/`:
 
@@ -98,6 +100,8 @@ cd build
 ./fireEngineApp physics_demos/FallRestDemo.gltf      skybox.hdr --debug-physics
 ./fireEngineApp physics_demos/RestitutionDemo.gltf   skybox.hdr --debug-physics
 ./fireEngineApp physics_demos/FrictionRampDemo.gltf  skybox.hdr --debug-physics
+./fireEngineApp physics_demos/StackDemo.gltf         skybox.hdr --debug-physics
+./fireEngineApp physics_demos/ToppleDemo.gltf        skybox.hdr --debug-physics
 ```
 
 Run all the demo behaviour tests headlessly:
