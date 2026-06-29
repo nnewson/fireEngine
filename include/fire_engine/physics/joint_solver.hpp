@@ -37,15 +37,20 @@ public:
     JointSolver(JointSolver&&) noexcept = default;
     JointSolver& operator=(JointSolver&&) noexcept = default;
 
-    // Build constraint rows from the joints, compute effective masses + the
-    // Baumgarte position bias from the current anchor/axis error. Clears prior state.
-    void prepare(std::span<const SolverBody> bodies, std::span<const JointInput> joints, float dt);
+    // Build constraint rows from the joints, compute effective masses + the soft
+    // coefficients from the substep `h`, and the position error from the current
+    // anchor/axis state. Clears prior state.
+    void prepare(std::span<const SolverBody> bodies, std::span<const JointInput> joints, float h);
 
-    // Apply the (warm-started) accumulated impulses once before iterating.
+    // Apply the (warm-started) accumulated impulses. Called once per substep, before solving.
     void warmStart(std::vector<SolverBody>& bodies) const;
 
-    // One velocity-constraint Gauss-Seidel sweep. Call kVelocityIterations times.
-    void solveVelocity(std::vector<SolverBody>& bodies);
+    // One velocity-constraint Gauss-Seidel sweep. `useBias` applies the soft
+    // damped-spring bias toward zero position error (recomputed from the current pose
+    // for the point-anchor rows) and the impulse-decay term; the no-bias *relax* pass
+    // (useBias = false) projects out only the residual velocity, removing the bias
+    // velocity so it cannot pump energy.
+    void solveVelocity(std::vector<SolverBody>& bodies, bool useBias);
 
     // Warm-start persistence split for the per-island solve (see ContactSolver):
     // `beginStore` once before the islands, `store` per island (appends), `commitStore`
@@ -82,6 +87,14 @@ private:
         float impulse{0.0f};
         std::uint64_t key{0};
         int slot{0};
+        // Point-anchor (ball-socket) rows track their separation analytically through
+        // the substeps: the error is dot((posA + qA·anchorLocalA) − (posB + qB·anchorLocalB),
+        // errorAxis), recomputed each bias solve. Other row types (axis/limit/distance)
+        // hold the prepare-time `positionError` across the substeps (anchorError = false).
+        bool anchorError{false};
+        Vec3 anchorLocalA{};
+        Vec3 anchorLocalB{};
+        Vec3 errorAxis{};
     };
 
     // Append one constraint row: full Jacobian (linA/angA act on body A, linB/angB
@@ -118,7 +131,8 @@ private:
     std::vector<ConstraintRow> rows_;
     // World-space inverse inertia per body, R·diag(invI_local)·Rᵀ, built in prepare.
     std::vector<Mat3> invInertiaWorld_;
-    float dt_{0.0f};
+    // Substep dt (h = dt / kSubstepCount); the soft coefficients are computed against it.
+    float h_{0.0f};
 
     // Soft-constraint coefficients (Box2D-v3 `b2MakeSoft`), computed once per step in
     // prepare() from kJointHertz / kJointDampingRatio / dt. Shared by every row.

@@ -525,8 +525,9 @@ TEST_CASE("Demos.Query.RaycastAndOverlapFindBodies", "[Demos]")
     CHECK(world.overlapSphere(origin, 1.0f).empty());
 }
 
-// NOTE: the P4 ragdoll demo is deferred until roadmap P9. A complex ragdoll never
-// settles with the current solver (a joint-driven limit cycle — gravity-independent,
-// not fixable by damping/iterations alone; see roadmap P9 B2). The headless ragdoll
-// physics is still covered by tests/scene/test_ragdoll.cpp. Re-add a demo test here
-// when the demo returns post-P9.
+// NOTE: the P4 ragdoll demo is still deferred after P9.2. The TGS soft-step solver now
+// settles a representative synthetic 17-bone humanoid (gated by Ragdoll.HumanoidSettlesOnFloor
+// in tests/scene/test_ragdoll.cpp), but the real CesiumMan skeleton — a larger joint graph —
+// remains in a ~0.5-1 m/s limit cycle even at high substep counts. That is the signal for
+// reduced-coordinate articulations (roadmap P9 item 5); re-add a demo test here once the
+// demo returns. The headless ragdoll physics stays covered by tests/scene/test_ragdoll.cpp.

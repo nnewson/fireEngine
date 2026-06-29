@@ -4,6 +4,7 @@
 #include <vector>
 
 #include <fire_engine/collision/sweep_and_prune_broad_phase.hpp>
+#include <fire_engine/physics/physics_constants.hpp>
 #include <fire_engine/physics/physics_world.hpp>
 
 #include <catch2/catch_test_macros.hpp>
@@ -89,9 +90,11 @@ TEST_CASE("Determinism.ReplayIsBitIdentical", "[Determinism]")
 
 TEST_CASE("Determinism.FreeFallMatchesClosedForm", "[Determinism]")
 {
-    // A single dynamic body with no collider free-falls under semi-implicit
-    // Euler: v_n = n·g·dt, y_n = y0 + dt²·g·n(n+1)/2. A physical sanity check
-    // independent of the hash.
+    // A single dynamic body with no collider free-falls under semi-implicit Euler.
+    // The TGS solver substeps gravity, so over n fixed steps there are m = n·kSubstepCount
+    // sub-integrations at h = dt/kSubstepCount: v_m = m·g·h (= n·g·dt, unchanged) and
+    // y_m = y0 + h²·g·m(m+1)/2 (slightly less fall than the single-step form, as finer
+    // integration is more accurate). A physical sanity check independent of the hash.
     PhysicsWorld world;
     PhysicsBodyDesc desc;
     desc.type = PhysicsBodyType::Dynamic;
@@ -105,8 +108,9 @@ TEST_CASE("Determinism.FreeFallMatchesClosedForm", "[Determinism]")
         world.step(kFixedDt);
     }
 
-    const float expectedY =
-        100.0f + kFixedDt * kFixedDt * kGravityY * static_cast<float>(n * (n + 1)) / 2.0f;
+    constexpr int m = n * kSubstepCount;
+    constexpr float h = kFixedDt / static_cast<float>(kSubstepCount);
+    const float expectedY = 100.0f + h * h * kGravityY * static_cast<float>(m * (m + 1)) / 2.0f;
     const float expectedVy = static_cast<float>(n) * kGravityY * kFixedDt;
 
     const auto transform = world.bodyTransform(body);
@@ -139,7 +143,9 @@ TEST_CASE("Determinism.GoldenHash", "[Determinism]")
     // Behaviour tripwire: this hash captures the exact end-state of buildScene
     // after kSteps. It changes whenever the solver math changes — update it
     // INTENTIONALLY (and review why) when that happens, never reflexively.
-    constexpr std::uint64_t kGoldenHash = 0x98969fb8f47a51cfULL;
+    // Re-baselined for the P9.2 TGS soft-step solver (substepped gravity, soft contacts
+    // + restitution at the true impact velocity) and the inelastic default material.
+    constexpr std::uint64_t kGoldenHash = 0x9c433ce1d9ec997eULL;
 
     PhysicsWorld world;
     const auto handles = buildScene(world);

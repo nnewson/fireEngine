@@ -473,9 +473,11 @@ def build_ragdoll_demo():
     activate at load — the figure drops and crumples onto the floor. The generator can't
     emit a skinned mesh, so this rewrites the existing asset rather than building one.
 
-    DEFERRED (not called from main()): a complex ragdoll never settles with the current
-    solver — it sits in a joint-driven limit cycle (see roadmap P9 B2). Re-enable this
-    (add the main() call back) once P9's stability state machine lets it come to rest."""
+    STILL DEFERRED after P9.2 (not called from main()): the TGS soft-step solver settles a
+    representative synthetic 17-bone humanoid (tests/scene/test_ragdoll.cpp gate), but the
+    real CesiumMan skeleton — a larger joint graph — stays in a ~0.5-1 m/s limit cycle even
+    at high substep counts. This is the signal for reduced-coordinate articulations (roadmap
+    P9 item 5); re-enable once that lands."""
     here = os.path.dirname(os.path.abspath(__file__))
     with open(os.path.join(here, "..", "CesiumMan", "CesiumMan.gltf")) as f:
         d = json.load(f)
@@ -792,8 +794,9 @@ DEMOS = {
 def main():
     for name, builder in DEMOS.items():
         write_demo(name, builder())
-    # build_ragdoll_demo()  # deferred until roadmap P9 item 2 (TGS substeps) — single-step
-    # soft joints settle a representative ragdoll but not the real CesiumMan skeleton robustly.
+    # build_ragdoll_demo()  # still deferred after P9.2: TGS settles the synthetic humanoid gate
+    # but the real CesiumMan skeleton still limit-cycles — needs reduced-coordinate articulations
+    # (roadmap P9 item 5). See build_ragdoll_demo()'s docstring.
 
 
 if __name__ == "__main__":
