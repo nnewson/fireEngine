@@ -598,21 +598,9 @@ void PhysicsWorld::step(float fixedDt)
         return;
     }
 
-    // Integrate velocity only (gravity); positions advance after the velocity
-    // solve so contact impulses are applied before the bodies move. Sleeping bodies
-    // are skipped — no gravity, so they stay put until their island wakes.
-    for (BodyEntry& entry : bodies_)
-    {
-        if (!entry.active || entry.body.type() != PhysicsBodyType::Dynamic || entry.sleeping)
-        {
-            continue;
-        }
-
-        Vec3 velocity = entry.body.linearVelocity();
-        velocity += gravity_ * entry.body.gravityScale() * fixedDt;
-        entry.body.linearVelocity(velocity);
-    }
-
+    // Gravity is integrated per substep inside the TGS solve (solveIsland), not here:
+    // collision detection runs once on this step's start-of-frame velocities, then the
+    // substep loop applies gravity + solves + integrates positions kSubstepCount times.
     updateColliders(fixedDt);
     broadPhase_->update();
 
@@ -1736,10 +1724,9 @@ float PhysicsWorld::positionWeight(const BodyEntry& body) noexcept
 {
     switch (body.body.type())
     {
-    case PhysicsBodyType::Dynamic:
-        return body.body.inverseMass();
     case PhysicsBodyType::Kinematic:
-        return 1.0f; // scene-driven, but still slides out of penetration
+        return 1.0f; // scene-driven: not velocity-solved, but slides out of penetration
+    case PhysicsBodyType::Dynamic: // resolves penetration through the soft bias (TGS), not here
     case PhysicsBodyType::Static:
     default:
         return 0.0f;
@@ -1834,36 +1821,104 @@ void PhysicsWorld::solveIsland(const Island& island, std::vector<SolverBody>& so
     const bool haveContacts = !islandContacts.empty();
     const bool haveJoints = !islandJoints.empty();
 
-    // Velocity (impulse) solve: joints and contacts share the SolverBody array and
-    // are interleaved Gauss-Seidel — joints first each sweep, then contacts. Joints
-    // fold their position error into a Baumgarte velocity bias (no split-impulse
-    // pass), so the orientation/position integration below corrects them.
+    // TGS soft-step (P9.2). Collision detection already ran once (in step()); here the
+    // fixed step is split into kSubstepCount sub-steps of h. Constraints are prepared
+    // ONCE at h (soft coefficients + anchors), then each substep: integrate gravity,
+    // warm-start, bias-solve (joints then contacts, recomputing separation/error from
+    // the moving pose), integrate positions, then a no-bias *relax* solve that removes
+    // the bias velocity (the dissipation that stops the correction pumping energy).
+    const float h = dt / static_cast<float>(kSubstepCount);
+
     if (haveContacts)
     {
-        solver_.prepare(solverBodies, islandContacts, dt);
-        solver_.warmStart(solverBodies);
+        solver_.prepare(solverBodies, islandContacts, h);
     }
     if (haveJoints)
     {
-        jointSolver_.prepare(solverBodies, islandJoints, dt);
-        jointSolver_.warmStart(solverBodies);
+        jointSolver_.prepare(solverBodies, islandJoints, h);
     }
-    for (int i = 0; i < kVelocityIterations; ++i)
+
+    for (int s = 0; s < kSubstepCount; ++s)
     {
+        // Integrate velocities: gravity on this island's dynamic bodies (Kinematic
+        // members are scene-driven nodes; Static are boundaries).
+        for (const int bi : island.bodies)
+        {
+            const auto b = static_cast<std::size_t>(bi);
+            BodyEntry& entry = bodies_[b];
+            if (entry.body.type() != PhysicsBodyType::Dynamic)
+            {
+                continue;
+            }
+            solverBodies[b].velocity += gravity_ * entry.body.gravityScale() * h;
+        }
+
         if (haveJoints)
         {
-            jointSolver_.solveVelocity(solverBodies);
+            jointSolver_.warmStart(solverBodies);
         }
         if (haveContacts)
         {
-            solver_.solveVelocity(solverBodies);
+            solver_.warmStart(solverBodies);
+        }
+
+        for (int i = 0; i < kVelocityIterations; ++i)
+        {
+            if (haveJoints)
+            {
+                jointSolver_.solveVelocity(solverBodies, /*useBias=*/true);
+            }
+            if (haveContacts)
+            {
+                solver_.solveVelocity(solverBodies, /*useBias=*/true);
+            }
+        }
+
+        // Integrate positions over h from the biased velocities.
+        for (const int bi : island.bodies)
+        {
+            const auto b = static_cast<std::size_t>(bi);
+            BodyEntry& entry = bodies_[b];
+            if (entry.body.type() != PhysicsBodyType::Dynamic)
+            {
+                continue;
+            }
+            solverBodies[b].position += solverBodies[b].velocity * h;
+            if (solverBodies[b].angularVelocity.magnitudeSquared() > 0.0f)
+            {
+                solverBodies[b].orientation =
+                    solverBodies[b].orientation.integrate(solverBodies[b].angularVelocity, h);
+            }
+        }
+
+        // Relax: same solve with no bias, removing the soft bias velocity so the
+        // constraint correction does not feed energy back into the system.
+        for (int i = 0; i < kVelocityIterations; ++i)
+        {
+            if (haveJoints)
+            {
+                jointSolver_.solveVelocity(solverBodies, /*useBias=*/false);
+            }
+            if (haveContacts)
+            {
+                solver_.solveVelocity(solverBodies, /*useBias=*/false);
+            }
         }
     }
 
-    // Integrate this island's dynamic bodies: write solved velocity back and advance
-    // position/orientation. Free-faller singletons (no constraints) integrate here too.
-    // Kinematic members are nodes (their contacts were solved + position-corrected
-    // above) but are scene-driven, so they are not velocity-integrated.
+    // Single end-of-step restitution pass at the true impact velocity.
+    if (haveContacts)
+    {
+        solver_.applyRestitution(solverBodies);
+        // Push scene-driven Kinematic bodies out of penetration (Dynamic bodies already
+        // resolved via the soft bias; positionWeight is 0 for them, so this only moves
+        // Kinematic members).
+        solver_.solvePosition(solverBodies);
+    }
+
+    // Write the solved velocities back to the dynamic bodies (positions/orientations
+    // were advanced into solverBodies above and are written back by the caller), then
+    // append this island's warm-start impulses.
     for (const int bi : island.bodies)
     {
         const auto b = static_cast<std::size_t>(bi);
@@ -1874,19 +1929,10 @@ void PhysicsWorld::solveIsland(const Island& island, std::vector<SolverBody>& so
         }
         entry.body.linearVelocity(solverBodies[b].velocity);
         entry.body.angularVelocity(solverBodies[b].angularVelocity);
-        solverBodies[b].position += solverBodies[b].velocity * dt;
-        if (solverBodies[b].angularVelocity.magnitudeSquared() > 0.0f)
-        {
-            solverBodies[b].orientation =
-                solverBodies[b].orientation.integrate(solverBodies[b].angularVelocity, dt);
-        }
     }
 
-    // Split-impulse positional correction (contacts; may also nudge Kinematic
-    // anchors), then append this island's warm-start impulses.
     if (haveContacts)
     {
-        solver_.solvePosition(solverBodies);
         solver_.store();
     }
     if (haveJoints)

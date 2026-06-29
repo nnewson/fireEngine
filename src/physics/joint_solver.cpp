@@ -20,6 +20,12 @@ constexpr float kInf = std::numeric_limits<float>::infinity();
     return Vec3::dotProduct(a, b);
 }
 
+// Sign-preserving slop deadzone: a satisfied joint (|C| < slop) contributes no bias.
+[[nodiscard]] float slopCorrect(float c) noexcept
+{
+    return c > 0.0f ? std::max(c - kJointSlop, 0.0f) : std::min(c + kJointSlop, 0.0f);
+}
+
 // Orthonormal pair spanning the plane perpendicular to unit `n` (same seed logic
 // as the contact solver's tangent basis — avoids a near-zero cross product).
 void perpendicularBasis(const Vec3& n, Vec3& t1, Vec3& t2) noexcept
@@ -74,8 +80,7 @@ void JointSolver::pushRow(int a, int b, float invMassA, float invMassB, const Ma
     // Store the slop-corrected error C, leaving a small deadzone so a satisfied joint
     // contributes no spring bias. Sign-preserving reduction keeps bilateral errors
     // stable. solveVelocity() turns this into a soft-constraint (damped-spring) bias.
-    row.positionError = positionError > 0.0f ? std::max(positionError - kJointSlop, 0.0f)
-                                             : std::min(positionError + kJointSlop, 0.0f);
+    row.positionError = slopCorrect(positionError);
 
     row.lower = lower;
     row.upper = upper;
@@ -92,11 +97,20 @@ void JointSolver::addPointRows(const SolverBody& a, const SolverBody& b, const J
     // world axis. linearA = e, angularA = rA×e; body B takes the opposite Jacobian.
     const Vec3 separation = joint.anchorA - joint.anchorB;
     const Vec3 axes[3] = {Vec3{1.0f, 0.0f, 0.0f}, Vec3{0.0f, 1.0f, 0.0f}, Vec3{0.0f, 0.0f, 1.0f}};
+    // Anchors stored body-local so each substep can recompute the separation error from
+    // the moving bodies (TGS): worldAnchor = pos + orientation·anchorLocal.
+    const Vec3 anchorLocalA = a.orientation.conjugate().rotate(rA);
+    const Vec3 anchorLocalB = b.orientation.conjugate().rotate(rB);
     for (const Vec3& e : axes)
     {
         pushRow(joint.bodyA, joint.bodyB, a.invMass, b.invMass, iA, iB, e,
                 Vec3::crossProduct(rA, e), e * -1.0f, Vec3::crossProduct(rB, e) * -1.0f,
                 dot(separation, e), -kInf, kInf, joint.key, slot++);
+        ConstraintRow& row = rows_.back();
+        row.anchorError = true;
+        row.anchorLocalA = anchorLocalA;
+        row.anchorLocalB = anchorLocalB;
+        row.errorAxis = e;
     }
 }
 
@@ -203,18 +217,19 @@ void JointSolver::addConeTwistLimit(const SolverBody& a, const SolverBody& b,
 }
 
 void JointSolver::prepare(std::span<const SolverBody> bodies, std::span<const JointInput> joints,
-                          float dt)
+                          float h)
 {
-    dt_ = dt;
+    h_ = h;
     rows_.clear();
 
     // Soft-constraint coefficients (Box2D-v3 `b2MakeSoft`): a damped spring at frequency
-    // kJointHertz with damping ratio kJointDampingRatio. `impulseScale_` decays the
-    // accumulated impulse each sweep (dissipative — the anti-energy-pump term).
+    // kJointHertz with damping ratio kJointDampingRatio, evaluated at the substep h.
+    // `impulseScale_` decays the accumulated impulse each sweep (dissipative — the
+    // anti-energy-pump term).
     {
         const float omega = 2.0f * std::numbers::pi_v<float> * kJointHertz;
-        const float a1 = 2.0f * kJointDampingRatio + dt_ * omega;
-        const float a2 = dt_ * omega * a1;
+        const float a1 = 2.0f * kJointDampingRatio + h_ * omega;
+        const float a2 = h_ * omega * a1;
         const float a3 = 1.0f / (1.0f + a2);
         biasRate_ = omega / a1;
         massScale_ = a2 * a3;
@@ -296,7 +311,7 @@ void JointSolver::warmStart(std::vector<SolverBody>& bodies) const
     }
 }
 
-void JointSolver::solveVelocity(std::vector<SolverBody>& bodies)
+void JointSolver::solveVelocity(std::vector<SolverBody>& bodies, bool useBias)
 {
     for (ConstraintRow& row : rows_)
     {
@@ -307,11 +322,31 @@ void JointSolver::solveVelocity(std::vector<SolverBody>& bodies)
 
         const float jv = dot(row.linearA, a.velocity) + dot(row.angularA, a.angularVelocity) +
                          dot(row.linearB, b.velocity) + dot(row.angularB, b.angularVelocity);
+
         // Soft constraint: a damped-spring bias toward zero error, scaled mass, and an
-        // impulse-decay term that dissipates energy (vs the old hard `-(kBaumgarte/dt)·C`
-        // bias, which fed unresolved error back as velocity = an energy pump).
-        const float bias = biasRate_ * row.positionError;
-        float lambda = -row.effectiveMass * massScale_ * (jv + bias) - impulseScale_ * row.impulse;
+        // impulse-decay term that dissipates energy (vs the old hard Baumgarte velocity
+        // bias, an energy pump). The bias/scaling only act on the bias solve; the no-bias
+        // relax pass projects out residual velocity (massScale 1, no decay) so the bias
+        // velocity is removed rather than accumulated. Point-anchor rows recompute their
+        // error from the current pose so the spring targets the live separation.
+        float bias = 0.0f;
+        float massScale = 1.0f;
+        float impulseScale = 0.0f;
+        if (useBias)
+        {
+            float positionError = row.positionError;
+            if (row.anchorError)
+            {
+                const Vec3 worldA = a.position + a.orientation.rotate(row.anchorLocalA);
+                const Vec3 worldB = b.position + b.orientation.rotate(row.anchorLocalB);
+                positionError = slopCorrect(dot(worldA - worldB, row.errorAxis));
+            }
+            bias = biasRate_ * positionError;
+            massScale = massScale_;
+            impulseScale = impulseScale_;
+        }
+
+        float lambda = -row.effectiveMass * massScale * (jv + bias) - impulseScale * row.impulse;
 
         const float oldImpulse = row.impulse;
         row.impulse = std::clamp(oldImpulse + lambda, row.lower, row.upper);

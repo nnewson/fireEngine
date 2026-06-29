@@ -10,13 +10,17 @@
 #include <fire_engine/physics/physics_constants.hpp>
 
 using fire_engine::ContactSolver;
-using fire_engine::kVelocityIterations;
 using fire_engine::SolverBody;
 using fire_engine::SolverContactInput;
 using fire_engine::Vec3;
 
 namespace
 {
+
+// Substep dt the unit tests prepare against. The converged velocity of a relax pass is
+// independent of h; h only sets the soft-spring rate and the speculative 1/h gap brake,
+// so a representative single-step h keeps the gap-brake expectations exactly -gap/h.
+constexpr float kTestH = 1.0f / 60.0f;
 
 // A single-point contact along `normal`, restitution/friction as given.
 SolverContactInput makeContact(Vec3 normal, float penetration, float restitution, float friction)
@@ -33,14 +37,19 @@ SolverContactInput makeContact(Vec3 normal, float penetration, float restitution
     return c;
 }
 
+// Drive the velocity constraint to convergence the way the TGS substep loop does:
+// warm-start once, then alternate a biased solve with a no-bias relax pass, ending on
+// the relax so the soft bias velocity is removed. The bodies are not advanced (these
+// are pure velocity-response tests), so the separation stays at its prepared value.
 void runVelocity(ContactSolver& solver, std::vector<SolverBody>& bodies,
                  const std::vector<SolverContactInput>& contacts)
 {
-    solver.prepare(bodies, contacts, 1.0f / 60.0f);
+    solver.prepare(bodies, contacts, kTestH);
     solver.warmStart(bodies);
-    for (int i = 0; i < kVelocityIterations; ++i)
+    for (int i = 0; i < 8; ++i)
     {
-        solver.solveVelocity(bodies);
+        solver.solveVelocity(bodies, /*useBias=*/true);
+        solver.solveVelocity(bodies, /*useBias=*/false);
     }
 }
 
@@ -53,7 +62,6 @@ TEST_CASE("ContactSolver.NormalRemovesApproachVelocity", "[ContactSolver]")
     std::vector<SolverBody> bodies(2);
     bodies[0].velocity = {0.0f, -1.0f, 0.0f};
     bodies[0].invMass = 1.0f;
-    bodies[0].positionWeight = 1.0f;
 
     ContactSolver solver;
     runVelocity(solver, bodies, {makeContact({0.0f, 1.0f, 0.0f}, 0.0f, 0.0f, 0.0f)});
@@ -64,29 +72,30 @@ TEST_CASE("ContactSolver.NormalRemovesApproachVelocity", "[ContactSolver]")
 TEST_CASE("ContactSolver.RestitutionBouncesAboveThreshold", "[ContactSolver]")
 {
     // Approaching at 2 m/s (above the 1 m/s threshold) with restitution 1 should
-    // reverse the velocity to a clean +2 m/s separation.
+    // reverse the velocity to a clean +2 m/s separation. The velocity solve removes
+    // the approach; the end-of-step restitution pass adds the rebound.
     std::vector<SolverBody> bodies(2);
     bodies[0].velocity = {0.0f, -2.0f, 0.0f};
     bodies[0].invMass = 1.0f;
-    bodies[0].positionWeight = 1.0f;
 
     ContactSolver solver;
     runVelocity(solver, bodies, {makeContact({0.0f, 1.0f, 0.0f}, 0.0f, 1.0f, 0.0f)});
+    solver.applyRestitution(bodies);
 
     CHECK(bodies[0].velocity.y() == Catch::Approx(2.0f).margin(1e-3f));
 }
 
 TEST_CASE("ContactSolver.RestitutionSuppressedBelowThreshold", "[ContactSolver]")
 {
-    // Approaching at 0.5 m/s (below threshold) with restitution 1: the bounce bias
-    // is suppressed so the body comes to rest instead of buzzing.
+    // Approaching at 0.5 m/s (below threshold) with restitution 1: the restitution
+    // pass is suppressed so the body comes to rest instead of buzzing.
     std::vector<SolverBody> bodies(2);
     bodies[0].velocity = {0.0f, -0.5f, 0.0f};
     bodies[0].invMass = 1.0f;
-    bodies[0].positionWeight = 1.0f;
 
     ContactSolver solver;
     runVelocity(solver, bodies, {makeContact({0.0f, 1.0f, 0.0f}, 0.0f, 1.0f, 0.0f)});
+    solver.applyRestitution(bodies);
 
     CHECK(bodies[0].velocity.y() == Catch::Approx(0.0f).margin(1e-4f));
 }
@@ -99,7 +108,6 @@ TEST_CASE("ContactSolver.FrictionStopsTangentialMotion", "[ContactSolver]")
     std::vector<SolverBody> bodies(2);
     bodies[0].velocity = {1.0f, -1.0f, 0.0f};
     bodies[0].invMass = 1.0f;
-    bodies[0].positionWeight = 1.0f;
 
     ContactSolver solver;
     runVelocity(solver, bodies, {makeContact({0.0f, 1.0f, 0.0f}, 0.0f, 0.0f, 1.0f)});
@@ -116,7 +124,6 @@ TEST_CASE("ContactSolver.FrictionClampedByNormalImpulse", "[ContactSolver]")
     std::vector<SolverBody> bodies(2);
     bodies[0].velocity = {1.0f, -1.0f, 0.0f};
     bodies[0].invMass = 1.0f;
-    bodies[0].positionWeight = 1.0f;
 
     ContactSolver solver;
     runVelocity(solver, bodies, {makeContact({0.0f, 1.0f, 0.0f}, 0.0f, 0.0f, 0.3f)});
@@ -133,10 +140,8 @@ TEST_CASE("ContactSolver.MassRatioWeightsImpulseByInverseMass", "[ContactSolver]
     std::vector<SolverBody> bodies(2);
     bodies[0].velocity = {0.0f, -1.0f, 0.0f};
     bodies[0].invMass = 0.1f;
-    bodies[0].positionWeight = 0.1f;
     bodies[1].velocity = {0.0f, 1.0f, 0.0f};
     bodies[1].invMass = 1.0f;
-    bodies[1].positionWeight = 1.0f;
 
     ContactSolver solver;
     runVelocity(solver, bodies, {makeContact({0.0f, 1.0f, 0.0f}, 0.0f, 0.0f, 0.0f)});
@@ -150,53 +155,50 @@ TEST_CASE("ContactSolver.MassRatioWeightsImpulseByInverseMass", "[ContactSolver]
     CHECK(changeB == Catch::Approx(10.0f * changeA).margin(1e-2f));
 }
 
-TEST_CASE("ContactSolver.PositionPassPushesOutOfPenetration", "[ContactSolver]")
+TEST_CASE("ContactSolver.SoftBiasPushesOutOfPenetration", "[ContactSolver]")
 {
-    // The split-impulse position pass moves a penetrating dynamic body out along
-    // the normal (a fraction of penetration beyond slop), leaving the immovable
-    // body in place.
+    // The soft contact constraint replaces the old split-impulse position pass: a
+    // penetrating, resting body is given an outward (separating) bias velocity, which
+    // the substep position integration then turns into separation. A single biased
+    // solve is enough to surface the push-out velocity.
     std::vector<SolverBody> bodies(2);
     bodies[0].position = {0.0f, 0.0f, 0.0f};
     bodies[0].invMass = 1.0f;
-    bodies[0].positionWeight = 1.0f;
     bodies[1].position = {0.0f, -1.0f, 0.0f};
 
     ContactSolver solver;
     const std::array contacts{makeContact({0.0f, 1.0f, 0.0f}, 0.1f, 0.0f, 0.0f)};
-    solver.prepare(bodies, contacts, 1.0f / 60.0f);
-    solver.solvePosition(bodies);
+    solver.prepare(bodies, contacts, kTestH);
+    solver.warmStart(bodies);
+    solver.solveVelocity(bodies, /*useBias=*/true);
 
-    CHECK(bodies[0].position.y() > 0.0f);                  // pushed out along +y
-    CHECK(bodies[0].position.y() < 0.1f);                  // by less than the full penetration
-    CHECK(bodies[1].position.y() == Catch::Approx(-1.0f)); // immovable target stays put
+    CHECK(bodies[0].velocity.y() > 0.0f);                 // separating (pushed out along +y)
+    CHECK(bodies[1].velocity.y() == Catch::Approx(0.0f)); // immovable target unaffected
 }
 
 TEST_CASE("ContactSolver.SpeculativeContactBrakesOvershoot", "[ContactSolver]")
 {
     // A speculative gap contact (negative penetration = a 0.05 m gap) lets the body
-    // close the gap but no further: a body closing far faster than gap/dt is braked
-    // to exactly gap/dt (= 0.05 * 60 = 3 m/s), so it reaches the surface this step
-    // without tunnelling through it.
-    const float dt = 1.0f / 60.0f;
+    // close the gap but no further: a body closing far faster than gap/h is braked
+    // to exactly gap/h (= 0.05 * 60 = 3 m/s), so it reaches the surface this substep
+    // without tunnelling through it. The speculative brake acts on both bias and relax.
     std::vector<SolverBody> bodies(2);
     bodies[0].velocity = {0.0f, -10.0f, 0.0f};
     bodies[0].invMass = 1.0f;
-    bodies[0].positionWeight = 1.0f;
 
     ContactSolver solver;
     runVelocity(solver, bodies, {makeContact({0.0f, 1.0f, 0.0f}, -0.05f, 0.0f, 0.0f)});
 
-    CHECK(bodies[0].velocity.y() == Catch::Approx(-0.05f / dt).margin(1e-3f)); // = -3 m/s
+    CHECK(bodies[0].velocity.y() == Catch::Approx(-0.05f / kTestH).margin(1e-3f)); // = -3 m/s
 }
 
 TEST_CASE("ContactSolver.SpeculativeContactIgnoresSlowApproach", "[ContactSolver]")
 {
-    // A body approaching slower than gap/dt won't reach the surface this step, so
+    // A body approaching slower than gap/h won't reach the surface this substep, so
     // the speculative contact applies no impulse and leaves its velocity untouched.
     std::vector<SolverBody> bodies(2);
-    bodies[0].velocity = {0.0f, -1.0f, 0.0f}; // gap/dt = 3 m/s; 1 m/s won't reach
+    bodies[0].velocity = {0.0f, -1.0f, 0.0f}; // gap/h = 3 m/s; 1 m/s won't reach
     bodies[0].invMass = 1.0f;
-    bodies[0].positionWeight = 1.0f;
 
     ContactSolver solver;
     runVelocity(solver, bodies, {makeContact({0.0f, 1.0f, 0.0f}, -0.05f, 0.0f, 0.0f)});
@@ -215,7 +217,6 @@ TEST_CASE("ContactSolver.OffCentreImpulseImpartsAngularVelocity", "[ContactSolve
     bodies[0].velocity = {0.0f, -1.0f, 0.0f};
     bodies[0].invMass = 1.0f;
     bodies[0].inverseInertiaLocal = {2.0f, 2.0f, 2.0f};
-    bodies[0].positionWeight = 1.0f;
 
     SolverContactInput c;
     c.bodyA = 0;
@@ -242,7 +243,6 @@ TEST_CASE("ContactSolver.CentredContactProducesNoSpin", "[ContactSolver]")
     bodies[0].velocity = {0.0f, -1.0f, 0.0f};
     bodies[0].invMass = 1.0f;
     bodies[0].inverseInertiaLocal = {2.0f, 2.0f, 2.0f};
-    bodies[0].positionWeight = 1.0f;
 
     ContactSolver solver;
     runVelocity(solver, bodies, {makeContact({0.0f, 1.0f, 0.0f}, 0.0f, 0.0f, 0.0f)});

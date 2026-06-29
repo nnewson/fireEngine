@@ -15,7 +15,11 @@ enum class PhysicsBodyType
 
 struct PhysicsMaterial
 {
-    float restitution{1.0f};
+    // Inelastic by default (Box2D/PhysX convention): contact restitution combines as
+    // max(a, b), so a bouncy default makes any pair bounce and is a known footgun. The
+    // TGS solver applies restitution at the true impact velocity (P9.2), so bodies that
+    // should bounce must opt in explicitly.
+    float restitution{0.0f};
     float friction{0.0f};
 };
 
