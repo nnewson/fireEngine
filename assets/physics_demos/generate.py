@@ -792,7 +792,8 @@ DEMOS = {
 def main():
     for name, builder in DEMOS.items():
         write_demo(name, builder())
-    # build_ragdoll_demo()  # deferred until roadmap P9 (complex ragdolls don't settle yet)
+    # build_ragdoll_demo()  # deferred until roadmap P9 item 2 (TGS substeps) — single-step
+    # soft joints settle a representative ragdoll but not the real CesiumMan skeleton robustly.
 
 
 if __name__ == "__main__":

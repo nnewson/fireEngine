@@ -17,9 +17,11 @@ namespace fire_engine
 // generic bilateral/limit constraint rows rather than contact points: each joint
 // expands into one or more ConstraintRows (a full Jacobian linearA/angularA/
 // linearB/angularB), solved Gauss-Seidel alongside the contacts over the same
-// SolverBody array. Position error is folded into a Baumgarte velocity bias
-// (kJointBaumgarte) instead of a separate split-impulse pass — joints are stiff and
-// the bias is recomputed each step from the live anchor/axis error.
+// SolverBody array. Position error is enforced as a **soft / compliant constraint**
+// (Box2D-v3 `b2MakeSoft`, P9.1) — a damped spring whose impulse-decay term dissipates
+// energy — rather than a hard Baumgarte velocity bias, which pumped energy into
+// many-joint graphs (ragdolls). The error is recomputed each step from the live
+// anchor/axis state.
 //
 // Like ContactSolver it is decoupled from PhysicsWorld (operates on JointInput,
 // world-space anchors composed by the caller) so it can be unit-tested in isolation,
@@ -73,7 +75,8 @@ private:
         Vec3 linearB{};
         Vec3 angularB{};
         float effectiveMass{0.0f};
-        float bias{0.0f};
+        float positionError{
+            0.0f}; // slop-corrected constraint error C (soft-constraint bias source)
         float lower{0.0f};
         float upper{0.0f};
         float impulse{0.0f};
@@ -82,7 +85,8 @@ private:
     };
 
     // Append one constraint row: full Jacobian (linA/angA act on body A, linB/angB
-    // on body B), with effective mass + Baumgarte bias derived from `positionError`.
+    // on body B), with effective mass + the slop-corrected `positionError` (the soft
+    // constraint turns that into a damped-spring bias in solveVelocity).
     void pushRow(int a, int b, float invMassA, float invMassB, const Mat3& iA, const Mat3& iB,
                  const Vec3& linearA, const Vec3& angularA, const Vec3& linearB,
                  const Vec3& angularB, float positionError, float lower, float upper,
@@ -115,6 +119,14 @@ private:
     // World-space inverse inertia per body, R·diag(invI_local)·Rᵀ, built in prepare.
     std::vector<Mat3> invInertiaWorld_;
     float dt_{0.0f};
+
+    // Soft-constraint coefficients (Box2D-v3 `b2MakeSoft`), computed once per step in
+    // prepare() from kJointHertz / kJointDampingRatio / dt. Shared by every row.
+    // `impulseScale_` decays the accumulated impulse each sweep — the dissipative term
+    // that stops the joint correction acting as an energy pump.
+    float biasRate_{0.0f};
+    float massScale_{1.0f};
+    float impulseScale_{0.0f};
 
     // Warm-start cache, keyed by joint id → accumulated impulse per row slot. Only
     // ever looked up by key, never iterated to produce results, so map ordering can
