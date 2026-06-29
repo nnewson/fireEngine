@@ -93,6 +93,71 @@ TEST_CASE("Ragdoll.ActivateSetsWorldOverrideOnBones", "[Ragdoll]")
     CHECK_FALSE(b0.hasWorldOverride());
 }
 
+TEST_CASE("Ragdoll.HumanoidSettlesOnFloor", "[Ragdoll]")
+{
+    // P9.1 gate: a complex articulated ragdoll (17 bones / 16 joints, branching) dropped
+    // onto a floor must come to REST. With the old hard-Baumgarte joints this never
+    // happened — the joint correction pumped energy, leaving a ~0.4–1.5 m/s limit cycle
+    // forever. Soft/compliant joints dissipate instead of pumping, so the island settles.
+    SceneGraph sg;
+    std::vector<Node*> bones;
+    const auto add = [&](Node* parent, const char* name, Vec3 local) -> Node*
+    {
+        auto node = std::make_unique<Node>(name);
+        Node* p = parent ? &parent->addChild(std::move(node)) : &sg.addNode(std::move(node));
+        p->transform().position(local);
+        bones.push_back(p);
+        return p;
+    };
+    Node* pelvis = add(nullptr, "pelvis", {0.0f, 1.6f, 0.0f});
+    Node* spine = add(pelvis, "spine", {0.0f, 0.3f, 0.0f});
+    Node* chest = add(spine, "chest", {0.0f, 0.3f, 0.0f});
+    Node* neck = add(chest, "neck", {0.0f, 0.25f, 0.0f});
+    add(neck, "head", {0.0f, 0.2f, 0.0f});
+    Node* shL = add(chest, "shL", {0.2f, 0.05f, 0.0f});
+    Node* uaL = add(shL, "uaL", {0.25f, 0.0f, 0.0f});
+    add(uaL, "faL", {0.25f, 0.0f, 0.0f});
+    Node* shR = add(chest, "shR", {-0.2f, 0.05f, 0.0f});
+    Node* uaR = add(shR, "uaR", {-0.25f, 0.0f, 0.0f});
+    add(uaR, "faR", {-0.25f, 0.0f, 0.0f});
+    Node* hipL = add(pelvis, "hipL", {0.12f, -0.05f, 0.0f});
+    Node* thL = add(hipL, "thL", {0.0f, -0.35f, 0.0f});
+    add(thL, "shinL", {0.0f, -0.35f, 0.0f});
+    Node* hipR = add(pelvis, "hipR", {-0.12f, -0.05f, 0.0f});
+    Node* thR = add(hipR, "thR", {0.0f, -0.35f, 0.0f});
+    add(thR, "shinR", {0.0f, -0.35f, 0.0f});
+    sg.update(InputState{});
+
+    PhysicsWorld physics;
+    fire_engine::PhysicsBodyDesc floor;
+    floor.type = fire_engine::PhysicsBodyType::Static;
+    floor.position = {0.0f, -0.25f, 0.0f};
+    floor.material = fire_engine::PhysicsMaterial{.restitution = 0.0f, .friction = 0.6f};
+    const auto floorBody = physics.createBody(floor);
+    static_cast<void>(physics.createCollider(
+        floorBody,
+        fire_engine::ColliderDesc{.shape = fire_engine::BoxShape{Vec3{6.0f, 0.25f, 6.0f}, {}}}));
+
+    Ragdoll rag = Ragdoll::make(physics, bones);
+    rag.activate();
+
+    constexpr float dt = 1.0f / 60.0f;
+    for (int i = 0; i < 900; ++i) // 15 s — fall, flop, and (now) settle
+    {
+        physics.step(dt);
+        sg.applyPhysics(physics);
+    }
+
+    float vmax = 0.0f;
+    for (std::size_t i = 0; i < rag.boneCount(); ++i)
+    {
+        const Vec3 v = physics.body(rag.body(i))->linearVelocity();
+        vmax = std::max(vmax, v.magnitude());
+        CHECK(std::isfinite(bodyPos(physics, rag, i).y()));
+    }
+    CHECK(vmax < 0.05f); // came to rest — no joint-driven limit cycle
+}
+
 TEST_CASE("Ragdoll.ChainFallsAndStaysConnected", "[Ragdoll]")
 {
     SceneGraph sg;

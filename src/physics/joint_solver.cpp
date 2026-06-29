@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <numbers>
 
 #include <fire_engine/physics/physics_constants.hpp>
 
@@ -70,11 +71,11 @@ void JointSolver::pushRow(int a, int b, float invMassA, float invMassB, const Ma
                     invMassB * dot(linearB, linearB) + dot(angularB, iB * angularB);
     row.effectiveMass = k > 0.0f ? 1.0f / k : 0.0f;
 
-    // Baumgarte bias toward zero error, leaving a small slop deadzone so a satisfied
-    // joint adds no velocity. Sign-preserving reduction keeps bilateral errors stable.
-    const float corrected = positionError > 0.0f ? std::max(positionError - kJointSlop, 0.0f)
-                                                 : std::min(positionError + kJointSlop, 0.0f);
-    row.bias = -(kJointBaumgarte / dt_) * corrected;
+    // Store the slop-corrected error C, leaving a small deadzone so a satisfied joint
+    // contributes no spring bias. Sign-preserving reduction keeps bilateral errors
+    // stable. solveVelocity() turns this into a soft-constraint (damped-spring) bias.
+    row.positionError = positionError > 0.0f ? std::max(positionError - kJointSlop, 0.0f)
+                                             : std::min(positionError + kJointSlop, 0.0f);
 
     row.lower = lower;
     row.upper = upper;
@@ -207,6 +208,19 @@ void JointSolver::prepare(std::span<const SolverBody> bodies, std::span<const Jo
     dt_ = dt;
     rows_.clear();
 
+    // Soft-constraint coefficients (Box2D-v3 `b2MakeSoft`): a damped spring at frequency
+    // kJointHertz with damping ratio kJointDampingRatio. `impulseScale_` decays the
+    // accumulated impulse each sweep (dissipative — the anti-energy-pump term).
+    {
+        const float omega = 2.0f * std::numbers::pi_v<float> * kJointHertz;
+        const float a1 = 2.0f * kJointDampingRatio + dt_ * omega;
+        const float a2 = dt_ * omega * a1;
+        const float a3 = 1.0f / (1.0f + a2);
+        biasRate_ = omega / a1;
+        massScale_ = a2 * a3;
+        impulseScale_ = a3;
+    }
+
     invInertiaWorld_.assign(bodies.size(), Mat3{});
     for (std::size_t i = 0; i < bodies.size(); ++i)
     {
@@ -293,7 +307,11 @@ void JointSolver::solveVelocity(std::vector<SolverBody>& bodies)
 
         const float jv = dot(row.linearA, a.velocity) + dot(row.angularA, a.angularVelocity) +
                          dot(row.linearB, b.velocity) + dot(row.angularB, b.angularVelocity);
-        float lambda = -row.effectiveMass * (jv - row.bias);
+        // Soft constraint: a damped-spring bias toward zero error, scaled mass, and an
+        // impulse-decay term that dissipates energy (vs the old hard `-(kBaumgarte/dt)·C`
+        // bias, which fed unresolved error back as velocity = an energy pump).
+        const float bias = biasRate_ * row.positionError;
+        float lambda = -row.effectiveMass * massScale_ * (jv + bias) - impulseScale_ * row.impulse;
 
         const float oldImpulse = row.impulse;
         row.impulse = std::clamp(oldImpulse + lambda, row.lower, row.upper);

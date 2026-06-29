@@ -35,12 +35,19 @@ inline constexpr float kWarmStartMatchRadius = 0.02f;
 // near-touching pairs; the motion term scales it so fast movers can't tunnel.
 inline constexpr float kSpeculativeDistance = 0.02f;
 
-// Joints (P4) reuse the same sequential-impulse machinery as contacts. Position
-// error is fed back through a Baumgarte velocity bias rather than a separate
-// split-impulse pass: bias = -(kJointBaumgarte/dt)·C, removing that fraction of the
-// anchor/axis error per step. Stiffer than contacts (joints should hold tightly)
-// but < 1 to stay stable.
-inline constexpr float kJointBaumgarte = 0.2f;
+// Joints (P4) reuse the same sequential-impulse machinery as contacts, but use a
+// **soft / compliant** constraint (Erin Catto / Box2D-v3 `b2MakeSoft`) instead of a hard
+// Baumgarte velocity bias (P9.1). A soft constraint is a damped spring: it has finite
+// stiffness (a target frequency `kJointHertz`) and a damping ratio (`kJointDampingRatio`),
+// and its impulse-decay term *dissipates* energy rather than re-injecting unresolved
+// position error as velocity each step — which a hard Baumgarte bias does, pumping energy
+// into many-joint graphs (ragdolls) so they never settle. See roadmap P9 (B2)/(C).
+//
+// Frequency is a fraction of the step rate (stiff but stable at a single step); damping
+// ratio > 1 is overdamped (no overshoot). Tune so joints hold tightly *and* ragdolls
+// settle (gated by the [Joint] tests + the ragdoll-settles test).
+inline constexpr float kJointHertz = 8.0f;
+inline constexpr float kJointDampingRatio = 5.0f;
 
 // Anchor/axis error (metres / radians) a joint leaves uncorrected, so a satisfied
 // joint contributes no bias and never buzzes.
