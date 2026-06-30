@@ -102,6 +102,45 @@ public:
     }
 
     [[nodiscard]]
+    constexpr float determinant() const noexcept
+    {
+        const float a = m_[0], b = m_[3], c = m_[6]; // row 0
+        const float d = m_[1], e = m_[4], f = m_[7]; // row 1
+        const float g = m_[2], h = m_[5], i = m_[8]; // row 2
+        return a * (e * i - f * h) + b * (f * g - d * i) + c * (d * h - e * g);
+    }
+
+    // Inverse via the adjugate / determinant. Returns the zero matrix when (near-)singular
+    // (|det| <= eps) so callers can detect it and fall back rather than propagate NaNs.
+    [[nodiscard]]
+    constexpr Mat3 inverse(float eps = 1.0e-12f) const noexcept
+    {
+        const float a = m_[0], b = m_[3], c = m_[6]; // row 0
+        const float d = m_[1], e = m_[4], f = m_[7]; // row 1
+        const float g = m_[2], h = m_[5], i = m_[8]; // row 2
+        const float A = e * i - f * h;
+        const float B = f * g - d * i;
+        const float C = d * h - e * g;
+        const float det = a * A + b * B + c * C;
+        if (det <= eps && det >= -eps)
+        {
+            return Mat3{};
+        }
+        const float s = 1.0f / det;
+        Mat3 r;
+        r[0, 0] = A * s;
+        r[0, 1] = (c * h - b * i) * s;
+        r[0, 2] = (b * f - c * e) * s;
+        r[1, 0] = B * s;
+        r[1, 1] = (a * i - c * g) * s;
+        r[1, 2] = (c * d - a * f) * s;
+        r[2, 0] = C * s;
+        r[2, 1] = (b * g - a * h) * s;
+        r[2, 2] = (a * e - b * d) * s;
+        return r;
+    }
+
+    [[nodiscard]]
     constexpr Mat3 operator*(const Mat3& rhs) const noexcept
     {
         Mat3 r;

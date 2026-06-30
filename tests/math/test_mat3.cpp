@@ -60,3 +60,26 @@ TEST_CASE("Mat3.MultiplyAndTranspose", "[Mat3]")
     const Vec3 v{1.0f, -2.0f, 0.5f};
     CHECK(((a * b) * v).approxEqual(a * (b * v), 1e-5f));
 }
+
+TEST_CASE("Mat3.InverseTimesMatrixIsIdentity", "[Mat3]")
+{
+    // A non-symmetric invertible matrix (det != 0).
+    const Mat3 a = Mat3::fromColumns({1.0f, 2.0f, 3.0f}, {0.0f, 1.0f, 4.0f}, {5.0f, 6.0f, 0.0f});
+    const Mat3 ai = a.inverse();
+    CHECK((a * ai).approxEqual(Mat3::identity(), 1e-4f));
+    CHECK((ai * a).approxEqual(Mat3::identity(), 1e-4f));
+
+    // Identity inverts to itself; a diagonal inverts component-wise.
+    CHECK(Mat3::identity().inverse().approxEqual(Mat3::identity(), 1e-6f));
+    CHECK(Mat3::diagonal({2.0f, 4.0f, 0.5f})
+              .inverse()
+              .approxEqual(Mat3::diagonal({0.5f, 0.25f, 2.0f}), 1e-6f));
+
+    // A symmetric positive-definite matrix (the shape of the joint's effective-mass K).
+    const Mat3 k = Mat3::fromColumns({4.0f, 1.0f, 0.5f}, {1.0f, 3.0f, 0.2f}, {0.5f, 0.2f, 2.0f});
+    CHECK((k * k.inverse()).approxEqual(Mat3::identity(), 1e-4f));
+
+    // Singular matrix (rank-deficient: column 2 = column 0 + column 1) → zero, not NaN.
+    const Mat3 s = Mat3::fromColumns({1.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}, {1.0f, 1.0f, 0.0f});
+    CHECK(s.inverse() == Mat3{});
+}
