@@ -50,6 +50,16 @@ inline constexpr float kBaumgarte = 0.2f;
 // jitter around exact touching (metres).
 inline constexpr float kLinearSlop = 0.005f;
 
+// Coulomb friction (P9.3 model). Friction is solved as a coupled 2-vector over the contact
+// tangent plane against a symmetric 2x2 effective mass (which captures the two tangents'
+// angular cross-coupling) and clamped to the friction *disk* |λ| ≤ μ·N (a circle, not an
+// independent-axis box). That coupling + circular clamp is what keeps a tipping/edge contact
+// from pumping spurious torque; an earlier per-axis box clamp + scalar masses over-budgeted
+// diagonally and mis-distributed torque. (A positional static-friction *anchor* scheme was
+// tried and removed: per-point anchors on a 2-point edge contact formed a torsional couple
+// that pumped energy and flipped settled convex bodies; the 2x2-mass + disk clamp alone is
+// both simpler and strictly better — see roadmap P9.3.)
+
 // Below this closing speed (m/s) restitution is suppressed, so bodies settling
 // under gravity come to rest instead of buzzing with micro-bounces.
 inline constexpr float kRestitutionThreshold = 1.0f;
