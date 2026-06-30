@@ -8,6 +8,7 @@
 
 #include <fire_engine/collision/contact_manifold.hpp>
 #include <fire_engine/math/mat3.hpp>
+#include <fire_engine/math/vec2.hpp>
 #include <fire_engine/math/vec3.hpp>
 #include <fire_engine/physics/solver_math.hpp>
 
@@ -133,8 +134,13 @@ private:
         float adjustedSeparation{0.0f};
         float normalMass{0.0f};
         float posNormalMass{0.0f}; // effective mass along the normal using posWeights
-        float tangentMass1{0.0f};
-        float tangentMass2{0.0f};
+        // Symmetric 2x2 tangent effective mass (inverse of K = J M⁻¹ Jᵀ over t1/t2). The
+        // off-diagonal is the angular cross-coupling between the two tangents — non-zero for
+        // an off-centre / edge contact, which is exactly where treating the tangents as two
+        // independent scalar rows mis-distributes torque.
+        float tangentMass00{0.0f};
+        float tangentMass01{0.0f};
+        float tangentMass11{0.0f};
         float pseudoImpulse{0.0f}; // accumulated position-pass pseudo-impulse
         // Relative-normal velocity at prepare (negative = approaching); the impact
         // speed restitution rebounds against at end-of-step.
@@ -142,22 +148,24 @@ private:
         float restitution{0.0f};
         float friction{0.0f};
         float normalImpulse{0.0f};
-        float tangentImpulse1{0.0f};
-        float tangentImpulse2{0.0f};
+        // Accumulated 2D friction impulse in the (tangent1, tangent2) basis. Solved as a
+        // coupled 2-vector against the 2x2 mass and clamped to the friction *disk* (a circle,
+        // not an independent-axis box) so it can't over-budget diagonally.
+        Vec2 tangentImpulse{};
         // Largest normal impulse reached over the substeps; restitution is only
         // applied to points that actually engaged (maxNormalImpulse > 0).
         float maxNormalImpulse{0.0f};
         std::uint64_t key{0};
     };
 
-    // One persisted contact point: its world position (for proximity matching next
-    // frame) and the impulses accumulated this frame.
+    // One persisted contact point: its world position (for proximity matching next frame)
+    // and the normal impulse accumulated this frame. Only the *normal* impulse is warm-started
+    // across frames — friction has no cross-frame memory (carrying it pumps energy at a
+    // rocking contact), so it is not cached.
     struct CachedPoint
     {
         Vec3 point{};
         float normalImpulse{0.0f};
-        float tangentImpulse1{0.0f};
-        float tangentImpulse2{0.0f};
     };
 
     std::vector<ConstraintPoint> points_;

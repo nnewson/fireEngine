@@ -453,6 +453,129 @@ TEST_CASE("PhysicsWorld.ConvexHullCubeRestsFlatLikeABox", "[PhysicsWorld]")
     CHECK(physics.body(boxBody)->linearVelocity().approxEqual(Vec3{0.0f, 0.0f, 0.0f}, 0.05f));
 }
 
+TEST_CASE("PhysicsWorld.TippingTetrahedronDoesNotSpinUpAboutVertical", "[PhysicsWorld]")
+{
+    // Friction-patch regression guard (P9.3). A tetrahedron that lands on an edge and tips
+    // onto a face used to acquire a large spurious yaw at the third-vertex impact: velocity-
+    // only friction re-applied a transient impulse at the rotating contact lever every substep
+    // (a ~1.5 rad/s spin-up that did not settle). With friction anchors (static friction as a
+    // positional constraint) the contact instead resolves cleanly: the figure comes to rest and
+    // the yaw stays bounded. Frictionless, the same drop yaws ~0.02 rad/s — friction must not
+    // multiply that into a pumped spin.
+    PhysicsWorld physics;
+
+    PhysicsBodyDesc floor;
+    floor.type = PhysicsBodyType::Static;
+    floor.position = {0.0f, -0.5f, 0.0f};
+    floor.material = PhysicsMaterial{.restitution = 0.0f, .friction = 0.5f};
+    const auto floorBody = physics.createBody(floor);
+    [[maybe_unused]] const auto fc = physics.createCollider(
+        floorBody, ColliderDesc{.shape = BoxShape{.halfExtents = {6.0f, 0.5f, 6.0f}}});
+
+    // Regular tetrahedron (scale 0.6), tilted so it lands edge-first and tips onto a face.
+    const float s = 0.6f;
+    const std::vector<Vec3> verts{{s, s, s}, {s, -s, -s}, {-s, s, -s}, {-s, -s, s}};
+    const std::vector<std::uint32_t> idx{0, 1, 2, 0, 3, 1, 0, 2, 3, 1, 3, 2};
+    PhysicsBodyDesc tetra;
+    tetra.type = PhysicsBodyType::Dynamic;
+    tetra.position = {0.0f, 2.0f, 0.0f};
+    tetra.material = PhysicsMaterial{.restitution = 0.0f, .friction = 0.5f};
+    const float a = 0.9f; // rotate about (1,0,1)
+    const Vec3 axis = Vec3::normalise(Vec3{1.0f, 0.0f, 1.0f});
+    tetra.rotation = Quaternion{axis.x() * std::sin(a * 0.5f), axis.y() * std::sin(a * 0.5f),
+                                axis.z() * std::sin(a * 0.5f), std::cos(a * 0.5f)};
+    const auto tetraBody = physics.createBody(tetra);
+    [[maybe_unused]] const auto tc =
+        physics.createCollider(tetraBody, ColliderDesc{.shape = buildConvexHull(verts, idx)});
+
+    float maxYaw = 0.0f;
+    for (int i = 0; i < 300; ++i)
+    {
+        physics.step(1.0f / 60.0f);
+        maxYaw = std::max(maxYaw, std::abs(physics.body(tetraBody)->angularVelocity().y()));
+    }
+
+    // The decisive guard is that it COMES TO REST: the old bug pumped a vertical spin and
+    // never settled (a ~1.5 rad/s limit cycle forever). The transient yaw is bounded but not
+    // tiny on this deliberately-harsh drop (friction has no cross-frame memory, so a single
+    // sharp impact isn't smoothed) — what matters is it dissipates rather than self-sustains.
+    CHECK(maxYaw < 2.5f);
+    // ...and it comes to rest sitting on the floor (centre above y = 0), not spinning forever.
+    CHECK(physics.body(tetraBody)->angularVelocity().approxEqual(Vec3{0.0f, 0.0f, 0.0f}, 0.05f));
+    CHECK(physics.body(tetraBody)->linearVelocity().approxEqual(Vec3{0.0f, 0.0f, 0.0f}, 0.05f));
+    CHECK(physics.bodyTransform(tetraBody)->position().y() > 0.0f);
+}
+
+TEST_CASE("PhysicsWorld.SettledTetrahedronDoesNotFlipToAnotherFace", "[PhysicsWorld]")
+{
+    // Friction regression guard (P9.3): a tetrahedron that settles on a face must STAY on
+    // that face. An earlier static-friction *anchor* scheme pumped energy on the two-point
+    // edge a tetra rocks across while settling — it would come to rest on one face, then
+    // spontaneously flip onto another (energy injected from rest). Velocity-only Coulomb
+    // friction with the 2x2 mass + disk clamp settles it cleanly. Built from the flat-shaded
+    // mesh (the loader's convex-hull path), the orientation that exposed the flip.
+    PhysicsWorld physics;
+    PhysicsBodyDesc floor;
+    floor.type = PhysicsBodyType::Static;
+    floor.position = {0.0f, -0.25f, 0.0f};
+    floor.material = PhysicsMaterial{.restitution = 0.0f, .friction = 0.5f};
+    const auto floorBody = physics.createBody(floor);
+    [[maybe_unused]] const auto fc = physics.createCollider(
+        floorBody, ColliderDesc{.shape = BoxShape{.halfExtents = {6.0f, 0.25f, 6.0f}}});
+
+    // Flat-shaded regular tetra (4 corners × 0.6, 4 faces, 3 verts each = 12), as the glTF
+    // loader feeds buildConvexHull.
+    const float s = 0.6f;
+    const Vec3 corners[4]{{s, s, s}, {s, -s, -s}, {-s, s, -s}, {-s, -s, s}};
+    const int faces[4][3]{{0, 1, 2}, {0, 3, 1}, {0, 2, 3}, {1, 3, 2}};
+    std::vector<Vec3> verts;
+    std::vector<std::uint32_t> idx;
+    for (const auto& f : faces)
+    {
+        for (const int k : f)
+        {
+            idx.push_back(static_cast<std::uint32_t>(verts.size()));
+            verts.push_back(corners[k]);
+        }
+    }
+
+    PhysicsBodyDesc tetra;
+    tetra.type = PhysicsBodyType::Dynamic;
+    tetra.position = {1.6f, 2.4f, 0.3f};
+    tetra.material = PhysicsMaterial{.restitution = 0.0f, .friction = 0.5f};
+    const float a = 0.4f; // rotate about (1,1,0) — the demo's green tetra
+    const Vec3 axis = Vec3::normalise(Vec3{1.0f, 1.0f, 0.0f});
+    tetra.rotation = Quaternion{axis.x() * std::sin(a * 0.5f), axis.y() * std::sin(a * 0.5f),
+                                axis.z() * std::sin(a * 0.5f), std::cos(a * 0.5f)};
+    const auto tetraBody = physics.createBody(tetra);
+    [[maybe_unused]] const auto tc =
+        physics.createCollider(tetraBody, ColliderDesc{.shape = buildConvexHull(verts, idx)});
+
+    // Run until it first settles (low angular speed), then capture its resting face.
+    Vec3 restingUp{};
+    bool captured = false;
+    float maxSpinAfterSettle = 0.0f;
+    for (int i = 0; i < 400; ++i)
+    {
+        physics.step(1.0f / 60.0f);
+        const float spin = physics.body(tetraBody)->angularVelocity().magnitude();
+        const Vec3 up = physics.bodyTransform(tetraBody)->rotation().rotate(Vec3{0.0f, 1.0f, 0.0f});
+        if (!captured && i > 60 && spin < 0.02f)
+        {
+            restingUp = up;
+            captured = true;
+        }
+        else if (captured)
+        {
+            maxSpinAfterSettle = std::max(maxSpinAfterSettle, spin);
+            // The resting face (its world up-vector) must not change — no flip.
+            CHECK((up - restingUp).magnitude() < 0.1f);
+        }
+    }
+    REQUIRE(captured);
+    CHECK(maxSpinAfterSettle < 0.1f); // no energy injected from rest
+}
+
 TEST_CASE("PhysicsWorld.TallTiltedBoxTopplesOntoItsSide", "[PhysicsWorld]")
 {
     // A tall box tilted past its balance angle topples onto its long side: its local

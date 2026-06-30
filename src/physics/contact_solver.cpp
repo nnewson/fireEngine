@@ -32,6 +32,36 @@ void buildTangents(const Vec3& n, Vec3& t1, Vec3& t2) noexcept
     t2 = Vec3::crossProduct(n, t1);
 }
 
+// Symmetric 2x2 tangent effective mass M = K⁻¹, where
+//   K_ij = (invMassA + invMassB)(t_i·t_j) + (rA×t_i)·IA(rA×t_j) + (rB×t_i)·IB(rB×t_j).
+// The off-diagonal is the angular cross-coupling between the two tangents. Returns the
+// inverse's three distinct entries (m00, m01, m11); zero for a degenerate (immovable) pair.
+void tangentMass2x2(float invMassA, float invMassB, const Vec3& rA, const Vec3& rB, const Vec3& t1,
+                    const Vec3& t2, const Mat3& iA, const Mat3& iB, float& m00, float& m01,
+                    float& m11) noexcept
+{
+    const Vec3 ra1 = Vec3::crossProduct(rA, t1);
+    const Vec3 ra2 = Vec3::crossProduct(rA, t2);
+    const Vec3 rb1 = Vec3::crossProduct(rB, t1);
+    const Vec3 rb2 = Vec3::crossProduct(rB, t2);
+    const float invM = invMassA + invMassB;
+    const float k11 = invM * dot(t1, t1) + dot(ra1, iA * ra1) + dot(rb1, iB * rb1);
+    const float k22 = invM * dot(t2, t2) + dot(ra2, iA * ra2) + dot(rb2, iB * rb2);
+    const float k12 = invM * dot(t1, t2) + dot(ra1, iA * ra2) + dot(rb1, iB * rb2);
+    const float det = k11 * k22 - k12 * k12;
+    if (det > 0.0f)
+    {
+        const float inv = 1.0f / det;
+        m00 = k22 * inv;
+        m01 = -k12 * inv;
+        m11 = k11 * inv;
+    }
+    else
+    {
+        m00 = m01 = m11 = 0.0f;
+    }
+}
+
 } // namespace
 
 void ContactSolver::prepare(std::span<const SolverBody> bodies,
@@ -104,19 +134,22 @@ void ContactSolver::prepare(std::span<const SolverBody> bodies,
                 effectiveMassAlong(cp.invMassA, cp.invMassB, rA0, rB0, cp.normal, iA, iB);
             cp.posNormalMass =
                 effectiveMassAlong(cp.posWeightA, cp.posWeightB, rA0, rB0, cp.normal, iA, iB);
-            cp.tangentMass1 =
-                effectiveMassAlong(cp.invMassA, cp.invMassB, rA0, rB0, tangent1, iA, iB);
-            cp.tangentMass2 =
-                effectiveMassAlong(cp.invMassA, cp.invMassB, rA0, rB0, tangent2, iA, iB);
+            tangentMass2x2(cp.invMassA, cp.invMassB, rA0, rB0, tangent1, tangent2, iA, iB,
+                           cp.tangentMass00, cp.tangentMass01, cp.tangentMass11);
             cp.key = contact.key;
 
             // Approach velocity at prepare (negative = closing), for the end-of-step
             // restitution pass: rebound to −restitution·relVelN0.
             cp.relVelN0 = dot(relativeVelocity(bodyA, bodyB, rA0, rB0), cp.normal);
 
-            // Warm start: inherit the previous step's impulses from the nearest cached
-            // point of this pair (resting bodies barely move, so proximity matching is
-            // robust). Unmatched points start from zero.
+            // Warm start the *normal* impulse from the nearest cached point of this pair
+            // (resting bodies barely move, so proximity matching is robust; the normal's
+            // one-sided [0,∞] clamp makes per-substep re-application self-correcting). The
+            // *friction* impulse is deliberately NOT carried across frames — it's re-derived
+            // from zero each step (the within-step per-substep warm-start still converges it).
+            // Replaying a friction impulse across frames feeds the per-substep warm-start at a
+            // rocking/rotating contact and pumps energy: it flipped settled convex bodies and
+            // flung a box off a friction ramp. Friction has no cross-frame memory.
             const auto cached = cache_.find(contact.key);
             if (cached != cache_.end())
             {
@@ -134,8 +167,6 @@ void ContactSolver::prepare(std::span<const SolverBody> bodies,
                 if (match != nullptr)
                 {
                     cp.normalImpulse = match->normalImpulse;
-                    cp.tangentImpulse1 = match->tangentImpulse1;
-                    cp.tangentImpulse2 = match->tangentImpulse2;
                 }
             }
 
@@ -152,8 +183,8 @@ void ContactSolver::warmStart(std::vector<SolverBody>& bodies) const
         SolverBody& b = bodies[static_cast<std::size_t>(cp.b)];
         const Vec3 rA = a.orientation.rotate(cp.anchorLocalA);
         const Vec3 rB = b.orientation.rotate(cp.anchorLocalB);
-        const Vec3 impulse = cp.normal * cp.normalImpulse + cp.tangent1 * cp.tangentImpulse1 +
-                             cp.tangent2 * cp.tangentImpulse2;
+        const Vec3 impulse = cp.normal * cp.normalImpulse + cp.tangent1 * cp.tangentImpulse.s() +
+                             cp.tangent2 * cp.tangentImpulse.t();
         applyImpulse(a, b, cp.invMassA, cp.invMassB,
                      invInertiaWorld_[static_cast<std::size_t>(cp.a)],
                      invInertiaWorld_[static_cast<std::size_t>(cp.b)], rA, rB, impulse);
@@ -213,21 +244,28 @@ void ContactSolver::solveVelocity(std::vector<SolverBody>& bodies, bool useBias)
 
         if (cp.friction > 0.0f && cp.normalImpulse > 0.0f)
         {
-            const float maxFriction = cp.friction * cp.normalImpulse;
+            // Coulomb friction over the 2D tangent basis: drive the tangential velocity to
+            // zero via the coupled 2x2 mass, then clamp the impulse *vector* to the friction
+            // disk |λ| ≤ μ·N. Solving both tangents together (the 2x2 captures their angular
+            // cross-coupling) and clamping to a circle — rather than two independent scalar
+            // rows clamped to a box — is what stops a tipping/edge contact pumping spurious
+            // torque (a per-axis box over-budgets diagonally and mis-distributes torque).
+            const Vec3 vrel = relativeVelocity(a, b, rA, rB);
+            const Vec2 vt{dot(vrel, cp.tangent1), dot(vrel, cp.tangent2)};
+            const float mrx = cp.tangentMass00 * vt.s() + cp.tangentMass01 * vt.t();
+            const float mry = cp.tangentMass01 * vt.s() + cp.tangentMass11 * vt.t();
+            Vec2 newImpulse{cp.tangentImpulse.s() - mrx, cp.tangentImpulse.t() - mry};
 
-            const float vt1 = dot(relativeVelocity(a, b, rA, rB), cp.tangent1);
-            float lambda1 = -cp.tangentMass1 * vt1;
-            const float old1 = cp.tangentImpulse1;
-            cp.tangentImpulse1 = std::clamp(old1 + lambda1, -maxFriction, maxFriction);
-            lambda1 = cp.tangentImpulse1 - old1;
-            apply(cp.tangent1 * lambda1);
+            const float budget = cp.friction * cp.normalImpulse;
+            const float len = newImpulse.magnitude();
+            if (len > budget && len > 0.0f)
+            {
+                newImpulse *= budget / len;
+            }
 
-            const float vt2 = dot(relativeVelocity(a, b, rA, rB), cp.tangent2);
-            float lambda2 = -cp.tangentMass2 * vt2;
-            const float old2 = cp.tangentImpulse2;
-            cp.tangentImpulse2 = std::clamp(old2 + lambda2, -maxFriction, maxFriction);
-            lambda2 = cp.tangentImpulse2 - old2;
-            apply(cp.tangent2 * lambda2);
+            const Vec2 delta = newImpulse - cp.tangentImpulse;
+            cp.tangentImpulse = newImpulse;
+            apply(cp.tangent1 * delta.s() + cp.tangent2 * delta.t());
         }
     }
 }
@@ -333,8 +371,7 @@ void ContactSolver::store()
     // order) to the pending cache. Keys are island-local, so appends never collide.
     for (const ConstraintPoint& cp : points_)
     {
-        next_[cp.key].push_back(
-            CachedPoint{cp.point, cp.normalImpulse, cp.tangentImpulse1, cp.tangentImpulse2});
+        next_[cp.key].push_back(CachedPoint{cp.point, cp.normalImpulse});
     }
 }
 

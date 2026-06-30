@@ -155,6 +155,28 @@ TEST_CASE("ContactSolver.MassRatioWeightsImpulseByInverseMass", "[ContactSolver]
     CHECK(changeB == Catch::Approx(10.0f * changeA).margin(1e-2f));
 }
 
+TEST_CASE("ContactSolver.FrictionDiskClampLimitsCombinedTangentImpulse", "[ContactSolver]")
+{
+    // Friction is a 2D disk clamp (P9.3), not two independent scalar axes: a body sliding
+    // diagonally on both tangents at once is limited by the *combined* impulse magnitude
+    // μ·N, not μ·N per axis. Here the body slides at 1 m/s along each tangent (x and z) with
+    // μ = 0.3 and a normal impulse of 1 (1 m/s approach, unit mass), so the total tangential
+    // change is capped at 0.3 along the diagonal — leaving ≈ 1 − 0.3/√2 on each axis, not the
+    // 0.7 an independent-axis (box) clamp would leave.
+    std::vector<SolverBody> bodies(2);
+    bodies[0].velocity = {1.0f, -1.0f, 1.0f};
+    bodies[0].invMass = 1.0f;
+
+    ContactSolver solver;
+    runVelocity(solver, bodies, {makeContact({0.0f, 1.0f, 0.0f}, 0.0f, 0.0f, 0.3f)});
+
+    // Total tangential impulse magnitude is μ·N = 0.3, split along the (x,z) diagonal.
+    const float perAxis = 1.0f - 0.3f / std::sqrt(2.0f);
+    CHECK(bodies[0].velocity.x() == Catch::Approx(perAxis).margin(2e-2f));
+    CHECK(bodies[0].velocity.z() == Catch::Approx(perAxis).margin(2e-2f));
+    CHECK(bodies[0].velocity.y() == Catch::Approx(0.0f).margin(1e-3f));
+}
+
 TEST_CASE("ContactSolver.SoftBiasPushesOutOfPenetration", "[ContactSolver]")
 {
     // The soft contact constraint replaces the old split-impulse position pass: a
