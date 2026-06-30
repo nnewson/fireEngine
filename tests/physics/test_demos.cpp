@@ -311,15 +311,17 @@ TEST_CASE("Demos.Friction.HighFrictionStaysLowFrictionSlides", "[Demos]")
 
 TEST_CASE("Demos.Stack.SettlesAndStaysStill", "[Demos]")
 {
-    // StackDemo.gltf: a tower of three boxes dropped with small gaps settles into a
-    // resting stack at centres 0.5, 1.5, 2.5 and stays still (no collapse, no drift)
-    // rather than buzzing apart — the warm-started impulse solver's headline win.
-    // (Three, not more: a taller tower sits near the fixed-iteration solver's
-    // stability margin and quiesces only slowly — see generate.py demo_stack.)
+    // StackDemo.gltf: a 5-high tower of boxes dropped with small gaps settles into a
+    // resting stack at centres 0.5, 1.5, 2.5, 3.5, 4.5 and stays still (no collapse, no
+    // drift) rather than buzzing apart. Five, not three: the TGS soft-step solver (P9.2)
+    // propagates the settle down the stack through its substeps + relax pass and quiesces
+    // a tall tower cleanly, where the old fixed-iteration solver shuffled for seconds and
+    // diverged taller (so this demo was capped at three until P9).
+    constexpr int n = 5;
     PhysicsWorld world;
     addStaticFloor(world, 6.0f);
-    std::array<PhysicsBodyHandle, 3> boxes{};
-    for (int i = 0; i < 3; ++i)
+    std::array<PhysicsBodyHandle, n> boxes{};
+    for (int i = 0; i < n; ++i)
     {
         boxes[static_cast<std::size_t>(i)] =
             addDynamicBox(world, {0.0f, 0.55f + static_cast<float>(i) * 1.05f, 0.0f},
