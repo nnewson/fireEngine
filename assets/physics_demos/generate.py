@@ -614,18 +614,19 @@ def demo_friction_ramp():
 
 
 def demo_stack():
-    """P3: a tower of boxes dropped with small gaps settles into a resting stack
-    and stays still (warm-started impulse solver, then sleeps) instead of buzzing
-    apart. Three boxes — a taller tower quiesces much more slowly because the
-    fixed-iteration sequential-impulse solver propagates the settle down the stack
-    gradually (the bottom box bears the whole load), so a 5-high tower shuffles for
-    several seconds before sleeping; three settles in ~1 s."""
+    """P3: a 5-high tower of boxes dropped with small gaps settles into a resting stack
+    and sleeps, instead of buzzing apart. The TGS soft-step solver (P9.2) propagates the
+    settle down the stack through its substeps + relax pass, so a tall tower comes fully
+    to rest in well under a second — the old fixed-iteration sequential-impulse solver
+    quiesced a 5-high tower only after several seconds of shuffling (and diverged taller),
+    which is why this demo was capped at three until P9."""
     s = Scene()
     s.static_floor(half_xz=6.0)
-    palette = [(0.80, 0.35, 0.30), (0.35, 0.55, 0.80), (0.80, 0.65, 0.30)]
-    # Half 0.5 boxes; centres start at 0.55, 1.60, 2.65 (a small gap above the floor
-    # top at y=0) so they fall a little and settle into contact at 0.5, 1.5, 2.5.
-    for i in range(3):
+    palette = [(0.80, 0.35, 0.30), (0.35, 0.55, 0.80), (0.80, 0.65, 0.30),
+               (0.45, 0.75, 0.45), (0.70, 0.45, 0.75)]
+    # Half 0.5 boxes; centres start at 0.55, 1.60, 2.65, ... (a small gap above the floor
+    # top at y=0) so they fall a little and settle into contact at 0.5, 1.5, 2.5, ...
+    for i in range(5):
         s.box_body(
             f"Box{i}",
             (0.5, 0.5, 0.5),
@@ -634,7 +635,7 @@ def demo_stack():
             {"BodyType": "Dynamic", "Shape": "Box", "Mass": 1.0,
              "Restitution": 0.0, "Friction": 0.5},
         )
-    s.camera(eye=(6.0, 4.0, 8.0), target=(0.0, 2.5, 0.0))
+    s.camera(eye=(7.0, 5.0, 9.0), target=(0.0, 2.5, 0.0))
     return s
 
 
