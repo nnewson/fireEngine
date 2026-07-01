@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <span>
 #include <vector>
@@ -17,8 +18,10 @@ namespace fire_engine
 //                (3 DOF, cone-twist) arrive in a later phase.
 enum class ArticulationJointType
 {
-    Fixed,
-    Revolute,
+    Fixed,     // 0 DOF — welded to the parent
+    Revolute,  // 1 DOF — rotation by q about jointAxis
+    Spherical, // 3 DOF — free rotation (a ball joint: hip / shoulder). State is a quaternion;
+               // the three generalized velocities are the angular velocity in the joint frame.
 };
 
 // Authoring description for one link. The link's body frame is reached from its parent's
@@ -37,6 +40,17 @@ struct ArticulationLinkDesc
     float mass{1.0f};
     Vec3 inertiaLocal{1.0f, 1.0f, 1.0f}; // diagonal principal inertia, link frame
     Vec3 comLocal{};                     // centre of mass in the link frame
+
+    // Cone-twist limit for a Spherical joint (a knee/shoulder range). Active only when
+    // `limitStiffness > 0`: past the swing cone (half-angle `swingLimit` about `jointAxis`) or
+    // the ±`twistLimit` twist, a passive restoring generalized torque (spring `limitStiffness`
+    // + damping `limitDamping`) pushes the joint back inside — so the limb articulates like a
+    // skeleton rather than a free pivot. Within the range it adds nothing. Kept moderate to
+    // stay stable under the explicit integrator (a very stiff penalty would ring).
+    float swingLimit{pi};
+    float twistLimit{pi};
+    float limitStiffness{0.0f};
+    float limitDamping{0.0f};
 };
 
 // A reduced-coordinate articulation: a tree of links whose joints are *parameterized*
@@ -104,6 +118,16 @@ public:
     // Set generalized coordinate / velocity `dof` (0-based over dofCount()).
     void q(int dof, float value) noexcept;
     void qDot(int dof, float value) noexcept;
+
+    // A Spherical joint's orientation is a quaternion (its 3 velocities live in q̇), not a
+    // scalar q — set/read it here. Identity = the joint's rest frame.
+    void jointRotation(std::size_t link, const Quaternion& rotation) noexcept;
+
+    [[nodiscard]]
+    Quaternion jointRotation(std::size_t link) const noexcept
+    {
+        return links_[link].jointRotation;
+    }
 
     // The generalized-coordinate offset of link `i`'s joint (−1 for a 0-DOF Fixed joint
     // or the root). Lets callers map a link's joint to its slice of q / qDot.
@@ -196,6 +220,10 @@ private:
     Vec3 impulseResponse(std::size_t link, const Vec3& worldPoint, const Vec3& worldImpulse,
                          bool commit);
 
+    // Fill link `i`'s joint motion-subspace columns (child frame) and return its DOF count:
+    // the rotation axis for Revolute (1), the three frame axes for Spherical (3), none for Fixed.
+    int jointSubspace(std::size_t i, std::array<SpatialVector, 3>& s) const;
+
     struct Link
     {
         int parent{-1};
@@ -208,6 +236,11 @@ private:
         Vec3 comLocal{};
         int dofOffset{-1}; // offset into q_/qDot_, or −1 for a 0-DOF joint
         int dofCount{0};
+        Quaternion jointRotation{Quaternion::identity()}; // Spherical joint state
+        float swingLimit{pi};
+        float twistLimit{pi};
+        float limitStiffness{0.0f};
+        float limitDamping{0.0f};
     };
 
     std::vector<Link> links_;
@@ -220,15 +253,20 @@ private:
     bool baseFixed_{true};
 
     // Cached articulated-inertia factorization (geometry + mass only; independent of the
-    // impulses applied during a solve), built by factorizeArticulatedInertia(). xup/xforce
-    // are the per-link Plücker motion/force transforms; artInertia_ is each link's
-    // articulated inertia (children folded in); u_ = Iᴬ·S, d_ = Sᵀu_.
+    // impulses applied during a solve), built by factorizeArticulatedInertia(). Per link:
+    // xup/xforce are the Plücker motion/force transforms; artInertia_ is the articulated
+    // inertia (children folded in); subspace_/u_ are the joint's DOF columns (S, and U = Iᴬ·S);
+    // dInv_ = (SᵀU)⁻¹ (top-left dofCount block); uDinv_ = U·D⁻¹; ia_ = Iᴬ − U·D⁻¹·Uᵀ (the
+    // articulated inertia projected across the joint). All generalise 1-DOF revolute → 3-DOF
+    // spherical (dInv_ is a scalar reciprocal or a 3×3 inverse).
     std::vector<SpatialMatrix> xup_;
     std::vector<SpatialMatrix> xforce_;
-    std::vector<SpatialVector> subspace_;
     std::vector<SpatialMatrix> artInertia_;
-    std::vector<SpatialVector> u_;
-    std::vector<float> d_;
+    std::vector<SpatialMatrix> ia_;
+    std::vector<std::array<SpatialVector, 3>> subspace_;
+    std::vector<std::array<SpatialVector, 3>> u_;
+    std::vector<std::array<SpatialVector, 3>> uDinv_;
+    std::vector<Mat3> dInv_;
     // World spatial velocity per link (angular; linear at the link origin), from
     // computeLinkVelocities(); the base for pointVelocity().
     std::vector<SpatialVector> linkVelWorld_;
