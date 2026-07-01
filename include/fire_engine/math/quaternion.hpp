@@ -239,6 +239,16 @@ public:
         return Quaternion::normalise({c.x(), c.y(), c.z(), 1.0f + d});
     }
 
+    // Rotation by `angle` radians about `axis` (assumed unit-length). The standard
+    // axis-angle form q = {axis·sin(θ/2), cos(θ/2)}; a zero angle returns identity.
+    [[nodiscard]]
+    static Quaternion fromAxisAngle(const Vec3& axis, float angle) noexcept
+    {
+        const float half = angle * 0.5f;
+        const float s = std::sin(half);
+        return Quaternion{axis.x() * s, axis.y() * s, axis.z() * s, std::cos(half)};
+    }
+
     [[nodiscard]]
     static Quaternion slerp(const Quaternion& a, const Quaternion& b, float t) noexcept
     {

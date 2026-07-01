@@ -17,6 +17,7 @@
 #include <fire_engine/collision/ray.hpp>
 #include <fire_engine/collision/shape_cast.hpp>
 #include <fire_engine/graphics/cloth.hpp>
+#include <fire_engine/physics/articulation.hpp>
 #include <fire_engine/physics/collider_shape.hpp>
 #include <fire_engine/physics/collision_event.hpp>
 #include <fire_engine/physics/contact.hpp>
@@ -89,6 +90,32 @@ public:
 
     [[nodiscard]]
     bool destroyJoint(PhysicsConstraintHandle handle);
+
+    // --- Reduced-coordinate articulations (P9 item 5) ---
+    //
+    // Create an empty articulation and build it through the returned handle's
+    // articulation() accessor (addRootLink / addLink), then attachLinkCollider to give a
+    // link a broadphase collider. Phase A is kinematic only: link colliders track their
+    // forward-kinematics pose and pair in the broadphase / answer spatial queries, but do
+    // not yet generate contact response — that is the Phase C ConstraintBody coupling.
+    [[nodiscard]]
+    PhysicsArticulationHandle createArticulation();
+
+    [[nodiscard]]
+    Articulation* articulation(PhysicsArticulationHandle handle) noexcept;
+
+    [[nodiscard]]
+    const Articulation* articulation(PhysicsArticulationHandle handle) const noexcept;
+
+    [[nodiscard]]
+    std::size_t articulationCount() const noexcept;
+
+    // Attach a collider to articulation link `link`. Its world bounds track the link's
+    // forward-kinematics pose each step. Returns a null handle if the articulation or link
+    // index is invalid.
+    [[nodiscard]]
+    PhysicsColliderHandle attachLinkCollider(PhysicsArticulationHandle handle, int link,
+                                             const ColliderDesc& desc);
 
     void clear();
     void step(float fixedDt);
@@ -255,7 +282,14 @@ private:
     struct ColliderEntry
     {
         PhysicsColliderHandle handle;
+        // Owner is exactly one of: a rigid body (`body` valid) or an articulation link
+        // (`articulation` valid + `link` ≥ 0). The two are mutually exclusive; the owner's
+        // world pose (body transform or link forward-kinematics) drives worldShape and the
+        // swept-bound update. A link collider's `body` is the null handle, which the
+        // narrowphase pair guard treats as "no rigid response" (Phase C couples it instead).
         PhysicsBodyHandle body;
+        PhysicsArticulationHandle articulation;
+        int link{-1};
         Collider collider;
         ColliderShape shape;
         PhysicsMaterial material;
@@ -266,6 +300,12 @@ private:
         bool active{true};
         // Non-null for a static triangle-mesh collider; null otherwise.
         std::shared_ptr<MeshCollisionData> mesh;
+
+        [[nodiscard]]
+        bool isLinkCollider() const noexcept
+        {
+            return articulation.valid();
+        }
     };
 
     struct JointEntry
@@ -301,9 +341,15 @@ private:
     PhysicsBodyHandle nextBodyHandle_{PhysicsBodyHandle{1U}};
     PhysicsColliderHandle nextColliderHandle_{PhysicsColliderHandle{1U}};
     PhysicsConstraintHandle nextJointHandle_{PhysicsConstraintHandle{1U}};
+    PhysicsArticulationHandle nextArticulationHandle_{PhysicsArticulationHandle{1U}};
     std::vector<BodyEntry> bodies_;
     std::deque<ColliderEntry> colliders_;
     std::vector<JointEntry> joints_;
+    // Articulations live in a deque so the Articulation references handed out via
+    // articulation() stay stable as more are added (links/colliders cache the handle, not
+    // a pointer). Keyed for O(1) lookup by handle value.
+    std::deque<Articulation> articulations_;
+    std::unordered_map<std::uint32_t, std::size_t> articulationIndexByHandle_;
     // Side-tables for O(1) lookup into the entry containers, keyed by handle
     // value and (for the broadphase's pair pointers) by Collider address.
     // Backing entries stay in place so solver indices and broadphase pointers remain
@@ -354,6 +400,36 @@ private:
                                            std::uint32_t collisionLayer,
                                            std::uint32_t collisionMask, const Vec3& localPosition,
                                            const Quaternion& localRotation, bool isTrigger = false);
+
+    // Articulation-link variant of addColliderEntry: the owner is link `link` of
+    // `articulation` rather than a rigid body. Registers with the broadphase the same way;
+    // the collider's bounds seed from the link's current forward-kinematics pose.
+    [[nodiscard]]
+    PhysicsColliderHandle addLinkColliderEntry(
+        PhysicsArticulationHandle articulation, int link, const ColliderShape& shape,
+        const PhysicsMaterial& material, std::uint32_t collisionLayer, std::uint32_t collisionMask,
+        const Vec3& localPosition, const Quaternion& localRotation, bool isTrigger);
+
+    [[nodiscard]]
+    Articulation* findArticulation(PhysicsArticulationHandle handle) noexcept;
+
+    [[nodiscard]]
+    const Articulation* findArticulation(PhysicsArticulationHandle handle) const noexcept;
+
+    // World pose of a collider's owner — the rigid-body transform, or the articulation
+    // link's forward-kinematics transform — resolved uniformly so worldShape / the
+    // swept-bound update don't branch on owner kind at every call site. `scale` is the
+    // body scale (1 for a link collider, which carries no scale).
+    struct OwnerPose
+    {
+        Mat4 world{Mat4::identity()};
+        Quaternion rotation{Quaternion::identity()};
+        Vec3 scale{1.0f, 1.0f, 1.0f};
+        bool valid{false};
+    };
+
+    [[nodiscard]]
+    OwnerPose colliderOwnerPose(const ColliderEntry& entry) const;
 
     [[nodiscard]]
     BodyEntry* findBody(PhysicsBodyHandle handle) noexcept;

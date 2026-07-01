@@ -57,8 +57,13 @@ struct PhysicsConstraintTag
 {
 };
 
+struct PhysicsArticulationTag
+{
+};
+
 using PhysicsBodyHandle = PhysicsHandle<PhysicsBodyTag>;
 using PhysicsColliderHandle = PhysicsHandle<PhysicsColliderTag>;
 using PhysicsConstraintHandle = PhysicsHandle<PhysicsConstraintTag>;
+using PhysicsArticulationHandle = PhysicsHandle<PhysicsArticulationTag>;
 
 } // namespace fire_engine

@@ -234,6 +234,14 @@ namespace
     return {lo, hi};
 }
 
+// Per-axis scale from the world matrix columns.
+[[nodiscard]] Vec3 matrixScale(const Mat4& m)
+{
+    return {Vec3{m[0, 0], m[1, 0], m[2, 0]}.magnitude(),
+            Vec3{m[0, 1], m[1, 1], m[2, 1]}.magnitude(),
+            Vec3{m[0, 2], m[1, 2], m[2, 2]}.magnitude()};
+}
+
 struct CompoundMassProperties
 {
     Vec3 com;
@@ -470,12 +478,113 @@ PhysicsWorld::addColliderEntry(BodyEntry& owner, const ColliderShape& shape,
     collider.resetFrame(owner.transform.world());
 
     colliderIndexByHandle_.emplace(handle.value(), colliders_.size());
-    colliders_.push_back({handle, owner.handle, std::move(collider), shape, material, localPosition,
-                          localRotation, true, nullptr});
+    colliders_.push_back({handle, owner.handle, PhysicsArticulationHandle{}, -1,
+                          std::move(collider), shape, material, localPosition, localRotation, true,
+                          nullptr});
     colliderIndexByPointer_.emplace(&colliders_.back().collider, colliders_.size() - 1);
     owner.colliders.push_back(handle);
     broadPhase_->addCollider(colliders_.back().collider);
     return handle;
+}
+
+PhysicsArticulationHandle PhysicsWorld::createArticulation()
+{
+    const PhysicsArticulationHandle handle = nextArticulationHandle_;
+    nextArticulationHandle_ = PhysicsArticulationHandle{nextArticulationHandle_.value() + 1U};
+    articulationIndexByHandle_.emplace(handle.value(), articulations_.size());
+    articulations_.emplace_back();
+    return handle;
+}
+
+Articulation* PhysicsWorld::findArticulation(PhysicsArticulationHandle handle) noexcept
+{
+    const auto it = articulationIndexByHandle_.find(handle.value());
+    return it != articulationIndexByHandle_.end() ? &articulations_[it->second] : nullptr;
+}
+
+const Articulation* PhysicsWorld::findArticulation(PhysicsArticulationHandle handle) const noexcept
+{
+    const auto it = articulationIndexByHandle_.find(handle.value());
+    return it != articulationIndexByHandle_.end() ? &articulations_[it->second] : nullptr;
+}
+
+Articulation* PhysicsWorld::articulation(PhysicsArticulationHandle handle) noexcept
+{
+    return findArticulation(handle);
+}
+
+const Articulation* PhysicsWorld::articulation(PhysicsArticulationHandle handle) const noexcept
+{
+    return findArticulation(handle);
+}
+
+std::size_t PhysicsWorld::articulationCount() const noexcept
+{
+    return articulations_.size();
+}
+
+PhysicsColliderHandle PhysicsWorld::attachLinkCollider(PhysicsArticulationHandle handle, int link,
+                                                       const ColliderDesc& desc)
+{
+    const Articulation* art = findArticulation(handle);
+    if (art == nullptr || link < 0 || static_cast<std::size_t>(link) >= art->linkCount())
+    {
+        return PhysicsColliderHandle{};
+    }
+    return addLinkColliderEntry(handle, link, desc.shape, desc.material, desc.collisionLayer,
+                                desc.collisionMask, Vec3{}, Quaternion::identity(), desc.isTrigger);
+}
+
+PhysicsColliderHandle PhysicsWorld::addLinkColliderEntry(
+    PhysicsArticulationHandle articulationHandle, int link, const ColliderShape& shape,
+    const PhysicsMaterial& material, std::uint32_t collisionLayer, std::uint32_t collisionMask,
+    const Vec3& localPosition, const Quaternion& localRotation, bool isTrigger)
+{
+    const PhysicsColliderHandle handle = nextColliderHandle_;
+    nextColliderHandle_ = PhysicsColliderHandle{nextColliderHandle_.value() + 1U};
+
+    Collider collider;
+    const Mat4 childMat = Mat4::translate(localPosition) * localRotation.toMat4();
+    collider.localBounds(transformAabb(childMat, localBounds(shape)));
+    collider.collisionLayer(collisionLayer);
+    collider.collisionMask(collisionMask);
+    collider.isTrigger(isTrigger);
+
+    colliderIndexByHandle_.emplace(handle.value(), colliders_.size());
+    colliders_.push_back({handle, PhysicsBodyHandle{}, articulationHandle, link,
+                          std::move(collider), shape, material, localPosition, localRotation, true,
+                          nullptr});
+    ColliderEntry& entry = colliders_.back();
+    colliderIndexByPointer_.emplace(&entry.collider, colliders_.size() - 1);
+    // Seed the swept bound from the link's current forward-kinematics pose.
+    const OwnerPose owner = colliderOwnerPose(entry);
+    entry.collider.resetFrame(owner.world);
+    broadPhase_->addCollider(entry.collider);
+    return handle;
+}
+
+PhysicsWorld::OwnerPose PhysicsWorld::colliderOwnerPose(const ColliderEntry& entry) const
+{
+    if (entry.isLinkCollider())
+    {
+        const Articulation* art = findArticulation(entry.articulation);
+        if (art == nullptr || entry.link < 0 ||
+            static_cast<std::size_t>(entry.link) >= art->linkCount())
+        {
+            return OwnerPose{};
+        }
+        const RigidTransform lw = art->linkWorld(static_cast<std::size_t>(entry.link));
+        const Mat4 world = Mat4::translate(lw.translation) * lw.rotation.toMat4();
+        return OwnerPose{world, lw.rotation, Vec3{1.0f, 1.0f, 1.0f}, true};
+    }
+
+    const BodyEntry* owner = findBody(entry.body);
+    if (owner == nullptr)
+    {
+        return OwnerPose{};
+    }
+    const Mat4 world = owner->transform.world();
+    return OwnerPose{world, owner->transform.rotation(), matrixScale(world), true};
 }
 
 void PhysicsWorld::deactivateCollider(ColliderEntry& collider)
@@ -576,13 +685,16 @@ void PhysicsWorld::clear()
     bodies_.clear();
     colliders_.clear();
     joints_.clear();
+    articulations_.clear();
     bodyIndexByHandle_.clear();
     colliderIndexByHandle_.clear();
     jointIndexByHandle_.clear();
     colliderIndexByPointer_.clear();
+    articulationIndexByHandle_.clear();
     nextBodyHandle_ = PhysicsBodyHandle{1U};
     nextColliderHandle_ = PhysicsColliderHandle{1U};
     nextJointHandle_ = PhysicsConstraintHandle{1U};
+    nextArticulationHandle_ = PhysicsArticulationHandle{1U};
     triggerOverlaps_.clear();
     previousTriggerOverlaps_.clear();
     collisionOverlaps_.clear();
@@ -596,6 +708,15 @@ void PhysicsWorld::step(float fixedDt)
     if (fixedDt <= 0.0f)
     {
         return;
+    }
+
+    // Refresh articulation link world transforms from their generalized coordinates so the
+    // link colliders' swept bounds (updateColliders, below) track the current pose. Phase A
+    // articulations are kinematic (q is set externally), so this is pure forward kinematics;
+    // the ABA dynamics that advance q live inside the solve in a later phase.
+    for (Articulation& art : articulations_)
+    {
+        art.forwardKinematics();
     }
 
     // Gravity is integrated per substep inside the TGS solve (solveIsland), not here:
@@ -690,14 +811,6 @@ std::size_t PhysicsWorld::jointCount() const noexcept
 
 namespace
 {
-
-// Per-axis scale from the world matrix columns.
-[[nodiscard]] Vec3 matrixScale(const Mat4& m)
-{
-    return {Vec3{m[0, 0], m[1, 0], m[2, 0]}.magnitude(),
-            Vec3{m[0, 1], m[1, 1], m[2, 1]}.magnitude(),
-            Vec3{m[0, 2], m[1, 2], m[2, 2]}.magnitude()};
-}
 
 // A body is sleep-eligible this step when both its linear and angular speeds are
 // below the sleep thresholds (squared comparison).
@@ -816,19 +929,17 @@ namespace
 
 WorldShape PhysicsWorld::worldShape(const ColliderEntry& entry) const
 {
-    // Identity when the owner is missing (shouldn't happen for active colliders).
-    const BodyEntry* owner = findBody(entry.body);
-    const Mat4 bodyWorld = owner != nullptr ? owner->transform.world() : Mat4::identity();
-    const Quaternion bodyRot =
-        owner != nullptr ? owner->transform.rotation() : Quaternion::identity();
-    // Compose the body world with the collider's local offset (identity for a plain
+    // Owner world pose — a rigid body's transform or an articulation link's
+    // forward-kinematics pose (identity when the owner is missing, which shouldn't happen
+    // for an active collider).
+    const OwnerPose owner = colliderOwnerPose(entry);
+    // Compose the owner world with the collider's local offset (identity for a plain
     // single collider; a compound child's placement otherwise). Shape dimensions take
-    // the body scale; orientation is body × child rotation.
+    // the owner scale; orientation is owner × child rotation.
     const Mat4 world =
-        bodyWorld * (Mat4::translate(entry.localPosition) * entry.localRotation.toMat4());
-    const Quaternion rot = bodyRot * entry.localRotation;
-    const Vec3 s = matrixScale(bodyWorld);
-    return composeWorldShape(entry.shape, world, rot, s);
+        owner.world * (Mat4::translate(entry.localPosition) * entry.localRotation.toMat4());
+    const Quaternion rot = owner.rotation * entry.localRotation;
+    return composeWorldShape(entry.shape, world, rot, owner.scale);
 }
 
 std::optional<RaycastHit> PhysicsWorld::raycast(const Ray& ray, QueryFilter filter) const
@@ -1306,34 +1417,43 @@ AABB PhysicsWorld::localBounds(const ColliderShape& shape) const noexcept
 
 void PhysicsWorld::updateCollider(ColliderEntry& collider, float dt)
 {
-    const BodyEntry* owner = findBody(collider.body);
-    if (owner == nullptr)
+    const OwnerPose owner = colliderOwnerPose(collider);
+    if (!owner.valid)
     {
         return;
     }
 
-    // Predicted displacement this step (dynamic bodies only — kinematic/static were
-    // already moved into place by the scene before step()). Threaded into the swept
-    // bound so the broadphase pairs fast movers with what they are about to reach.
-    const Vec3 motion =
-        owner->body.type() == PhysicsBodyType::Dynamic ? owner->body.linearVelocity() * dt : Vec3{};
+    // Predicted displacement this step (rigid Dynamic bodies only — kinematic/static were
+    // already moved into place by the scene before step(); a link collider's motion comes
+    // from forward kinematics, so it carries no separate linear-velocity term in Phase A).
+    // Threaded into the swept bound so the broadphase pairs fast movers with what they
+    // are about to reach.
+    Vec3 motion{};
+    if (!collider.isLinkCollider())
+    {
+        const BodyEntry* body = findBody(collider.body);
+        if (body != nullptr && body->body.type() == PhysicsBodyType::Dynamic)
+        {
+            motion = body->body.linearVelocity() * dt;
+        }
+    }
 
     const Mat4 childMat = Mat4::translate(collider.localPosition) * collider.localRotation.toMat4();
     collider.collider.localBounds(transformAabb(childMat, localBounds(collider.shape)));
-    collider.collider.update(owner->transform.world(), motion);
+    collider.collider.update(owner.world, motion);
 }
 
 void PhysicsWorld::resetCollider(ColliderEntry& collider)
 {
-    const BodyEntry* owner = findBody(collider.body);
-    if (owner == nullptr)
+    const OwnerPose owner = colliderOwnerPose(collider);
+    if (!owner.valid)
     {
         return;
     }
 
     const Mat4 childMat = Mat4::translate(collider.localPosition) * collider.localRotation.toMat4();
     collider.collider.localBounds(transformAabb(childMat, localBounds(collider.shape)));
-    collider.collider.resetFrame(owner->transform.world());
+    collider.collider.resetFrame(owner.world);
 }
 
 void PhysicsWorld::updateColliders(float dt)
