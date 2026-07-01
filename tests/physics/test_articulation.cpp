@@ -434,6 +434,265 @@ TEST_CASE("Articulation.ImpulseThroughLinkageSolvesContactVelocity", "[Articulat
     CHECK(std::abs(vn1) < 1e-4f);
 }
 
+TEST_CASE("Articulation.SphericalJointMatchesRevoluteInPlane", "[Articulation]")
+{
+    // A spherical (3-DOF) joint driven only in the plane must reproduce the equivalent
+    // revolute joint exactly — same release acceleration (gravity torque about +Z only) and
+    // same bob trajectory. Validates the multi-DOF ABA against the trusted 1-DOF path.
+    const auto make = [](ArticulationJointType jt)
+    {
+        Articulation a;
+        a.baseFixed(true);
+        a.addRootLink(ArticulationLinkDesc{});
+        ArticulationLinkDesc rod;
+        rod.parent = 0;
+        rod.joint = jt;
+        rod.jointAxis = Vec3{0.0f, 0.0f, 1.0f};
+        rod.mass = 1.0f;
+        rod.comLocal = Vec3{1.0f, 0.0f, 0.0f};
+        rod.inertiaLocal = Vec3{0.01f, 0.34f, 0.34f};
+        a.addLink(rod);
+        return a;
+    };
+
+    Articulation spherical = make(ArticulationJointType::Spherical);
+    spherical.computeAccelerations(Vec3{0.0f, -9.81f, 0.0f});
+    // Gravity torque about +Z only: q̈ = (0, 0, −mgL/(I_com+mL²)).
+    CHECK(spherical.qDDot()[0] == Catch::Approx(0.0f).margin(1e-4f));
+    CHECK(spherical.qDDot()[1] == Catch::Approx(0.0f).margin(1e-4f));
+    CHECK(spherical.qDDot()[2] == Catch::Approx(-9.81f / 1.34f).margin(0.01f));
+
+    Articulation revolute = make(ArticulationJointType::Revolute);
+    const Vec3 g{0.0f, -9.81f, 0.0f};
+    float maxDiff = 0.0f;
+    for (int i = 0; i < 4000; ++i)
+    {
+        spherical.computeAccelerations(g);
+        spherical.integrate(1.0f / 2000.0f);
+        revolute.computeAccelerations(g);
+        revolute.integrate(1.0f / 2000.0f);
+        spherical.forwardKinematics();
+        revolute.forwardKinematics();
+        const Vec3 bs = spherical.linkWorld(1).transformPoint(Vec3{2.0f, 0.0f, 0.0f});
+        const Vec3 br = revolute.linkWorld(1).transformPoint(Vec3{2.0f, 0.0f, 0.0f});
+        maxDiff = std::max(maxDiff, (bs - br).magnitude());
+    }
+    CHECK(maxDiff < 1e-3f);
+}
+
+TEST_CASE("Articulation.SphericalJointConservesEnergyOutOfPlane", "[Articulation]")
+{
+    // An out-of-plane precessing spherical pendulum stresses the quaternion integration
+    // (a wrong left-vs-right multiply pumps energy badly). Total mechanical energy must hold.
+    Articulation a;
+    a.baseFixed(true);
+    a.addRootLink(ArticulationLinkDesc{});
+    ArticulationLinkDesc rod;
+    rod.parent = 0;
+    rod.joint = ArticulationJointType::Spherical;
+    rod.mass = 1.0f;
+    rod.comLocal = Vec3{1.0f, 0.0f, 0.0f};
+    rod.inertiaLocal = Vec3{0.05f, 0.34f, 0.34f};
+    a.addLink(rod);
+    a.qDot(1, 3.0f);
+    a.qDot(2, -2.0f);
+
+    const Vec3 g{0.0f, -9.81f, 0.0f};
+    const float ix = 0.05f;
+    const float iyz = 0.34f + 1.0f; // perpendicular inertia about the pivot
+    const auto energy = [&]
+    {
+        a.forwardKinematics();
+        const Vec3 com = a.linkWorld(1).transformPoint(Vec3{1.0f, 0.0f, 0.0f});
+        const float wx = a.qDot()[0];
+        const float wy = a.qDot()[1];
+        const float wz = a.qDot()[2];
+        return 0.5f * (ix * wx * wx + iyz * wy * wy + iyz * wz * wz) + 9.81f * com.y();
+    };
+
+    const float e0 = energy();
+    float emin = e0;
+    float emax = e0;
+    for (int i = 0; i < 16000; ++i)
+    {
+        a.computeAccelerations(g);
+        a.integrate(1.0f / 8000.0f);
+        const float e = energy();
+        emin = std::min(emin, e);
+        emax = std::max(emax, e);
+    }
+    CHECK((emax - emin) / std::abs(e0) < 0.02f);
+}
+
+namespace
+{
+
+// Swing angle of link 1's spherical joint about `twistAxis` (the cone-limit measure).
+float swingAngle(const Articulation& a, const Vec3& twistAxis)
+{
+    const Quaternion q = a.jointRotation(1);
+    const float d = q.x() * twistAxis.x() + q.y() * twistAxis.y() + q.z() * twistAxis.z();
+    const Quaternion twist = Quaternion::normalise(
+        Quaternion{twistAxis.x() * d, twistAxis.y() * d, twistAxis.z() * d, q.w()});
+    const Quaternion swing = q * twist.conjugate();
+    const Vec3 sv{swing.x(), swing.y(), swing.z()};
+    const float s = sv.magnitude();
+    return 2.0f * std::atan2(s, swing.w());
+}
+
+float twistAngle(const Articulation& a, const Vec3& twistAxis)
+{
+    const Quaternion q = a.jointRotation(1);
+    const float d = q.x() * twistAxis.x() + q.y() * twistAxis.y() + q.z() * twistAxis.z();
+    return 2.0f * std::atan2(d, q.w());
+}
+
+// A spherical joint with a rod hanging along +Z (its twist axis), optionally cone-limited.
+Articulation sphericalRod(float swingLimit, float twistLimit, float stiffness, float damping)
+{
+    Articulation a;
+    a.baseFixed(true);
+    a.addRootLink(ArticulationLinkDesc{});
+    ArticulationLinkDesc rod;
+    rod.parent = 0;
+    rod.joint = ArticulationJointType::Spherical;
+    rod.jointAxis = Vec3{0.0f, 0.0f, 1.0f};
+    rod.mass = 1.0f;
+    rod.comLocal = Vec3{0.0f, 0.0f, 1.0f};
+    rod.inertiaLocal = Vec3{0.34f, 0.34f, 0.05f};
+    rod.swingLimit = swingLimit;
+    rod.twistLimit = twistLimit;
+    rod.limitStiffness = stiffness;
+    rod.limitDamping = damping;
+    a.addLink(rod);
+    return a;
+}
+
+} // namespace
+
+TEST_CASE("Articulation.ConeLimitHoldsSphericalSwing", "[Articulation]")
+{
+    // Gravity pulls a spherical-jointed rod sideways; unconstrained it swings far past a
+    // tight cone. The cone-twist limit (a passive restoring torque past swingLimit) must
+    // hold it near the cone, while an unlimited joint swings freely well beyond.
+    const Vec3 twistAxis{0.0f, 0.0f, 1.0f};
+    const Vec3 g{0.0f, -9.81f, 0.0f};
+    const float limit = 0.5f;
+
+    Articulation limited = sphericalRod(limit, pi, 400.0f, 10.0f);
+    Articulation free = sphericalRod(pi, pi, 0.0f, 0.0f);
+    for (int i = 0; i < 3000; ++i)
+    {
+        limited.computeAccelerations(g, 0.1f);
+        limited.integrate(1.0f / 240.0f);
+        free.computeAccelerations(g, 0.1f);
+        free.integrate(1.0f / 240.0f);
+    }
+    const float limitedSwing = swingAngle(limited, twistAxis);
+    const float freeSwing = swingAngle(free, twistAxis);
+
+    CHECK(std::isfinite(limitedSwing));
+    CHECK(limitedSwing < limit + 0.1f);     // held near the cone (soft-limit compliance)
+    CHECK(freeSwing > limitedSwing + 0.3f); // the unlimited joint swings much further
+}
+
+TEST_CASE("Articulation.TwistLimitArrestsSpin", "[Articulation]")
+{
+    // A spin about the twist axis must be arrested at ±twistLimit, not run free.
+    const Vec3 twistAxis{0.0f, 0.0f, 1.0f};
+    Articulation a = sphericalRod(pi, 0.6f, 200.0f, 8.0f);
+    a.qDot(2, 4.0f); // spin about the twist axis
+    for (int i = 0; i < 2000; ++i)
+    {
+        a.computeAccelerations(Vec3{}, 0.05f);
+        a.integrate(1.0f / 240.0f);
+    }
+    CHECK(std::abs(twistAngle(a, twistAxis)) < 0.7f); // arrested near the ±0.6 limit
+}
+
+TEST_CASE("Articulation.WithinLimitMotionIsUnconstrained", "[Articulation]")
+{
+    // Inside the cone the limit adds nothing: a gravity-free rod given a small swing keeps
+    // rotating freely (no spurious restoring torque below the limit).
+    const Vec3 twistAxis{0.0f, 0.0f, 1.0f};
+    Articulation a = sphericalRod(1.0f, pi, 400.0f, 10.0f);
+    a.qDot(0, 0.3f);
+    for (int i = 0; i < 200; ++i)
+    {
+        a.computeAccelerations(Vec3{}, 0.0f); // no gravity, no global damping
+        a.integrate(1.0f / 240.0f);
+    }
+    // Free rotation at 0.3 rad/s for 200/240 s ≈ 0.25 rad — untouched by the (inactive) limit.
+    CHECK(swingAngle(a, twistAxis) == Catch::Approx(0.25f).margin(0.02f));
+}
+
+TEST_CASE("Articulation.RevoluteDriveHoldsTargetAngle", "[Articulation]")
+{
+    // A passive drive (spring toward driveTarget + damping) must hold a gravity-loaded
+    // revolute rod near its target angle, where an undriven rod would fall to hang straight.
+    const auto make = [](float stiffness, float target)
+    {
+        Articulation a;
+        a.baseFixed(true);
+        a.addRootLink(ArticulationLinkDesc{});
+        ArticulationLinkDesc rod;
+        rod.parent = 0;
+        rod.joint = ArticulationJointType::Revolute;
+        rod.jointAxis = Vec3{0.0f, 0.0f, 1.0f};
+        rod.mass = 1.0f;
+        rod.comLocal = Vec3{1.0f, 0.0f, 0.0f};
+        rod.inertiaLocal = Vec3{0.01f, 0.34f, 0.34f};
+        rod.driveTarget = target;
+        rod.driveStiffness = stiffness;
+        rod.driveDamping = 12.0f;
+        a.addLink(rod);
+        return a;
+    };
+    const Vec3 g{0.0f, -9.81f, 0.0f};
+
+    Articulation driven = make(80.0f, 1.0f);
+    Articulation undriven = make(0.0f, 1.0f);
+    for (int i = 0; i < 3000; ++i)
+    {
+        driven.computeAccelerations(g, 0.05f);
+        driven.integrate(1.0f / 240.0f);
+        undriven.computeAccelerations(g, 0.05f);
+        undriven.integrate(1.0f / 240.0f);
+    }
+    CHECK(driven.q()[0] == Catch::Approx(1.0f).margin(0.15f)); // holds near target
+    CHECK(undriven.q()[0] < -1.0f);                            // fell toward hanging
+}
+
+TEST_CASE("Articulation.SphericalDriveSeeksTargetOrientation", "[Articulation]")
+{
+    // A spherical drive pulls the joint to a target orientation (a rest-pose bias / muscle).
+    Articulation a;
+    a.baseFixed(true);
+    a.addRootLink(ArticulationLinkDesc{});
+    ArticulationLinkDesc rod;
+    rod.parent = 0;
+    rod.joint = ArticulationJointType::Spherical;
+    rod.mass = 1.0f;
+    rod.comLocal = Vec3{0.0f, 0.0f, 1.0f};
+    rod.inertiaLocal = Vec3{0.34f, 0.34f, 0.05f};
+    const Quaternion target = Quaternion::fromAxisAngle(Vec3{0.0f, 1.0f, 0.0f}, 0.785f);
+    rod.driveTargetRotation = target;
+    rod.driveStiffness = 80.0f;
+    rod.driveDamping = 12.0f;
+    a.addLink(rod);
+
+    for (int i = 0; i < 3000; ++i)
+    {
+        a.computeAccelerations(Vec3{}, 0.05f); // gravity-free: the drive alone poses it
+        a.integrate(1.0f / 240.0f);
+    }
+    const Quaternion q = a.jointRotation(1);
+    const Quaternion e = q.conjugate() * target;
+    const float angle = 2.0f * std::atan2(std::sqrt(e.x() * e.x() + e.y() * e.y() + e.z() * e.z()),
+                                          std::abs(e.w()));
+    CHECK(angle < 0.02f); // reached the target orientation
+}
+
 TEST_CASE("Articulation.LinkRestsOnFloorThroughConstraintBody", "[Articulation]")
 {
     // The Phase D gate: a fixed-base pendulum whose bob swings down onto a static floor

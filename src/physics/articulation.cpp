@@ -1,12 +1,100 @@
 #include <fire_engine/physics/articulation.hpp>
 
 #include <cassert>
+#include <cmath>
 #include <cstddef>
 
 #include <fire_engine/math/quaternion.hpp>
 
 namespace fire_engine
 {
+
+namespace
+{
+
+// Invert the top-left `nd`×`nd` block of a joint's D = SᵀU matrix: a scalar reciprocal for
+// a 1-DOF revolute, a full 3×3 inverse for a 3-DOF spherical, zero otherwise.
+[[nodiscard]] Mat3 invertDof(const Mat3& d, int nd) noexcept
+{
+    Mat3 r{};
+    if (nd == 1)
+    {
+        if (d[0, 0] > 1e-9f)
+        {
+            r[0, 0] = 1.0f / d[0, 0];
+        }
+    }
+    else if (nd == 3)
+    {
+        r = d.inverse();
+    }
+    return r;
+}
+
+// Passive cone-twist restoring torque (joint frame) for a spherical joint at rotation `q`
+// with joint-frame angular velocity `omega`. Zero inside the swing cone (`swingLimit` about
+// `twistAxis`) and the ±`twistLimit` twist; past either, a spring (`k`·excess) + damping
+// pushes back. Returns the generalized torque on the 3 spherical DOFs. (Assumes the child
+// frame coincides with the joint rotation frame — jointToChild a pure rotation about it.)
+[[nodiscard]] Vec3 coneTwistTorque(const Quaternion& q, const Vec3& omega, const Vec3& twistAxis,
+                                   float swingLimit, float twistLimit, float k,
+                                   float damping) noexcept
+{
+    // Swing-twist decomposition about twistAxis: q = swing · twist.
+    const float d = q.x() * twistAxis.x() + q.y() * twistAxis.y() + q.z() * twistAxis.z();
+    const Quaternion twist = Quaternion::normalise(
+        Quaternion{twistAxis.x() * d, twistAxis.y() * d, twistAxis.z() * d, q.w()});
+    const Quaternion swing = q * twist.conjugate();
+
+    Vec3 torque{};
+
+    // Swing cone: push back once the twist axis leaves the cone half-angle.
+    const Vec3 swingVec{swing.x(), swing.y(), swing.z()};
+    const float swingSin = swingVec.magnitude();
+    if (swingSin > 1.0e-5f)
+    {
+        const float swingAngle = 2.0f * std::atan2(swingSin, swing.w());
+        if (swingAngle > swingLimit)
+        {
+            const Vec3 axis = swingVec * (1.0f / swingSin);
+            torque = torque + axis * (-k * (swingAngle - swingLimit) -
+                                      damping * Vec3::dotProduct(omega, axis));
+        }
+    }
+
+    // Twist: clamp to ±twistLimit about the twist axis.
+    const float twistAngle = 2.0f * std::atan2(d, q.w());
+    if (twistAngle > twistLimit || twistAngle < -twistLimit)
+    {
+        const float excess =
+            twistAngle > twistLimit ? twistAngle - twistLimit : twistAngle + twistLimit;
+        torque = torque + twistAxis * (-k * excess - damping * Vec3::dotProduct(omega, twistAxis));
+    }
+
+    return torque;
+}
+
+// Body-frame rotation-vector error current→target (2·log of q⁻¹·q_target, small-angle exact),
+// the axis·angle a spherical drive spring pulls along. `q` is the joint rotation (parent→child),
+// so q⁻¹·q_target is the residual rotation expressed in the child (body) frame — the frame the
+// generalized velocities q̇ live in.
+[[nodiscard]] Vec3 orientationError(const Quaternion& q, const Quaternion& target) noexcept
+{
+    Quaternion e = q.conjugate() * target;
+    if (e.w() < 0.0f) // shortest arc
+    {
+        e = Quaternion{-e.x(), -e.y(), -e.z(), -e.w()};
+    }
+    const Vec3 v{e.x(), e.y(), e.z()};
+    const float s = v.magnitude();
+    if (s < 1.0e-6f)
+    {
+        return Vec3{};
+    }
+    return v * (2.0f * std::atan2(s, e.w()) / s);
+}
+
+} // namespace
 
 int Articulation::addRootLink(const ArticulationLinkDesc& desc)
 {
@@ -41,8 +129,18 @@ int Articulation::addLink(const ArticulationLinkDesc& desc)
     link.mass = desc.mass;
     link.inertiaLocal = desc.inertiaLocal;
     link.comLocal = desc.comLocal;
+    link.swingLimit = desc.swingLimit;
+    link.twistLimit = desc.twistLimit;
+    link.limitStiffness = desc.limitStiffness;
+    link.limitDamping = desc.limitDamping;
+    link.driveTarget = desc.driveTarget;
+    link.driveTargetRotation = desc.driveTargetRotation;
+    link.driveStiffness = desc.driveStiffness;
+    link.driveDamping = desc.driveDamping;
 
-    link.dofCount = (desc.joint == ArticulationJointType::Revolute) ? 1 : 0;
+    link.dofCount = desc.joint == ArticulationJointType::Revolute    ? 1
+                    : desc.joint == ArticulationJointType::Spherical ? 3
+                                                                     : 0;
     if (link.dofCount > 0)
     {
         link.dofOffset = dofCount_;
@@ -70,6 +168,11 @@ void Articulation::qDot(int dof, float value) noexcept
     qDot_[static_cast<std::size_t>(dof)] = value;
 }
 
+void Articulation::jointRotation(std::size_t link, const Quaternion& rotation) noexcept
+{
+    links_[link].jointRotation = Quaternion::normalise(rotation);
+}
+
 void Articulation::forwardKinematics()
 {
     if (links_.empty())
@@ -94,121 +197,33 @@ void Articulation::forwardKinematics()
             const float angle = q_[static_cast<std::size_t>(link.dofOffset)];
             jointMotion.rotation = Quaternion::fromAxisAngle(link.jointAxis, angle);
         }
+        else if (link.joint == ArticulationJointType::Spherical)
+        {
+            jointMotion.rotation = link.jointRotation;
+        }
 
         linkWorld_[i] = parentWorld * link.parentToJoint * jointMotion * link.jointToChild;
     }
 }
 
-void Articulation::computeAccelerations(const Vec3& gravity, float jointDamping)
+int Articulation::jointSubspace(std::size_t i, std::array<SpatialVector, 3>& s) const
 {
-    forwardKinematics(); // link world orientations, needed for the per-link gravity wrench
-
-    const std::size_t n = links_.size();
-
-    // Featherstone ABA scratch, indexed by link (0 = root). Everything is expressed in each
-    // link's own frame, moved between links by the Plücker transforms Xup (motion,
-    // parent→child) and Xforce (force, child→parent).
-    std::vector<SpatialMatrix> xup(n);
-    std::vector<SpatialMatrix> xforce(n);
-    std::vector<SpatialVector> subspace(n); // joint motion subspace S (child frame)
-    std::vector<SpatialVector> vel(n);      // spatial velocity v
-    std::vector<SpatialVector> velProd(n);  // velocity-product accel c = v ×  (S q̇)
-    std::vector<SpatialMatrix> artInertia(n);
-    std::vector<SpatialVector> artBias(n); // articulated bias force pᴬ
-    std::vector<SpatialVector> u(n);       // U = Iᴬ S
-    std::vector<float> d(n, 0.0f);         // D = Sᵀ U
-    std::vector<float> uForce(n, 0.0f);    // u = τ − Sᵀ pᴬ
-    std::vector<SpatialVector> accel(n);
-
-    const bool rootFixed = baseFixed_;
-
-    // --- Pass 1 (outward): transforms, velocities, link inertias, bias forces. ---
-    for (std::size_t i = 1; i < n; ++i)
+    s = {};
+    switch (links_[i].joint)
     {
-        const Link& link = links_[i];
-        const auto p = static_cast<std::size_t>(link.parent);
-
-        RigidTransform jointMotion; // rotation about the joint axis by q (identity for Fixed)
-        if (link.joint == ArticulationJointType::Revolute)
-        {
-            jointMotion.rotation = Quaternion::fromAxisAngle(
-                link.jointAxis, q_[static_cast<std::size_t>(link.dofOffset)]);
-        }
-        // Relative parent→child transform. jointToChild is assumed a pure rotation (the axis
-        // passes through the child origin), so the subspace stays (axis; 0).
-        const RigidTransform t = link.parentToJoint * jointMotion * link.jointToChild;
-        xup[i] = motionTransform(t.inverse());
-        xforce[i] = forceTransform(t);
-
-        subspace[i] = (link.joint == ArticulationJointType::Revolute)
-                          ? SpatialVector{link.jointAxis, Vec3{}}
-                          : SpatialVector{};
-
-        const float qDotI =
-            link.dofCount > 0 ? qDot_[static_cast<std::size_t>(link.dofOffset)] : 0.0f;
-        const SpatialVector vJoint = subspace[i] * qDotI;
-        const SpatialVector vParent = (p == 0 && rootFixed) ? SpatialVector{} : vel[p];
-        vel[i] = xup[i] * vParent + vJoint;
-        velProd[i] = crossMotion(vel[i], vJoint);
-
-        artInertia[i] = spatialInertia(link.mass, link.comLocal, Mat3::diagonal(link.inertiaLocal));
-
-        // Gravity as an external wrench in the link frame: a force m·g at the COM.
-        const Vec3 gLink = linkWorld_[i].rotation.conjugate().rotate(gravity);
-        const Vec3 gForce = gLink * link.mass;
-        const SpatialVector gravityWrench{Vec3::crossProduct(link.comLocal, gForce), gForce};
-        artBias[i] = crossForce(vel[i], artInertia[i] * vel[i]) - gravityWrench;
+    case ArticulationJointType::Revolute:
+        s[0] = SpatialVector{links_[i].jointAxis, Vec3{}};
+        return 1;
+    case ArticulationJointType::Spherical:
+        // The three joint-frame axes: a free 3-DOF rotation.
+        s[0] = SpatialVector{Vec3{1.0f, 0.0f, 0.0f}, Vec3{}};
+        s[1] = SpatialVector{Vec3{0.0f, 1.0f, 0.0f}, Vec3{}};
+        s[2] = SpatialVector{Vec3{0.0f, 0.0f, 1.0f}, Vec3{}};
+        return 3;
+    case ArticulationJointType::Fixed:
+        break;
     }
-
-    // --- Pass 2 (inward): articulated inertia + bias, projected onto each parent. ---
-    for (std::size_t i = n - 1; i >= 1; --i)
-    {
-        const Link& link = links_[i];
-        const auto p = static_cast<std::size_t>(link.parent);
-        const bool toParent = !(p == 0 && rootFixed);
-
-        u[i] = artInertia[i] * subspace[i];
-        d[i] = subspace[i].dot(u[i]);
-        const float tau = link.dofCount > 0
-                              ? -jointDamping * qDot_[static_cast<std::size_t>(link.dofOffset)]
-                              : 0.0f;
-        uForce[i] = tau - subspace[i].dot(artBias[i]);
-
-        if (d[i] > 1e-9f) // a real (revolute) DOF: rank-1 articulated update
-        {
-            const SpatialMatrix ia = artInertia[i] - spatialOuter(u[i] * (1.0f / d[i]), u[i]);
-            const SpatialVector pa = artBias[i] + ia * velProd[i] + u[i] * (uForce[i] / d[i]);
-            if (toParent)
-            {
-                artInertia[p] = artInertia[p] + xforce[i] * ia * xup[i];
-                artBias[p] = artBias[p] + xforce[i] * pa;
-            }
-        }
-        else if (toParent) // a Fixed joint (no DOF): rigidly fold the link onto its parent
-        {
-            artInertia[p] = artInertia[p] + xforce[i] * artInertia[i] * xup[i];
-            artBias[p] = artBias[p] + xforce[i] * (artBias[i] + artInertia[i] * velProd[i]);
-        }
-    }
-
-    // --- Pass 3 (outward): base acceleration down to joint accelerations. ---
-    for (std::size_t i = 1; i < n; ++i)
-    {
-        const Link& link = links_[i];
-        const auto p = static_cast<std::size_t>(link.parent);
-        const SpatialVector aParent = (p == 0 && rootFixed) ? SpatialVector{} : accel[p];
-        const SpatialVector aPrime = xup[i] * aParent + velProd[i];
-        if (link.dofCount > 0 && d[i] > 1e-9f)
-        {
-            const float qdd = (uForce[i] - u[i].dot(aPrime)) / d[i];
-            qDDot_[static_cast<std::size_t>(link.dofOffset)] = qdd;
-            accel[i] = aPrime + subspace[i] * qdd;
-        }
-        else
-        {
-            accel[i] = aPrime;
-        }
-    }
+    return 0;
 }
 
 void Articulation::factorizeArticulatedInertia()
@@ -217,48 +232,206 @@ void Articulation::factorizeArticulatedInertia()
     const std::size_t n = links_.size();
     xup_.assign(n, SpatialMatrix{});
     xforce_.assign(n, SpatialMatrix{});
-    subspace_.assign(n, SpatialVector{});
     artInertia_.assign(n, SpatialMatrix{});
-    u_.assign(n, SpatialVector{});
-    d_.assign(n, 0.0f);
+    ia_.assign(n, SpatialMatrix{});
+    subspace_.assign(n, std::array<SpatialVector, 3>{});
+    u_.assign(n, std::array<SpatialVector, 3>{});
+    uDinv_.assign(n, std::array<SpatialVector, 3>{});
+    dInv_.assign(n, Mat3{});
 
     for (std::size_t i = 1; i < n; ++i)
     {
         const Link& link = links_[i];
-        RigidTransform jointMotion;
+        RigidTransform jm; // joint's own rotation (identity for Fixed)
         if (link.joint == ArticulationJointType::Revolute)
         {
-            jointMotion.rotation = Quaternion::fromAxisAngle(
-                link.jointAxis, q_[static_cast<std::size_t>(link.dofOffset)]);
+            jm.rotation = Quaternion::fromAxisAngle(link.jointAxis,
+                                                    q_[static_cast<std::size_t>(link.dofOffset)]);
         }
-        const RigidTransform t = link.parentToJoint * jointMotion * link.jointToChild;
+        else if (link.joint == ArticulationJointType::Spherical)
+        {
+            jm.rotation = link.jointRotation;
+        }
+        const RigidTransform t = link.parentToJoint * jm * link.jointToChild;
         xup_[i] = motionTransform(t.inverse());
         xforce_[i] = forceTransform(t);
-        subspace_[i] = (link.joint == ArticulationJointType::Revolute)
-                           ? SpatialVector{link.jointAxis, Vec3{}}
-                           : SpatialVector{};
+        jointSubspace(i, subspace_[i]);
         artInertia_[i] =
             spatialInertia(link.mass, link.comLocal, Mat3::diagonal(link.inertiaLocal));
     }
 
+    // Inward: build each joint's DOF factorization (U = Iᴬ·S, D⁻¹, U·D⁻¹, ia = Iᴬ − U·D⁻¹·Uᵀ)
+    // and fold the projected inertia onto the parent. Generalises rank-1 (revolute) to rank-3
+    // (spherical) via the small D⁻¹.
     for (std::size_t i = n - 1; i >= 1; --i)
     {
         const Link& link = links_[i];
         const auto p = static_cast<std::size_t>(link.parent);
-        const bool toParent = !(p == 0 && baseFixed_);
-        u_[i] = artInertia_[i] * subspace_[i];
-        d_[i] = subspace_[i].dot(u_[i]);
-        if (d_[i] > 1e-9f)
+        const int nd = link.dofCount;
+
+        for (int k = 0; k < nd; ++k)
         {
-            const SpatialMatrix ia = artInertia_[i] - spatialOuter(u_[i] * (1.0f / d_[i]), u_[i]);
-            if (toParent)
+            u_[i][static_cast<std::size_t>(k)] =
+                artInertia_[i] * subspace_[i][static_cast<std::size_t>(k)];
+        }
+        Mat3 dmat{};
+        for (int j = 0; j < nd; ++j)
+        {
+            for (int k = 0; k < nd; ++k)
             {
-                artInertia_[p] = artInertia_[p] + xforce_[i] * ia * xup_[i];
+                dmat[j, k] = subspace_[i][static_cast<std::size_t>(j)].dot(
+                    u_[i][static_cast<std::size_t>(k)]);
             }
         }
-        else if (toParent)
+        dInv_[i] = invertDof(dmat, nd);
+
+        SpatialMatrix ia = artInertia_[i];
+        for (int k = 0; k < nd; ++k)
         {
-            artInertia_[p] = artInertia_[p] + xforce_[i] * artInertia_[i] * xup_[i];
+            SpatialVector udk{};
+            for (int j = 0; j < nd; ++j)
+            {
+                udk = udk + u_[i][static_cast<std::size_t>(j)] * dInv_[i][j, k];
+            }
+            uDinv_[i][static_cast<std::size_t>(k)] = udk;
+            ia = ia - spatialOuter(udk, u_[i][static_cast<std::size_t>(k)]);
+        }
+        ia_[i] = ia;
+
+        if (!(p == 0 && baseFixed_))
+        {
+            artInertia_[p] = artInertia_[p] + xforce_[i] * ia_[i] * xup_[i];
+        }
+    }
+}
+
+void Articulation::computeAccelerations(const Vec3& gravity, float jointDamping)
+{
+    factorizeArticulatedInertia(); // FK + geometry/inertia factorization (xup/xforce/ia/dInv/…)
+    const std::size_t n = links_.size();
+    const bool rootFixed = baseFixed_;
+
+    std::vector<SpatialVector> vel(n);
+    std::vector<SpatialVector> velProd(n); // velocity-product accel c = v × (S q̇)
+    std::vector<SpatialVector> bias(n);    // articulated bias pᴬ (gravity + velocity product)
+    std::vector<SpatialVector> accel(n);
+    std::vector<std::array<float, 3>> uForce(n);
+
+    // Pass 1 (outward): spatial velocities + the gravity / velocity-product bias.
+    for (std::size_t i = 1; i < n; ++i)
+    {
+        const Link& link = links_[i];
+        const auto p = static_cast<std::size_t>(link.parent);
+        const int nd = link.dofCount;
+        const auto off = static_cast<std::size_t>(link.dofOffset);
+
+        SpatialVector vJoint{};
+        for (int k = 0; k < nd; ++k)
+        {
+            vJoint = vJoint + subspace_[i][static_cast<std::size_t>(k)] *
+                                  qDot_[off + static_cast<std::size_t>(k)];
+        }
+        const SpatialVector vParent = (p == 0 && rootFixed) ? SpatialVector{} : vel[p];
+        vel[i] = xup_[i] * vParent + vJoint;
+        velProd[i] = crossMotion(vel[i], vJoint);
+
+        const SpatialMatrix linkInertia =
+            spatialInertia(link.mass, link.comLocal, Mat3::diagonal(link.inertiaLocal));
+        const Vec3 gLink = linkWorld_[i].rotation.conjugate().rotate(gravity);
+        const Vec3 gForce = gLink * link.mass;
+        const SpatialVector gravityWrench{Vec3::crossProduct(link.comLocal, gForce), gForce};
+        bias[i] = crossForce(vel[i], linkInertia * vel[i]) - gravityWrench;
+    }
+
+    // Pass 2 (inward): fold the bias to each parent; record uForce = τ − Sᵀpᴬ per DOF.
+    for (std::size_t i = n - 1; i >= 1; --i)
+    {
+        const Link& link = links_[i];
+        const auto p = static_cast<std::size_t>(link.parent);
+        const int nd = link.dofCount;
+        const auto off = static_cast<std::size_t>(link.dofOffset);
+
+        // Passive joint torque per DOF: global damping + cone-twist limit + drive spring.
+        float jointTorque[3]{0.0f, 0.0f, 0.0f};
+        if (link.joint == ArticulationJointType::Spherical)
+        {
+            const Vec3 omega{qDot_[off], qDot_[off + 1], qDot_[off + 2]};
+            Vec3 t{};
+            if (link.limitStiffness > 0.0f)
+            {
+                t = coneTwistTorque(link.jointRotation, omega, link.jointAxis, link.swingLimit,
+                                    link.twistLimit, link.limitStiffness, link.limitDamping);
+            }
+            if (link.driveStiffness > 0.0f)
+            {
+                // Spring toward the target orientation (body-frame error) − drive damping.
+                t = t +
+                    orientationError(link.jointRotation, link.driveTargetRotation) *
+                        link.driveStiffness -
+                    omega * link.driveDamping;
+            }
+            jointTorque[0] = t.x();
+            jointTorque[1] = t.y();
+            jointTorque[2] = t.z();
+        }
+        else if (link.joint == ArticulationJointType::Revolute && link.driveStiffness > 0.0f)
+        {
+            jointTorque[0] =
+                link.driveStiffness * (link.driveTarget - q_[off]) - link.driveDamping * qDot_[off];
+        }
+        for (int k = 0; k < nd; ++k)
+        {
+            const float tau =
+                -jointDamping * qDot_[off + static_cast<std::size_t>(k)] + jointTorque[k];
+            uForce[i][static_cast<std::size_t>(k)] =
+                tau - subspace_[i][static_cast<std::size_t>(k)].dot(bias[i]);
+        }
+        std::array<float, 3> g{};
+        for (int k = 0; k < nd; ++k)
+        {
+            for (int j = 0; j < nd; ++j)
+            {
+                g[static_cast<std::size_t>(k)] +=
+                    dInv_[i][k, j] * uForce[i][static_cast<std::size_t>(j)];
+            }
+        }
+        SpatialVector pa = bias[i] + ia_[i] * velProd[i];
+        for (int k = 0; k < nd; ++k)
+        {
+            pa = pa + u_[i][static_cast<std::size_t>(k)] * g[static_cast<std::size_t>(k)];
+        }
+        if (!(p == 0 && rootFixed))
+        {
+            bias[p] = bias[p] + xforce_[i] * pa;
+        }
+    }
+
+    // Pass 3 (outward): base acceleration (0, fixed) down to joint accelerations q̈.
+    for (std::size_t i = 1; i < n; ++i)
+    {
+        const Link& link = links_[i];
+        const auto p = static_cast<std::size_t>(link.parent);
+        const int nd = link.dofCount;
+        const auto off = static_cast<std::size_t>(link.dofOffset);
+        const SpatialVector aParent = (p == 0 && rootFixed) ? SpatialVector{} : accel[p];
+        const SpatialVector aPrime = xup_[i] * aParent + velProd[i];
+
+        std::array<float, 3> e{};
+        for (int j = 0; j < nd; ++j)
+        {
+            e[static_cast<std::size_t>(j)] = uForce[i][static_cast<std::size_t>(j)] -
+                                             u_[i][static_cast<std::size_t>(j)].dot(aPrime);
+        }
+        accel[i] = aPrime;
+        for (int k = 0; k < nd; ++k)
+        {
+            float qdd = 0.0f;
+            for (int j = 0; j < nd; ++j)
+            {
+                qdd += dInv_[i][k, j] * e[static_cast<std::size_t>(j)];
+            }
+            qDDot_[off + static_cast<std::size_t>(k)] = qdd;
+            accel[i] = accel[i] + subspace_[i][static_cast<std::size_t>(k)] * qdd;
         }
     }
 }
@@ -310,24 +483,35 @@ Vec3 Articulation::impulseResponse(std::size_t link, const Vec3& worldPoint,
     std::vector<SpatialVector> bias(n, SpatialVector{});
     bias[link] = SpatialVector{Vec3::crossProduct(rLink, fLink), fLink} * -1.0f;
 
-    // Inward pass: fold the bias toward the root, recording each joint's uForce = −Sᵀpᴬ.
-    std::vector<float> uForce(n, 0.0f);
+    // Inward pass: fold the bias toward the root, recording each joint's uForce = −Sᵀpᴬ per DOF.
+    std::vector<std::array<float, 3>> uForce(n);
     for (std::size_t i = n - 1; i >= 1; --i)
     {
-        const auto p = static_cast<std::size_t>(links_[i].parent);
-        const bool toParent = !(p == 0 && baseFixed_);
-        if (d_[i] > 1e-9f)
+        const Link& lk = links_[i];
+        const auto p = static_cast<std::size_t>(lk.parent);
+        const int nd = lk.dofCount;
+        for (int k = 0; k < nd; ++k)
         {
-            uForce[i] = -subspace_[i].dot(bias[i]);
-            const SpatialVector pa = bias[i] + u_[i] * (uForce[i] / d_[i]);
-            if (toParent)
+            uForce[i][static_cast<std::size_t>(k)] =
+                -subspace_[i][static_cast<std::size_t>(k)].dot(bias[i]);
+        }
+        std::array<float, 3> g{};
+        for (int k = 0; k < nd; ++k)
+        {
+            for (int j = 0; j < nd; ++j)
             {
-                bias[p] = bias[p] + xforce_[i] * pa;
+                g[static_cast<std::size_t>(k)] +=
+                    dInv_[i][k, j] * uForce[i][static_cast<std::size_t>(j)];
             }
         }
-        else if (toParent)
+        SpatialVector pa = bias[i];
+        for (int k = 0; k < nd; ++k)
         {
-            bias[p] = bias[p] + xforce_[i] * bias[i];
+            pa = pa + u_[i][static_cast<std::size_t>(k)] * g[static_cast<std::size_t>(k)];
+        }
+        if (!(p == 0 && baseFixed_))
+        {
+            bias[p] = bias[p] + xforce_[i] * pa;
         }
     }
 
@@ -336,19 +520,29 @@ Vec3 Articulation::impulseResponse(std::size_t link, const Vec3& worldPoint,
     std::vector<float> dq(static_cast<std::size_t>(dofCount_), 0.0f);
     for (std::size_t i = 1; i < n; ++i)
     {
-        const Link& link = links_[i];
-        const auto p = static_cast<std::size_t>(link.parent);
+        const Link& lk = links_[i];
+        const auto p = static_cast<std::size_t>(lk.parent);
+        const int nd = lk.dofCount;
+        const auto off = static_cast<std::size_t>(lk.dofOffset);
         const SpatialVector dvParent = (p == 0 && baseFixed_) ? SpatialVector{} : dv[p];
         const SpatialVector dvPrime = xup_[i] * dvParent;
-        if (link.dofCount > 0 && d_[i] > 1e-9f)
+
+        std::array<float, 3> e{};
+        for (int j = 0; j < nd; ++j)
         {
-            const float delta = (uForce[i] - u_[i].dot(dvPrime)) / d_[i];
-            dq[static_cast<std::size_t>(link.dofOffset)] = delta;
-            dv[i] = dvPrime + subspace_[i] * delta;
+            e[static_cast<std::size_t>(j)] = uForce[i][static_cast<std::size_t>(j)] -
+                                             u_[i][static_cast<std::size_t>(j)].dot(dvPrime);
         }
-        else
+        dv[i] = dvPrime;
+        for (int k = 0; k < nd; ++k)
         {
-            dv[i] = dvPrime;
+            float delta = 0.0f;
+            for (int j = 0; j < nd; ++j)
+            {
+                delta += dInv_[i][k, j] * e[static_cast<std::size_t>(j)];
+            }
+            dq[off + static_cast<std::size_t>(k)] = delta;
+            dv[i] = dv[i] + subspace_[i][static_cast<std::size_t>(k)] * delta;
         }
     }
 
@@ -388,7 +582,32 @@ void Articulation::integrate(float dt)
     for (int i = 0; i < dofCount_; ++i)
     {
         qDot_[static_cast<std::size_t>(i)] += qDDot_[static_cast<std::size_t>(i)] * dt;
-        q_[static_cast<std::size_t>(i)] += qDot_[static_cast<std::size_t>(i)] * dt;
+    }
+    // Advance each joint's position from its (updated) velocity. A revolute q integrates
+    // linearly; a spherical joint's quaternion advances by its angular velocity via the
+    // exponential map (stable, re-normalised) since its q̇ *is* the joint-frame angular rate.
+    for (Link& link : links_)
+    {
+        if (link.joint == ArticulationJointType::Revolute)
+        {
+            const auto off = static_cast<std::size_t>(link.dofOffset);
+            q_[off] += qDot_[off] * dt;
+        }
+        else if (link.joint == ArticulationJointType::Spherical)
+        {
+            // q̇ is the angular velocity in the *child* (body) frame, so the joint quaternion
+            // advances by right multiplication R·Δ (Quaternion::integrate left-multiplies, a
+            // world-frame convention — that would drift energy for out-of-plane motion).
+            const auto off = static_cast<std::size_t>(link.dofOffset);
+            const Vec3 omega{qDot_[off], qDot_[off + 1], qDot_[off + 2]};
+            const float angle = omega.magnitude() * dt;
+            if (angle > 1e-8f)
+            {
+                const Vec3 axis = omega * (1.0f / omega.magnitude());
+                link.jointRotation = Quaternion::normalise(link.jointRotation *
+                                                           Quaternion::fromAxisAngle(axis, angle));
+            }
+        }
     }
 }
 
