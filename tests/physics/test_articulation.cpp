@@ -1,4 +1,8 @@
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
+
+#include <algorithm>
+#include <cmath>
 
 #include <fire_engine/math/constants.hpp>
 #include <fire_engine/math/quaternion.hpp>
@@ -170,6 +174,67 @@ TEST_CASE("PhysicsWorld.LinkColliderTracksForwardKinematicsInBroadphase", "[Arti
     CHECK(world.overlapSphere(Vec3{2.0f, 5.0f, 0.0f}, 0.2f).empty());
 }
 
+TEST_CASE("Spatial.CrossProducts", "[Articulation]")
+{
+    // crossMotion is the familiar 3-D cross in the angular block, with the mixed
+    // angular×linear coupling in the linear block; crossForce is its dual.
+    const SpatialVector v{Vec3{0.0f, 0.0f, 1.0f}, Vec3{1.0f, 0.0f, 0.0f}};
+    const SpatialVector u{Vec3{1.0f, 0.0f, 0.0f}, Vec3{0.0f, 1.0f, 0.0f}};
+
+    const SpatialVector m = crossMotion(v, u);
+    // ang = (0,0,1)×(1,0,0) = (0,1,0); lin = (0,0,1)×(0,1,0) + (1,0,0)×(1,0,0) = (-1,0,0)+0
+    CHECK(m.angular.approxEqual(Vec3{0.0f, 1.0f, 0.0f}, 1e-6f));
+    CHECK(m.linear.approxEqual(Vec3{-1.0f, 0.0f, 0.0f}, 1e-6f));
+
+    const SpatialVector f = crossForce(v, u);
+    // ang = (0,0,1)×(1,0,0) + (1,0,0)×(0,1,0) = (0,1,0)+(0,0,1) = (0,1,1); lin =
+    // (0,0,1)×(0,1,0)=(-1,0,0)
+    CHECK(f.angular.approxEqual(Vec3{0.0f, 1.0f, 1.0f}, 1e-6f));
+    CHECK(f.linear.approxEqual(Vec3{-1.0f, 0.0f, 0.0f}, 1e-6f));
+}
+
+TEST_CASE("Spatial.PluckerTransforms", "[Articulation]")
+{
+    // Pure translation by (1,0,0): a body spinning about +Z at rate 1 has zero linear
+    // velocity at the child origin; at the parent origin the linear part becomes
+    // r×(E·ω) = (1,0,0)×(0,0,1) = (0,-1,0).
+    const RigidTransform t{Quaternion::identity(), Vec3{1.0f, 0.0f, 0.0f}};
+    const SpatialMatrix mt = motionTransform(t);
+    const SpatialVector out = mt * SpatialVector{Vec3{0.0f, 0.0f, 1.0f}, Vec3{}};
+    CHECK(out.angular.approxEqual(Vec3{0.0f, 0.0f, 1.0f}, 1e-6f));
+    CHECK(out.linear.approxEqual(Vec3{0.0f, -1.0f, 0.0f}, 1e-6f));
+
+    // Force transform: a pure force (·; 0,1,0) at the child origin produces a torque
+    // r×f = (1,0,0)×(0,1,0) = (0,0,1) about the parent origin.
+    const SpatialMatrix ft = forceTransform(t);
+    const SpatialVector fout = ft * SpatialVector{Vec3{}, Vec3{0.0f, 1.0f, 0.0f}};
+    CHECK(fout.angular.approxEqual(Vec3{0.0f, 0.0f, 1.0f}, 1e-6f));
+    CHECK(fout.linear.approxEqual(Vec3{0.0f, 1.0f, 0.0f}, 1e-6f));
+}
+
+TEST_CASE("Spatial.RigidInertiaMomentum", "[Articulation]")
+{
+    // COM at the origin: spatial inertia is block-diagonal — momentum = (I·ω ; m·v).
+    const Mat3 icom = Mat3::diagonal(Vec3{2.0f, 3.0f, 4.0f});
+    const SpatialMatrix centered = spatialInertia(5.0f, Vec3{}, icom);
+    const SpatialVector p =
+        centered * SpatialVector{Vec3{1.0f, 1.0f, 1.0f}, Vec3{0.0f, 2.0f, 0.0f}};
+    CHECK(p.angular.approxEqual(Vec3{2.0f, 3.0f, 4.0f}, 1e-6f)); // I·ω
+    CHECK(p.linear.approxEqual(Vec3{0.0f, 10.0f, 0.0f}, 1e-6f)); // m·v
+
+    // Offset COM, pure translation (ω=0): linear momentum m·v with a torque h×v about the
+    // offset origin (h = m·com).
+    const SpatialMatrix offset = spatialInertia(5.0f, Vec3{1.0f, 0.0f, 0.0f}, icom);
+    const SpatialVector po = offset * SpatialVector{Vec3{}, Vec3{0.0f, 1.0f, 0.0f}};
+    CHECK(po.linear.approxEqual(Vec3{0.0f, 5.0f, 0.0f}, 1e-6f));  // m·v
+    CHECK(po.angular.approxEqual(Vec3{0.0f, 0.0f, 5.0f}, 1e-6f)); // (5,0,0)×(0,1,0)=(0,0,5)
+
+    // Spatial inertia is symmetric: a == aᵀ, d == dᵀ, c == bᵀ.
+    CHECK(offset.a.approxEqual(offset.a.transpose(), 1e-6f));
+    CHECK(offset.d.approxEqual(offset.d.transpose(), 1e-6f));
+    CHECK(offset.c.approxEqual(offset.b.transpose(), 1e-6f));
+}
+
 TEST_CASE("SpatialVector.ArithmeticAndDot", "[Articulation]")
 {
     const SpatialVector a{Vec3{1.0f, 0.0f, 0.0f}, Vec3{0.0f, 2.0f, 0.0f}};
@@ -183,4 +248,136 @@ TEST_CASE("SpatialVector.ArithmeticAndDot", "[Articulation]")
     CHECK(a.dot(b) == 0.0f);
     // Self-dot is the sum of squared parts: 1 + 4 = 5.
     CHECK(a.dot(a) == 5.0f);
+}
+
+namespace
+{
+
+// A fixed-base single pendulum: a rod of length 2 (COM 1 m out along local +X), revolute
+// about +Z at the origin. Rotational inertia about the COM is the thin-rod value m·L²/12.
+Articulation singlePendulum()
+{
+    Articulation a;
+    a.baseFixed(true);
+    a.addRootLink(ArticulationLinkDesc{}); // root = fixed world anchor
+    ArticulationLinkDesc rod;
+    rod.parent = 0;
+    rod.joint = ArticulationJointType::Revolute;
+    rod.jointAxis = Vec3{0.0f, 0.0f, 1.0f};
+    rod.mass = 1.0f;
+    rod.comLocal = Vec3{1.0f, 0.0f, 0.0f};
+    rod.inertiaLocal = Vec3{0.001f, 0.3333f, 0.3333f};
+    a.addLink(rod);
+    return a;
+}
+
+// A fixed-base double pendulum: two unit rods (length 1, COM 0.5 out), each revolute +Z,
+// the second jointed at the end of the first.
+Articulation doublePendulum()
+{
+    Articulation a;
+    a.baseFixed(true);
+    a.addRootLink(ArticulationLinkDesc{});
+    ArticulationLinkDesc rod;
+    rod.parent = 0;
+    rod.joint = ArticulationJointType::Revolute;
+    rod.jointAxis = Vec3{0.0f, 0.0f, 1.0f};
+    rod.mass = 1.0f;
+    rod.comLocal = Vec3{0.5f, 0.0f, 0.0f};
+    rod.inertiaLocal = Vec3{0.001f, 0.0833f, 0.0833f};
+    a.addLink(rod); // link 1
+    rod.parent = 1;
+    rod.parentToJoint = RigidTransform{Quaternion::identity(), Vec3{1.0f, 0.0f, 0.0f}};
+    a.addLink(rod); // link 2
+    return a;
+}
+
+} // namespace
+
+TEST_CASE("Articulation.SinglePendulumReleaseAccelerationMatchesAnalytic", "[Articulation]")
+{
+    // A rod released from horizontal (q = 0) has angular acceleration q̈ = −m·g·L / (I_com +
+    // m·L²): the gravity torque m·g·L about the pivot over the pivot inertia. Here
+    // −1·9.81·1 / (0.3333 + 1) = −7.358 rad/s². The ABA must reproduce this exactly.
+    Articulation a = singlePendulum();
+    a.computeAccelerations(Vec3{0.0f, -9.81f, 0.0f});
+    CHECK(a.qDDot()[0] == Catch::Approx(-7.358f).margin(0.01f));
+}
+
+TEST_CASE("Articulation.SinglePendulumConservesEnergy", "[Articulation]")
+{
+    // A non-chaotic single pendulum must conserve total mechanical energy under the
+    // semi-implicit integrator (drift is O(dt); < 0.1% at dt = 1/8000 over a full swing).
+    Articulation a = singlePendulum();
+    a.q(0, 1.5f); // released from near-horizontal
+    const Vec3 g{0.0f, -9.81f, 0.0f};
+    const float iPivot = 0.3333f + 1.0f; // I_com + m·L²
+    const float dt = 1.0f / 8000.0f;
+
+    const auto energy = [&]
+    {
+        a.forwardKinematics();
+        const Vec3 com = a.linkWorld(1).transformPoint(Vec3{1.0f, 0.0f, 0.0f});
+        return 0.5f * iPivot * a.qDot()[0] * a.qDot()[0] + 9.81f * com.y();
+    };
+
+    const float e0 = energy();
+    float emin = e0;
+    float emax = e0;
+    for (int i = 0; i < 8000; ++i)
+    {
+        a.computeAccelerations(g);
+        a.integrate(dt);
+        const float e = energy();
+        emin = std::min(emin, e);
+        emax = std::max(emax, e);
+    }
+    CHECK((emax - emin) / std::abs(e0) < 0.01f);
+}
+
+TEST_CASE("Articulation.DoublePendulumInterLinkCouplingIsStable", "[Articulation]")
+{
+    // Exercises the inter-link articulated-inertia transform (the single pendulum's only
+    // link folds into the *fixed* root, so it never tests link→link coupling). Under zero
+    // gravity the energy is pure kinetic, so a bent, moving double pendulum must keep its
+    // joint speeds bounded — a runaway would expose a bad coupling transform.
+    Articulation a = doublePendulum();
+    a.q(1, 0.8f);
+    a.qDot(0, 0.5f);
+    a.qDot(1, -0.5f);
+    const Vec3 zeroG{};
+    const float dt = 1.0f / 8000.0f;
+    float maxSpeed = 0.0f;
+    for (int i = 0; i < 8000; ++i)
+    {
+        a.computeAccelerations(zeroG);
+        a.integrate(dt);
+        maxSpeed = std::max(maxSpeed, std::max(std::abs(a.qDot()[0]), std::abs(a.qDot()[1])));
+    }
+    CHECK(maxSpeed < 2.0f); // started near 0.5; a correct coupling keeps it O(1)
+    CHECK(std::isfinite(a.qDot()[0]));
+    CHECK(std::isfinite(a.qDot()[1]));
+}
+
+TEST_CASE("Articulation.DoublePendulumSettlesUnderDamping", "[Articulation]")
+{
+    // A chaotic gravity-driven double pendulum under a non-symplectic explicit integrator
+    // drifts energy and, undamped at the physics substep rate, diverges — a known limit of
+    // explicit integration, not an ABA fault (see the energy-conserving tests above). Passive
+    // joint damping (which ragdolls carry) dissipates that: over 6 s at the substep h = 1/480
+    // the motion stays finite and bleeds toward rest.
+    Articulation a = doublePendulum();
+    a.q(0, 1.2f);
+    a.q(1, 0.4f);
+    const Vec3 g{0.0f, -9.81f, 0.0f};
+    const float dt = 1.0f / 480.0f;
+    for (int i = 0; i < static_cast<int>(6.0f / dt); ++i)
+    {
+        a.computeAccelerations(g, 0.2f); // passive damping τ = −0.2·q̇
+        a.integrate(dt);
+    }
+    CHECK(std::isfinite(a.qDot()[0]));
+    CHECK(std::isfinite(a.qDot()[1]));
+    CHECK(std::abs(a.qDot()[0]) < 5.0f);
+    CHECK(std::abs(a.qDot()[1]) < 5.0f);
 }

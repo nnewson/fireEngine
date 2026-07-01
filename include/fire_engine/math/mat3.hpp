@@ -165,6 +165,54 @@ public:
                 m_[2] * v.x() + m_[5] * v.y() + m_[8] * v.z()};
     }
 
+    [[nodiscard]]
+    constexpr Mat3 operator+(const Mat3& rhs) const noexcept
+    {
+        Mat3 r;
+        for (int i = 0; i < 9; ++i)
+        {
+            r.m_[i] = m_[i] + rhs.m_[i];
+        }
+        return r;
+    }
+
+    [[nodiscard]]
+    constexpr Mat3 operator-(const Mat3& rhs) const noexcept
+    {
+        Mat3 r;
+        for (int i = 0; i < 9; ++i)
+        {
+            r.m_[i] = m_[i] - rhs.m_[i];
+        }
+        return r;
+    }
+
+    [[nodiscard]]
+    constexpr Mat3 operator*(float s) const noexcept
+    {
+        Mat3 r;
+        for (int i = 0; i < 9; ++i)
+        {
+            r.m_[i] = m_[i] * s;
+        }
+        return r;
+    }
+
+    // Skew-symmetric (cross-product) matrix of `v`: skew(v) * w == v × w. Its transpose
+    // is skew(-v); used throughout spatial (6-D) rigid-body algebra for the r× coupling.
+    [[nodiscard]]
+    static constexpr Mat3 skew(const Vec3& v) noexcept
+    {
+        Mat3 r;
+        r[0, 1] = -v.z();
+        r[0, 2] = v.y();
+        r[1, 0] = v.z();
+        r[1, 2] = -v.x();
+        r[2, 0] = -v.y();
+        r[2, 1] = v.x();
+        return r;
+    }
+
     // Strict bit-for-bit equality — use approxEqual for tolerance.
     [[nodiscard]]
     constexpr bool operator==(const Mat3& rhs) const noexcept
