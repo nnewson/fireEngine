@@ -1,5 +1,6 @@
 #pragma once
 
+#include <fire_engine/math/mat3.hpp>
 #include <fire_engine/math/quaternion.hpp>
 #include <fire_engine/math/vec3.hpp>
 
@@ -86,6 +87,107 @@ struct SpatialVector
 constexpr SpatialVector operator*(float s, const SpatialVector& v) noexcept
 {
     return v * s;
+}
+
+// Spatial motion cross product v ×  u (Featherstone's crm): the acceleration a moving
+// frame's velocity induces on another motion vector. (angular; linear) ordering.
+[[nodiscard]]
+constexpr SpatialVector crossMotion(const SpatialVector& v, const SpatialVector& u) noexcept
+{
+    return SpatialVector{Vec3::crossProduct(v.angular, u.angular),
+                         Vec3::crossProduct(v.angular, u.linear) +
+                             Vec3::crossProduct(v.linear, u.angular)};
+}
+
+// Spatial force cross product v ×* f (Featherstone's crf, the dual of crossMotion): the
+// rate of change a moving frame's velocity induces on a force/momentum vector.
+[[nodiscard]]
+constexpr SpatialVector crossForce(const SpatialVector& v, const SpatialVector& f) noexcept
+{
+    return SpatialVector{Vec3::crossProduct(v.angular, f.angular) +
+                             Vec3::crossProduct(v.linear, f.linear),
+                         Vec3::crossProduct(v.angular, f.linear)};
+}
+
+// A 6x6 spatial matrix as four 3x3 blocks [[a, b], [c, d]], acting on a spatial vector
+// (angular; linear): out.angular = a·ang + b·lin, out.linear = c·ang + d·lin. Used for
+// spatial (articulated-body) inertias and the Plücker coordinate transforms.
+struct SpatialMatrix
+{
+    Mat3 a{};
+    Mat3 b{};
+    Mat3 c{};
+    Mat3 d{};
+
+    [[nodiscard]]
+    constexpr SpatialVector operator*(const SpatialVector& v) const noexcept
+    {
+        return SpatialVector{a * v.angular + b * v.linear, c * v.angular + d * v.linear};
+    }
+
+    [[nodiscard]]
+    constexpr SpatialMatrix operator*(const SpatialMatrix& m) const noexcept
+    {
+        return SpatialMatrix{a * m.a + b * m.c, a * m.b + b * m.d, c * m.a + d * m.c,
+                             c * m.b + d * m.d};
+    }
+
+    [[nodiscard]]
+    constexpr SpatialMatrix operator+(const SpatialMatrix& m) const noexcept
+    {
+        return SpatialMatrix{a + m.a, b + m.b, c + m.c, d + m.d};
+    }
+
+    [[nodiscard]]
+    constexpr SpatialMatrix operator-(const SpatialMatrix& m) const noexcept
+    {
+        return SpatialMatrix{a - m.a, b - m.b, c - m.c, d - m.d};
+    }
+};
+
+// Outer product s·fᵀ of a force-like column `s` with a force-like row `f`, as the 6x6
+// spatial matrix whose blocks are the 3x3 outer products. Used for the ABA rank-1
+// articulated-inertia update U·D⁻¹·Uᵀ.
+[[nodiscard]]
+constexpr SpatialMatrix spatialOuter(const SpatialVector& s, const SpatialVector& f) noexcept
+{
+    const auto outer = [](const Vec3& u, const Vec3& w)
+    { return Mat3::fromColumns(w * u.x(), w * u.y(), w * u.z()); };
+    return SpatialMatrix{outer(s.angular, f.angular), outer(s.angular, f.linear),
+                         outer(s.linear, f.angular), outer(s.linear, f.linear)};
+}
+
+// Plücker MOTION transform child→parent for a rigid transform T = (E, r) that maps a
+// child-frame point to the parent frame (p_parent = E·p_child + r): a motion vector
+// (ω; v) maps to (E·ω; r×(E·ω) + E·v). As a block matrix [[R,0],[skew(r)R, R]].
+[[nodiscard]]
+inline SpatialMatrix motionTransform(const RigidTransform& t) noexcept
+{
+    const Mat3 r = Mat3::fromQuaternion(t.rotation);
+    return SpatialMatrix{r, Mat3{}, Mat3::skew(t.translation) * r, r};
+}
+
+// Plücker FORCE transform child→parent (dual of motionTransform): a force vector (n; f)
+// maps to (E·n + r×(E·f); E·f). Block matrix [[R, skew(r)R],[0, R]].
+[[nodiscard]]
+inline SpatialMatrix forceTransform(const RigidTransform& t) noexcept
+{
+    const Mat3 r = Mat3::fromQuaternion(t.rotation);
+    return SpatialMatrix{r, Mat3::skew(t.translation) * r, Mat3{}, r};
+}
+
+// Rigid-body spatial inertia about a link frame's origin, from mass `m`, centre of mass
+// `com` (in that frame), and rotational inertia `inertia` about the COM. As a block
+// matrix [[Iₒ, skew(h)], [skew(h)ᵀ, m·1]] with h = m·com and Iₒ = I_com − m·skew(com)²
+// (parallel-axis to the origin). Symmetric and constant in the link frame.
+[[nodiscard]]
+inline SpatialMatrix spatialInertia(float m, const Vec3& com, const Mat3& inertia) noexcept
+{
+    const Vec3 h = com * m;
+    const Mat3 sc = Mat3::skew(com);
+    const Mat3 io = inertia - (sc * sc) * m; // I_com − m·skew(com)²  (parallel axis to origin)
+    const Mat3 sh = Mat3::skew(h);
+    return SpatialMatrix{io, sh, sh.transpose(), Mat3::identity() * m};
 }
 
 } // namespace fire_engine

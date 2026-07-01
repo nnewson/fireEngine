@@ -130,6 +130,37 @@ public:
         return linkWorld_[i];
     }
 
+    // Fixed vs floating base. When fixed (default) the root link is an immovable anchor
+    // (world) and only the joint DOFs move — a robot arm / pendulum bolted to the ground.
+    // Floating-base dynamics (the free 6-DOF root a ragdoll needs) arrive next.
+    void baseFixed(bool fixed) noexcept
+    {
+        baseFixed_ = fixed;
+    }
+
+    [[nodiscard]]
+    bool baseFixed() const noexcept
+    {
+        return baseFixed_;
+    }
+
+    // Featherstone Articulated-Body Algorithm: compute the joint accelerations q̈ from the
+    // current q / q̇, gravity, and a passive per-DOF `jointDamping` torque (τ = −damping·q̇).
+    // Runs forwardKinematics() internally (needs link world orientations for gravity). The
+    // revolute joint axis is assumed to pass through the child link's frame origin (i.e.
+    // jointToChild is a pure rotation); geometry goes in parentToJoint + comLocal.
+    void computeAccelerations(const Vec3& gravity, float jointDamping = 0.0f);
+
+    // Integrate q̇ += q̈·dt, q += q̇·dt from the last computeAccelerations(). Semi-implicit
+    // Euler (velocity first), matching the rigid-body integrator.
+    void integrate(float dt);
+
+    [[nodiscard]]
+    std::span<const float> qDDot() const noexcept
+    {
+        return qDDot_;
+    }
+
 private:
     struct Link
     {
@@ -150,7 +181,9 @@ private:
     RigidTransform base_{};
     std::vector<float> q_;
     std::vector<float> qDot_;
+    std::vector<float> qDDot_; // joint accelerations from the last computeAccelerations()
     int dofCount_{0};
+    bool baseFixed_{true};
 };
 
 } // namespace fire_engine
