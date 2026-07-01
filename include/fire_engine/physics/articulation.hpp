@@ -51,6 +51,16 @@ struct ArticulationLinkDesc
     float twistLimit{pi};
     float limitStiffness{0.0f};
     float limitDamping{0.0f};
+
+    // Passive drive: a spring pulling the joint toward a target pose (a muscle / a bias to a
+    // rest pose), active when `driveStiffness > 0`. τ = driveStiffness·(target − q) −
+    // driveDamping·q̇. `driveTarget` is the target angle for a Revolute joint; `driveTargetRotation`
+    // the target orientation for a Spherical one. Distinct from the global joint damping — this
+    // seeks a pose, that only bleeds speed.
+    float driveTarget{0.0f};
+    Quaternion driveTargetRotation{Quaternion::identity()};
+    float driveStiffness{0.0f};
+    float driveDamping{0.0f};
 };
 
 // A reduced-coordinate articulation: a tree of links whose joints are *parameterized*
@@ -241,6 +251,10 @@ private:
         float twistLimit{pi};
         float limitStiffness{0.0f};
         float limitDamping{0.0f};
+        float driveTarget{0.0f};
+        Quaternion driveTargetRotation{Quaternion::identity()};
+        float driveStiffness{0.0f};
+        float driveDamping{0.0f};
     };
 
     std::vector<Link> links_;

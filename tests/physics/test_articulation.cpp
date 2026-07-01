@@ -626,6 +626,73 @@ TEST_CASE("Articulation.WithinLimitMotionIsUnconstrained", "[Articulation]")
     CHECK(swingAngle(a, twistAxis) == Catch::Approx(0.25f).margin(0.02f));
 }
 
+TEST_CASE("Articulation.RevoluteDriveHoldsTargetAngle", "[Articulation]")
+{
+    // A passive drive (spring toward driveTarget + damping) must hold a gravity-loaded
+    // revolute rod near its target angle, where an undriven rod would fall to hang straight.
+    const auto make = [](float stiffness, float target)
+    {
+        Articulation a;
+        a.baseFixed(true);
+        a.addRootLink(ArticulationLinkDesc{});
+        ArticulationLinkDesc rod;
+        rod.parent = 0;
+        rod.joint = ArticulationJointType::Revolute;
+        rod.jointAxis = Vec3{0.0f, 0.0f, 1.0f};
+        rod.mass = 1.0f;
+        rod.comLocal = Vec3{1.0f, 0.0f, 0.0f};
+        rod.inertiaLocal = Vec3{0.01f, 0.34f, 0.34f};
+        rod.driveTarget = target;
+        rod.driveStiffness = stiffness;
+        rod.driveDamping = 12.0f;
+        a.addLink(rod);
+        return a;
+    };
+    const Vec3 g{0.0f, -9.81f, 0.0f};
+
+    Articulation driven = make(80.0f, 1.0f);
+    Articulation undriven = make(0.0f, 1.0f);
+    for (int i = 0; i < 3000; ++i)
+    {
+        driven.computeAccelerations(g, 0.05f);
+        driven.integrate(1.0f / 240.0f);
+        undriven.computeAccelerations(g, 0.05f);
+        undriven.integrate(1.0f / 240.0f);
+    }
+    CHECK(driven.q()[0] == Catch::Approx(1.0f).margin(0.15f)); // holds near target
+    CHECK(undriven.q()[0] < -1.0f);                            // fell toward hanging
+}
+
+TEST_CASE("Articulation.SphericalDriveSeeksTargetOrientation", "[Articulation]")
+{
+    // A spherical drive pulls the joint to a target orientation (a rest-pose bias / muscle).
+    Articulation a;
+    a.baseFixed(true);
+    a.addRootLink(ArticulationLinkDesc{});
+    ArticulationLinkDesc rod;
+    rod.parent = 0;
+    rod.joint = ArticulationJointType::Spherical;
+    rod.mass = 1.0f;
+    rod.comLocal = Vec3{0.0f, 0.0f, 1.0f};
+    rod.inertiaLocal = Vec3{0.34f, 0.34f, 0.05f};
+    const Quaternion target = Quaternion::fromAxisAngle(Vec3{0.0f, 1.0f, 0.0f}, 0.785f);
+    rod.driveTargetRotation = target;
+    rod.driveStiffness = 80.0f;
+    rod.driveDamping = 12.0f;
+    a.addLink(rod);
+
+    for (int i = 0; i < 3000; ++i)
+    {
+        a.computeAccelerations(Vec3{}, 0.05f); // gravity-free: the drive alone poses it
+        a.integrate(1.0f / 240.0f);
+    }
+    const Quaternion q = a.jointRotation(1);
+    const Quaternion e = q.conjugate() * target;
+    const float angle = 2.0f * std::atan2(std::sqrt(e.x() * e.x() + e.y() * e.y() + e.z() * e.z()),
+                                          std::abs(e.w()));
+    CHECK(angle < 0.02f); // reached the target orientation
+}
+
 TEST_CASE("Articulation.LinkRestsOnFloorThroughConstraintBody", "[Articulation]")
 {
     // The Phase D gate: a fixed-base pendulum whose bob swings down onto a static floor

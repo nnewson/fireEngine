@@ -74,6 +74,26 @@ namespace
     return torque;
 }
 
+// Body-frame rotation-vector error current→target (2·log of q⁻¹·q_target, small-angle exact),
+// the axis·angle a spherical drive spring pulls along. `q` is the joint rotation (parent→child),
+// so q⁻¹·q_target is the residual rotation expressed in the child (body) frame — the frame the
+// generalized velocities q̇ live in.
+[[nodiscard]] Vec3 orientationError(const Quaternion& q, const Quaternion& target) noexcept
+{
+    Quaternion e = q.conjugate() * target;
+    if (e.w() < 0.0f) // shortest arc
+    {
+        e = Quaternion{-e.x(), -e.y(), -e.z(), -e.w()};
+    }
+    const Vec3 v{e.x(), e.y(), e.z()};
+    const float s = v.magnitude();
+    if (s < 1.0e-6f)
+    {
+        return Vec3{};
+    }
+    return v * (2.0f * std::atan2(s, e.w()) / s);
+}
+
 } // namespace
 
 int Articulation::addRootLink(const ArticulationLinkDesc& desc)
@@ -113,6 +133,10 @@ int Articulation::addLink(const ArticulationLinkDesc& desc)
     link.twistLimit = desc.twistLimit;
     link.limitStiffness = desc.limitStiffness;
     link.limitDamping = desc.limitDamping;
+    link.driveTarget = desc.driveTarget;
+    link.driveTargetRotation = desc.driveTargetRotation;
+    link.driveStiffness = desc.driveStiffness;
+    link.driveDamping = desc.driveDamping;
 
     link.dofCount = desc.joint == ArticulationJointType::Revolute    ? 1
                     : desc.joint == ArticulationJointType::Spherical ? 3
@@ -327,19 +351,38 @@ void Articulation::computeAccelerations(const Vec3& gravity, float jointDamping)
         const int nd = link.dofCount;
         const auto off = static_cast<std::size_t>(link.dofOffset);
 
-        // Passive joint torque: global damping + (spherical only) the cone-twist limit.
-        Vec3 limitTorque{};
-        if (link.joint == ArticulationJointType::Spherical && link.limitStiffness > 0.0f)
+        // Passive joint torque per DOF: global damping + cone-twist limit + drive spring.
+        float jointTorque[3]{0.0f, 0.0f, 0.0f};
+        if (link.joint == ArticulationJointType::Spherical)
         {
             const Vec3 omega{qDot_[off], qDot_[off + 1], qDot_[off + 2]};
-            limitTorque =
-                coneTwistTorque(link.jointRotation, omega, link.jointAxis, link.swingLimit,
-                                link.twistLimit, link.limitStiffness, link.limitDamping);
+            Vec3 t{};
+            if (link.limitStiffness > 0.0f)
+            {
+                t = coneTwistTorque(link.jointRotation, omega, link.jointAxis, link.swingLimit,
+                                    link.twistLimit, link.limitStiffness, link.limitDamping);
+            }
+            if (link.driveStiffness > 0.0f)
+            {
+                // Spring toward the target orientation (body-frame error) − drive damping.
+                t = t +
+                    orientationError(link.jointRotation, link.driveTargetRotation) *
+                        link.driveStiffness -
+                    omega * link.driveDamping;
+            }
+            jointTorque[0] = t.x();
+            jointTorque[1] = t.y();
+            jointTorque[2] = t.z();
         }
-        const float limitT[3]{limitTorque.x(), limitTorque.y(), limitTorque.z()};
+        else if (link.joint == ArticulationJointType::Revolute && link.driveStiffness > 0.0f)
+        {
+            jointTorque[0] =
+                link.driveStiffness * (link.driveTarget - q_[off]) - link.driveDamping * qDot_[off];
+        }
         for (int k = 0; k < nd; ++k)
         {
-            const float tau = -jointDamping * qDot_[off + static_cast<std::size_t>(k)] + limitT[k];
+            const float tau =
+                -jointDamping * qDot_[off + static_cast<std::size_t>(k)] + jointTorque[k];
             uForce[i][static_cast<std::size_t>(k)] =
                 tau - subspace_[i][static_cast<std::size_t>(k)].dot(bias[i]);
         }
