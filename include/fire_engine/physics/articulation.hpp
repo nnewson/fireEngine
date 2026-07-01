@@ -161,7 +161,41 @@ public:
         return qDDot_;
     }
 
+    // --- Contact/constraint coupling (Phase C: the ConstraintBody seam) ---
+    //
+    // These let the contact solver treat an articulation link like any other constraint
+    // body: read the world velocity of a contact point, ask how much that point resists an
+    // impulse along a direction (the operational-space effective mass), and apply an impulse
+    // that propagates through the whole linkage into q̇. All world-space; `link` indexes a
+    // link, `worldPoint` is on it.
+    //
+    // Call factorizeArticulatedInertia() + computeLinkVelocities() once per solve step
+    // (after setting q/q̇) before using the three below; both depend only on the current
+    // pose/velocity, not on the impulses applied during the solve.
+    void factorizeArticulatedInertia();
+    void computeLinkVelocities();
+
+    [[nodiscard]]
+    Vec3 pointVelocity(std::size_t link, const Vec3& worldPoint) const;
+
+    // Inverse effective mass along `worldDir` at `worldPoint`: dᵀ (J M⁻¹ Jᵀ) d, the point's
+    // response to a unit impulse. The solver uses 1/this as the constraint effective mass.
+    [[nodiscard]]
+    float inverseEffectiveMass(std::size_t link, const Vec3& worldPoint,
+                               const Vec3& worldDir) const;
+
+    // Apply a world impulse at a link point, updating q̇ via the articulated impulse response
+    // (Δq̇ = M⁻¹ Jᵀ·impulse), so the whole chain reacts — the seam's applyImpulse.
+    void applyImpulse(std::size_t link, const Vec3& worldPoint, const Vec3& worldImpulse);
+
 private:
+    // Articulated impulse response, using the cached factorization: applies a world impulse
+    // at a link point and returns the resulting world velocity change *of that point*.
+    // Shared by inverseEffectiveMass (probe, `commit` = false) and applyImpulse (commit into
+    // qDot_). The point-velocity delta is what the effective-mass query needs.
+    Vec3 impulseResponse(std::size_t link, const Vec3& worldPoint, const Vec3& worldImpulse,
+                         bool commit);
+
     struct Link
     {
         int parent{-1};
@@ -184,6 +218,20 @@ private:
     std::vector<float> qDDot_; // joint accelerations from the last computeAccelerations()
     int dofCount_{0};
     bool baseFixed_{true};
+
+    // Cached articulated-inertia factorization (geometry + mass only; independent of the
+    // impulses applied during a solve), built by factorizeArticulatedInertia(). xup/xforce
+    // are the per-link Plücker motion/force transforms; artInertia_ is each link's
+    // articulated inertia (children folded in); u_ = Iᴬ·S, d_ = Sᵀu_.
+    std::vector<SpatialMatrix> xup_;
+    std::vector<SpatialMatrix> xforce_;
+    std::vector<SpatialVector> subspace_;
+    std::vector<SpatialMatrix> artInertia_;
+    std::vector<SpatialVector> u_;
+    std::vector<float> d_;
+    // World spatial velocity per link (angular; linear at the link origin), from
+    // computeLinkVelocities(); the base for pointVelocity().
+    std::vector<SpatialVector> linkVelWorld_;
 };
 
 } // namespace fire_engine
