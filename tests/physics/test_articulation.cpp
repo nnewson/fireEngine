@@ -381,3 +381,53 @@ TEST_CASE("Articulation.DoublePendulumSettlesUnderDamping", "[Articulation]")
     CHECK(std::abs(a.qDot()[0]) < 5.0f);
     CHECK(std::abs(a.qDot()[1]) < 5.0f);
 }
+
+TEST_CASE("Articulation.EffectiveMassAndImpulseResponseMatchAnalytic", "[Articulation]")
+{
+    // The ConstraintBody seam on a single pendulum: for a tangential impulse at the bob
+    // (2 m out), the inverse effective mass is L_bob²/I_pivot and the response is
+    // Δq̇ = P·L_bob/I_pivot — the reflected point mass a contact would see.
+    Articulation a = singlePendulum();
+    a.factorizeArticulatedInertia();
+    a.computeLinkVelocities();
+
+    const Vec3 bob{2.0f, 0.0f, 0.0f};
+    const Vec3 tangent{0.0f, 1.0f, 0.0f};
+    const float iPivot = 0.3333f + 1.0f;
+
+    const float invEff = a.inverseEffectiveMass(1, bob, tangent);
+    CHECK(invEff > 0.0f); // a mass response is positive
+    CHECK(invEff == Catch::Approx(4.0f / iPivot).margin(1e-3f));
+
+    const float impulse = 0.5f;
+    a.applyImpulse(1, bob, tangent * impulse);
+    CHECK(a.qDot()[0] == Catch::Approx(impulse * 2.0f / iPivot).margin(1e-3f));
+}
+
+TEST_CASE("Articulation.ImpulseThroughLinkageSolvesContactVelocity", "[Articulation]")
+{
+    // The Phase C go/no-go: a single impulse solved through the articulated response
+    // (J = −vₙ / invEffMass) must drive a point's constraint velocity to zero on a *two*-link
+    // chain — i.e. the impulse propagates correctly through the inter-link coupling, exactly
+    // what a contact normal row needs. A rigid body trivially does this; the articulation
+    // must too for the contact solver to treat a link as a constraint body.
+    Articulation d = doublePendulum();
+    d.q(0, 0.3f);
+    d.q(1, -0.5f);
+    d.qDot(0, 1.5f);
+    d.qDot(1, -2.0f);
+    d.factorizeArticulatedInertia();
+    d.computeLinkVelocities();
+
+    const Vec3 tip = d.linkWorld(2).transformPoint(Vec3{1.0f, 0.0f, 0.0f});
+    const Vec3 normal{0.0f, 1.0f, 0.0f};
+    const float vn0 = Vec3::dotProduct(d.pointVelocity(2, tip), normal);
+    REQUIRE(std::abs(vn0) > 0.1f); // the tip is actually moving along the constraint
+
+    const float invEff = d.inverseEffectiveMass(2, tip, normal);
+    d.applyImpulse(2, tip, normal * (-vn0 / invEff));
+
+    d.computeLinkVelocities();
+    const float vn1 = Vec3::dotProduct(d.pointVelocity(2, tip), normal);
+    CHECK(std::abs(vn1) < 1e-4f);
+}

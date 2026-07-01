@@ -211,6 +211,177 @@ void Articulation::computeAccelerations(const Vec3& gravity, float jointDamping)
     }
 }
 
+void Articulation::factorizeArticulatedInertia()
+{
+    forwardKinematics();
+    const std::size_t n = links_.size();
+    xup_.assign(n, SpatialMatrix{});
+    xforce_.assign(n, SpatialMatrix{});
+    subspace_.assign(n, SpatialVector{});
+    artInertia_.assign(n, SpatialMatrix{});
+    u_.assign(n, SpatialVector{});
+    d_.assign(n, 0.0f);
+
+    for (std::size_t i = 1; i < n; ++i)
+    {
+        const Link& link = links_[i];
+        RigidTransform jointMotion;
+        if (link.joint == ArticulationJointType::Revolute)
+        {
+            jointMotion.rotation = Quaternion::fromAxisAngle(
+                link.jointAxis, q_[static_cast<std::size_t>(link.dofOffset)]);
+        }
+        const RigidTransform t = link.parentToJoint * jointMotion * link.jointToChild;
+        xup_[i] = motionTransform(t.inverse());
+        xforce_[i] = forceTransform(t);
+        subspace_[i] = (link.joint == ArticulationJointType::Revolute)
+                           ? SpatialVector{link.jointAxis, Vec3{}}
+                           : SpatialVector{};
+        artInertia_[i] =
+            spatialInertia(link.mass, link.comLocal, Mat3::diagonal(link.inertiaLocal));
+    }
+
+    for (std::size_t i = n - 1; i >= 1; --i)
+    {
+        const Link& link = links_[i];
+        const auto p = static_cast<std::size_t>(link.parent);
+        const bool toParent = !(p == 0 && baseFixed_);
+        u_[i] = artInertia_[i] * subspace_[i];
+        d_[i] = subspace_[i].dot(u_[i]);
+        if (d_[i] > 1e-9f)
+        {
+            const SpatialMatrix ia = artInertia_[i] - spatialOuter(u_[i] * (1.0f / d_[i]), u_[i]);
+            if (toParent)
+            {
+                artInertia_[p] = artInertia_[p] + xforce_[i] * ia * xup_[i];
+            }
+        }
+        else if (toParent)
+        {
+            artInertia_[p] = artInertia_[p] + xforce_[i] * artInertia_[i] * xup_[i];
+        }
+    }
+}
+
+void Articulation::computeLinkVelocities()
+{
+    forwardKinematics();
+    const std::size_t n = links_.size();
+    linkVelWorld_.assign(n, SpatialVector{}); // fixed base: root velocity 0
+
+    for (std::size_t i = 1; i < n; ++i)
+    {
+        const Link& link = links_[i];
+        const auto p = static_cast<std::size_t>(link.parent);
+        const SpatialVector& parentVel = linkVelWorld_[p];
+        // Transport the parent's spatial velocity to this link's origin (rigid link), then
+        // add the joint's own angular rate about the world axis (a revolute joint through the
+        // link origin adds no linear velocity there).
+        const Vec3 offset = linkWorld_[i].translation - linkWorld_[p].translation;
+        Vec3 angular = parentVel.angular;
+        if (link.joint == ArticulationJointType::Revolute)
+        {
+            const Vec3 worldAxis = linkWorld_[i].rotation.rotate(link.jointAxis);
+            angular = angular + worldAxis * qDot_[static_cast<std::size_t>(link.dofOffset)];
+        }
+        const Vec3 linear = parentVel.linear + Vec3::crossProduct(parentVel.angular, offset);
+        linkVelWorld_[i] = SpatialVector{angular, linear};
+    }
+}
+
+Vec3 Articulation::pointVelocity(std::size_t link, const Vec3& worldPoint) const
+{
+    const SpatialVector& lv = linkVelWorld_[link];
+    const Vec3 r = worldPoint - linkWorld_[link].translation;
+    return lv.linear + Vec3::crossProduct(lv.angular, r);
+}
+
+Vec3 Articulation::impulseResponse(std::size_t link, const Vec3& worldPoint,
+                                   const Vec3& worldImpulse, bool commit)
+{
+    const std::size_t n = links_.size();
+
+    // World impulse → spatial impulse at the link origin, in the link frame.
+    const Quaternion& rot = linkWorld_[link].rotation;
+    const Vec3 fLink = rot.conjugate().rotate(worldImpulse);
+    const Vec3 rLink = rot.conjugate().rotate(worldPoint - linkWorld_[link].translation);
+    // Bias force pᴬ = −(applied impulse), matching the acceleration ABA where an external
+    // force enters the bias with a minus sign; uForce = −Sᵀpᴬ then carries the right sign.
+    std::vector<SpatialVector> bias(n, SpatialVector{});
+    bias[link] = SpatialVector{Vec3::crossProduct(rLink, fLink), fLink} * -1.0f;
+
+    // Inward pass: fold the bias toward the root, recording each joint's uForce = −Sᵀpᴬ.
+    std::vector<float> uForce(n, 0.0f);
+    for (std::size_t i = n - 1; i >= 1; --i)
+    {
+        const auto p = static_cast<std::size_t>(links_[i].parent);
+        const bool toParent = !(p == 0 && baseFixed_);
+        if (d_[i] > 1e-9f)
+        {
+            uForce[i] = -subspace_[i].dot(bias[i]);
+            const SpatialVector pa = bias[i] + u_[i] * (uForce[i] / d_[i]);
+            if (toParent)
+            {
+                bias[p] = bias[p] + xforce_[i] * pa;
+            }
+        }
+        else if (toParent)
+        {
+            bias[p] = bias[p] + xforce_[i] * bias[i];
+        }
+    }
+
+    // Outward pass: base velocity delta (0, fixed) down to the joint velocity deltas Δq̇.
+    std::vector<SpatialVector> dv(n, SpatialVector{});
+    std::vector<float> dq(static_cast<std::size_t>(dofCount_), 0.0f);
+    for (std::size_t i = 1; i < n; ++i)
+    {
+        const Link& link = links_[i];
+        const auto p = static_cast<std::size_t>(link.parent);
+        const SpatialVector dvParent = (p == 0 && baseFixed_) ? SpatialVector{} : dv[p];
+        const SpatialVector dvPrime = xup_[i] * dvParent;
+        if (link.dofCount > 0 && d_[i] > 1e-9f)
+        {
+            const float delta = (uForce[i] - u_[i].dot(dvPrime)) / d_[i];
+            dq[static_cast<std::size_t>(link.dofOffset)] = delta;
+            dv[i] = dvPrime + subspace_[i] * delta;
+        }
+        else
+        {
+            dv[i] = dvPrime;
+        }
+    }
+
+    // Resulting world velocity change of the contact point on `link`.
+    const SpatialVector& dvL = dv[link];
+    const Vec3 dvPointLink = dvL.linear + Vec3::crossProduct(dvL.angular, rLink);
+    const Vec3 dvPointWorld = rot.rotate(dvPointLink);
+
+    if (commit)
+    {
+        for (int k = 0; k < dofCount_; ++k)
+        {
+            qDot_[static_cast<std::size_t>(k)] += dq[static_cast<std::size_t>(k)];
+        }
+    }
+    return dvPointWorld;
+}
+
+float Articulation::inverseEffectiveMass(std::size_t link, const Vec3& worldPoint,
+                                         const Vec3& worldDir) const
+{
+    // A unit impulse along worldDir; the point-velocity response projected back onto worldDir
+    // is dᵀ (J M⁻¹ Jᵀ) d = the inverse effective mass. const via a non-committing probe.
+    const Vec3 dv =
+        const_cast<Articulation*>(this)->impulseResponse(link, worldPoint, worldDir, false);
+    return Vec3::dotProduct(dv, worldDir);
+}
+
+void Articulation::applyImpulse(std::size_t link, const Vec3& worldPoint, const Vec3& worldImpulse)
+{
+    impulseResponse(link, worldPoint, worldImpulse, true);
+}
+
 void Articulation::integrate(float dt)
 {
     // Semi-implicit Euler (velocity first), matching the rigid-body integrator.
