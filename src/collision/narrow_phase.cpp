@@ -582,9 +582,14 @@ struct PolyFace
     for (const Vec3& p : poly)
     {
         const float depth = refFaceD - dot(refNormal, p);
-        if (depth < -1e-4f)
+        // Keep points within kContactOffset *above* the reference face too (depth down to
+        // -kContactOffset), recording the true signed gap as a negative penetration. These
+        // near-contact points widen a near-degenerate support (e.g. a tetra landing almost
+        // flat) into a small patch; the solver treats the gap points as speculative
+        // (brake-only), so they share the friction load without lifting a resting body.
+        if (depth < -kContactOffset)
         {
-            continue; // above the reference face, not in contact
+            continue; // beyond the offset above the reference face, not in contact
         }
         if (m.count >= kMaxManifoldPoints)
         {
@@ -599,11 +604,11 @@ struct PolyFace
             }
             if (depth > m.points[static_cast<std::size_t>(shallow)].penetration)
             {
-                m.points[static_cast<std::size_t>(shallow)] = {p, std::max(depth, 0.0f)};
+                m.points[static_cast<std::size_t>(shallow)] = {p, depth};
             }
             continue;
         }
-        m.points[static_cast<std::size_t>(m.count++)] = {p, std::max(depth, 0.0f)};
+        m.points[static_cast<std::size_t>(m.count++)] = {p, depth};
     }
     return m;
 }

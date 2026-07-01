@@ -256,7 +256,12 @@ void ContactSolver::solveVelocity(std::vector<SolverBody>& bodies, bool useBias)
             const float mry = cp.tangentMass01 * vt.s() + cp.tangentMass11 * vt.t();
             Vec2 newImpulse{cp.tangentImpulse.s() - mrx, cp.tangentImpulse.t() - mry};
 
-            const float budget = cp.friction * cp.normalImpulse;
+            // Proximity ramp: a speculative offset point earns friction scaled from 0 at
+            // the outer gap (separation = kContactOffset) to full at real contact
+            // (separation <= 0). This lets a near-contact point share the friction load
+            // without acting as a full tangential motor while it is still a gap.
+            const float frictionScale = std::clamp(1.0f - separation / kContactOffset, 0.0f, 1.0f);
+            const float budget = cp.friction * cp.normalImpulse * frictionScale;
             const float len = newImpulse.magnitude();
             if (len > budget && len > 0.0f)
             {
