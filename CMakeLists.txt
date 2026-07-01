@@ -57,6 +57,7 @@ add_library(fireengine SHARED
     src/platform/mouse.cpp
     src/platform/window.cpp
     src/physics/articulation.cpp
+    src/physics/articulation_contact.cpp
     src/physics/character_controller.cpp
     src/physics/contact_solver.cpp
     src/physics/island.cpp

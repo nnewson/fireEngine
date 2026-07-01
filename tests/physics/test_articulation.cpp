@@ -2,12 +2,14 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 
 #include <fire_engine/math/constants.hpp>
 #include <fire_engine/math/quaternion.hpp>
 #include <fire_engine/math/vec3.hpp>
 #include <fire_engine/physics/articulation.hpp>
+#include <fire_engine/physics/articulation_contact.hpp>
 #include <fire_engine/physics/collider_shape.hpp>
 #include <fire_engine/physics/physics_world.hpp>
 #include <fire_engine/physics/spatial.hpp>
@@ -430,4 +432,43 @@ TEST_CASE("Articulation.ImpulseThroughLinkageSolvesContactVelocity", "[Articulat
     d.computeLinkVelocities();
     const float vn1 = Vec3::dotProduct(d.pointVelocity(2, tip), normal);
     CHECK(std::abs(vn1) < 1e-4f);
+}
+
+TEST_CASE("Articulation.LinkRestsOnFloorThroughConstraintBody", "[Articulation]")
+{
+    // The Phase D gate: a fixed-base pendulum whose bob swings down onto a static floor
+    // plane must stop AT the surface (no tunnelling) and settle — the full path exercised:
+    // ABA free dynamics + the ConstraintBody seam (normal contact) over the TGS substep loop.
+    Articulation a;
+    a.baseFixed(true);
+    a.addRootLink(ArticulationLinkDesc{});
+    ArticulationLinkDesc rod;
+    rod.parent = 0;
+    rod.joint = ArticulationJointType::Revolute;
+    rod.jointAxis = Vec3{0.0f, 0.0f, 1.0f};
+    rod.mass = 1.0f;
+    rod.comLocal = Vec3{1.0f, 0.0f, 0.0f};
+    rod.inertiaLocal = Vec3{0.01f, 0.34f, 0.34f};
+    a.addLink(rod);
+    a.baseTransform(RigidTransform{Quaternion::identity(), Vec3{0.0f, 2.0f, 0.0f}}); // pivot at y=2
+
+    // Bob at the rod tip (2 m out); floor half-space y >= 0.5.
+    const float floorY = 0.5f;
+    const std::array<ArticulationPlaneContact, 1> contacts{
+        ArticulationPlaneContact{1, Vec3{2.0f, 0.0f, 0.0f}, Vec3{0.0f, 1.0f, 0.0f}, floorY, 0.5f}};
+    const Vec3 g{0.0f, -9.81f, 0.0f};
+
+    float minBobY = 1e9f;
+    for (int i = 0; i < 400; ++i)
+    {
+        stepArticulationOnPlanes(a, contacts, g, 1.0f / 60.0f, 0.05f);
+        a.forwardKinematics();
+        minBobY = std::min(minBobY, a.linkWorld(1).transformPoint(Vec3{2.0f, 0.0f, 0.0f}).y());
+    }
+    a.forwardKinematics();
+    const float bobY = a.linkWorld(1).transformPoint(Vec3{2.0f, 0.0f, 0.0f}).y();
+
+    CHECK(minBobY > floorY - 0.01f);                    // never tunnelled through the floor
+    CHECK(bobY == Catch::Approx(floorY).margin(0.01f)); // rests on it
+    CHECK(std::abs(a.qDot()[0]) < 0.05f);               // came to rest
 }
