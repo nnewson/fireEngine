@@ -245,6 +245,10 @@ void DebugDraw::buildLines(const PhysicsDebugData& data, const RenderTunables& t
             }
         }
     }
+    for (const DebugCapsule& link : data.jointLinks)
+    {
+        addCapsule(link.a, link.b, link.radius, link.colour);
+    }
     if (tunables.debugDrawContacts)
     {
         for (const DebugContact& contact : data.contacts)

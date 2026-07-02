@@ -775,6 +775,33 @@ std::vector<AABB> PhysicsWorld::debugColliderBounds() const
     return bounds;
 }
 
+std::vector<DebugJointAnchor> PhysicsWorld::debugJointAnchors() const
+{
+    std::vector<DebugJointAnchor> anchors;
+    anchors.reserve(jointCount());
+    for (const JointEntry& entry : joints_)
+    {
+        if (!entry.active)
+        {
+            continue;
+        }
+
+        const BodyEntry* a = findBody(entry.desc.bodyA);
+        const BodyEntry* b = findBody(entry.desc.bodyB);
+        if (a == nullptr || b == nullptr || !a->active || !b->active)
+        {
+            continue;
+        }
+
+        const Mat3 ra = Mat3::fromQuaternion(a->transform.rotation());
+        const Mat3 rb = Mat3::fromQuaternion(b->transform.rotation());
+        anchors.push_back(DebugJointAnchor{a->transform.position(), b->transform.position(),
+                                           a->transform.position() + ra * entry.desc.anchorA,
+                                           b->transform.position() + rb * entry.desc.anchorB});
+    }
+    return anchors;
+}
+
 bool PhysicsWorld::valid(PhysicsBodyHandle handle) const noexcept
 {
     return findBody(handle) != nullptr;
@@ -814,12 +841,11 @@ namespace
 
 // A body is sleep-eligible this step when both its linear and angular speeds are
 // below the sleep thresholds (squared comparison).
-[[nodiscard]] bool belowSleepThreshold(const PhysicsBody& body) noexcept
+[[nodiscard]] bool belowSleepThreshold(const PhysicsBody& body, float angularThreshold) noexcept
 {
     return body.linearVelocity().magnitudeSquared() <
                kLinearSleepThreshold * kLinearSleepThreshold &&
-           body.angularVelocity().magnitudeSquared() <
-               kAngularSleepThreshold * kAngularSleepThreshold;
+           body.angularVelocity().magnitudeSquared() < angularThreshold * angularThreshold;
 }
 
 // Compose an authored shape with an already-built world matrix / rotation / per-axis
@@ -1867,6 +1893,53 @@ namespace
     return (static_cast<std::uint64_t>(hi) << 32) | static_cast<std::uint64_t>(lo);
 }
 
+void projectSleepingJointAnchors(const Island& island, std::span<const JointInput> jointInputs,
+                                 std::vector<SolverBody>& solverBodies) noexcept
+{
+    struct AnchorProjection
+    {
+        int bodyA{-1};
+        int bodyB{-1};
+        Vec3 rA{};
+        Vec3 rB{};
+    };
+
+    std::vector<AnchorProjection> projections;
+    projections.reserve(island.joints.size());
+    for (const int ji : island.joints)
+    {
+        const JointInput& joint = jointInputs[static_cast<std::size_t>(ji)];
+        if (joint.type != JointType::BallSocket && joint.type != JointType::Hinge)
+        {
+            continue;
+        }
+
+        const SolverBody& a = solverBodies[static_cast<std::size_t>(joint.bodyA)];
+        const SolverBody& b = solverBodies[static_cast<std::size_t>(joint.bodyB)];
+        projections.push_back(AnchorProjection{joint.bodyA, joint.bodyB, joint.anchorA - a.position,
+                                               joint.anchorB - b.position});
+    }
+
+    constexpr int kSleepProjectionIterations = 12;
+    for (int iter = 0; iter < kSleepProjectionIterations; ++iter)
+    {
+        for (const AnchorProjection& projection : projections)
+        {
+            SolverBody& a = solverBodies[static_cast<std::size_t>(projection.bodyA)];
+            SolverBody& b = solverBodies[static_cast<std::size_t>(projection.bodyB)];
+            const float invMassSum = a.invMass + b.invMass;
+            if (invMassSum <= 0.0f)
+            {
+                continue;
+            }
+
+            const Vec3 separation = (a.position + projection.rA) - (b.position + projection.rB);
+            a.position -= separation * (a.invMass / invMassSum);
+            b.position += separation * (b.invMass / invMassSum);
+        }
+    }
+}
+
 } // namespace
 
 std::vector<JointInput> PhysicsWorld::buildJointInputs() const
@@ -2068,6 +2141,7 @@ bool PhysicsWorld::islandShouldSleep(const Island& island) const
         return false;
     }
 
+    const float angularThreshold = island.joints.empty() ? kAngularSleepThreshold : 0.15f;
     bool anyDynamic = false;
     for (const int bi : island.bodies)
     {
@@ -2082,7 +2156,8 @@ bool PhysicsWorld::islandShouldSleep(const Island& island) const
             continue;
         }
         anyDynamic = true;
-        if (!entry.body.allowSleeping() || entry.sleepTimer < kSleepTime)
+        if (!entry.body.allowSleeping() || !belowSleepThreshold(entry.body, angularThreshold) ||
+            entry.sleepTimer < kSleepTime)
         {
             return false;
         }
@@ -2183,6 +2258,7 @@ bool PhysicsWorld::solveAndIntegrate(std::span<const SolverContact> contacts, fl
         {
             // Put (or keep) the island asleep: zero the dynamic members' velocities,
             // flag them sleeping, and skip the solve + integration.
+            projectSleepingJointAnchors(island, jointInputs, solverBodies);
             for (const int bi : island.bodies)
             {
                 BodyEntry& entry = bodies_[static_cast<std::size_t>(bi)];
@@ -2218,7 +2294,8 @@ bool PhysicsWorld::solveAndIntegrate(std::span<const SolverContact> contacts, fl
             {
                 continue;
             }
-            if (belowSleepThreshold(entry.body))
+            const float angularThreshold = island.joints.empty() ? kAngularSleepThreshold : 0.15f;
+            if (belowSleepThreshold(entry.body, angularThreshold))
             {
                 entry.sleepTimer += dt;
             }

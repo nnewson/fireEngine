@@ -366,6 +366,41 @@ def rotate_by_quat(q, v):
     )
 
 
+def quat_conjugate(q):
+    """Conjugate/inverse of a unit quaternion q = [x,y,z,w]."""
+    return (-q[0], -q[1], -q[2], q[3])
+
+
+def quat_multiply(a, b):
+    """Hamilton product for glTF quaternions [x,y,z,w]."""
+    ax, ay, az, aw = a
+    bx, by, bz, bw = b
+    return (
+        aw * bx + ax * bw + ay * bz - az * by,
+        aw * by - ax * bz + ay * bw + az * bx,
+        aw * bz + ax * by - ay * bx + az * bw,
+        aw * bw - ax * bx - ay * by - az * bz,
+    )
+
+
+def quat_from_to(a, b):
+    """Shortest quaternion rotating vector `a` onto vector `b`."""
+    av = _normalise(a)
+    bv = _normalise(b)
+    dot = max(-1.0, min(1.0, sum(av[i] * bv[i] for i in range(3))))
+    if dot > 0.999999:
+        return (0.0, 0.0, 0.0, 1.0)
+    if dot < -0.999999:
+        axis = _cross(av, (1.0, 0.0, 0.0))
+        if sum(c * c for c in axis) < 1.0e-8:
+            axis = _cross(av, (0.0, 0.0, 1.0))
+        return quat_axis_angle(axis, math.pi)
+    axis = _cross(av, bv)
+    s = math.sqrt((1.0 + dot) * 2.0)
+    inv_s = 1.0 / s
+    return (axis[0] * inv_s, axis[1] * inv_s, axis[2] * inv_s, 0.5 * s)
+
+
 def _look_at_quat(eye, target, up):
     """Quaternion [x,y,z,w] orienting a glTF camera (looks down -Z) from eye to target."""
     def sub(a, b):
@@ -468,41 +503,188 @@ def _append_static_floor_box(doc, half_xz=4.0, thickness=0.25):
 
 
 def build_ragdoll_demo():
-    """P4: reuse the skinned CesiumMan humanoid, author extras.Ragdoll on it, lift it
-    above a floor, and let the ragdoll (capsule body + cone-twist joint per bone)
-    activate at load — the figure drops and crumples onto the floor. The generator can't
-    emit a skinned mesh, so this rewrites the existing asset rather than building one.
-
-    STILL DEFERRED after P9.2 (not called from main()): the TGS soft-step solver settles a
-    representative synthetic 17-bone humanoid (tests/scene/test_ragdoll.cpp gate), but the
-    real CesiumMan skeleton — a larger joint graph — stays in a ~0.5-1 m/s limit cycle even
-    at high substep counts. This is the signal for reduced-coordinate articulations (roadmap
-    P9 item 5); re-enable once that lands."""
+    """P4: a generated humanoid skeleton tagged with extras.Ragdoll, lifted above a
+    Static floor. The scene intentionally mirrors tests/scene/test_ragdoll.cpp's
+    17-bone humanoid settle gate rather than CesiumMan: the maximal-coordinate
+    solver can settle this representative graph, while CesiumMan's production skin
+    still limit-cycles and belongs with the reduced-coordinate articulation work."""
     here = os.path.dirname(os.path.abspath(__file__))
-    with open(os.path.join(here, "..", "CesiumMan", "CesiumMan.gltf")) as f:
-        d = json.load(f)
-    # Character data/image stay external, resolved relative to physics_demos/.
-    d["buffers"][0]["uri"] = "../CesiumMan/CesiumMan_data.bin"
-    if d.get("images"):
-        d["images"][0]["uri"] = "../CesiumMan/CesiumMan_img0.jpg"
-    # Drop the walk animation so it doesn't fight the ragdoll's world-override drive.
-    d.pop("animations", None)
-    # Ragdoll on the skinned node (built from skin 0's joints at load).
-    skinned = next(i for i, n in enumerate(d["nodes"]) if "skin" in n)
-    d["nodes"][skinned].setdefault("extras", {})["Ragdoll"] = {
-        "Mass": 1.0, "Radius": 0.06, "BoneLength": 0.15,
-        "ConeTwist": True, "SwingLimit": 0.7, "TwistLimit": 0.5}
-    # Lift the whole figure above the floor (node 0 has a matrix, so wrap it).
-    scene = d["scenes"][d.get("scene", 0)]
-    root = scene["nodes"][0]
-    lift = len(d["nodes"])
-    d["nodes"].append({"name": "RagdollLift", "translation": [0.0, 1.8, 0.0], "children": [root]})
-    scene["nodes"] = [lift, _append_static_floor_box(d)]
+    d = {
+        "asset": {"version": "2.0", "generator": "fireEngine physics_demos generate.py"},
+        "scene": 0,
+        "scenes": [{"nodes": [0]}],
+        "nodes": [
+            {"name": "SyntheticRagdoll", "skin": 0,
+             "extras": {"Ragdoll": {"Mass": 1.0, "Radius": 0.05, "BoneLength": 0.2,
+                                     "ConeTwist": True, "SwingLimit": 0.7,
+                                     "TwistLimit": 0.5}}}
+        ],
+        "skins": [{"name": "SyntheticRagdollSkin", "joints": []}],
+        "buffers": [],
+        "bufferViews": [],
+        "accessors": [],
+        "materials": [],
+        "meshes": [],
+    }
+
+    specs = []
+
+    def spec(parent, name, local):
+        specs.append((parent, name, local))
+        return len(specs) - 1
+
+    pelvis = spec(None, "pelvis", (0.0, 1.6, 0.0))
+    spine = spec(pelvis, "spine", (0.0, 0.3, 0.0))
+    chest = spec(spine, "chest", (0.0, 0.3, 0.0))
+    neck = spec(chest, "neck", (0.0, 0.25, 0.0))
+    spec(neck, "head", (0.0, 0.2, 0.0))
+    sh_l = spec(chest, "shoulder_L", (0.18, 0.0, 0.0))
+    upper_l = spec(sh_l, "upper_arm_L", (0.0, -0.25, 0.0))
+    spec(upper_l, "forearm_L", (0.0, -0.25, 0.0))
+    sh_r = spec(chest, "shoulder_R", (-0.18, 0.0, 0.0))
+    upper_r = spec(sh_r, "upper_arm_R", (0.0, -0.25, 0.0))
+    spec(upper_r, "forearm_R", (0.0, -0.25, 0.0))
+    hip_l = spec(pelvis, "hip_L", (0.12, -0.05, 0.0))
+    thigh_l = spec(hip_l, "thigh_L", (0.0, -0.35, 0.0))
+    spec(thigh_l, "shin_L", (0.0, -0.35, 0.0))
+    hip_r = spec(pelvis, "hip_R", (-0.12, -0.05, 0.0))
+    thigh_r = spec(hip_r, "thigh_R", (0.0, -0.35, 0.0))
+    spec(thigh_r, "shin_R", (0.0, -0.35, 0.0))
+
+    world_pos = []
+    children = [[] for _ in specs]
+    for i, (parent, _, local) in enumerate(specs):
+        if parent is None:
+            world_pos.append(local)
+        else:
+            parent_pos = world_pos[parent]
+            world_pos.append(
+                (parent_pos[0] + local[0], parent_pos[1] + local[1], parent_pos[2] + local[2])
+            )
+            children[parent].append(i)
+
+    world_rot = []
+    for i, (parent, _, _) in enumerate(specs):
+        if parent is None:
+            if children[i]:
+                direction = _sub(world_pos[children[i][0]], world_pos[i])
+            else:
+                direction = (0.0, 1.0, 0.0)
+        else:
+            direction = _sub(world_pos[i], world_pos[parent])
+            if sum(c * c for c in direction) < 1.0e-8 and children[i]:
+                direction = _sub(world_pos[children[i][0]], world_pos[i])
+        world_rot.append(quat_from_to((0.0, 1.0, 0.0), direction))
+
+    def add(parent, name, translation, rotation):
+        node = len(d["nodes"])
+        entry = {"name": name, "translation": list(translation)}
+        if abs(rotation[0]) > 1.0e-7 or abs(rotation[1]) > 1.0e-7 or abs(rotation[2]) > 1.0e-7:
+            entry["rotation"] = list(rotation)
+        d["nodes"].append(entry)
+        if parent is not None:
+            d["nodes"][parent].setdefault("children", []).append(node)
+        d["skins"][0]["joints"].append(node)
+        return node
+
+    skinned = 0
+    node_indices = []
+    for i, (parent, name, local) in enumerate(specs):
+        parent_world_rot = (0.0, 0.0, 0.0, 1.0) if parent is None else world_rot[parent]
+        local_rot = quat_multiply(quat_conjugate(parent_world_rot), world_rot[i])
+        local_translation = (
+            local
+            if parent is None
+            else rotate_by_quat(quat_conjugate(parent_world_rot), _sub(world_pos[i], world_pos[parent]))
+        )
+        parent_node = skinned if parent is None else node_indices[parent]
+        node_indices.append(add(parent_node, name, local_translation, local_rot))
+
+    d["scenes"][0]["nodes"] = [skinned, _append_static_floor_box(d, half_xz=6.0)]
     out = os.path.join(here, "RagdollDemo.gltf")
     with open(out, "w") as f:
         json.dump(d, f, indent=2)
         f.write("\n")
-    print(f"wrote {os.path.relpath(out)}  (from CesiumMan + ragdoll + floor)")
+    print(f"wrote {os.path.relpath(out)}  (synthetic ragdoll + floor)")
+
+
+def build_single_joint_ragdoll_demo():
+    """A one-joint skin tagged with extras.Ragdoll.
+
+    This is the smallest legal ragdoll-authored scene: the loader builds one
+    capsule body from the single skin joint and no parent-child constraints.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    tilt = math.radians(10.0)
+    tilt_z = math.sin(0.5 * tilt)
+    tilt_w = math.cos(0.5 * tilt)
+    d = {
+        "asset": {"version": "2.0", "generator": "fireEngine physics_demos generate.py"},
+        "scene": 0,
+        "scenes": [{"nodes": [0]}],
+        "nodes": [
+            {"name": "SingleJointRagdoll", "skin": 0,
+             "extras": {"Ragdoll": {"Mass": 1.0, "Radius": 0.05, "BoneLength": 0.4,
+                                     "ConeTwist": False}}},
+            {"name": "root_joint", "translation": [0.0, 1.6, 0.0],
+             "rotation": [0.0, 0.0, tilt_z, tilt_w]},
+        ],
+        "skins": [{"name": "SingleJointRagdollSkin", "joints": [1]}],
+        "buffers": [],
+        "bufferViews": [],
+        "accessors": [],
+        "materials": [],
+        "meshes": [],
+    }
+
+    d["nodes"][0]["children"] = [1]
+    d["scenes"][0]["nodes"] = [0, _append_static_floor_box(d, half_xz=4.0)]
+    out = os.path.join(here, "SingleJointRagdollDemo.gltf")
+    with open(out, "w") as f:
+        json.dump(d, f, indent=2)
+        f.write("\n")
+    print(f"wrote {os.path.relpath(out)}  (single-joint ragdoll + floor)")
+
+
+def build_two_joint_ragdoll_demo():
+    """A minimal two-joint skin tagged with extras.Ragdoll.
+
+    This intentionally strips the ragdoll graph down to one parent/child constraint,
+    so visual debugging can separate the basic joint-anchor behavior from the
+    larger humanoid graph's branching and floor contacts.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    tilt = math.radians(3.0)
+    tilt_z = math.sin(0.5 * tilt)
+    tilt_w = math.cos(0.5 * tilt)
+    d = {
+        "asset": {"version": "2.0", "generator": "fireEngine physics_demos generate.py"},
+        "scene": 0,
+        "scenes": [{"nodes": [0]}],
+        "nodes": [
+            {"name": "TwoJointRagdoll", "skin": 0,
+             "extras": {"Ragdoll": {"Mass": 1.0, "Radius": 0.05, "BoneLength": 0.4,
+                                     "ConeTwist": False, "SwingLimit": 0.7,
+                                     "TwistLimit": 0.5}}},
+            {"name": "root_joint", "translation": [0.0, 1.6, 0.0],
+             "rotation": [0.0, 0.0, tilt_z, tilt_w], "children": [2]},
+            {"name": "tip_joint", "translation": [0.0, -0.4, 0.0]},
+        ],
+        "skins": [{"name": "TwoJointRagdollSkin", "joints": [1, 2]}],
+        "buffers": [],
+        "bufferViews": [],
+        "accessors": [],
+        "materials": [],
+        "meshes": [],
+    }
+
+    d["nodes"][0]["children"] = [1]
+    d["scenes"][0]["nodes"] = [0, _append_static_floor_box(d, half_xz=4.0)]
+    out = os.path.join(here, "TwoJointRagdollDemo.gltf")
+    with open(out, "w") as f:
+        json.dump(d, f, indent=2)
+        f.write("\n")
+    print(f"wrote {os.path.relpath(out)}  (two-joint ragdoll + floor)")
 
 
 def write_demo(name, scene):
@@ -795,9 +977,9 @@ DEMOS = {
 def main():
     for name, builder in DEMOS.items():
         write_demo(name, builder())
-    # build_ragdoll_demo()  # still deferred after P9.2: TGS settles the synthetic humanoid gate
-    # but the real CesiumMan skeleton still limit-cycles — needs reduced-coordinate articulations
-    # (roadmap P9 item 5). See build_ragdoll_demo()'s docstring.
+    build_single_joint_ragdoll_demo()
+    build_two_joint_ragdoll_demo()
+    build_ragdoll_demo()
 
 
 if __name__ == "__main__":

@@ -239,6 +239,11 @@ void Articulation::factorizeArticulatedInertia()
     uDinv_.assign(n, std::array<SpatialVector, 3>{});
     dInv_.assign(n, Mat3{});
 
+    // The root's own spatial inertia seeds artInertia_[0]; the inward pass folds the children
+    // onto it, so the floating-base solve inverts the full articulated inertia of the tree.
+    artInertia_[0] =
+        spatialInertia(links_[0].mass, links_[0].comLocal, Mat3::diagonal(links_[0].inertiaLocal));
+
     for (std::size_t i = 1; i < n; ++i)
     {
         const Link& link = links_[i];
@@ -317,6 +322,20 @@ void Articulation::computeAccelerations(const Vec3& gravity, float jointDamping)
     std::vector<SpatialVector> accel(n);
     std::vector<std::array<float, 3>> uForce(n);
 
+    // Floating base: seed the root with its own spatial velocity + gravity/velocity-product
+    // bias (Pass 2 folds the children's bias in). Fixed base leaves everything zero.
+    if (!rootFixed)
+    {
+        const Link& root = links_[0];
+        vel[0] = baseVel_;
+        const SpatialMatrix i0 =
+            spatialInertia(root.mass, root.comLocal, Mat3::diagonal(root.inertiaLocal));
+        const Vec3 gBase = base_.rotation.conjugate().rotate(gravity);
+        const Vec3 gForce = gBase * root.mass;
+        const SpatialVector gravityWrench{Vec3::crossProduct(root.comLocal, gForce), gForce};
+        bias[0] = crossForce(vel[0], i0 * vel[0]) - gravityWrench;
+    }
+
     // Pass 1 (outward): spatial velocities + the gravity / velocity-product bias.
     for (std::size_t i = 1; i < n; ++i)
     {
@@ -331,8 +350,7 @@ void Articulation::computeAccelerations(const Vec3& gravity, float jointDamping)
             vJoint = vJoint + subspace_[i][static_cast<std::size_t>(k)] *
                                   qDot_[off + static_cast<std::size_t>(k)];
         }
-        const SpatialVector vParent = (p == 0 && rootFixed) ? SpatialVector{} : vel[p];
-        vel[i] = xup_[i] * vParent + vJoint;
+        vel[i] = xup_[i] * vel[p] + vJoint; // vel[0] is 0 (fixed) or baseVel_ (floating)
         velProd[i] = crossMotion(vel[i], vJoint);
 
         const SpatialMatrix linkInertia =
@@ -400,21 +418,25 @@ void Articulation::computeAccelerations(const Vec3& gravity, float jointDamping)
         {
             pa = pa + u_[i][static_cast<std::size_t>(k)] * g[static_cast<std::size_t>(k)];
         }
-        if (!(p == 0 && rootFixed))
-        {
-            bias[p] = bias[p] + xforce_[i] * pa;
-        }
+        bias[p] = bias[p] + xforce_[i] * pa; // p may be the floating root (bias[0])
     }
 
-    // Pass 3 (outward): base acceleration (0, fixed) down to joint accelerations q̈.
+    // Base acceleration: the free root carries no constraint force, so Iᴬ₀·a₀ + pᴬ₀ = 0 ⇒
+    // a₀ = −Iᴬ₀⁻¹·pᴬ₀ (the 6×6 solve). A fixed base stays at rest.
+    if (!rootFixed)
+    {
+        accel[0] = artInertia_[0].inverse() * (bias[0] * -1.0f);
+    }
+    baseAccel_ = accel[0];
+
+    // Pass 3 (outward): base acceleration down to joint accelerations q̈.
     for (std::size_t i = 1; i < n; ++i)
     {
         const Link& link = links_[i];
         const auto p = static_cast<std::size_t>(link.parent);
         const int nd = link.dofCount;
         const auto off = static_cast<std::size_t>(link.dofOffset);
-        const SpatialVector aParent = (p == 0 && rootFixed) ? SpatialVector{} : accel[p];
-        const SpatialVector aPrime = xup_[i] * aParent + velProd[i];
+        const SpatialVector aPrime = xup_[i] * accel[p] + velProd[i]; // accel[0] set above
 
         std::array<float, 3> e{};
         for (int j = 0; j < nd; ++j)
@@ -441,6 +463,13 @@ void Articulation::computeLinkVelocities()
     forwardKinematics();
     const std::size_t n = links_.size();
     linkVelWorld_.assign(n, SpatialVector{}); // fixed base: root velocity 0
+    if (!baseFixed_)
+    {
+        // baseVel_ is in the base (body) frame; rotate to world (linear is the base origin's
+        // velocity). The child transport below then carries it down the chain.
+        linkVelWorld_[0] = SpatialVector{base_.rotation.rotate(baseVel_.angular),
+                                         base_.rotation.rotate(baseVel_.linear)};
+    }
 
     for (std::size_t i = 1; i < n; ++i)
     {
@@ -509,14 +538,17 @@ Vec3 Articulation::impulseResponse(std::size_t link, const Vec3& worldPoint,
         {
             pa = pa + u_[i][static_cast<std::size_t>(k)] * g[static_cast<std::size_t>(k)];
         }
-        if (!(p == 0 && baseFixed_))
-        {
-            bias[p] = bias[p] + xforce_[i] * pa;
-        }
+        bias[p] = bias[p] + xforce_[i] * pa; // p may be the floating root (bias[0])
     }
 
-    // Outward pass: base velocity delta (0, fixed) down to the joint velocity deltas Δq̇.
+    // Base velocity delta: a floating root responds Δv₀ = −Iᴬ₀⁻¹·Y₀ to the folded impulse.
     std::vector<SpatialVector> dv(n, SpatialVector{});
+    if (!baseFixed_)
+    {
+        dv[0] = artInertia_[0].inverse() * (bias[0] * -1.0f);
+    }
+
+    // Outward pass: base velocity delta down to the joint velocity deltas Δq̇.
     std::vector<float> dq(static_cast<std::size_t>(dofCount_), 0.0f);
     for (std::size_t i = 1; i < n; ++i)
     {
@@ -524,8 +556,7 @@ Vec3 Articulation::impulseResponse(std::size_t link, const Vec3& worldPoint,
         const auto p = static_cast<std::size_t>(lk.parent);
         const int nd = lk.dofCount;
         const auto off = static_cast<std::size_t>(lk.dofOffset);
-        const SpatialVector dvParent = (p == 0 && baseFixed_) ? SpatialVector{} : dv[p];
-        const SpatialVector dvPrime = xup_[i] * dvParent;
+        const SpatialVector dvPrime = xup_[i] * dv[p]; // dv[0] set above (0 when fixed)
 
         std::array<float, 3> e{};
         for (int j = 0; j < nd; ++j)
@@ -557,7 +588,9 @@ Vec3 Articulation::impulseResponse(std::size_t link, const Vec3& worldPoint,
         {
             qDot_[static_cast<std::size_t>(k)] += dq[static_cast<std::size_t>(k)];
         }
+        baseVel_ = baseVel_ + dv[0]; // floating base absorbs its share of the impulse
     }
+    baseDeltaVel_ = dv[0];
     return dvPointWorld;
 }
 
@@ -582,6 +615,23 @@ void Articulation::integrate(float dt)
     for (int i = 0; i < dofCount_; ++i)
     {
         qDot_[static_cast<std::size_t>(i)] += qDDot_[static_cast<std::size_t>(i)] * dt;
+    }
+
+    // Floating base: advance the 6-DOF root velocity, then its pose. baseVel_ is body-frame,
+    // so the orientation right-multiplies (like a spherical joint) and the origin translates
+    // by R·v (the base-frame linear velocity rotated to world).
+    if (!baseFixed_)
+    {
+        baseVel_ = baseVel_ + baseAccel_ * dt;
+        const Vec3 worldLinear = base_.rotation.rotate(baseVel_.linear);
+        base_.translation = base_.translation + worldLinear * dt;
+        const float angle = baseVel_.angular.magnitude() * dt;
+        if (angle > 1e-8f)
+        {
+            const Vec3 axis = baseVel_.angular * (1.0f / baseVel_.angular.magnitude());
+            base_.rotation =
+                Quaternion::normalise(base_.rotation * Quaternion::fromAxisAngle(axis, angle));
+        }
     }
     // Advance each joint's position from its (updated) velocity. A revolute q integrates
     // linearly; a spherical joint's quaternion advances by its angular velocity via the

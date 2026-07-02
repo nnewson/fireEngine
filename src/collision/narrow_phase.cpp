@@ -164,6 +164,38 @@ collidePair(const WorldBox& box, const WorldCapsule& cap, float margin) noexcept
     }
     // Normal cap -> box.
     const Vec3 n = dist > kGeomEps ? d * (1.0f / dist) : Vec3{0.0f, 1.0f, 0.0f};
+
+    ContactManifold m;
+    m.normal = n;
+    const auto addEndpoint = [&](Vec3 endpoint)
+    {
+        if (m.count >= kMaxManifoldPoints)
+        {
+            return;
+        }
+
+        const Vec3 closest = closestPointOnObb(endpoint, box);
+        const Vec3 delta = closest - endpoint;
+        const float endpointDist = delta.magnitude();
+        if (endpointDist >= cap.radius + margin)
+        {
+            return;
+        }
+        if (endpointDist > kGeomEps && dot(delta * (1.0f / endpointDist), n) < 0.95f)
+        {
+            return;
+        }
+
+        m.points[static_cast<std::size_t>(m.count++)] = {closest, cap.radius - endpointDist};
+    };
+
+    addEndpoint(cap.p0);
+    addEndpoint(cap.p1);
+    if (m.count > 0)
+    {
+        return m;
+    }
+
     return onePoint(n, onBox, cap.radius - dist);
 }
 

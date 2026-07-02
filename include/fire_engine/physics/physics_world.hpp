@@ -33,6 +33,14 @@
 namespace fire_engine
 {
 
+struct DebugJointAnchor
+{
+    Vec3 originA{};
+    Vec3 originB{};
+    Vec3 anchorA{};
+    Vec3 anchorB{};
+};
+
 class PhysicsWorld
 {
 public:
@@ -163,6 +171,9 @@ public:
     {
         return debugContacts_;
     }
+
+    [[nodiscard]]
+    std::vector<DebugJointAnchor> debugJointAnchors() const;
 
     // Overlap-lifecycle events from the most recent step(). triggerEvents covers pairs
     // where at least one collider isTrigger (no solver response); collisionEvents covers

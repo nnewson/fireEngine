@@ -584,14 +584,23 @@ void FireEngine::mainLoop()
         if (renderer_->physicsDebugWanted() || queryProbeActive_)
         {
             PhysicsDebugData debugData;
+            debugData.queryLines = queryProbeLines(now);
             if (renderer_->physicsDebugWanted())
             {
                 debugData.aabbs = physics_.debugColliderBounds();
                 debugData.shapes = colliders;
                 debugData.contacts = physics_.debugContacts();
                 debugData.shapesAsleep = physics_.debugColliderSleeping();
+                for (const DebugJointAnchor& joint : physics_.debugJointAnchors())
+                {
+                    debugData.jointLinks.push_back(DebugCapsule{
+                        joint.originA, joint.originB, 0.025f, Colour3{0.1f, 0.65f, 1.0f}});
+                    const float stretch = (joint.anchorA - joint.anchorB).magnitude();
+                    const Colour3 colour =
+                        stretch > 0.02f ? Colour3{1.0f, 0.2f, 0.1f} : Colour3{0.1f, 0.9f, 0.35f};
+                    debugData.queryLines.push_back(DebugLine{joint.anchorA, joint.anchorB, colour});
+                }
             }
-            debugData.queryLines = queryProbeLines(now);
             renderer_->setPhysicsDebug(std::move(debugData));
         }
         colliders.push_back(makePlaneCollider(Vec3{0.0f, 1.0f, 0.0f}, 0.0f));
