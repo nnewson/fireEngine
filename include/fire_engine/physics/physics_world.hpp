@@ -484,6 +484,14 @@ private:
     void resetResolvedColliders();
     void capturePreviousPositions() noexcept;
 
+    // Reduced-coordinate articulation dynamics (Phase F1). Steps every articulation one
+    // fixed step under gravity + joint damping, resolving link-collider contacts against
+    // *static* rigid colliders through the ConstraintBody seam (link-vs-dynamic and
+    // self-collision are deferred). Contacts come from the same broadphase as the rigid
+    // path; each manifold point becomes a per-link plane contact tracked across substeps.
+    // Runs in its own solve pass, separate from the rigid islands.
+    void stepArticulations(float dt);
+
     [[nodiscard]]
     std::vector<SolverContact> contacts(float dt);
 

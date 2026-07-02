@@ -15,6 +15,7 @@
 #include <fire_engine/math/constants.hpp>
 #include <fire_engine/math/mat4.hpp>
 #include <fire_engine/math/vec4.hpp>
+#include <fire_engine/physics/articulation_contact.hpp>
 #include <fire_engine/physics/physics_constants.hpp>
 
 namespace fire_engine
@@ -733,6 +734,14 @@ void PhysicsWorld::step(float fixedDt)
     {
         resetResolvedColliders();
         broadPhase_->rebuild();
+    }
+
+    // Reduced-coordinate articulations advance in their own solve pass (link-vs-static
+    // contacts through the ConstraintBody seam). Uses the broadphase pairs from this step's
+    // start pose; the substep loop tracks each contact in link-local space as the link moves.
+    if (!articulations_.empty())
+    {
+        stepArticulations(fixedDt);
     }
 
     // Diff this step's overlaps against the previous step into enter/stay/exit events.
@@ -1501,6 +1510,96 @@ void PhysicsWorld::resetResolvedColliders()
         {
             resetCollider(collider);
         }
+    }
+}
+
+void PhysicsWorld::stepArticulations(float dt)
+{
+    // Uniform passive joint damping for the articulation solve. Modest but non-zero: a
+    // chaotic reduced-coordinate chain needs some dissipation to stay stable under the
+    // explicit integrator (see the Phase B double-pendulum finding); per-joint limits and
+    // drives add the rest. Exposed via RagdollParams once the Ragdoll binding lands.
+    constexpr float kArticulationDamping = 0.2f;
+
+    // Gather each articulation's contacts from this step's broadphase pairs. A link collider
+    // paired with a *static* rigid collider yields one plane contact per manifold point,
+    // stored in link-local space so the substep loop tracks it as the link moves. Link-vs-
+    // dynamic-rigid and link-vs-link (self-collision) are deferred to the full pipeline.
+    std::vector<std::vector<ArticulationPlaneContact>> perArticulation(articulations_.size());
+
+    for (const CollisionPair& pair : broadPhase_->possiblePairs())
+    {
+        ColliderEntry* first = findCollider(pair.first);
+        ColliderEntry* second = findCollider(pair.second);
+        if (first == nullptr || second == nullptr)
+        {
+            continue;
+        }
+
+        ColliderEntry* link = nullptr;
+        ColliderEntry* other = nullptr;
+        if (first->isLinkCollider() && !second->isLinkCollider())
+        {
+            link = first;
+            other = second;
+        }
+        else if (second->isLinkCollider() && !first->isLinkCollider())
+        {
+            link = second;
+            other = first;
+        }
+        else
+        {
+            continue; // both links or neither — not this pass
+        }
+
+        const BodyEntry* otherBody = findBody(other->body);
+        if (otherBody == nullptr || otherBody->body.type() != PhysicsBodyType::Static)
+        {
+            continue; // link-vs-static only for now
+        }
+
+        const auto it = articulationIndexByHandle_.find(link->articulation.value());
+        if (it == articulationIndexByHandle_.end())
+        {
+            continue;
+        }
+        Articulation& art = articulations_[it->second];
+        const auto linkIndex = static_cast<std::size_t>(link->link);
+        if (link->link < 0 || linkIndex >= art.linkCount())
+        {
+            continue;
+        }
+
+        // Manifold with the normal pointing other -> link (the direction to push the link
+        // out of the static surface).
+        const auto manifold =
+            narrowPhase_.collide(worldShape(*link), worldShape(*other), kSpeculativeDistance);
+        if (!manifold.has_value() || manifold->count == 0)
+        {
+            continue;
+        }
+
+        const RigidTransform linkInv = art.linkWorld(linkIndex).inverse();
+        const float friction = std::sqrt(std::max(link->material.friction, 0.0f) *
+                                         std::max(other->material.friction, 0.0f));
+        for (int p = 0; p < manifold->count; ++p)
+        {
+            const Vec3 worldPoint = manifold->points[static_cast<std::size_t>(p)].position;
+            const float penetration = manifold->points[static_cast<std::size_t>(p)].penetration;
+            // Plane through the contact point with the manifold normal; offset chosen so the
+            // prepare-time separation is −penetration (dot(n, wp) − offset = −penetration).
+            perArticulation[it->second].push_back(ArticulationPlaneContact{
+                linkIndex, linkInv.transformPoint(worldPoint), manifold->normal,
+                Vec3::dotProduct(manifold->normal, worldPoint) + penetration, friction});
+        }
+    }
+
+    // Step every articulation (contacts or not — they all fall under gravity).
+    for (std::size_t i = 0; i < articulations_.size(); ++i)
+    {
+        stepArticulationOnPlanes(articulations_[i], perArticulation[i], gravity_, dt,
+                                 kArticulationDamping);
     }
 }
 

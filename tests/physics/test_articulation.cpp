@@ -112,6 +112,65 @@ TEST_CASE("Articulation.FloatingBaseRotationCarriesThroughChain", "[Articulation
     CHECK(arm.linkWorld(2).translation.approxEqual(Vec3{0.0f, 4.0f, 0.0f}, 1e-5f));
 }
 
+TEST_CASE("Articulation.FloatingBaseConservesLinearMomentum", "[Articulation]")
+{
+    // The floating-base gate: whatever a free articulation does internally, its centre of
+    // mass must free-fall at exactly g (linear momentum = ∫Mg). This is the invariant that
+    // caught the articulated-inertia bug (an off-centre-COM link folded into the free root
+    // made the COM fall several × too fast). A revolute child with an off-centre COM AND a
+    // joint offset — plus an initial internal spin — exercises the full coupling.
+    //
+    // Measured as the change in COM vertical velocity over a window (a first difference —
+    // robust; a second-difference "acceleration" of ~10 m positions at this dt is float noise).
+    Articulation a;
+    a.baseFixed(false);
+    ArticulationLinkDesc base;
+    base.mass = 1.0f;
+    base.inertiaLocal = Vec3{0.1f, 0.1f, 0.1f};
+    a.addRootLink(base);
+    ArticulationLinkDesc rod;
+    rod.parent = 0;
+    rod.joint = ArticulationJointType::Revolute;
+    rod.jointAxis = Vec3{0.0f, 0.0f, 1.0f};
+    rod.mass = 1.0f;
+    rod.comLocal = Vec3{1.0f, 0.0f, 0.0f};
+    rod.inertiaLocal = Vec3{0.01f, 0.34f, 0.34f};
+    rod.parentToJoint = RigidTransform{Quaternion::identity(), Vec3{0.5f, 0.0f, 0.0f}};
+    a.addLink(rod);
+    a.baseTransform(RigidTransform{Quaternion::identity(), Vec3{0.0f, 10.0f, 0.0f}});
+    a.qDot(0, 1.0f); // internal spin — must not change the COM free-fall
+
+    const Vec3 g{0.0f, -9.81f, 0.0f};
+    const float dt = 1.0f / 240.0f;
+    const int window = 24;
+    const auto comY = [&]
+    {
+        a.forwardKinematics();
+        return 0.5f * (a.linkWorld(0).transformPoint(Vec3{}).y() +
+                       a.linkWorld(1).transformPoint(Vec3{1.0f, 0.0f, 0.0f}).y());
+    };
+    const auto comVy = [&]
+    {
+        const float y0 = comY();
+        for (int i = 0; i < window; ++i)
+        {
+            a.computeAccelerations(g);
+            a.integrate(dt);
+        }
+        return (comY() - y0) / (window * dt);
+    };
+
+    const float vy1 = comVy();
+    for (int i = 0; i < 48; ++i)
+    {
+        a.computeAccelerations(g);
+        a.integrate(dt);
+    }
+    const float vy2 = comVy();
+    const float comAccel = (vy2 - vy1) / ((48 + window) * dt);
+    CHECK(comAccel == Catch::Approx(-9.81f).margin(0.02f)); // COM free-falls at g
+}
+
 TEST_CASE("RigidTransform.ComposeAndInverseRoundTrip", "[Articulation]")
 {
     const RigidTransform t{Quaternion::fromAxisAngle(Vec3{0.0f, 1.0f, 0.0f}, 0.7f),
@@ -691,6 +750,77 @@ TEST_CASE("Articulation.SphericalDriveSeeksTargetOrientation", "[Articulation]")
     const float angle = 2.0f * std::atan2(std::sqrt(e.x() * e.x() + e.y() * e.y() + e.z() * e.z()),
                                           std::abs(e.w()));
     CHECK(angle < 0.02f); // reached the target orientation
+}
+
+TEST_CASE("Articulation.SphericalChainSettlesOnFloor", "[Articulation]")
+{
+    // The Phase F1 gate: a free-floating spherical-joint capsule chain (a proto-ragdoll)
+    // with cone-twist limits, dropped tilted above a box floor, must flop down and settle —
+    // no tunnelling, comes to rest. Exercises the full reduced-coordinate path through the
+    // world step: floating-base ABA, link colliders in the broadphase, real capsule-vs-box
+    // manifolds, and the ConstraintBody contact solve pass.
+    PhysicsWorld world;
+    PhysicsBodyDesc floor;
+    floor.type = PhysicsBodyType::Static;
+    floor.position = {0.0f, -0.5f, 0.0f}; // top face at y = 0
+    floor.material = PhysicsMaterial{.restitution = 0.0f, .friction = 0.6f};
+    const auto floorBody = world.createBody(floor);
+    [[maybe_unused]] const auto fc = world.createCollider(
+        floorBody,
+        ColliderDesc{.shape = BoxShape{Vec3{8.0f, 0.5f, 8.0f}},
+                     .material = PhysicsMaterial{.restitution = 0.0f, .friction = 0.6f}});
+
+    const PhysicsArticulationHandle arm = world.createArticulation();
+    Articulation* a = world.articulation(arm);
+    a->baseFixed(false);
+    ArticulationLinkDesc base;
+    base.mass = 1.0f;
+    base.inertiaLocal = Vec3{0.02f, 0.02f, 0.02f};
+    a->addRootLink(base);
+    for (int i = 1; i < 3; ++i) // two spherical children below the pelvis
+    {
+        ArticulationLinkDesc link;
+        link.parent = i - 1;
+        link.joint = ArticulationJointType::Spherical;
+        link.mass = 1.0f;
+        link.inertiaLocal = Vec3{0.02f, 0.02f, 0.02f};
+        link.parentToJoint = RigidTransform{Quaternion::identity(), Vec3{0.0f, -0.6f, 0.0f}};
+        link.swingLimit = 0.8f;
+        link.twistLimit = 0.5f;
+        link.limitStiffness = 60.0f;
+        link.limitDamping = 6.0f;
+        a->addLink(link);
+    }
+    // Tilted, well above the floor so no link starts interpenetrating.
+    a->baseTransform(RigidTransform{Quaternion::fromAxisAngle(Vec3{0.0f, 0.0f, 1.0f}, 1.0f),
+                                    Vec3{0.0f, 2.6f, 0.0f}});
+    const ColliderDesc capsule{.shape = CapsuleShape{0.15f, 0.3f},
+                               .material = PhysicsMaterial{.restitution = 0.0f, .friction = 0.6f}};
+    for (int i = 0; i < 3; ++i)
+    {
+        [[maybe_unused]] const auto lc = world.attachLinkCollider(arm, i, capsule);
+    }
+
+    float minEver = 1e9f;
+    for (int i = 0; i < 900; ++i) // 15 s — fall, flop, settle
+    {
+        world.step(1.0f / 60.0f);
+        a->forwardKinematics();
+        for (std::size_t link = 0; link < a->linkCount(); ++link)
+        {
+            minEver = std::min(minEver, a->linkWorld(link).translation.y());
+        }
+    }
+    a->forwardKinematics();
+    float lowest = 1e9f;
+    for (std::size_t link = 0; link < a->linkCount(); ++link)
+    {
+        lowest = std::min(lowest, a->linkWorld(link).translation.y());
+    }
+    CHECK(std::isfinite(lowest));
+    CHECK(minEver > -0.3f); // never tunnelled through the floor (capsule radius 0.15 + slop)
+    CHECK(lowest > 0.0f);   // rests on top of the floor
+    CHECK(a->baseVelocity().linear.magnitude() < 0.2f); // came to rest
 }
 
 TEST_CASE("Articulation.LinkRestsOnFloorThroughConstraintBody", "[Articulation]")

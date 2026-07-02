@@ -481,10 +481,19 @@ void Articulation::computeLinkVelocities()
         // link origin adds no linear velocity there).
         const Vec3 offset = linkWorld_[i].translation - linkWorld_[p].translation;
         Vec3 angular = parentVel.angular;
+        const auto off = static_cast<std::size_t>(link.dofOffset);
         if (link.joint == ArticulationJointType::Revolute)
         {
             const Vec3 worldAxis = linkWorld_[i].rotation.rotate(link.jointAxis);
-            angular = angular + worldAxis * qDot_[static_cast<std::size_t>(link.dofOffset)];
+            angular = angular + worldAxis * qDot_[off];
+        }
+        else if (link.joint == ArticulationJointType::Spherical)
+        {
+            // The spherical joint's three velocities are the joint angular rate in the child
+            // frame — rotate to world and add. (Omitting this dropped the whole spherical
+            // joint's motion from pointVelocity, so the contact solve read stale velocities.)
+            const Vec3 jointOmega{qDot_[off], qDot_[off + 1], qDot_[off + 2]};
+            angular = angular + linkWorld_[i].rotation.rotate(jointOmega);
         }
         const Vec3 linear = parentVel.linear + Vec3::crossProduct(parentVel.angular, offset);
         linkVelWorld_[i] = SpatialVector{angular, linear};
