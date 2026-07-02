@@ -36,10 +36,19 @@ struct DebugLine
     Colour3 colour{1.0f, 1.0f, 1.0f};
 };
 
+struct DebugCapsule
+{
+    Vec3 a{};
+    Vec3 b{};
+    float radius{0.02f};
+    Colour3 colour{1.0f, 1.0f, 1.0f};
+};
+
 struct PhysicsDebugData
 {
     std::vector<AABB> aabbs;
     std::vector<ClothCollider> shapes;
+    std::vector<DebugCapsule> jointLinks;
     std::vector<DebugContact> contacts;
     // Parallel to `shapes` (1 = asleep): sleeping bodies draw in a distinct colour.
     std::vector<std::uint8_t> shapesAsleep;

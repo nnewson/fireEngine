@@ -1,0 +1,391 @@
+{
+  "asset": {
+    "version": "2.0",
+    "generator": "fireEngine physics_demos generate.py"
+  },
+  "scene": 0,
+  "scenes": [
+    {
+      "nodes": [
+        0,
+        18
+      ]
+    }
+  ],
+  "nodes": [
+    {
+      "name": "SyntheticRagdoll",
+      "skin": 0,
+      "extras": {
+        "Ragdoll": {
+          "Mass": 1.0,
+          "Radius": 0.05,
+          "BoneLength": 0.2,
+          "ConeTwist": true,
+          "SwingLimit": 0.7,
+          "TwistLimit": 0.5
+        }
+      },
+      "children": [
+        1
+      ]
+    },
+    {
+      "name": "pelvis",
+      "translation": [
+        0.0,
+        1.6,
+        0.0
+      ],
+      "children": [
+        2,
+        12,
+        15
+      ]
+    },
+    {
+      "name": "spine",
+      "translation": [
+        0.0,
+        0.30000000000000004,
+        0.0
+      ],
+      "children": [
+        3
+      ]
+    },
+    {
+      "name": "chest",
+      "translation": [
+        0.0,
+        0.30000000000000004,
+        0.0
+      ],
+      "children": [
+        4,
+        6,
+        9
+      ]
+    },
+    {
+      "name": "neck",
+      "translation": [
+        0.0,
+        0.25,
+        0.0
+      ],
+      "children": [
+        5
+      ]
+    },
+    {
+      "name": "head",
+      "translation": [
+        0.0,
+        0.20000000000000018,
+        0.0
+      ]
+    },
+    {
+      "name": "shoulder_L",
+      "translation": [
+        0.18,
+        0.0,
+        0.0
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        -0.7071067811865475,
+        0.7071067811865476
+      ],
+      "children": [
+        7
+      ]
+    },
+    {
+      "name": "upper_arm_L",
+      "translation": [
+        0.25,
+        -5.551115123125783e-17,
+        0.0
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        -0.7071067811865476,
+        0.7071067811865475
+      ],
+      "children": [
+        8
+      ]
+    },
+    {
+      "name": "forearm_L",
+      "translation": [
+        3.061616997868383e-17,
+        0.25,
+        0.0
+      ]
+    },
+    {
+      "name": "shoulder_R",
+      "translation": [
+        -0.18,
+        0.0,
+        0.0
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.7071067811865475,
+        0.7071067811865476
+      ],
+      "children": [
+        10
+      ]
+    },
+    {
+      "name": "upper_arm_R",
+      "translation": [
+        -0.25,
+        -5.551115123125783e-17,
+        0.0
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        -0.7071067811865476,
+        -0.7071067811865475
+      ],
+      "children": [
+        11
+      ]
+    },
+    {
+      "name": "forearm_R",
+      "translation": [
+        3.061616997868383e-17,
+        0.25,
+        0.0
+      ]
+    },
+    {
+      "name": "hip_L",
+      "translation": [
+        0.12,
+        -0.050000000000000044,
+        0.0
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        -0.8320502943378436,
+        0.554700196225229
+      ],
+      "children": [
+        13
+      ]
+    },
+    {
+      "name": "thigh_L",
+      "translation": [
+        0.3230769230769229,
+        0.13461538461538453,
+        0.0
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        -0.554700196225229,
+        0.8320502943378436
+      ],
+      "children": [
+        14
+      ]
+    },
+    {
+      "name": "shin_L",
+      "translation": [
+        4.286263797015736e-17,
+        0.35,
+        0.0
+      ]
+    },
+    {
+      "name": "hip_R",
+      "translation": [
+        -0.12,
+        -0.050000000000000044,
+        0.0
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.8320502943378436,
+        0.554700196225229
+      ],
+      "children": [
+        16
+      ]
+    },
+    {
+      "name": "thigh_R",
+      "translation": [
+        -0.3230769230769229,
+        0.13461538461538453,
+        0.0
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        -0.554700196225229,
+        -0.8320502943378436
+      ],
+      "children": [
+        17
+      ]
+    },
+    {
+      "name": "shin_R",
+      "translation": [
+        4.286263797015736e-17,
+        0.35,
+        0.0
+      ]
+    },
+    {
+      "name": "Floor",
+      "mesh": 0,
+      "translation": [
+        0.0,
+        -0.25,
+        0.0
+      ],
+      "extras": {
+        "Physics": {
+          "BodyType": "Static",
+          "Shape": "Box",
+          "HalfExtents": [
+            6.0,
+            0.25,
+            6.0
+          ],
+          "Restitution": 0.0,
+          "Friction": 0.6
+        }
+      }
+    }
+  ],
+  "skins": [
+    {
+      "name": "SyntheticRagdollSkin",
+      "joints": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17
+      ]
+    }
+  ],
+  "buffers": [
+    {
+      "byteLength": 648,
+      "uri": "data:application/octet-stream;base64,AADAQAAAgL4AAMDAAADAQAAAgD4AAMDAAADAQAAAgD4AAMBAAADAQAAAgL4AAMBAAADAwAAAgL4AAMBAAADAwAAAgD4AAMBAAADAwAAAgD4AAMDAAADAwAAAgL4AAMDAAADAwAAAgD4AAMDAAADAwAAAgD4AAMBAAADAQAAAgD4AAMBAAADAQAAAgD4AAMDAAADAwAAAgL4AAMBAAADAwAAAgL4AAMDAAADAQAAAgL4AAMDAAADAQAAAgL4AAMBAAADAQAAAgL4AAMBAAADAQAAAgD4AAMBAAADAwAAAgD4AAMBAAADAwAAAgL4AAMBAAADAwAAAgL4AAMDAAADAwAAAgD4AAMDAAADAQAAAgD4AAMDAAADAQAAAgL4AAMDAAACAPwAAAAAAAAAAAACAPwAAAAAAAAAAAACAPwAAAAAAAAAAAACAPwAAAAAAAAAAAACAvwAAAAAAAAAAAACAvwAAAAAAAAAAAACAvwAAAAAAAAAAAACAvwAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIC/AAAAAAAAAAAAAIC/AAAAAAAAAAAAAIC/AAAAAAAAAAAAAIC/AAABAAIAAAACAAMABAAFAAYABAAGAAcACAAJAAoACAAKAAsADAANAA4ADAAOAA8AEAARABIAEAASABMAFAAVABYAFAAWABcA"
+    }
+  ],
+  "bufferViews": [
+    {
+      "buffer": 0,
+      "byteOffset": 0,
+      "byteLength": 288,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 288,
+      "byteLength": 288,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 576,
+      "byteLength": 72,
+      "target": 34963
+    }
+  ],
+  "accessors": [
+    {
+      "bufferView": 0,
+      "componentType": 5126,
+      "count": 24,
+      "type": "VEC3",
+      "min": [
+        -6.0,
+        -0.25,
+        -6.0
+      ],
+      "max": [
+        6.0,
+        0.25,
+        6.0
+      ]
+    },
+    {
+      "bufferView": 1,
+      "componentType": 5126,
+      "count": 24,
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 2,
+      "componentType": 5123,
+      "count": 36,
+      "type": "SCALAR"
+    }
+  ],
+  "materials": [
+    {
+      "name": "FloorMat",
+      "doubleSided": true,
+      "pbrMetallicRoughness": {
+        "baseColorFactor": [
+          0.45,
+          0.45,
+          0.48,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.7
+      }
+    }
+  ],
+  "meshes": [
+    {
+      "name": "Floor",
+      "primitives": [
+        {
+          "attributes": {
+            "POSITION": 0,
+            "NORMAL": 1
+          },
+          "indices": 2,
+          "material": 0
+        }
+      ]
+    }
+  ]
+}

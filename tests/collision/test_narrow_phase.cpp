@@ -144,6 +144,21 @@ TEST_CASE("Collide.BoxCapsule", "[Collide]")
     CHECK(m->maxPenetration() == Catch::Approx(0.1f).margin(1e-4f));
 }
 
+TEST_CASE("Collide.CapsuleBoxFaceKeepsEndpointManifold", "[Collide]")
+{
+    NarrowPhase np;
+    const WorldShape cap{WorldCapsule{{-0.2f, 0.04f, 0.0f}, {0.2f, 0.04f, 0.0f}, 0.05f}};
+    const WorldShape floor{
+        WorldBox{{0.0f, -0.25f, 0.0f}, {4.0f, 0.25f, 4.0f}, Quaternion::identity()}};
+
+    auto m = np.collide(cap, floor);
+    REQUIRE(m.has_value());
+    CHECK(m->count == 2);
+    CHECK(m->normal.approxEqual(Vec3{0.0f, 1.0f, 0.0f}, 1e-4f));
+    CHECK(m->points[0].penetration == Catch::Approx(0.01f).margin(1e-5f));
+    CHECK(m->points[1].penetration == Catch::Approx(0.01f).margin(1e-5f));
+}
+
 // --- Speculative margin: separated-but-within-margin → negative-penetration gap --
 
 TEST_CASE("Collide.SpeculativeSphereGapWithinMargin", "[Collide]")

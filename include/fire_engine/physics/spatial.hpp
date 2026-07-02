@@ -143,6 +143,21 @@ struct SpatialMatrix
     {
         return SpatialMatrix{a - m.a, b - m.b, c - m.c, d - m.d};
     }
+
+    // 6x6 inverse via 3x3 block (Schur-complement) inversion, valid when the d block is
+    // invertible — which holds for an articulated inertia (its d block is m·1 plus PD folded
+    // terms). The floating-base solve a₀ = −Iᴬ⁻¹·pᴬ uses this. For M = [[A,B],[C,D]]:
+    //   S = A − B D⁻¹ C,  M⁻¹ = [[S⁻¹, −S⁻¹ B D⁻¹], [−D⁻¹ C S⁻¹, D⁻¹ + D⁻¹ C S⁻¹ B D⁻¹]].
+    [[nodiscard]]
+    SpatialMatrix inverse() const noexcept
+    {
+        const Mat3 di = d.inverse();
+        const Mat3 dic = di * c;
+        const Mat3 si = (a - b * dic).inverse();
+        const Mat3 bdi = b * di;
+        const Mat3 negSiBdi = (si * bdi) * -1.0f;
+        return SpatialMatrix{si, negSiBdi, (dic * si) * -1.0f, di - dic * negSiBdi};
+    }
 };
 
 // Outer product s·fᵀ of a force-like column `s` with a force-like row `f`, as the 6x6
@@ -151,8 +166,12 @@ struct SpatialMatrix
 [[nodiscard]]
 constexpr SpatialMatrix spatialOuter(const SpatialVector& s, const SpatialVector& f) noexcept
 {
+    // outer(u, w) = u·wᵀ (column j is u·w_j, so entry [i,j] = u_i·w_j). The earlier form
+    // built w·uᵀ, transposing the off-diagonal blocks — harmless for a symmetric use where
+    // the vectors coincide, but it swapped the ang↔lin coupling of U·D⁻¹·Uᵀ once a link had
+    // an off-centre COM (skew(h) coupling), breaking the floating-base articulated inertia.
     const auto outer = [](const Vec3& u, const Vec3& w)
-    { return Mat3::fromColumns(w * u.x(), w * u.y(), w * u.z()); };
+    { return Mat3::fromColumns(u * w.x(), u * w.y(), u * w.z()); };
     return SpatialMatrix{outer(s.angular, f.angular), outer(s.angular, f.linear),
                          outer(s.linear, f.angular), outer(s.linear, f.linear)};
 }

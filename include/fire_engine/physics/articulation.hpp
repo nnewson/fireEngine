@@ -113,6 +113,20 @@ public:
         return base_;
     }
 
+    // Floating-base spatial velocity of the root, in the base (body) frame: (angular; linear
+    // of the base origin). Only meaningful when !baseFixed(); integrate() advances the base
+    // pose from it.
+    void baseVelocity(const SpatialVector& velocity) noexcept
+    {
+        baseVel_ = velocity;
+    }
+
+    [[nodiscard]]
+    SpatialVector baseVelocity() const noexcept
+    {
+        return baseVel_;
+    }
+
     [[nodiscard]]
     std::span<const float> q() const noexcept
     {
@@ -265,6 +279,14 @@ private:
     std::vector<float> qDDot_; // joint accelerations from the last computeAccelerations()
     int dofCount_{0};
     bool baseFixed_{true};
+    // Floating-base state (used only when !baseFixed_): the root link's spatial velocity /
+    // acceleration expressed in the base (body) frame — (angular; linear-at-origin). The base
+    // pose is base_; integrate() advances it from baseVel_, and the base's 6 DOFs solve as
+    // a₀ = −Iᴬ₀⁻¹·pᴬ₀ (the free root carries no constraint force).
+    SpatialVector baseVel_{};
+    SpatialVector baseAccel_{};
+    // Base velocity change from the last impulse response (for the floating-base seam).
+    SpatialVector baseDeltaVel_{};
 
     // Cached articulated-inertia factorization (geometry + mass only; independent of the
     // impulses applied during a solve), built by factorizeArticulatedInertia(). Per link:

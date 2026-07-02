@@ -1,0 +1,163 @@
+{
+  "asset": {
+    "version": "2.0",
+    "generator": "fireEngine physics_demos generate.py"
+  },
+  "scene": 0,
+  "scenes": [
+    {
+      "nodes": [
+        0,
+        2
+      ]
+    }
+  ],
+  "nodes": [
+    {
+      "name": "SingleJointRagdoll",
+      "skin": 0,
+      "extras": {
+        "Ragdoll": {
+          "Mass": 1.0,
+          "Radius": 0.05,
+          "BoneLength": 0.4,
+          "ConeTwist": false
+        }
+      },
+      "children": [
+        1
+      ]
+    },
+    {
+      "name": "root_joint",
+      "translation": [
+        0.0,
+        1.6,
+        0.0
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.08715574274765817,
+        0.9961946980917455
+      ]
+    },
+    {
+      "name": "Floor",
+      "mesh": 0,
+      "translation": [
+        0.0,
+        -0.25,
+        0.0
+      ],
+      "extras": {
+        "Physics": {
+          "BodyType": "Static",
+          "Shape": "Box",
+          "HalfExtents": [
+            4.0,
+            0.25,
+            4.0
+          ],
+          "Restitution": 0.0,
+          "Friction": 0.6
+        }
+      }
+    }
+  ],
+  "skins": [
+    {
+      "name": "SingleJointRagdollSkin",
+      "joints": [
+        1
+      ]
+    }
+  ],
+  "buffers": [
+    {
+      "byteLength": 648,
+      "uri": "data:application/octet-stream;base64,AACAQAAAgL4AAIDAAACAQAAAgD4AAIDAAACAQAAAgD4AAIBAAACAQAAAgL4AAIBAAACAwAAAgL4AAIBAAACAwAAAgD4AAIBAAACAwAAAgD4AAIDAAACAwAAAgL4AAIDAAACAwAAAgD4AAIDAAACAwAAAgD4AAIBAAACAQAAAgD4AAIBAAACAQAAAgD4AAIDAAACAwAAAgL4AAIBAAACAwAAAgL4AAIDAAACAQAAAgL4AAIDAAACAQAAAgL4AAIBAAACAQAAAgL4AAIBAAACAQAAAgD4AAIBAAACAwAAAgD4AAIBAAACAwAAAgL4AAIBAAACAwAAAgL4AAIDAAACAwAAAgD4AAIDAAACAQAAAgD4AAIDAAACAQAAAgL4AAIDAAACAPwAAAAAAAAAAAACAPwAAAAAAAAAAAACAPwAAAAAAAAAAAACAPwAAAAAAAAAAAACAvwAAAAAAAAAAAACAvwAAAAAAAAAAAACAvwAAAAAAAAAAAACAvwAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIC/AAAAAAAAAAAAAIC/AAAAAAAAAAAAAIC/AAAAAAAAAAAAAIC/AAABAAIAAAACAAMABAAFAAYABAAGAAcACAAJAAoACAAKAAsADAANAA4ADAAOAA8AEAARABIAEAASABMAFAAVABYAFAAWABcA"
+    }
+  ],
+  "bufferViews": [
+    {
+      "buffer": 0,
+      "byteOffset": 0,
+      "byteLength": 288,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 288,
+      "byteLength": 288,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 576,
+      "byteLength": 72,
+      "target": 34963
+    }
+  ],
+  "accessors": [
+    {
+      "bufferView": 0,
+      "componentType": 5126,
+      "count": 24,
+      "type": "VEC3",
+      "min": [
+        -4.0,
+        -0.25,
+        -4.0
+      ],
+      "max": [
+        4.0,
+        0.25,
+        4.0
+      ]
+    },
+    {
+      "bufferView": 1,
+      "componentType": 5126,
+      "count": 24,
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 2,
+      "componentType": 5123,
+      "count": 36,
+      "type": "SCALAR"
+    }
+  ],
+  "materials": [
+    {
+      "name": "FloorMat",
+      "doubleSided": true,
+      "pbrMetallicRoughness": {
+        "baseColorFactor": [
+          0.45,
+          0.45,
+          0.48,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.7
+      }
+    }
+  ],
+  "meshes": [
+    {
+      "name": "Floor",
+      "primitives": [
+        {
+          "attributes": {
+            "POSITION": 0,
+            "NORMAL": 1
+          },
+          "indices": 2,
+          "material": 0
+        }
+      ]
+    }
+  ]
+}
