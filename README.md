@@ -98,7 +98,6 @@ Physics can be authored in glTF through node `extras.Physics`. The loader create
 | `CompoundDemo.gltf` | An L-shaped body whose collider is a `Shape:"Compound"` of two boxes; its engine-aggregated centre of mass is offset toward the corner, so it rests stably on its bar instead of tipping. | `Demos.Compound.LShapeRestsOnFloor` |
 | `SingleJointRagdollDemo.gltf` | The smallest ragdoll-authored scene: one skinned joint tagged with `extras.Ragdoll`, producing one capsule body and no parent-child constraints. | `Ragdoll.GeneratedSingleJointDemoAssetRestsOnFloor` |
 | `TwoJointRagdollDemo.gltf` | A deliberately tiny skinned skeleton with two joints and one ragdoll constraint; used to verify the basic parent→child joint connection before scaling up to a humanoid graph. | `Ragdoll.GeneratedTwoJointDemoAssetStaysConnected` |
-| `RagdollDemo.gltf` | A generated 17-bone humanoid skeleton is lifted above a Static floor and tagged with `extras.Ragdoll`, so loading the scene builds/activates a capsule-and-cone-twist ragdoll that drops, crumples, and settles. | `Ragdoll.GeneratedDemoAssetSettlesOnFloor` |
 
 Run a demo (add `--debug-physics` to overlay collider/contact wireframes); paths are relative to `build/`:
 
@@ -115,7 +114,6 @@ cd build
 ./fireEngineApp physics_demos/CompoundDemo.gltf      skybox.hdr --debug-physics
 ./fireEngineApp physics_demos/SingleJointRagdollDemo.gltf skybox.hdr --debug-physics
 ./fireEngineApp physics_demos/TwoJointRagdollDemo.gltf skybox.hdr --debug-physics
-./fireEngineApp physics_demos/RagdollDemo.gltf       skybox.hdr --debug-physics
 ```
 
 Run all the demo behaviour tests headlessly:

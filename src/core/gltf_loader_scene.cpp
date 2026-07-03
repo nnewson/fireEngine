@@ -130,7 +130,6 @@ Node* GltfLoader::loadScene(const std::string& path, SceneGraph& scene, Resource
     // it); the per-frame update() recomputes it afterwards.
     if (!ragdollNodeConfigs.empty())
     {
-        scene.resolve();
         for (const auto& [nodeIndex, params] : ragdollNodeConfigs)
         {
             const auto& gltfNode = asset.nodes[nodeIndex];
@@ -148,6 +147,12 @@ Node* GltfLoader::loadScene(const std::string& path, SceneGraph& scene, Resource
                 const auto it = nodeMap.find(jointNodeIndex);
                 if (it != nodeMap.end())
                 {
+                    // Seed the ragdoll from the BIND pose: an *animated* skeleton's joint nodes
+                    // aren't at their bind transform at load time (the animation hasn't been
+                    // evaluated — they sit at identity), so composing them would collapse every
+                    // bone onto the armature origin and build a degenerate ragdoll. Reset each
+                    // joint to its glTF (bind) TRS first.
+                    applyTRS(asset.nodes[jointNodeIndex], *it->second);
                     bones.push_back(it->second);
                 }
             }
@@ -155,6 +160,7 @@ Node* GltfLoader::loadScene(const std::string& path, SceneGraph& scene, Resource
             {
                 continue;
             }
+            scene.resolve(); // compose the just-restored bind pose before seeding the ragdoll
             Ragdoll ragdoll = params.articulated ? Ragdoll::makeArticulated(physics, bones, params)
                                                  : Ragdoll::make(physics, bones, params);
             ragdoll.activate();

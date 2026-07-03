@@ -344,6 +344,10 @@ private:
     SpatialVector baseAccel_{};
     // Base velocity change from the last impulse response (for the floating-base seam).
     SpatialVector baseDeltaVel_{};
+    // Passive joint damping from the last computeAccelerations(); integrateVelocities() applies the
+    // same rate to the floating base (implicit decay) so a settled ragdoll doesn't drift/slide —
+    // the joints are damped by an explicit −c·q̇ torque, but the free 6-DOF base had nothing.
+    float jointDamping_{0.0f};
 
     // Cached articulated-inertia factorization (geometry + mass only; independent of the
     // impulses applied during a solve), built by factorizeArticulatedInertia(). Per link:

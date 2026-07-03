@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <memory>
@@ -593,6 +594,41 @@ void FireEngine::mainLoop()
             if (ragdoll.active() && ragdoll.articulated())
             {
                 ragdoll.syncNodes();
+            }
+        }
+
+        // Ragdoll diagnostic (FE_RAGDOLL_DBG=1): once a second, report each articulated ragdoll's
+        // max joint rate + base speed so the app can be compared directly against the headless
+        // settle test — the two must agree or the test isn't measuring what ships.
+        if (std::getenv("FE_RAGDOLL_DBG") != nullptr)
+        {
+            static int frame = 0;
+            if (++frame % 60 == 0)
+            {
+                for (const Ragdoll& ragdoll : ragdolls_)
+                {
+                    if (!ragdoll.articulated())
+                    {
+                        continue;
+                    }
+                    const Articulation* art = physics_.articulation(ragdoll.articulation());
+                    if (art == nullptr)
+                    {
+                        continue;
+                    }
+                    float jr = 0.0f;
+                    for (const float v : art->qDot())
+                    {
+                        jr = std::max(jr, std::abs(v));
+                    }
+                    std::fprintf(stderr,
+                                 "[ragdoll] frame %d maxJointRate=%.3f baseLin=%.3f baseAng=%.3f "
+                                 "baseY=%.3f\n",
+                                 frame, static_cast<double>(jr),
+                                 static_cast<double>(art->baseVelocity().linear.magnitude()),
+                                 static_cast<double>(art->baseVelocity().angular.magnitude()),
+                                 static_cast<double>(art->baseTransform().translation.y()));
+                }
             }
         }
 

@@ -82,6 +82,15 @@ inline constexpr float kSpeculativeDistance = 0.02f;
 // velocities) lets these sweeps iterate to convergence within one substep.
 inline constexpr int kArticulationVelocityIterations = 4;
 
+// Settle assist for a reduced-coordinate ragdoll's floating base: the joints damp via an explicit
+// −c·q̇ torque, but the free 6-DOF root has none, so a settled ragdoll keeps its residual
+// horizontal drift and slides. A *linear* base-velocity decay fixes it (angular damping
+// destabilises a violent impact and is not applied). The rate ramps up once the base is slow
+// (below kBaseSettleSpeed) so a resting ragdoll stops quickly, while a fast (falling) base is left
+// almost untouched — no floaty fall.
+inline constexpr float kBaseSettleSpeed = 0.3f;   // m/s — below this the base is "settling"
+inline constexpr float kBaseSettleDamping = 8.0f; // 1/s — strong linear decay when settling
+
 // Velocity-level cone-twist joint-limit push-out (solveJointLimits): close a fraction
 // kJointLimitErp of the angular over-limit per step, capped at kJointLimitMaxPush rad/s so a
 // deep violation can't fling the joint back. A projection, not a spring — stable at any inertia.

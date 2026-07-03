@@ -1,11 +1,13 @@
 #include <fire_engine/physics/articulation.hpp>
 
+#include <algorithm>
 #include <cassert>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 
 #include <fire_engine/math/quaternion.hpp>
+#include <fire_engine/physics/physics_constants.hpp>
 
 namespace fire_engine
 {
@@ -293,6 +295,7 @@ void Articulation::factorizeArticulatedInertia()
 
 void Articulation::computeAccelerations(const Vec3& gravity, float jointDamping)
 {
+    jointDamping_ = jointDamping;  // integrateVelocities() applies the same rate to the base
     factorizeArticulatedInertia(); // FK + geometry/inertia factorization (xup/xforce/ia/dInv/…)
     const std::size_t n = links_.size();
     const bool rootFixed = baseFixed_;
@@ -921,6 +924,16 @@ void Articulation::integrateVelocities(float dt)
     if (!baseFixed_)
     {
         baseVel_ = baseVel_ + baseAccel_ * dt;
+        // Settle assist on the free base's *linear* velocity: strongly damp once it is slow so a
+        // resting ragdoll stops drifting, gently (or not) while fast so the fall is untouched. Base
+        // *angular* is deliberately never damped — that blows up a near-planar articulation. Gated
+        // on jointDamping_>0 so a genuinely free articulation still free-falls at g.
+        if (jointDamping_ > 0.0f)
+        {
+            const float speed = baseVel_.linear.magnitude();
+            const float c = speed < kBaseSettleSpeed ? kBaseSettleDamping : jointDamping_;
+            baseVel_.linear = baseVel_.linear * (1.0f / (1.0f + c * dt));
+        }
     }
 }
 

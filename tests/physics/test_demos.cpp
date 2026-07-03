@@ -526,7 +526,3 @@ TEST_CASE("Demos.Query.RaycastAndOverlapFindBodies", "[Demos]")
     CHECK(world.overlapSphere(origin, 5.0f).size() == 2);
     CHECK(world.overlapSphere(origin, 1.0f).empty());
 }
-
-// RagdollDemo.gltf is covered in tests/scene/test_ragdoll.cpp because it exercises the
-// scene skeleton/ragdoll binding rather than a pure PhysicsWorld setup like these rigid-body
-// demos.
