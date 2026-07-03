@@ -3,6 +3,7 @@
 #include <cassert>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 
 #include <fire_engine/math/quaternion.hpp>
 
@@ -29,49 +30,6 @@ namespace
         r = d.inverse();
     }
     return r;
-}
-
-// Passive cone-twist restoring torque (joint frame) for a spherical joint at rotation `q`
-// with joint-frame angular velocity `omega`. Zero inside the swing cone (`swingLimit` about
-// `twistAxis`) and the ±`twistLimit` twist; past either, a spring (`k`·excess) + damping
-// pushes back. Returns the generalized torque on the 3 spherical DOFs. (Assumes the child
-// frame coincides with the joint rotation frame — jointToChild a pure rotation about it.)
-[[nodiscard]] Vec3 coneTwistTorque(const Quaternion& q, const Vec3& omega, const Vec3& twistAxis,
-                                   float swingLimit, float twistLimit, float k,
-                                   float damping) noexcept
-{
-    // Swing-twist decomposition about twistAxis: q = swing · twist.
-    const float d = q.x() * twistAxis.x() + q.y() * twistAxis.y() + q.z() * twistAxis.z();
-    const Quaternion twist = Quaternion::normalise(
-        Quaternion{twistAxis.x() * d, twistAxis.y() * d, twistAxis.z() * d, q.w()});
-    const Quaternion swing = q * twist.conjugate();
-
-    Vec3 torque{};
-
-    // Swing cone: push back once the twist axis leaves the cone half-angle.
-    const Vec3 swingVec{swing.x(), swing.y(), swing.z()};
-    const float swingSin = swingVec.magnitude();
-    if (swingSin > 1.0e-5f)
-    {
-        const float swingAngle = 2.0f * std::atan2(swingSin, swing.w());
-        if (swingAngle > swingLimit)
-        {
-            const Vec3 axis = swingVec * (1.0f / swingSin);
-            torque = torque + axis * (-k * (swingAngle - swingLimit) -
-                                      damping * Vec3::dotProduct(omega, axis));
-        }
-    }
-
-    // Twist: clamp to ±twistLimit about the twist axis.
-    const float twistAngle = 2.0f * std::atan2(d, q.w());
-    if (twistAngle > twistLimit || twistAngle < -twistLimit)
-    {
-        const float excess =
-            twistAngle > twistLimit ? twistAngle - twistLimit : twistAngle + twistLimit;
-        torque = torque + twistAxis * (-k * excess - damping * Vec3::dotProduct(omega, twistAxis));
-    }
-
-    return torque;
 }
 
 // Body-frame rotation-vector error current→target (2·log of q⁻¹·q_target, small-angle exact),
@@ -131,8 +89,6 @@ int Articulation::addLink(const ArticulationLinkDesc& desc)
     link.comLocal = desc.comLocal;
     link.swingLimit = desc.swingLimit;
     link.twistLimit = desc.twistLimit;
-    link.limitStiffness = desc.limitStiffness;
-    link.limitDamping = desc.limitDamping;
     link.driveTarget = desc.driveTarget;
     link.driveTargetRotation = desc.driveTargetRotation;
     link.driveStiffness = desc.driveStiffness;
@@ -171,6 +127,26 @@ void Articulation::qDot(int dof, float value) noexcept
 void Articulation::jointRotation(std::size_t link, const Quaternion& rotation) noexcept
 {
     links_[link].jointRotation = Quaternion::normalise(rotation);
+}
+
+namespace
+{
+[[nodiscard]] std::uint64_t selfCollisionKey(std::size_t a, std::size_t b) noexcept
+{
+    const std::uint64_t lo = a < b ? a : b;
+    const std::uint64_t hi = a < b ? b : a;
+    return (lo << 20) | hi;
+}
+} // namespace
+
+void Articulation::excludeSelfCollision(std::size_t a, std::size_t b)
+{
+    selfCollisionExcluded_.insert(selfCollisionKey(a, b));
+}
+
+bool Articulation::selfCollisionExcluded(std::size_t a, std::size_t b) const
+{
+    return selfCollisionExcluded_.count(selfCollisionKey(a, b)) != 0;
 }
 
 void Articulation::forwardKinematics()
@@ -308,6 +284,11 @@ void Articulation::factorizeArticulatedInertia()
             artInertia_[p] = artInertia_[p] + xforce_[i] * ia_[i] * xup_[i];
         }
     }
+
+    // Cache the floating-base articulated-inertia inverse: it is constant for this factorization
+    // but the base solve (a₀ = −Iᴬ₀⁻¹·pᴬ₀) runs on every impulse response — inverting the 6×6 per
+    // call dominated the solve. One inverse per substep instead of thousands.
+    baseInertiaInv_ = baseFixed_ ? SpatialMatrix{} : artInertia_[0].inverse();
 }
 
 void Articulation::computeAccelerations(const Vec3& gravity, float jointDamping)
@@ -320,7 +301,8 @@ void Articulation::computeAccelerations(const Vec3& gravity, float jointDamping)
     std::vector<SpatialVector> velProd(n); // velocity-product accel c = v × (S q̇)
     std::vector<SpatialVector> bias(n);    // articulated bias pᴬ (gravity + velocity product)
     std::vector<SpatialVector> accel(n);
-    std::vector<std::array<float, 3>> uForce(n);
+    std::vector<std::array<float, 3>>& uForce = scratchUForce_;
+    uForce.assign(n, std::array<float, 3>{});
 
     // Floating base: seed the root with its own spatial velocity + gravity/velocity-product
     // bias (Pass 2 folds the children's bias in). Fixed base leaves everything zero.
@@ -369,17 +351,15 @@ void Articulation::computeAccelerations(const Vec3& gravity, float jointDamping)
         const int nd = link.dofCount;
         const auto off = static_cast<std::size_t>(link.dofOffset);
 
-        // Passive joint torque per DOF: global damping + cone-twist limit + drive spring.
+        // Passive joint torque per DOF: global damping + drive spring. Cone-twist LIMITS are no
+        // longer a torque here — a stiff limit spring on a low-inertia (small-bone) joint blows
+        // up under explicit Euler; limits are now a velocity-level constraint (solveJointLimits),
+        // solved with the contacts.
         float jointTorque[3]{0.0f, 0.0f, 0.0f};
         if (link.joint == ArticulationJointType::Spherical)
         {
             const Vec3 omega{qDot_[off], qDot_[off + 1], qDot_[off + 2]};
             Vec3 t{};
-            if (link.limitStiffness > 0.0f)
-            {
-                t = coneTwistTorque(link.jointRotation, omega, link.jointAxis, link.swingLimit,
-                                    link.twistLimit, link.limitStiffness, link.limitDamping);
-            }
             if (link.driveStiffness > 0.0f)
             {
                 // Spring toward the target orientation (body-frame error) − drive damping.
@@ -425,7 +405,7 @@ void Articulation::computeAccelerations(const Vec3& gravity, float jointDamping)
     // a₀ = −Iᴬ₀⁻¹·pᴬ₀ (the 6×6 solve). A fixed base stays at rest.
     if (!rootFixed)
     {
-        accel[0] = artInertia_[0].inverse() * (bias[0] * -1.0f);
+        accel[0] = baseInertiaInv_ * (bias[0] * -1.0f);
     }
     baseAccel_ = accel[0];
 
@@ -481,10 +461,19 @@ void Articulation::computeLinkVelocities()
         // link origin adds no linear velocity there).
         const Vec3 offset = linkWorld_[i].translation - linkWorld_[p].translation;
         Vec3 angular = parentVel.angular;
+        const auto off = static_cast<std::size_t>(link.dofOffset);
         if (link.joint == ArticulationJointType::Revolute)
         {
             const Vec3 worldAxis = linkWorld_[i].rotation.rotate(link.jointAxis);
-            angular = angular + worldAxis * qDot_[static_cast<std::size_t>(link.dofOffset)];
+            angular = angular + worldAxis * qDot_[off];
+        }
+        else if (link.joint == ArticulationJointType::Spherical)
+        {
+            // The spherical joint's three velocities are the joint angular rate in the child
+            // frame — rotate to world and add. (Omitting this dropped the whole spherical
+            // joint's motion from pointVelocity, so the contact solve read stale velocities.)
+            const Vec3 jointOmega{qDot_[off], qDot_[off + 1], qDot_[off + 2]};
+            angular = angular + linkWorld_[i].rotation.rotate(jointOmega);
         }
         const Vec3 linear = parentVel.linear + Vec3::crossProduct(parentVel.angular, offset);
         linkVelWorld_[i] = SpatialVector{angular, linear};
@@ -509,11 +498,13 @@ Vec3 Articulation::impulseResponse(std::size_t link, const Vec3& worldPoint,
     const Vec3 rLink = rot.conjugate().rotate(worldPoint - linkWorld_[link].translation);
     // Bias force pᴬ = −(applied impulse), matching the acceleration ABA where an external
     // force enters the bias with a minus sign; uForce = −Sᵀpᴬ then carries the right sign.
-    std::vector<SpatialVector> bias(n, SpatialVector{});
+    std::vector<SpatialVector>& bias = scratchBias_;
+    bias.assign(n, SpatialVector{});
     bias[link] = SpatialVector{Vec3::crossProduct(rLink, fLink), fLink} * -1.0f;
 
     // Inward pass: fold the bias toward the root, recording each joint's uForce = −Sᵀpᴬ per DOF.
-    std::vector<std::array<float, 3>> uForce(n);
+    std::vector<std::array<float, 3>>& uForce = scratchUForce_;
+    uForce.assign(n, std::array<float, 3>{});
     for (std::size_t i = n - 1; i >= 1; --i)
     {
         const Link& lk = links_[i];
@@ -542,14 +533,16 @@ Vec3 Articulation::impulseResponse(std::size_t link, const Vec3& worldPoint,
     }
 
     // Base velocity delta: a floating root responds Δv₀ = −Iᴬ₀⁻¹·Y₀ to the folded impulse.
-    std::vector<SpatialVector> dv(n, SpatialVector{});
+    std::vector<SpatialVector>& dv = scratchDv_;
+    dv.assign(n, SpatialVector{});
     if (!baseFixed_)
     {
-        dv[0] = artInertia_[0].inverse() * (bias[0] * -1.0f);
+        dv[0] = baseInertiaInv_ * (bias[0] * -1.0f);
     }
 
     // Outward pass: base velocity delta down to the joint velocity deltas Δq̇.
-    std::vector<float> dq(static_cast<std::size_t>(dofCount_), 0.0f);
+    std::vector<float>& dq = scratchDq_;
+    dq.assign(static_cast<std::size_t>(dofCount_), 0.0f);
     for (std::size_t i = 1; i < n; ++i)
     {
         const Link& lk = links_[i];
@@ -589,6 +582,21 @@ Vec3 Articulation::impulseResponse(std::size_t link, const Vec3& worldPoint,
             qDot_[static_cast<std::size_t>(k)] += dq[static_cast<std::size_t>(k)];
         }
         baseVel_ = baseVel_ + dv[0]; // floating base absorbs its share of the impulse
+
+        // Fold this impulse's per-link velocity change into the cached world link velocities so
+        // an *iterated* solve sees it immediately — without recomputing from qDot via
+        // computeLinkVelocities(), whose classical transport differs from this Plücker response
+        // and drifts under repeated intra-substep refresh. dv[i] is the link-frame spatial
+        // change at the link origin; rotate to world (same frame linkVelWorld_ is stored in).
+        if (linkVelWorld_.size() == n)
+        {
+            for (std::size_t i = 0; i < n; ++i)
+            {
+                const Quaternion& r = linkWorld_[i].rotation;
+                linkVelWorld_[i].angular = linkVelWorld_[i].angular + r.rotate(dv[i].angular);
+                linkVelWorld_[i].linear = linkVelWorld_[i].linear + r.rotate(dv[i].linear);
+            }
+        }
     }
     baseDeltaVel_ = dv[0];
     return dvPointWorld;
@@ -609,20 +617,319 @@ void Articulation::applyImpulse(std::size_t link, const Vec3& worldPoint, const 
     impulseResponse(link, worldPoint, worldImpulse, true);
 }
 
-void Articulation::integrate(float dt)
+Vec3 Articulation::jointImpulseResponse(std::size_t link, const Vec3& genImpulse, bool commit)
 {
-    // Semi-implicit Euler (velocity first), matching the rigid-body integrator.
+    // Response to a *generalized* impulse on link `link`'s spherical DOFs (the joint-limit path),
+    // as opposed to a point impulse on a link body. Same M⁻¹ articulated machinery as
+    // impulseResponse, but the impulse enters as uForce at `link` (a generalized force) with no
+    // point bias. Returns the resulting joint-rate change Δq̇ on `link`'s 3 DOFs; a floating base
+    // recoils, exactly conserving momentum (so clamping a joint rate stays physical).
+    const std::size_t n = links_.size();
+    const Link& target = links_[link];
+    if (target.joint != ArticulationJointType::Spherical)
+    {
+        return Vec3{};
+    }
+    const auto targetOff = static_cast<std::size_t>(target.dofOffset);
+
+    std::vector<SpatialVector>& bias = scratchBias_;
+    bias.assign(n, SpatialVector{});
+    std::vector<std::array<float, 3>>& uForce = scratchUForce_;
+    uForce.assign(n, std::array<float, 3>{});
+    for (std::size_t i = n - 1; i >= 1; --i)
+    {
+        const Link& lk = links_[i];
+        const auto p = static_cast<std::size_t>(lk.parent);
+        const int nd = lk.dofCount;
+        for (int k = 0; k < nd; ++k)
+        {
+            const float ext = (i == link) ? (k == 0   ? genImpulse.x()
+                                             : k == 1 ? genImpulse.y()
+                                                      : genImpulse.z())
+                                          : 0.0f;
+            uForce[i][static_cast<std::size_t>(k)] =
+                ext - subspace_[i][static_cast<std::size_t>(k)].dot(bias[i]);
+        }
+        std::array<float, 3> g{};
+        for (int k = 0; k < nd; ++k)
+        {
+            for (int j = 0; j < nd; ++j)
+            {
+                g[static_cast<std::size_t>(k)] +=
+                    dInv_[i][k, j] * uForce[i][static_cast<std::size_t>(j)];
+            }
+        }
+        SpatialVector pa = bias[i];
+        for (int k = 0; k < nd; ++k)
+        {
+            pa = pa + u_[i][static_cast<std::size_t>(k)] * g[static_cast<std::size_t>(k)];
+        }
+        bias[p] = bias[p] + xforce_[i] * pa;
+    }
+
+    std::vector<SpatialVector>& dv = scratchDv_;
+    dv.assign(n, SpatialVector{});
+    if (!baseFixed_)
+    {
+        dv[0] = baseInertiaInv_ * (bias[0] * -1.0f);
+    }
+
+    std::vector<float>& dq = scratchDq_;
+    dq.assign(static_cast<std::size_t>(dofCount_), 0.0f);
+    for (std::size_t i = 1; i < n; ++i)
+    {
+        const Link& lk = links_[i];
+        const auto p = static_cast<std::size_t>(lk.parent);
+        const int nd = lk.dofCount;
+        const auto off = static_cast<std::size_t>(lk.dofOffset);
+        const SpatialVector dvPrime = xup_[i] * dv[p];
+        std::array<float, 3> e{};
+        for (int j = 0; j < nd; ++j)
+        {
+            e[static_cast<std::size_t>(j)] = uForce[i][static_cast<std::size_t>(j)] -
+                                             u_[i][static_cast<std::size_t>(j)].dot(dvPrime);
+        }
+        dv[i] = dvPrime;
+        for (int k = 0; k < nd; ++k)
+        {
+            float delta = 0.0f;
+            for (int j = 0; j < nd; ++j)
+            {
+                delta += dInv_[i][k, j] * e[static_cast<std::size_t>(j)];
+            }
+            dq[off + static_cast<std::size_t>(k)] = delta;
+            dv[i] = dv[i] + subspace_[i][static_cast<std::size_t>(k)] * delta;
+        }
+    }
+
+    const Vec3 dOmega{dq[targetOff], dq[targetOff + 1], dq[targetOff + 2]};
+    if (commit)
+    {
+        for (int k = 0; k < dofCount_; ++k)
+        {
+            qDot_[static_cast<std::size_t>(k)] += dq[static_cast<std::size_t>(k)];
+        }
+        baseVel_ = baseVel_ + dv[0];
+        if (linkVelWorld_.size() == n)
+        {
+            for (std::size_t i = 0; i < n; ++i)
+            {
+                const Quaternion& r = linkWorld_[i].rotation;
+                linkVelWorld_[i].angular = linkVelWorld_[i].angular + r.rotate(dv[i].angular);
+                linkVelWorld_[i].linear = linkVelWorld_[i].linear + r.rotate(dv[i].linear);
+            }
+        }
+    }
+    return dOmega;
+}
+
+Vec3 Articulation::pairImpulseResponse(std::size_t linkA, const Vec3& worldPointA,
+                                       std::size_t linkB, const Vec3& worldPointB,
+                                       const Vec3& worldImpulse, bool commit)
+{
+    // Response to an equal-and-opposite impulse pair — +worldImpulse at linkA's point,
+    // −worldImpulse at linkB's point — through one M⁻¹ pass. The self-collision primitive:
+    // a contact between two links of the *same* articulation. Returns the change in the RELATIVE
+    // point velocity (Δ(vA − vB)); a floating base conserves momentum (the pair is internal).
+    const std::size_t n = links_.size();
+
+    // Contact offsets in each link's frame (used both to seed the bias and to read the response).
+    const Quaternion& rotA = linkWorld_[linkA].rotation;
+    const Quaternion& rotB = linkWorld_[linkB].rotation;
+    const Vec3 rLinkA = rotA.conjugate().rotate(worldPointA - linkWorld_[linkA].translation);
+    const Vec3 rLinkB = rotB.conjugate().rotate(worldPointB - linkWorld_[linkB].translation);
+
+    std::vector<SpatialVector>& bias = scratchBias_;
+    bias.assign(n, SpatialVector{});
+    const auto seed =
+        [&](std::size_t link, const Quaternion& rot, const Vec3& rLink, const Vec3& imp)
+    {
+        const Vec3 fLink = rot.conjugate().rotate(imp);
+        bias[link] = bias[link] + SpatialVector{Vec3::crossProduct(rLink, fLink), fLink} * -1.0f;
+    };
+    seed(linkA, rotA, rLinkA, worldImpulse);
+    seed(linkB, rotB, rLinkB, worldImpulse * -1.0f);
+
+    std::vector<std::array<float, 3>>& uForce = scratchUForce_;
+    uForce.assign(n, std::array<float, 3>{});
+    for (std::size_t i = n - 1; i >= 1; --i)
+    {
+        const Link& lk = links_[i];
+        const auto p = static_cast<std::size_t>(lk.parent);
+        const int nd = lk.dofCount;
+        for (int k = 0; k < nd; ++k)
+        {
+            uForce[i][static_cast<std::size_t>(k)] =
+                -subspace_[i][static_cast<std::size_t>(k)].dot(bias[i]);
+        }
+        std::array<float, 3> g{};
+        for (int k = 0; k < nd; ++k)
+        {
+            for (int j = 0; j < nd; ++j)
+            {
+                g[static_cast<std::size_t>(k)] +=
+                    dInv_[i][k, j] * uForce[i][static_cast<std::size_t>(j)];
+            }
+        }
+        SpatialVector pa = bias[i];
+        for (int k = 0; k < nd; ++k)
+        {
+            pa = pa + u_[i][static_cast<std::size_t>(k)] * g[static_cast<std::size_t>(k)];
+        }
+        bias[p] = bias[p] + xforce_[i] * pa;
+    }
+
+    std::vector<SpatialVector>& dv = scratchDv_;
+    dv.assign(n, SpatialVector{});
+    if (!baseFixed_)
+    {
+        dv[0] = baseInertiaInv_ * (bias[0] * -1.0f);
+    }
+
+    std::vector<float>& dq = scratchDq_;
+    dq.assign(static_cast<std::size_t>(dofCount_), 0.0f);
+    for (std::size_t i = 1; i < n; ++i)
+    {
+        const Link& lk = links_[i];
+        const auto p = static_cast<std::size_t>(lk.parent);
+        const int nd = lk.dofCount;
+        const auto off = static_cast<std::size_t>(lk.dofOffset);
+        const SpatialVector dvPrime = xup_[i] * dv[p];
+        std::array<float, 3> e{};
+        for (int j = 0; j < nd; ++j)
+        {
+            e[static_cast<std::size_t>(j)] = uForce[i][static_cast<std::size_t>(j)] -
+                                             u_[i][static_cast<std::size_t>(j)].dot(dvPrime);
+        }
+        dv[i] = dvPrime;
+        for (int k = 0; k < nd; ++k)
+        {
+            float delta = 0.0f;
+            for (int j = 0; j < nd; ++j)
+            {
+                delta += dInv_[i][k, j] * e[static_cast<std::size_t>(j)];
+            }
+            dq[off + static_cast<std::size_t>(k)] = delta;
+            dv[i] = dv[i] + subspace_[i][static_cast<std::size_t>(k)] * delta;
+        }
+    }
+
+    // Resulting world velocity change of each contact point, and their difference.
+    const auto pointVel = [&](std::size_t link, const Quaternion& rot, const Vec3& rLink)
+    {
+        const SpatialVector& d = dv[link];
+        return rot.rotate(d.linear + Vec3::crossProduct(d.angular, rLink));
+    };
+    const Vec3 dvRel = pointVel(linkA, rotA, rLinkA) - pointVel(linkB, rotB, rLinkB);
+
+    if (commit)
+    {
+        for (int k = 0; k < dofCount_; ++k)
+        {
+            qDot_[static_cast<std::size_t>(k)] += dq[static_cast<std::size_t>(k)];
+        }
+        baseVel_ = baseVel_ + dv[0];
+        if (linkVelWorld_.size() == n)
+        {
+            for (std::size_t i = 0; i < n; ++i)
+            {
+                const Quaternion& r = linkWorld_[i].rotation;
+                linkVelWorld_[i].angular = linkVelWorld_[i].angular + r.rotate(dv[i].angular);
+                linkVelWorld_[i].linear = linkVelWorld_[i].linear + r.rotate(dv[i].linear);
+            }
+        }
+    }
+    return dvRel;
+}
+
+void Articulation::solveJointLimits(float invH, bool useBias, float erp, float maxPush)
+{
+    for (std::size_t i = 1; i < links_.size(); ++i)
+    {
+        const Link& link = links_[i];
+        if (link.joint != ArticulationJointType::Spherical)
+        {
+            continue;
+        }
+        if (!(link.swingLimit < pi || link.twistLimit < pi)) // no limit configured
+        {
+            continue;
+        }
+        const auto off = static_cast<std::size_t>(link.dofOffset);
+        const Quaternion q = link.jointRotation;
+        const Vec3 twistAxis = link.jointAxis;
+
+        // Unilateral velocity-level limit along `axis` (child frame) violated by `excess`: an
+        // impulse through the articulated response drives the joint rate along `axis` down to a
+        // bounded push-back target (−min(excess·erp/h, maxPush) when biased, 0 on relax), but
+        // only if it is currently increasing the violation faster than that.
+        const auto applyLimit = [&](const Vec3& axis, float excess)
+        {
+            const Vec3 omega{qDot_[off], qDot_[off + 1], qDot_[off + 2]};
+            const float cRate = Vec3::dotProduct(omega, axis);
+            const float target = useBias ? -std::min(excess * erp * invH, maxPush) : 0.0f;
+            if (cRate <= target)
+            {
+                return;
+            }
+            const float invEff = Vec3::dotProduct(axis, jointImpulseResponse(i, axis, false));
+            if (invEff <= 1.0e-9f)
+            {
+                return;
+            }
+            jointImpulseResponse(i, axis * ((target - cRate) / invEff), true);
+        };
+
+        // Swing-twist decomposition about the twist axis: q = swing · twist.
+        const float d = q.x() * twistAxis.x() + q.y() * twistAxis.y() + q.z() * twistAxis.z();
+        const Quaternion twist = Quaternion::normalise(
+            Quaternion{twistAxis.x() * d, twistAxis.y() * d, twistAxis.z() * d, q.w()});
+        const Quaternion swing = q * twist.conjugate();
+
+        const Vec3 swingVec{swing.x(), swing.y(), swing.z()};
+        const float swingSin = swingVec.magnitude();
+        if (swingSin > 1.0e-5f)
+        {
+            const float swingAngle = 2.0f * std::atan2(swingSin, swing.w());
+            if (swingAngle > link.swingLimit)
+            {
+                applyLimit(swingVec * (1.0f / swingSin), swingAngle - link.swingLimit);
+            }
+        }
+
+        const float twistAngle = 2.0f * std::atan2(d, q.w());
+        if (twistAngle > link.twistLimit)
+        {
+            applyLimit(twistAxis, twistAngle - link.twistLimit);
+        }
+        else if (twistAngle < -link.twistLimit)
+        {
+            applyLimit(twistAxis * -1.0f, -link.twistLimit - twistAngle);
+        }
+    }
+}
+
+void Articulation::integrateVelocities(float dt)
+{
+    // Semi-implicit Euler, velocity half: advance generalized + base velocities from the
+    // accelerations. Split from the position half so a TGS contact solve can run *between* them
+    // (bias velocity applied here → moved into position by integratePositions → relaxed away).
     for (int i = 0; i < dofCount_; ++i)
     {
         qDot_[static_cast<std::size_t>(i)] += qDDot_[static_cast<std::size_t>(i)] * dt;
     }
-
-    // Floating base: advance the 6-DOF root velocity, then its pose. baseVel_ is body-frame,
-    // so the orientation right-multiplies (like a spherical joint) and the origin translates
-    // by R·v (the base-frame linear velocity rotated to world).
     if (!baseFixed_)
     {
         baseVel_ = baseVel_ + baseAccel_ * dt;
+    }
+}
+
+void Articulation::integratePositions(float dt)
+{
+    // Position half: advance the base pose and each joint's position from the current velocity.
+    if (!baseFixed_)
+    {
+        // baseVel_ is body-frame: the origin translates by R·v, the orientation right-multiplies.
         const Vec3 worldLinear = base_.rotation.rotate(baseVel_.linear);
         base_.translation = base_.translation + worldLinear * dt;
         const float angle = baseVel_.angular.magnitude() * dt;
@@ -633,9 +940,9 @@ void Articulation::integrate(float dt)
                 Quaternion::normalise(base_.rotation * Quaternion::fromAxisAngle(axis, angle));
         }
     }
-    // Advance each joint's position from its (updated) velocity. A revolute q integrates
-    // linearly; a spherical joint's quaternion advances by its angular velocity via the
-    // exponential map (stable, re-normalised) since its q̇ *is* the joint-frame angular rate.
+    // A revolute q integrates linearly; a spherical joint's quaternion advances by its angular
+    // velocity via the exponential map (stable, re-normalised) since its q̇ *is* the joint-frame
+    // angular rate, right-multiplied (a world-frame left-multiply drifts energy out-of-plane).
     for (Link& link : links_)
     {
         if (link.joint == ArticulationJointType::Revolute)
@@ -645,9 +952,6 @@ void Articulation::integrate(float dt)
         }
         else if (link.joint == ArticulationJointType::Spherical)
         {
-            // q̇ is the angular velocity in the *child* (body) frame, so the joint quaternion
-            // advances by right multiplication R·Δ (Quaternion::integrate left-multiplies, a
-            // world-frame convention — that would drift energy for out-of-plane motion).
             const auto off = static_cast<std::size_t>(link.dofOffset);
             const Vec3 omega{qDot_[off], qDot_[off + 1], qDot_[off + 2]};
             const float angle = omega.magnitude() * dt;
@@ -659,6 +963,14 @@ void Articulation::integrate(float dt)
             }
         }
     }
+}
+
+void Articulation::integrate(float dt)
+{
+    // Convenience for callers without a contact solve (free dynamics / tests): the two halves
+    // back-to-back are the original semi-implicit Euler step.
+    integrateVelocities(dt);
+    integratePositions(dt);
 }
 
 } // namespace fire_engine

@@ -6,6 +6,15 @@ project(fire_engine
     LANGUAGES CXX
 )
 
+# Optimize by default. With no explicit CMAKE_BUILD_TYPE the compiler defaults to -O0, which
+# leaves all the math (Vec3/Mat3/SpatialVector accessors + ctors) as un-inlined function calls —
+# ~20x slower, enough to make the physics (e.g. an articulated ragdoll) miss real-time. Apply -O2
+# WITHOUT -DNDEBUG so the Vulkan validation layers + asserts still run (see CLAUDE.md). An explicit
+# build type (e.g. -DCMAKE_BUILD_TYPE=Debug for -O0 -g) overrides this.
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+    add_compile_options(-O2)
+endif()
+
 # --- Dependencies -------------------------------------------------------
 
 find_package(Vulkan REQUIRED)

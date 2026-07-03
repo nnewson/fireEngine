@@ -26,6 +26,10 @@ struct RagdollParams
     bool coneTwist{true};
     float swingLimit{0.7f}; // cone half-angle (radians, ~40°)
     float twistLimit{0.5f}; // ± twist (radians)
+    // Build a reduced-coordinate articulation (makeArticulated) instead of maximal-coordinate
+    // rigid bodies + joints (make). Joint error is zero by construction, so a complex skeleton
+    // settles where the maximal chain limit-cycles — needed for a full humanoid like CesiumMan.
+    bool articulated{false};
     // Bones share one collision layer and mask it out of their own collisions, so
     // adjacent (overlapping) capsules don't fight the joints — but still collide
     // with everything else (floors, props). Default: bit 1, all-but-self.
@@ -48,8 +52,44 @@ public:
     static Ragdoll make(PhysicsWorld& physics, std::span<Node* const> bones,
                         const RagdollParams& params = {});
 
+    // Reduced-coordinate variant (Phase F): binds the bones to a single `Articulation`
+    // instead of N rigid bodies + joints — a floating-base pelvis (the root bone), one
+    // spherical joint per child bone (seeded from the bind pose), a capsule link collider
+    // per bone, and (with `coneTwist`) uniform swing-cone + twist limits. Joint error is
+    // zero by construction, so it settles where the maximal-coordinate chain limit-cycles.
+    // Requires a single root bone. Uniform limits for now; per-joint authoring layers on top.
+    [[nodiscard]]
+    static Ragdoll makeArticulated(PhysicsWorld& physics, std::span<Node* const> bones,
+                                   const RagdollParams& params = {});
+
+    // True when built via makeArticulated (drives the articulation) vs make (rigid bodies).
+    [[nodiscard]]
+    bool articulated() const noexcept
+    {
+        return articulation_.valid();
+    }
+
+    [[nodiscard]]
+    PhysicsArticulationHandle articulation() const noexcept
+    {
+        return articulation_;
+    }
+
+    // Articulation link index of bone `index` (−1 for a maximal-coordinate ragdoll).
+    [[nodiscard]]
+    int link(std::size_t index) const noexcept
+    {
+        return bones_[index].link;
+    }
+
     void activate();
     void deactivate();
+
+    // Push the current simulated pose to the bone nodes' world-overrides. Call every frame after
+    // the physics step: an articulated ragdoll's bones are not physics-body-bound, so
+    // SceneGraph::applyPhysics does not sync them. No-op until activate(). Idempotent for a
+    // maximal ragdoll (applyPhysics already syncs its body-bound bones).
+    void syncNodes();
 
     [[nodiscard]]
     bool active() const noexcept
@@ -88,10 +128,12 @@ private:
         PhysicsBodyHandle body;
         PhysicsConstraintHandle joint; // to the parent bone (invalid for a root)
         int parent{-1};                // index into bones_, or -1
+        int link{-1};                  // articulation link index (articulated ragdolls)
     };
 
     PhysicsWorld* physics_{nullptr};
     std::vector<Bone> bones_;
+    PhysicsArticulationHandle articulation_; // valid for makeArticulated ragdolls
     bool active_{false};
 };
 

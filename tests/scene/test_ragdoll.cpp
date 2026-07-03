@@ -21,6 +21,7 @@
 #include <fire_engine/graphics/cloth.hpp>
 #include <fire_engine/input/input_state.hpp>
 #include <fire_engine/math/mat4.hpp>
+#include <fire_engine/physics/articulation.hpp>
 #include <fire_engine/physics/physics_world.hpp>
 #include <fire_engine/scene/node.hpp>
 #include <fire_engine/scene/scene_graph.hpp>
@@ -667,4 +668,178 @@ TEST_CASE("Ragdoll.ChainFallsAndStaysConnected", "[Ragdoll]")
         CHECK(nodePos.y() == Catch::Approx(physicsPos.y()).margin(1e-4f));
         CHECK(nodePos.z() == Catch::Approx(physicsPos.z()).margin(1e-4f));
     }
+}
+
+namespace
+{
+
+// Drop an articulated ragdoll (built from `bones`) onto a floor and return the resting state:
+// the lowest link Y ever reached, the final lowest/highest link Y, and the base speed.
+struct ArticulatedRest
+{
+    float minEver{0.0f};
+    float lowest{0.0f};
+    float highest{0.0f};
+    float baseSpeed{0.0f};
+    bool finite{false};
+};
+
+ArticulatedRest dropArticulated(std::span<Node* const> bones, const RagdollParams& params,
+                                float floorHalfXz, int steps)
+{
+    PhysicsWorld physics;
+    fire_engine::PhysicsBodyDesc floor;
+    floor.type = fire_engine::PhysicsBodyType::Static;
+    floor.position = {0.0f, -0.5f, 0.0f}; // top face at y = 0
+    floor.material = fire_engine::PhysicsMaterial{.restitution = 0.0f, .friction = 0.6f};
+    const auto floorBody = physics.createBody(floor);
+    static_cast<void>(physics.createCollider(
+        floorBody,
+        fire_engine::ColliderDesc{
+            .shape = fire_engine::BoxShape{Vec3{floorHalfXz, 0.5f, floorHalfXz}},
+            .material = fire_engine::PhysicsMaterial{.restitution = 0.0f, .friction = 0.6f}}));
+
+    Ragdoll rag = Ragdoll::makeArticulated(physics, bones, params);
+    REQUIRE(rag.articulated());
+    const fire_engine::Articulation* art = physics.articulation(rag.articulation());
+    REQUIRE(art != nullptr);
+
+    ArticulatedRest r;
+    r.minEver = 1e9f;
+    for (int i = 0; i < steps; ++i)
+    {
+        physics.step(1.0f / 60.0f);
+        for (std::size_t link = 0; link < art->linkCount(); ++link)
+        {
+            r.minEver = std::min(r.minEver, art->linkWorld(link).translation.y());
+        }
+    }
+    r.lowest = 1e9f;
+    r.highest = -1e9f;
+    for (std::size_t link = 0; link < art->linkCount(); ++link)
+    {
+        const float y = art->linkWorld(link).translation.y();
+        r.lowest = std::min(r.lowest, y);
+        r.highest = std::max(r.highest, y);
+    }
+    r.baseSpeed = art->baseVelocity().linear.magnitude();
+    r.finite = std::isfinite(r.lowest) && std::isfinite(r.highest);
+    return r;
+}
+
+} // namespace
+
+TEST_CASE("Ragdoll.ArticulatedTwoJointDemoSettlesOnFloor", "[Ragdoll][Demos]")
+{
+    // Phase F2: the reduced-coordinate path binds the generated two-joint ragdoll (a floating
+    // pelvis + one spherical child) and settles it on the floor — joint error is zero by
+    // construction, so it rests rather than limit-cycling.
+    const std::filesystem::path gltfPath = "../assets/physics_demos/TwoJointRagdollDemo.gltf";
+    const fastgltf::Asset asset = parseGltfAsset(gltfPath);
+    const RagdollParams params = parseGeneratedRagdollParams(gltfPath);
+
+    SceneGraph sg;
+    std::vector<Node*> bones = buildRagdollDemoBones(sg, asset);
+    REQUIRE(bones.size() == 2U);
+
+    const ArticulatedRest r = dropArticulated(bones, params, 4.0f, 900);
+    CHECK(r.finite);
+    CHECK(r.minEver > -0.3f);  // never tunnelled through the floor
+    CHECK(r.lowest > 0.0f);    // rests on top of it
+    CHECK(r.baseSpeed < 0.3f); // came (near) to rest
+}
+
+TEST_CASE("Ragdoll.ArticulatedCesiumManSkeletonSettles", "[Ragdoll][CesiumMan]")
+{
+    // Phase F3 gate, headless: the real CesiumMan skin (19 small bones) bound to one
+    // reduced-coordinate articulation must fall and settle on a floor. Only the skinned render
+    // needs the GPU; the skeleton physics is testable here.
+    const std::filesystem::path gltfPath = "../assets/CesiumMan/CesiumMan.gltf";
+    const fastgltf::Asset asset = parseGltfAsset(gltfPath);
+
+    SceneGraph sg;
+    std::vector<Node*> bones = buildRagdollDemoBones(sg, asset);
+    REQUIRE(bones.size() >= 10U);
+
+    float minBoneY = 1e9f;
+    for (const Node* bone : bones)
+    {
+        minBoneY = std::min(minBoneY, nodeWorldPos(*bone).y());
+    }
+
+    RagdollParams params;
+    params.radius = 0.06f;
+    PhysicsWorld physics;
+    fire_engine::PhysicsBodyDesc floor;
+    floor.type = fire_engine::PhysicsBodyType::Static;
+    const float floorTop = minBoneY - 0.35f;
+    floor.position = {0.0f, floorTop - 0.5f, 0.0f};
+    floor.material = fire_engine::PhysicsMaterial{.restitution = 0.0f, .friction = 0.6f};
+    const auto floorBody = physics.createBody(floor);
+    static_cast<void>(physics.createCollider(
+        floorBody, fire_engine::ColliderDesc{.shape = fire_engine::BoxShape{Vec3{6.0f, 0.5f, 6.0f}},
+                                             .material = fire_engine::PhysicsMaterial{
+                                                 .restitution = 0.0f, .friction = 0.6f}}));
+
+    Ragdoll rag = Ragdoll::makeArticulated(physics, bones, params);
+    const fire_engine::Articulation* art = physics.articulation(rag.articulation());
+    REQUIRE(art != nullptr);
+
+    // Largest span between any two links — a proxy for "did it keep a body shape or crumple to a
+    // blob". Measured at the bind pose (standing) and after settling.
+    const auto maxSpan = [&]
+    {
+        float m = 0.0f;
+        for (std::size_t i = 0; i < art->linkCount(); ++i)
+        {
+            for (std::size_t j = i + 1; j < art->linkCount(); ++j)
+            {
+                m = std::max(
+                    m, (art->linkWorld(i).translation - art->linkWorld(j).translation).magnitude());
+            }
+        }
+        return m;
+    };
+    const float bindSpan = maxSpan();
+
+    float minEver = 1e9f;
+    for (int i = 0; i < 1500; ++i)
+    {
+        physics.step(1.0f / 60.0f);
+        for (std::size_t link = 0; link < art->linkCount(); ++link)
+        {
+            minEver = std::min(minEver, art->linkWorld(link).translation.y());
+        }
+        REQUIRE(std::isfinite(art->baseVelocity().linear.magnitude())); // never diverges
+    }
+    const float baseSpeed = art->baseVelocity().linear.magnitude();
+    const float settledSpan = maxSpan();
+    INFO("bones=" << bones.size() << " bindSpan=" << bindSpan << " settledSpan=" << settledSpan
+                  << " minEver=" << minEver << " baseSpeed=" << baseSpeed);
+    CHECK(minEver > floorTop - 0.2f);      // never tunnelled far through the floor
+    CHECK(baseSpeed < 0.5f);               // came to rest
+    CHECK(settledSpan > 0.55f * bindSpan); // kept a body shape — didn't crumple to a blob
+}
+
+TEST_CASE("Ragdoll.ArticulatedHumanoidSettlesOnFloor", "[Ragdoll][Demos]")
+{
+    // The Phase F2 gate: the full 17-bone humanoid (branching, multi-child) bound to a single
+    // reduced-coordinate articulation — floating pelvis, spherical joints, cone-twist limits —
+    // falls and settles on the floor without tunnelling or blowing up. The CesiumMan mechanism
+    // at demo scale.
+    const std::filesystem::path gltfPath = "../assets/physics_demos/RagdollDemo.gltf";
+    const fastgltf::Asset asset = parseGltfAsset(gltfPath);
+    const RagdollParams params = parseGeneratedRagdollParams(gltfPath);
+
+    SceneGraph sg;
+    std::vector<Node*> bones = buildRagdollDemoBones(sg, asset);
+    REQUIRE(bones.size() == 17U);
+
+    const ArticulatedRest r = dropArticulated(bones, params, 6.0f, 1200);
+    INFO("finite=" << r.finite << " minEver=" << r.minEver << " lowest=" << r.lowest
+                   << " baseSpeed=" << r.baseSpeed);
+    CHECK(r.finite);
+    CHECK(r.minEver > -0.3f);  // never tunnelled through the floor
+    CHECK(r.lowest > 0.0f);    // the whole skeleton rests above the floor
+    CHECK(r.baseSpeed < 0.4f); // came (near) to rest
 }

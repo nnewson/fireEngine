@@ -2,7 +2,9 @@
 
 #include <array>
 #include <cstddef>
+#include <cstdint>
 #include <span>
+#include <unordered_set>
 #include <vector>
 
 #include <fire_engine/math/vec3.hpp>
@@ -41,16 +43,13 @@ struct ArticulationLinkDesc
     Vec3 inertiaLocal{1.0f, 1.0f, 1.0f}; // diagonal principal inertia, link frame
     Vec3 comLocal{};                     // centre of mass in the link frame
 
-    // Cone-twist limit for a Spherical joint (a knee/shoulder range). Active only when
-    // `limitStiffness > 0`: past the swing cone (half-angle `swingLimit` about `jointAxis`) or
-    // the ±`twistLimit` twist, a passive restoring generalized torque (spring `limitStiffness`
-    // + damping `limitDamping`) pushes the joint back inside — so the limb articulates like a
-    // skeleton rather than a free pivot. Within the range it adds nothing. Kept moderate to
-    // stay stable under the explicit integrator (a very stiff penalty would ring).
+    // Cone-twist limit for a Spherical joint (a knee/shoulder range). Active when a limit is set
+    // (`swingLimit < π` or `twistLimit < π`): past the swing cone (half-angle `swingLimit` about
+    // `jointAxis`) or the ±`twistLimit` twist, the joint is held inside by a velocity-level
+    // unilateral constraint (Articulation::solveJointLimits) — a kinematic projection, not a
+    // spring, so it stays stable at any bone inertia. Within the range it adds nothing.
     float swingLimit{pi};
     float twistLimit{pi};
-    float limitStiffness{0.0f};
-    float limitDamping{0.0f};
 
     // Passive drive: a spring pulling the joint toward a target pose (a muscle / a bias to a
     // rest pose), active when `driveStiffness > 0`. τ = driveStiffness·(target − q) −
@@ -167,6 +166,14 @@ public:
         return links_[i].parent;
     }
 
+    // Self-collision filter: mark a link pair as excluded from link-vs-link contacts (they
+    // overlap in the rest pose — structurally adjacent bones — so colliding them would blast the
+    // skeleton apart). Symmetric. The self-collision gather consults selfCollisionExcluded().
+    void excludeSelfCollision(std::size_t a, std::size_t b);
+
+    [[nodiscard]]
+    bool selfCollisionExcluded(std::size_t a, std::size_t b) const;
+
     // Recompute every link's world transform from the base pose and the current q. Cheap
     // single forward sweep (links are topologically ordered). Call after changing q / base.
     void forwardKinematics();
@@ -203,6 +210,12 @@ public:
     // Euler (velocity first), matching the rigid-body integrator.
     void integrate(float dt);
 
+    // The two halves of integrate(), split so a TGS contact solve runs between them: apply the
+    // accelerations to the velocities, solve contacts (adding bias velocity), then advance the
+    // positions from those velocities, then relax the bias velocity away.
+    void integrateVelocities(float dt);
+    void integratePositions(float dt);
+
     [[nodiscard]]
     std::span<const float> qDDot() const noexcept
     {
@@ -236,7 +249,53 @@ public:
     // (Δq̇ = M⁻¹ Jᵀ·impulse), so the whole chain reacts — the seam's applyImpulse.
     void applyImpulse(std::size_t link, const Vec3& worldPoint, const Vec3& worldImpulse);
 
+    // One Gauss-Seidel sweep of the velocity-level cone-twist joint limits (a spherical joint's
+    // swing cone + twist range). For each violated limit, a unilateral impulse through the
+    // articulated response projects the joint rate so it no longer drives past the range, plus a
+    // bounded Baumgarte push-back when `useBias` (rate ≤ maxPush, closing a fraction erp of the
+    // excess per step). Unconditionally stable — no stiff spring, so a low-inertia small bone can
+    // not blow up under the explicit integrator. Call inside the contact solve's sweeps so limits
+    // and contacts converge together. `invH` = 1/substep.
+    void solveJointLimits(float invH, bool useBias, float erp, float maxPush);
+
+    // Apply a generalized impulse on link `link`'s spherical joint DOFs (child frame), reacting
+    // the whole chain + floating base through the articulated response. The primitive the
+    // velocity-level joint limits are built on; exposed for direct use / testing.
+    void applyJointImpulse(std::size_t link, const Vec3& genImpulse)
+    {
+        jointImpulseResponse(link, genImpulse, true);
+    }
+
+    // Self-collision seam: a contact between two links of the *same* articulation. The inverse
+    // effective mass of the RELATIVE point velocity to an impulse pair (+dir at A, −dir at B),
+    // and the application of such a pair. Both go through one shared articulated response, so a
+    // floating base recoils and momentum is conserved (an internal contact).
+    [[nodiscard]]
+    float pairInverseEffectiveMass(std::size_t linkA, const Vec3& worldPointA, std::size_t linkB,
+                                   const Vec3& worldPointB, const Vec3& worldDir)
+    {
+        return Vec3::dotProduct(
+            pairImpulseResponse(linkA, worldPointA, linkB, worldPointB, worldDir, false), worldDir);
+    }
+
+    void applyImpulsePair(std::size_t linkA, const Vec3& worldPointA, std::size_t linkB,
+                          const Vec3& worldPointB, const Vec3& worldImpulse)
+    {
+        pairImpulseResponse(linkA, worldPointA, linkB, worldPointB, worldImpulse, true);
+    }
+
 private:
+    // Response to a *generalized* impulse on link `link`'s spherical DOFs (the joint-limit path):
+    // returns the resulting joint-rate change Δq̇ on those DOFs, committing into q̇ / base when
+    // `commit`. Same M⁻¹ machinery as impulseResponse but the impulse is a generalized joint force.
+    Vec3 jointImpulseResponse(std::size_t link, const Vec3& genImpulse, bool commit);
+
+    // Response to an equal-and-opposite impulse pair (+worldImpulse at linkA's point, −it at
+    // linkB's) through one M⁻¹ pass — the self-collision primitive. Returns the change in the
+    // relative point velocity (Δ(vA − vB)); commits into q̇ / base / cache when `commit`.
+    Vec3 pairImpulseResponse(std::size_t linkA, const Vec3& worldPointA, std::size_t linkB,
+                             const Vec3& worldPointB, const Vec3& worldImpulse, bool commit);
+
     // Articulated impulse response, using the cached factorization: applies a world impulse
     // at a link point and returns the resulting world velocity change *of that point*.
     // Shared by inverseEffectiveMass (probe, `commit` = false) and applyImpulse (commit into
@@ -263,8 +322,6 @@ private:
         Quaternion jointRotation{Quaternion::identity()}; // Spherical joint state
         float swingLimit{pi};
         float twistLimit{pi};
-        float limitStiffness{0.0f};
-        float limitDamping{0.0f};
         float driveTarget{0.0f};
         Quaternion driveTargetRotation{Quaternion::identity()};
         float driveStiffness{0.0f};
@@ -303,9 +360,24 @@ private:
     std::vector<std::array<SpatialVector, 3>> u_;
     std::vector<std::array<SpatialVector, 3>> uDinv_;
     std::vector<Mat3> dInv_;
+    // Floating-base articulated-inertia inverse Iᴬ₀⁻¹, cached by factorizeArticulatedInertia()
+    // (constant per factorization) so the per-impulse base solve doesn't re-invert the 6×6.
+    SpatialMatrix baseInertiaInv_;
     // World spatial velocity per link (angular; linear at the link origin), from
     // computeLinkVelocities(); the base for pointVelocity().
     std::vector<SpatialVector> linkVelWorld_;
+
+    // Self-collision exclusions: keys pack the ordered pair (min<<20 | max). A pair here never
+    // generates a link-vs-link contact (rest-pose-overlapping / structurally adjacent bones).
+    std::unordered_set<std::uint64_t> selfCollisionExcluded_;
+
+    // Reusable scratch for the impulse-response passes (impulse/joint/pair), sized once and
+    // refilled per call so a solve's thousands of impulse responses don't each heap-allocate —
+    // that allocation churn dominated the articulation solve. Single-threaded, non-nesting use.
+    std::vector<SpatialVector> scratchBias_;
+    std::vector<SpatialVector> scratchDv_;
+    std::vector<std::array<float, 3>> scratchUForce_;
+    std::vector<float> scratchDq_;
 };
 
 } // namespace fire_engine

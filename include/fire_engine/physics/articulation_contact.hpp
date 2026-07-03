@@ -23,13 +23,30 @@ struct ArticulationPlaneContact
     float friction{0.5f};
 };
 
-// Advance a fixed-base articulation one fixed step `dt` under `gravity` + passive
-// `jointDamping`, resolving each plane contact through the articulated impulse response.
-// TGS-style: kSubstepCount substeps of h = dt/N, each integrating the free dynamics then
-// solving the contacts (soft non-penetration bias + velocity-only Coulomb friction) via the
-// ConstraintBody seam. Fixed-base only for now (floating base lands with the 6-DOF root).
+// A self-collision contact between two links of the *same* articulation (e.g. a thigh capsule
+// vs the torso). Points are in each link's local frame; the relative separation along `normal`
+// is tracked across the substep loop as both links move. `normal` (world, unit) points from B
+// toward A — the direction to push A off B. `offset` sets the touching baseline:
+// separation = dot(normal, worldA − worldB) − offset. Solved through the pair impulse response.
+struct ArticulationLinkContact
+{
+    std::size_t linkA{0};
+    std::size_t linkB{0};
+    Vec3 localA{};
+    Vec3 localB{};
+    Vec3 normal{0, 1, 0};
+    float offset{0.0f};
+    float friction{0.5f};
+};
+
+// Advance an articulation one fixed step `dt` under `gravity` + passive `jointDamping`, resolving
+// plane contacts (link vs static) and self-collision link contacts (link vs link, same
+// articulation) through the articulated impulse response. TGS-style: kSubstepCount substeps of
+// h = dt/N, each integrating the free dynamics then solving the contacts + joint limits (soft
+// non-penetration + velocity-only Coulomb friction) via the ConstraintBody / pair-impulse seams.
 void stepArticulationOnPlanes(Articulation& articulation,
                               std::span<const ArticulationPlaneContact> contacts,
-                              const Vec3& gravity, float dt, float jointDamping = 0.0f);
+                              const Vec3& gravity, float dt, float jointDamping = 0.0f,
+                              std::span<const ArticulationLinkContact> linkContacts = {});
 
 } // namespace fire_engine
