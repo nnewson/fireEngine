@@ -533,7 +533,7 @@ PhysicsColliderHandle PhysicsWorld::attachLinkCollider(PhysicsArticulationHandle
         return PhysicsColliderHandle{};
     }
     return addLinkColliderEntry(handle, link, desc.shape, desc.material, desc.collisionLayer,
-                                desc.collisionMask, Vec3{}, Quaternion::identity(), desc.isTrigger);
+                                desc.collisionMask, Vec3{}, desc.localRotation, desc.isTrigger);
 }
 
 PhysicsColliderHandle PhysicsWorld::addLinkColliderEntry(
@@ -1526,6 +1526,7 @@ void PhysicsWorld::stepArticulations(float dt)
     // stored in link-local space so the substep loop tracks it as the link moves. Link-vs-
     // dynamic-rigid and link-vs-link (self-collision) are deferred to the full pipeline.
     std::vector<std::vector<ArticulationPlaneContact>> perArticulation(articulations_.size());
+    std::vector<std::vector<ArticulationLinkContact>> perArticulationLink(articulations_.size());
 
     for (const CollisionPair& pair : broadPhase_->possiblePairs())
     {
@@ -1533,6 +1534,55 @@ void PhysicsWorld::stepArticulations(float dt)
         ColliderEntry* second = findCollider(pair.second);
         if (first == nullptr || second == nullptr)
         {
+            continue;
+        }
+
+        // Self-collision: both colliders are links of the *same* articulation. Skip adjacent
+        // (parent-child) bones — they share a joint and always overlap there — and solve the rest
+        // as link-vs-link contacts so limbs stack into a plausible pose instead of folding through
+        // each other.
+        if (first->isLinkCollider() && second->isLinkCollider())
+        {
+            if (first->articulation.value() != second->articulation.value())
+            {
+                continue; // different articulations (cross-ragdoll collision) — deferred
+            }
+            const auto ai = articulationIndexByHandle_.find(first->articulation.value());
+            if (ai == articulationIndexByHandle_.end())
+            {
+                continue;
+            }
+            Articulation& art = articulations_[ai->second];
+            const auto a = static_cast<std::size_t>(first->link);
+            const auto b = static_cast<std::size_t>(second->link);
+            if (a >= art.linkCount() || b >= art.linkCount())
+            {
+                continue;
+            }
+            if (art.parent(a) == static_cast<int>(b) || art.parent(b) == static_cast<int>(a) ||
+                art.selfCollisionExcluded(a, b))
+            {
+                continue; // adjacent or rest-pose-overlapping bones — not a real self-contact
+            }
+            const auto manifold =
+                narrowPhase_.collide(worldShape(*first), worldShape(*second), kSpeculativeDistance);
+            if (!manifold.has_value() || manifold->count == 0)
+            {
+                continue;
+            }
+            const RigidTransform invA = art.linkWorld(a).inverse();
+            const RigidTransform invB = art.linkWorld(b).inverse();
+            const float friction = std::sqrt(std::max(first->material.friction, 0.0f) *
+                                             std::max(second->material.friction, 0.0f));
+            for (int p = 0; p < manifold->count; ++p)
+            {
+                const Vec3 wp = manifold->points[static_cast<std::size_t>(p)].position;
+                const float pen = manifold->points[static_cast<std::size_t>(p)].penetration;
+                // normal points B(second) -> A(first); offset = pen so prepare-time sep = -pen.
+                perArticulationLink[ai->second].push_back(
+                    ArticulationLinkContact{a, b, invA.transformPoint(wp), invB.transformPoint(wp),
+                                            manifold->normal, pen, friction});
+            }
             continue;
         }
 
@@ -1550,7 +1600,7 @@ void PhysicsWorld::stepArticulations(float dt)
         }
         else
         {
-            continue; // both links or neither — not this pass
+            continue; // neither is a link — not this pass
         }
 
         const BodyEntry* otherBody = findBody(other->body);
@@ -1599,7 +1649,7 @@ void PhysicsWorld::stepArticulations(float dt)
     for (std::size_t i = 0; i < articulations_.size(); ++i)
     {
         stepArticulationOnPlanes(articulations_[i], perArticulation[i], gravity_, dt,
-                                 kArticulationDamping);
+                                 kArticulationDamping, perArticulationLink[i]);
     }
 }
 

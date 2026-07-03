@@ -26,6 +26,10 @@ struct RagdollParams
     bool coneTwist{true};
     float swingLimit{0.7f}; // cone half-angle (radians, ~40°)
     float twistLimit{0.5f}; // ± twist (radians)
+    // Build a reduced-coordinate articulation (makeArticulated) instead of maximal-coordinate
+    // rigid bodies + joints (make). Joint error is zero by construction, so a complex skeleton
+    // settles where the maximal chain limit-cycles — needed for a full humanoid like CesiumMan.
+    bool articulated{false};
     // Bones share one collision layer and mask it out of their own collisions, so
     // adjacent (overlapping) capsules don't fight the joints — but still collide
     // with everything else (floors, props). Default: bit 1, all-but-self.
@@ -80,6 +84,12 @@ public:
 
     void activate();
     void deactivate();
+
+    // Push the current simulated pose to the bone nodes' world-overrides. Call every frame after
+    // the physics step: an articulated ragdoll's bones are not physics-body-bound, so
+    // SceneGraph::applyPhysics does not sync them. No-op until activate(). Idempotent for a
+    // maximal ragdoll (applyPhysics already syncs its body-bound bones).
+    void syncNodes();
 
     [[nodiscard]]
     bool active() const noexcept

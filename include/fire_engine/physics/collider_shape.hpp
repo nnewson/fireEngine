@@ -56,6 +56,10 @@ struct ColliderDesc
     PhysicsMaterial material{};
     // A trigger collider reports overlaps as events but generates no solver response.
     bool isTrigger{false};
+    // Local orientation of the shape within its owner's frame. Identity for the usual
+    // axis-aligned collider; used to align a capsule with a bone that does not run along the
+    // link's local Y (an articulation link collider).
+    Quaternion localRotation{Quaternion::identity()};
 };
 
 // One primitive of a compound collider: a (non-compound) shape placed at a local

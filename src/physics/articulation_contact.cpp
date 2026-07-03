@@ -41,7 +41,8 @@ struct SoftCoeffs
 
 void stepArticulationOnPlanes(Articulation& articulation,
                               std::span<const ArticulationPlaneContact> contacts,
-                              const Vec3& gravity, float dt, float jointDamping)
+                              const Vec3& gravity, float dt, float jointDamping,
+                              std::span<const ArticulationLinkContact> linkContacts)
 {
     const float h = dt / static_cast<float>(kSubstepCount);
     const float invH = h > 0.0f ? 1.0f / h : 0.0f;
@@ -50,6 +51,7 @@ void stepArticulationOnPlanes(Articulation& articulation,
     // re-derived from zero each substep and clamped to the friction cone (no cross-frame
     // memory), matching the rigid solver's anti-pump choice.
     std::vector<float> normalImpulse(contacts.size(), 0.0f);
+    std::vector<float> linkNormalImpulse(linkContacts.size(), 0.0f);
     const Mat3 unused{}; // ConstraintBody link path ignores the inertia argument
 
     // Per-contact geometry precomputed once per substep — positions are fixed after integrate(),
@@ -66,6 +68,20 @@ void stepArticulationOnPlanes(Articulation& articulation,
         bool active{false};
     };
     std::vector<Prepared> prep(contacts.size());
+
+    // Self-collision (link-vs-link) prepared geometry: both contact points (world, substep-start
+    // pose), the relative-velocity normal inverse effective mass, and the soft bias.
+    struct PreparedLink
+    {
+        Vec3 pointA{};
+        Vec3 pointB{};
+        float invEffN{0.0f};
+        float bias{0.0f};
+        float massScale{1.0f};
+        float impulseScale{0.0f};
+        bool active{false};
+    };
+    std::vector<PreparedLink> prepLink(linkContacts.size());
 
     // One Gauss-Seidel sweep over the contacts. `useBias` on the first sweep applies the soft
     // push-out; the relax sweeps (bias 0, no impulse decay) only converge the coupled velocities
@@ -115,6 +131,57 @@ void stepArticulationOnPlanes(Articulation& articulation,
             const float lambdaT = std::clamp(-vtMag / invEffT, -budget, budget);
             link.applyImpulse(p.point, tangent * lambdaT, unused);
         }
+
+        // Self-collision link-vs-link contacts, solved through the pair impulse response (equal
+        // and opposite on the two links, one shared articulated reaction). Same soft normal +
+        // Coulomb friction, but on the *relative* point velocity.
+        for (std::size_t i = 0; i < linkContacts.size(); ++i)
+        {
+            const PreparedLink& p = prepLink[i];
+            if (!p.active)
+            {
+                continue;
+            }
+            const ArticulationLinkContact& c = linkContacts[i];
+            const auto relVel = [&]
+            {
+                return articulation.pointVelocity(c.linkA, p.pointA) -
+                       articulation.pointVelocity(c.linkB, p.pointB);
+            };
+
+            const float bias = useBias ? p.bias : 0.0f;
+            const float massScale = useBias ? p.massScale : 1.0f;
+            const float impulseScale = useBias ? p.impulseScale : 0.0f;
+            const float vn = dot(relVel(), c.normal);
+            const float lambda =
+                -(massScale * (vn + bias)) / p.invEffN - impulseScale * linkNormalImpulse[i];
+            const float old = linkNormalImpulse[i];
+            linkNormalImpulse[i] = std::max(0.0f, old + lambda);
+            articulation.applyImpulsePair(c.linkA, p.pointA, c.linkB, p.pointB,
+                                          c.normal * (linkNormalImpulse[i] - old));
+
+            if (linkNormalImpulse[i] <= 0.0f)
+            {
+                continue;
+            }
+            const Vec3 vt = relVel() - c.normal * dot(relVel(), c.normal);
+            const float vtMag = vt.magnitude();
+            if (vtMag < 1e-6f)
+            {
+                continue;
+            }
+            const Vec3 tangent = vt * (1.0f / vtMag);
+            const float invEffT = articulation.pairInverseEffectiveMass(c.linkA, p.pointA, c.linkB,
+                                                                        p.pointB, tangent);
+            if (invEffT <= 0.0f)
+            {
+                continue;
+            }
+            const float budget = c.friction * linkNormalImpulse[i];
+            const float lambdaT = std::clamp(-vtMag / invEffT, -budget, budget);
+            articulation.applyImpulsePair(c.linkA, p.pointA, c.linkB, p.pointB, tangent * lambdaT);
+        }
+
         // Cone-twist joint limits share the sweep so limits and contacts converge together
         // through the same articulated response (both velocity-level, unified velocity model).
         articulation.solveJointLimits(invH, useBias, kJointLimitErp, kJointLimitMaxPush);
@@ -151,6 +218,40 @@ void stepArticulationOnPlanes(Articulation& articulation,
             // Soft non-penetration (b2MakeSoft): a speculative gap closes at most this substep
             // (bias = separation·invH); a real penetration is pushed out by a damped spring capped
             // at kMaxBiasVelocity. massScale/impulseScale decay the impulse so it doesn't pump.
+            p.bias = 0.0f;
+            p.massScale = 1.0f;
+            p.impulseScale = 0.0f;
+            if (separation > 0.0f)
+            {
+                p.bias = separation * invH;
+            }
+            else
+            {
+                p.bias = std::max(soft.biasRate * separation, -kMaxBiasVelocity);
+                p.massScale = soft.massScale;
+                p.impulseScale = soft.impulseScale;
+            }
+        }
+
+        // Prepare self-collision link contacts against the substep-start pose.
+        for (std::size_t i = 0; i < linkContacts.size(); ++i)
+        {
+            const ArticulationLinkContact& c = linkContacts[i];
+            const Vec3 pointA = articulation.linkWorld(c.linkA).transformPoint(c.localA);
+            const Vec3 pointB = articulation.linkWorld(c.linkB).transformPoint(c.localB);
+            const float separation = dot(c.normal, pointA - pointB) - c.offset;
+            const float invEffN =
+                articulation.pairInverseEffectiveMass(c.linkA, pointA, c.linkB, pointB, c.normal);
+            PreparedLink& p = prepLink[i];
+            p.pointA = pointA;
+            p.pointB = pointB;
+            p.invEffN = invEffN;
+            p.active = separation <= kSpeculativeDistance && invEffN > 0.0f;
+            if (!p.active)
+            {
+                linkNormalImpulse[i] = 0.0f;
+                continue;
+            }
             p.bias = 0.0f;
             p.massScale = 1.0f;
             p.impulseScale = 0.0f;

@@ -113,6 +113,15 @@ void FireEngine::addFloorPlane()
     auto floorNode = std::make_unique<Node>("Floor");
     floorNode->component().emplace<Mesh>(std::move(floorObject));
     scene_.addNode(std::move(floorNode));
+
+    // A static physics collider coincident with the visual plane (top face at y=0), so dropped
+    // bodies / ragdolls actually land on it. A thin, wide box under the plane.
+    PhysicsBodyDesc floorBody;
+    floorBody.type = PhysicsBodyType::Static;
+    floorBody.position = Vec3{0.0f, -0.5f, 0.0f};
+    const PhysicsBodyHandle floorHandle = physics_.createBody(floorBody);
+    (void)physics_.createCollider(
+        floorHandle, ColliderDesc{.shape = BoxShape{Vec3{halfSize, 0.5f, halfSize}, Vec3{}}});
 }
 
 void FireEngine::addParticleFountain()
@@ -575,6 +584,17 @@ void FireEngine::mainLoop()
         }
 
         scene_.applyPhysics(physics_);
+
+        // Articulated ragdolls drive their bone nodes from the articulation's link FK, which
+        // applyPhysics (body-bound nodes only) does not cover — push it every frame so the
+        // skinned mesh renders the simulated pose.
+        for (Ragdoll& ragdoll : ragdolls_)
+        {
+            if (ragdoll.active() && ragdoll.articulated())
+            {
+                ragdoll.syncNodes();
+            }
+        }
 
         // World colliders for the cloth solver: physics bodies + the ground plane.
         auto colliders = physics_.gatherColliders();

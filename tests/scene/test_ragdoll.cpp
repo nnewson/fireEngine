@@ -785,6 +785,23 @@ TEST_CASE("Ragdoll.ArticulatedCesiumManSkeletonSettles", "[Ragdoll][CesiumMan]")
     const fire_engine::Articulation* art = physics.articulation(rag.articulation());
     REQUIRE(art != nullptr);
 
+    // Largest span between any two links — a proxy for "did it keep a body shape or crumple to a
+    // blob". Measured at the bind pose (standing) and after settling.
+    const auto maxSpan = [&]
+    {
+        float m = 0.0f;
+        for (std::size_t i = 0; i < art->linkCount(); ++i)
+        {
+            for (std::size_t j = i + 1; j < art->linkCount(); ++j)
+            {
+                m = std::max(
+                    m, (art->linkWorld(i).translation - art->linkWorld(j).translation).magnitude());
+            }
+        }
+        return m;
+    };
+    const float bindSpan = maxSpan();
+
     float minEver = 1e9f;
     for (int i = 0; i < 1500; ++i)
     {
@@ -796,10 +813,12 @@ TEST_CASE("Ragdoll.ArticulatedCesiumManSkeletonSettles", "[Ragdoll][CesiumMan]")
         REQUIRE(std::isfinite(art->baseVelocity().linear.magnitude())); // never diverges
     }
     const float baseSpeed = art->baseVelocity().linear.magnitude();
-    INFO("bones=" << bones.size() << " floorTop=" << floorTop << " minEver=" << minEver
-                  << " baseSpeed=" << baseSpeed);
-    CHECK(minEver > floorTop - 0.2f); // never tunnelled far through the floor
-    CHECK(baseSpeed < 0.5f);          // came to rest
+    const float settledSpan = maxSpan();
+    INFO("bones=" << bones.size() << " bindSpan=" << bindSpan << " settledSpan=" << settledSpan
+                  << " minEver=" << minEver << " baseSpeed=" << baseSpeed);
+    CHECK(minEver > floorTop - 0.2f);      // never tunnelled far through the floor
+    CHECK(baseSpeed < 0.5f);               // came to rest
+    CHECK(settledSpan > 0.55f * bindSpan); // kept a body shape — didn't crumple to a blob
 }
 
 TEST_CASE("Ragdoll.ArticulatedHumanoidSettlesOnFloor", "[Ragdoll][Demos]")
@@ -817,6 +836,8 @@ TEST_CASE("Ragdoll.ArticulatedHumanoidSettlesOnFloor", "[Ragdoll][Demos]")
     REQUIRE(bones.size() == 17U);
 
     const ArticulatedRest r = dropArticulated(bones, params, 6.0f, 1200);
+    INFO("finite=" << r.finite << " minEver=" << r.minEver << " lowest=" << r.lowest
+                   << " baseSpeed=" << r.baseSpeed);
     CHECK(r.finite);
     CHECK(r.minEver > -0.3f);  // never tunnelled through the floor
     CHECK(r.lowest > 0.0f);    // the whole skeleton rests above the floor

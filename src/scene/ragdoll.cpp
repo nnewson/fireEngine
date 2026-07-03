@@ -25,10 +25,58 @@ namespace
     return {m[0, 3], m[1, 3], m[2, 3]};
 }
 
-// Default enforcement of a ragdoll joint's cone-twist limit: a moderate spring (a rigid
-// limit would ring under the explicit integrator) plus damping. Uniform for now.
-constexpr float kRagdollLimitStiffness = 60.0f;
-constexpr float kRagdollLimitDamping = 6.0f;
+// Squared distance between two segments [p1,q1] and [p2,q2] (Ericson, Real-Time Collision
+// Detection). Used to detect which bone capsules overlap in the bind pose.
+[[nodiscard]] float segmentSegmentDistanceSq(const Vec3& p1, const Vec3& q1, const Vec3& p2,
+                                             const Vec3& q2) noexcept
+{
+    const Vec3 d1 = q1 - p1;
+    const Vec3 d2 = q2 - p2;
+    const Vec3 r = p1 - p2;
+    const float a = Vec3::dotProduct(d1, d1);
+    const float e = Vec3::dotProduct(d2, d2);
+    const float f = Vec3::dotProduct(d2, r);
+    float s = 0.0f;
+    float t = 0.0f;
+    constexpr float eps = 1e-8f;
+    if (a <= eps && e <= eps)
+    {
+        return Vec3::dotProduct(r, r); // both degenerate to points
+    }
+    if (a <= eps)
+    {
+        t = std::clamp(f / e, 0.0f, 1.0f);
+    }
+    else
+    {
+        const float c = Vec3::dotProduct(d1, r);
+        if (e <= eps)
+        {
+            s = std::clamp(-c / a, 0.0f, 1.0f);
+        }
+        else
+        {
+            const float b = Vec3::dotProduct(d1, d2);
+            const float denom = a * e - b * b;
+            s = denom > eps ? std::clamp((b * f - c * e) / denom, 0.0f, 1.0f) : 0.0f;
+            t = (b * s + f) / e;
+            if (t < 0.0f)
+            {
+                t = 0.0f;
+                s = std::clamp(-c / a, 0.0f, 1.0f);
+            }
+            else if (t > 1.0f)
+            {
+                t = 1.0f;
+                s = std::clamp((b - c) / a, 0.0f, 1.0f);
+            }
+        }
+    }
+    const Vec3 c1 = p1 + d1 * s;
+    const Vec3 c2 = p2 + d2 * t;
+    const Vec3 diff = c1 - c2;
+    return Vec3::dotProduct(diff, diff);
+}
 
 // Diagonal inertia of a capsule of mass `m`, radius `r`, cylinder half-height `h`, aligned
 // with the link's local Y (the collider axis). Rod-plus-radius approximation, floored so a
@@ -255,10 +303,19 @@ Ragdoll Ragdoll::makeArticulated(PhysicsWorld& physics, std::span<Node* const> b
     };
 
     std::vector<int> linkOf(count, -1);
+    std::vector<Vec3> capA(count); // capsule world endpoints (this joint …
+    std::vector<Vec3> capB(count); // … back toward the parent), for the self-collision exclusion
     for (const int b : order)
     {
         const auto bi = static_cast<std::size_t>(b);
         const float halfHeight = 0.5f * boneLength(b);
+
+        // This bone's own axis (joint→parent, the segment the capsule spans) expressed in the
+        // link's local frame. Defaults to +Y; set from geometry for a non-root bone. The capsule
+        // and the cone-twist twist axis both align to this — the rig's bones rarely run along the
+        // link's local Y, so without it the capsule sticks out sideways (self-collision can't stop
+        // the fold-through) and the limits are oriented arbitrarily (the skeleton collapses).
+        Vec3 boneAxisLocal{0.0f, 1.0f, 0.0f};
 
         ArticulationLinkDesc desc;
         desc.mass = params.mass;
@@ -280,23 +337,67 @@ Ragdoll Ragdoll::makeArticulated(PhysicsWorld& physics, std::span<Node* const> b
             // bind pose (jointToChild stays identity — the joint sits at the child origin).
             desc.parentToJoint = RigidTransform{rot[pb].conjugate() * rot[bi],
                                                 rot[pb].conjugate().rotate(pos[bi] - pos[pb])};
+            const Vec3 boneDirWorld = pos[bi] - pos[pb];
+            if (boneDirWorld.magnitudeSquared() > 1.0e-8f)
+            {
+                boneAxisLocal = rot[bi].conjugate().rotate(Vec3::normalise(boneDirWorld));
+            }
+            desc.jointAxis = boneAxisLocal;
             if (params.coneTwist)
             {
                 desc.swingLimit = params.swingLimit;
                 desc.twistLimit = params.twistLimit;
-                desc.limitStiffness = kRagdollLimitStiffness;
-                desc.limitDamping = kRagdollLimitDamping;
             }
             linkOf[bi] = art->addLink(desc);
         }
 
         ColliderDesc collider;
+        // Orient the capsule along the bone axis (its local Y rotated onto boneAxisLocal) so it
+        // covers the actual limb; a capsule left on local Y would stick out sideways and miss it.
         collider.shape = CapsuleShape{params.radius, halfHeight, Vec3{}};
+        collider.localRotation = Quaternion::fromVectors(Vec3{0.0f, 1.0f, 0.0f}, boneAxisLocal);
+        // Articulated bones self-collide (so limbs stack into a plausible pose instead of folding
+        // through the torso): they pair with each other in the broadphase; the articulation's
+        // self-collision gather skips adjacent (parent-child) bones, which always overlap at their
+        // shared joint. Layer kept so external masking still applies; mask opened to all.
         collider.collisionLayer = params.collisionLayer;
-        collider.collisionMask = params.collisionMask;
+        collider.collisionMask = ~0U;
         [[maybe_unused]] const auto lc =
             physics.attachLinkCollider(artHandle, linkOf[bi], collider);
+
+        // World endpoints of this capsule (straddling the joint along the bone axis by
+        // ±halfHeight), matching the collider above, for the bind-pose overlap exclusion below.
+        const Vec3 axWorld = rot[bi].rotate(boneAxisLocal) * halfHeight;
+        capA[bi] = pos[bi] - axWorld;
+        capB[bi] = pos[bi] + axWorld;
     }
+
+    // Exclude self-collision between bones whose capsules already overlap in the bind pose
+    // (structurally adjacent — arm-root vs torso, the two hip bones, …). Colliding those would
+    // blast the skeleton apart on the first step; only bones that come together *later* (a
+    // folding limb onto the torso) should generate self-contacts.
+    for (std::size_t a = 0; a < count; ++a)
+    {
+        if (linkOf[a] < 0)
+        {
+            continue;
+        }
+        for (std::size_t b = a + 1; b < count; ++b)
+        {
+            if (linkOf[b] < 0)
+            {
+                continue;
+            }
+            const float d2 = segmentSegmentDistanceSq(capA[a], capB[a], capA[b], capB[b]);
+            const float reach = 2.0f * params.radius + 0.02f; // both radii + a small margin
+            if (d2 < reach * reach)
+            {
+                art->excludeSelfCollision(static_cast<std::size_t>(linkOf[a]),
+                                          static_cast<std::size_t>(linkOf[b]));
+            }
+        }
+    }
+
     art->forwardKinematics(); // so linkWorld is valid before the first step / activate
 
     rag.articulation_ = artHandle;
@@ -311,27 +412,30 @@ Ragdoll Ragdoll::makeArticulated(PhysicsWorld& physics, std::span<Node* const> b
     return rag;
 }
 
-void Ragdoll::activate()
+void Ragdoll::syncNodes()
 {
     if (physics_ == nullptr)
     {
         return;
     }
-    // Seed each bone node's world-override from its simulated pose, so the skinning path
+    // Push each bone node's world-override from its current simulated pose, so the skinning path
     // (Skin reads Node::composedWorld) renders the simulated skeleton. An articulated ragdoll
-    // reads the link forward-kinematics transforms; a maximal one reads its bodies.
+    // reads the link forward-kinematics transforms; a maximal one reads its bodies. Maximal bones
+    // are also body-bound, so SceneGraph::applyPhysics keeps them in sync — but an articulated
+    // ragdoll's bones are NOT body-bound, so this must run every frame after the physics step.
     if (articulated())
     {
-        if (const Articulation* art = physics_->articulation(articulation_))
+        const Articulation* art = physics_->articulation(articulation_);
+        if (art == nullptr)
         {
-            for (Bone& bone : bones_)
+            return;
+        }
+        for (Bone& bone : bones_)
+        {
+            if (bone.link >= 0)
             {
-                if (bone.link >= 0)
-                {
-                    const RigidTransform lw = art->linkWorld(static_cast<std::size_t>(bone.link));
-                    bone.node->worldOverride(Mat4::translate(lw.translation) *
-                                             lw.rotation.toMat4());
-                }
+                const RigidTransform lw = art->linkWorld(static_cast<std::size_t>(bone.link));
+                bone.node->worldOverride(Mat4::translate(lw.translation) * lw.rotation.toMat4());
             }
         }
     }
@@ -346,6 +450,11 @@ void Ragdoll::activate()
             }
         }
     }
+}
+
+void Ragdoll::activate()
+{
+    syncNodes(); // seed the world-overrides from the initial simulated pose
     active_ = true;
 }
 

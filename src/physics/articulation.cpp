@@ -3,6 +3,7 @@
 #include <cassert>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 
 #include <fire_engine/math/quaternion.hpp>
 
@@ -88,8 +89,6 @@ int Articulation::addLink(const ArticulationLinkDesc& desc)
     link.comLocal = desc.comLocal;
     link.swingLimit = desc.swingLimit;
     link.twistLimit = desc.twistLimit;
-    link.limitStiffness = desc.limitStiffness;
-    link.limitDamping = desc.limitDamping;
     link.driveTarget = desc.driveTarget;
     link.driveTargetRotation = desc.driveTargetRotation;
     link.driveStiffness = desc.driveStiffness;
@@ -128,6 +127,26 @@ void Articulation::qDot(int dof, float value) noexcept
 void Articulation::jointRotation(std::size_t link, const Quaternion& rotation) noexcept
 {
     links_[link].jointRotation = Quaternion::normalise(rotation);
+}
+
+namespace
+{
+[[nodiscard]] std::uint64_t selfCollisionKey(std::size_t a, std::size_t b) noexcept
+{
+    const std::uint64_t lo = a < b ? a : b;
+    const std::uint64_t hi = a < b ? b : a;
+    return (lo << 20) | hi;
+}
+} // namespace
+
+void Articulation::excludeSelfCollision(std::size_t a, std::size_t b)
+{
+    selfCollisionExcluded_.insert(selfCollisionKey(a, b));
+}
+
+bool Articulation::selfCollisionExcluded(std::size_t a, std::size_t b) const
+{
+    return selfCollisionExcluded_.count(selfCollisionKey(a, b)) != 0;
 }
 
 void Articulation::forwardKinematics()
@@ -265,6 +284,11 @@ void Articulation::factorizeArticulatedInertia()
             artInertia_[p] = artInertia_[p] + xforce_[i] * ia_[i] * xup_[i];
         }
     }
+
+    // Cache the floating-base articulated-inertia inverse: it is constant for this factorization
+    // but the base solve (a₀ = −Iᴬ₀⁻¹·pᴬ₀) runs on every impulse response — inverting the 6×6 per
+    // call dominated the solve. One inverse per substep instead of thousands.
+    baseInertiaInv_ = baseFixed_ ? SpatialMatrix{} : artInertia_[0].inverse();
 }
 
 void Articulation::computeAccelerations(const Vec3& gravity, float jointDamping)
@@ -277,7 +301,8 @@ void Articulation::computeAccelerations(const Vec3& gravity, float jointDamping)
     std::vector<SpatialVector> velProd(n); // velocity-product accel c = v × (S q̇)
     std::vector<SpatialVector> bias(n);    // articulated bias pᴬ (gravity + velocity product)
     std::vector<SpatialVector> accel(n);
-    std::vector<std::array<float, 3>> uForce(n);
+    std::vector<std::array<float, 3>>& uForce = scratchUForce_;
+    uForce.assign(n, std::array<float, 3>{});
 
     // Floating base: seed the root with its own spatial velocity + gravity/velocity-product
     // bias (Pass 2 folds the children's bias in). Fixed base leaves everything zero.
@@ -380,7 +405,7 @@ void Articulation::computeAccelerations(const Vec3& gravity, float jointDamping)
     // a₀ = −Iᴬ₀⁻¹·pᴬ₀ (the 6×6 solve). A fixed base stays at rest.
     if (!rootFixed)
     {
-        accel[0] = artInertia_[0].inverse() * (bias[0] * -1.0f);
+        accel[0] = baseInertiaInv_ * (bias[0] * -1.0f);
     }
     baseAccel_ = accel[0];
 
@@ -473,11 +498,13 @@ Vec3 Articulation::impulseResponse(std::size_t link, const Vec3& worldPoint,
     const Vec3 rLink = rot.conjugate().rotate(worldPoint - linkWorld_[link].translation);
     // Bias force pᴬ = −(applied impulse), matching the acceleration ABA where an external
     // force enters the bias with a minus sign; uForce = −Sᵀpᴬ then carries the right sign.
-    std::vector<SpatialVector> bias(n, SpatialVector{});
+    std::vector<SpatialVector>& bias = scratchBias_;
+    bias.assign(n, SpatialVector{});
     bias[link] = SpatialVector{Vec3::crossProduct(rLink, fLink), fLink} * -1.0f;
 
     // Inward pass: fold the bias toward the root, recording each joint's uForce = −Sᵀpᴬ per DOF.
-    std::vector<std::array<float, 3>> uForce(n);
+    std::vector<std::array<float, 3>>& uForce = scratchUForce_;
+    uForce.assign(n, std::array<float, 3>{});
     for (std::size_t i = n - 1; i >= 1; --i)
     {
         const Link& lk = links_[i];
@@ -506,14 +533,16 @@ Vec3 Articulation::impulseResponse(std::size_t link, const Vec3& worldPoint,
     }
 
     // Base velocity delta: a floating root responds Δv₀ = −Iᴬ₀⁻¹·Y₀ to the folded impulse.
-    std::vector<SpatialVector> dv(n, SpatialVector{});
+    std::vector<SpatialVector>& dv = scratchDv_;
+    dv.assign(n, SpatialVector{});
     if (!baseFixed_)
     {
-        dv[0] = artInertia_[0].inverse() * (bias[0] * -1.0f);
+        dv[0] = baseInertiaInv_ * (bias[0] * -1.0f);
     }
 
     // Outward pass: base velocity delta down to the joint velocity deltas Δq̇.
-    std::vector<float> dq(static_cast<std::size_t>(dofCount_), 0.0f);
+    std::vector<float>& dq = scratchDq_;
+    dq.assign(static_cast<std::size_t>(dofCount_), 0.0f);
     for (std::size_t i = 1; i < n; ++i)
     {
         const Link& lk = links_[i];
@@ -603,8 +632,10 @@ Vec3 Articulation::jointImpulseResponse(std::size_t link, const Vec3& genImpulse
     }
     const auto targetOff = static_cast<std::size_t>(target.dofOffset);
 
-    std::vector<SpatialVector> bias(n, SpatialVector{});
-    std::vector<std::array<float, 3>> uForce(n);
+    std::vector<SpatialVector>& bias = scratchBias_;
+    bias.assign(n, SpatialVector{});
+    std::vector<std::array<float, 3>>& uForce = scratchUForce_;
+    uForce.assign(n, std::array<float, 3>{});
     for (std::size_t i = n - 1; i >= 1; --i)
     {
         const Link& lk = links_[i];
@@ -636,13 +667,15 @@ Vec3 Articulation::jointImpulseResponse(std::size_t link, const Vec3& genImpulse
         bias[p] = bias[p] + xforce_[i] * pa;
     }
 
-    std::vector<SpatialVector> dv(n, SpatialVector{});
+    std::vector<SpatialVector>& dv = scratchDv_;
+    dv.assign(n, SpatialVector{});
     if (!baseFixed_)
     {
-        dv[0] = artInertia_[0].inverse() * (bias[0] * -1.0f);
+        dv[0] = baseInertiaInv_ * (bias[0] * -1.0f);
     }
 
-    std::vector<float> dq(static_cast<std::size_t>(dofCount_), 0.0f);
+    std::vector<float>& dq = scratchDq_;
+    dq.assign(static_cast<std::size_t>(dofCount_), 0.0f);
     for (std::size_t i = 1; i < n; ++i)
     {
         const Link& lk = links_[i];
@@ -688,6 +721,125 @@ Vec3 Articulation::jointImpulseResponse(std::size_t link, const Vec3& genImpulse
         }
     }
     return dOmega;
+}
+
+Vec3 Articulation::pairImpulseResponse(std::size_t linkA, const Vec3& worldPointA,
+                                       std::size_t linkB, const Vec3& worldPointB,
+                                       const Vec3& worldImpulse, bool commit)
+{
+    // Response to an equal-and-opposite impulse pair — +worldImpulse at linkA's point,
+    // −worldImpulse at linkB's point — through one M⁻¹ pass. The self-collision primitive:
+    // a contact between two links of the *same* articulation. Returns the change in the RELATIVE
+    // point velocity (Δ(vA − vB)); a floating base conserves momentum (the pair is internal).
+    const std::size_t n = links_.size();
+
+    // Contact offsets in each link's frame (used both to seed the bias and to read the response).
+    const Quaternion& rotA = linkWorld_[linkA].rotation;
+    const Quaternion& rotB = linkWorld_[linkB].rotation;
+    const Vec3 rLinkA = rotA.conjugate().rotate(worldPointA - linkWorld_[linkA].translation);
+    const Vec3 rLinkB = rotB.conjugate().rotate(worldPointB - linkWorld_[linkB].translation);
+
+    std::vector<SpatialVector>& bias = scratchBias_;
+    bias.assign(n, SpatialVector{});
+    const auto seed =
+        [&](std::size_t link, const Quaternion& rot, const Vec3& rLink, const Vec3& imp)
+    {
+        const Vec3 fLink = rot.conjugate().rotate(imp);
+        bias[link] = bias[link] + SpatialVector{Vec3::crossProduct(rLink, fLink), fLink} * -1.0f;
+    };
+    seed(linkA, rotA, rLinkA, worldImpulse);
+    seed(linkB, rotB, rLinkB, worldImpulse * -1.0f);
+
+    std::vector<std::array<float, 3>>& uForce = scratchUForce_;
+    uForce.assign(n, std::array<float, 3>{});
+    for (std::size_t i = n - 1; i >= 1; --i)
+    {
+        const Link& lk = links_[i];
+        const auto p = static_cast<std::size_t>(lk.parent);
+        const int nd = lk.dofCount;
+        for (int k = 0; k < nd; ++k)
+        {
+            uForce[i][static_cast<std::size_t>(k)] =
+                -subspace_[i][static_cast<std::size_t>(k)].dot(bias[i]);
+        }
+        std::array<float, 3> g{};
+        for (int k = 0; k < nd; ++k)
+        {
+            for (int j = 0; j < nd; ++j)
+            {
+                g[static_cast<std::size_t>(k)] +=
+                    dInv_[i][k, j] * uForce[i][static_cast<std::size_t>(j)];
+            }
+        }
+        SpatialVector pa = bias[i];
+        for (int k = 0; k < nd; ++k)
+        {
+            pa = pa + u_[i][static_cast<std::size_t>(k)] * g[static_cast<std::size_t>(k)];
+        }
+        bias[p] = bias[p] + xforce_[i] * pa;
+    }
+
+    std::vector<SpatialVector>& dv = scratchDv_;
+    dv.assign(n, SpatialVector{});
+    if (!baseFixed_)
+    {
+        dv[0] = baseInertiaInv_ * (bias[0] * -1.0f);
+    }
+
+    std::vector<float>& dq = scratchDq_;
+    dq.assign(static_cast<std::size_t>(dofCount_), 0.0f);
+    for (std::size_t i = 1; i < n; ++i)
+    {
+        const Link& lk = links_[i];
+        const auto p = static_cast<std::size_t>(lk.parent);
+        const int nd = lk.dofCount;
+        const auto off = static_cast<std::size_t>(lk.dofOffset);
+        const SpatialVector dvPrime = xup_[i] * dv[p];
+        std::array<float, 3> e{};
+        for (int j = 0; j < nd; ++j)
+        {
+            e[static_cast<std::size_t>(j)] = uForce[i][static_cast<std::size_t>(j)] -
+                                             u_[i][static_cast<std::size_t>(j)].dot(dvPrime);
+        }
+        dv[i] = dvPrime;
+        for (int k = 0; k < nd; ++k)
+        {
+            float delta = 0.0f;
+            for (int j = 0; j < nd; ++j)
+            {
+                delta += dInv_[i][k, j] * e[static_cast<std::size_t>(j)];
+            }
+            dq[off + static_cast<std::size_t>(k)] = delta;
+            dv[i] = dv[i] + subspace_[i][static_cast<std::size_t>(k)] * delta;
+        }
+    }
+
+    // Resulting world velocity change of each contact point, and their difference.
+    const auto pointVel = [&](std::size_t link, const Quaternion& rot, const Vec3& rLink)
+    {
+        const SpatialVector& d = dv[link];
+        return rot.rotate(d.linear + Vec3::crossProduct(d.angular, rLink));
+    };
+    const Vec3 dvRel = pointVel(linkA, rotA, rLinkA) - pointVel(linkB, rotB, rLinkB);
+
+    if (commit)
+    {
+        for (int k = 0; k < dofCount_; ++k)
+        {
+            qDot_[static_cast<std::size_t>(k)] += dq[static_cast<std::size_t>(k)];
+        }
+        baseVel_ = baseVel_ + dv[0];
+        if (linkVelWorld_.size() == n)
+        {
+            for (std::size_t i = 0; i < n; ++i)
+            {
+                const Quaternion& r = linkWorld_[i].rotation;
+                linkVelWorld_[i].angular = linkVelWorld_[i].angular + r.rotate(dv[i].angular);
+                linkVelWorld_[i].linear = linkVelWorld_[i].linear + r.rotate(dv[i].linear);
+            }
+        }
+    }
+    return dvRel;
 }
 
 void Articulation::solveJointLimits(float invH, bool useBias, float erp, float maxPush)

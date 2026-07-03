@@ -155,8 +155,12 @@ Node* GltfLoader::loadScene(const std::string& path, SceneGraph& scene, Resource
             {
                 continue;
             }
-            Ragdoll ragdoll = Ragdoll::make(physics, bones, params);
+            Ragdoll ragdoll = params.articulated ? Ragdoll::makeArticulated(physics, bones, params)
+                                                 : Ragdoll::make(physics, bones, params);
             ragdoll.activate();
+            std::clog << "glTF: built " << (params.articulated ? "articulated" : "maximal")
+                      << " ragdoll for node '" << nodeName(asset, gltfNode) << "' with "
+                      << bones.size() << " bones\n";
             ragdolls->push_back(std::move(ragdoll));
         }
     }

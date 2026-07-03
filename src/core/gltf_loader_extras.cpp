@@ -426,6 +426,17 @@ std::optional<RagdollParams> GltfLoader::nodeExtrasRagdoll(simdjson::dom::object
         params.coneTwist = coneTwist;
     }
 
+    auto articulatedElement = ragdollObject.at_key("Articulated");
+    if (articulatedElement.error() != simdjson::NO_SUCH_FIELD)
+    {
+        bool articulated = false;
+        if (articulatedElement.get(articulated) != simdjson::SUCCESS)
+        {
+            throw std::runtime_error("glTF Ragdoll Articulated must be a boolean");
+        }
+        params.articulated = articulated;
+    }
+
     return params;
 }
 
