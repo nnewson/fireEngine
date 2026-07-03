@@ -450,7 +450,7 @@ def _look_at_quat(eye, target, up):
 
 def _append_static_floor_box(doc, half_xz=4.0, thickness=0.25):
     """Append a Static box-floor (own data-URI buffer + mesh + node) to an existing glTF
-    document; returns the new floor node index. Used by the ragdoll demo, which reuses an
+    document; returns the new floor node index. Used by the ragdoll demos, which reuse an
     external skinned asset and needs ground to land on."""
     half = (half_xz, thickness, half_xz)
     positions, normals, indices = box_geometry(half)
@@ -500,112 +500,6 @@ def _append_static_floor_box(doc, half_xz=4.0, thickness=0.25):
          "extras": {"Physics": {"BodyType": "Static", "Shape": "Box",
                                 "HalfExtents": list(half), "Restitution": 0.0, "Friction": 0.6}}})
     return node
-
-
-def build_ragdoll_demo():
-    """P4: a generated humanoid skeleton tagged with extras.Ragdoll, lifted above a
-    Static floor. The scene intentionally mirrors tests/scene/test_ragdoll.cpp's
-    17-bone humanoid settle gate rather than CesiumMan: the maximal-coordinate
-    solver can settle this representative graph, while CesiumMan's production skin
-    still limit-cycles and belongs with the reduced-coordinate articulation work."""
-    here = os.path.dirname(os.path.abspath(__file__))
-    d = {
-        "asset": {"version": "2.0", "generator": "fireEngine physics_demos generate.py"},
-        "scene": 0,
-        "scenes": [{"nodes": [0]}],
-        "nodes": [
-            {"name": "SyntheticRagdoll", "skin": 0,
-             "extras": {"Ragdoll": {"Mass": 1.0, "Radius": 0.05, "BoneLength": 0.2,
-                                     "ConeTwist": True, "SwingLimit": 0.7,
-                                     "TwistLimit": 0.5}}}
-        ],
-        "skins": [{"name": "SyntheticRagdollSkin", "joints": []}],
-        "buffers": [],
-        "bufferViews": [],
-        "accessors": [],
-        "materials": [],
-        "meshes": [],
-    }
-
-    specs = []
-
-    def spec(parent, name, local):
-        specs.append((parent, name, local))
-        return len(specs) - 1
-
-    pelvis = spec(None, "pelvis", (0.0, 1.6, 0.0))
-    spine = spec(pelvis, "spine", (0.0, 0.3, 0.0))
-    chest = spec(spine, "chest", (0.0, 0.3, 0.0))
-    neck = spec(chest, "neck", (0.0, 0.25, 0.0))
-    spec(neck, "head", (0.0, 0.2, 0.0))
-    sh_l = spec(chest, "shoulder_L", (0.18, 0.0, 0.0))
-    upper_l = spec(sh_l, "upper_arm_L", (0.0, -0.25, 0.0))
-    spec(upper_l, "forearm_L", (0.0, -0.25, 0.0))
-    sh_r = spec(chest, "shoulder_R", (-0.18, 0.0, 0.0))
-    upper_r = spec(sh_r, "upper_arm_R", (0.0, -0.25, 0.0))
-    spec(upper_r, "forearm_R", (0.0, -0.25, 0.0))
-    hip_l = spec(pelvis, "hip_L", (0.12, -0.05, 0.0))
-    thigh_l = spec(hip_l, "thigh_L", (0.0, -0.35, 0.0))
-    spec(thigh_l, "shin_L", (0.0, -0.35, 0.0))
-    hip_r = spec(pelvis, "hip_R", (-0.12, -0.05, 0.0))
-    thigh_r = spec(hip_r, "thigh_R", (0.0, -0.35, 0.0))
-    spec(thigh_r, "shin_R", (0.0, -0.35, 0.0))
-
-    world_pos = []
-    children = [[] for _ in specs]
-    for i, (parent, _, local) in enumerate(specs):
-        if parent is None:
-            world_pos.append(local)
-        else:
-            parent_pos = world_pos[parent]
-            world_pos.append(
-                (parent_pos[0] + local[0], parent_pos[1] + local[1], parent_pos[2] + local[2])
-            )
-            children[parent].append(i)
-
-    world_rot = []
-    for i, (parent, _, _) in enumerate(specs):
-        if parent is None:
-            if children[i]:
-                direction = _sub(world_pos[children[i][0]], world_pos[i])
-            else:
-                direction = (0.0, 1.0, 0.0)
-        else:
-            direction = _sub(world_pos[i], world_pos[parent])
-            if sum(c * c for c in direction) < 1.0e-8 and children[i]:
-                direction = _sub(world_pos[children[i][0]], world_pos[i])
-        world_rot.append(quat_from_to((0.0, 1.0, 0.0), direction))
-
-    def add(parent, name, translation, rotation):
-        node = len(d["nodes"])
-        entry = {"name": name, "translation": list(translation)}
-        if abs(rotation[0]) > 1.0e-7 or abs(rotation[1]) > 1.0e-7 or abs(rotation[2]) > 1.0e-7:
-            entry["rotation"] = list(rotation)
-        d["nodes"].append(entry)
-        if parent is not None:
-            d["nodes"][parent].setdefault("children", []).append(node)
-        d["skins"][0]["joints"].append(node)
-        return node
-
-    skinned = 0
-    node_indices = []
-    for i, (parent, name, local) in enumerate(specs):
-        parent_world_rot = (0.0, 0.0, 0.0, 1.0) if parent is None else world_rot[parent]
-        local_rot = quat_multiply(quat_conjugate(parent_world_rot), world_rot[i])
-        local_translation = (
-            local
-            if parent is None
-            else rotate_by_quat(quat_conjugate(parent_world_rot), _sub(world_pos[i], world_pos[parent]))
-        )
-        parent_node = skinned if parent is None else node_indices[parent]
-        node_indices.append(add(parent_node, name, local_translation, local_rot))
-
-    d["scenes"][0]["nodes"] = [skinned, _append_static_floor_box(d, half_xz=6.0)]
-    out = os.path.join(here, "RagdollDemo.gltf")
-    with open(out, "w") as f:
-        json.dump(d, f, indent=2)
-        f.write("\n")
-    print(f"wrote {os.path.relpath(out)}  (synthetic ragdoll + floor)")
 
 
 def build_single_joint_ragdoll_demo():
@@ -979,7 +873,6 @@ def main():
         write_demo(name, builder())
     build_single_joint_ragdoll_demo()
     build_two_joint_ragdoll_demo()
-    build_ragdoll_demo()
 
 
 if __name__ == "__main__":
