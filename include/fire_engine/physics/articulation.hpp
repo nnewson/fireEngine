@@ -203,6 +203,12 @@ public:
     // Euler (velocity first), matching the rigid-body integrator.
     void integrate(float dt);
 
+    // The two halves of integrate(), split so a TGS contact solve runs between them: apply the
+    // accelerations to the velocities, solve contacts (adding bias velocity), then advance the
+    // positions from those velocities, then relax the bias velocity away.
+    void integrateVelocities(float dt);
+    void integratePositions(float dt);
+
     [[nodiscard]]
     std::span<const float> qDDot() const noexcept
     {
@@ -236,7 +242,29 @@ public:
     // (Δq̇ = M⁻¹ Jᵀ·impulse), so the whole chain reacts — the seam's applyImpulse.
     void applyImpulse(std::size_t link, const Vec3& worldPoint, const Vec3& worldImpulse);
 
+    // One Gauss-Seidel sweep of the velocity-level cone-twist joint limits (a spherical joint's
+    // swing cone + twist range). For each violated limit, a unilateral impulse through the
+    // articulated response projects the joint rate so it no longer drives past the range, plus a
+    // bounded Baumgarte push-back when `useBias` (rate ≤ maxPush, closing a fraction erp of the
+    // excess per step). Unconditionally stable — no stiff spring, so a low-inertia small bone can
+    // not blow up under the explicit integrator. Call inside the contact solve's sweeps so limits
+    // and contacts converge together. `invH` = 1/substep.
+    void solveJointLimits(float invH, bool useBias, float erp, float maxPush);
+
+    // Apply a generalized impulse on link `link`'s spherical joint DOFs (child frame), reacting
+    // the whole chain + floating base through the articulated response. The primitive the
+    // velocity-level joint limits are built on; exposed for direct use / testing.
+    void applyJointImpulse(std::size_t link, const Vec3& genImpulse)
+    {
+        jointImpulseResponse(link, genImpulse, true);
+    }
+
 private:
+    // Response to a *generalized* impulse on link `link`'s spherical DOFs (the joint-limit path):
+    // returns the resulting joint-rate change Δq̇ on those DOFs, committing into q̇ / base when
+    // `commit`. Same M⁻¹ machinery as impulseResponse but the impulse is a generalized joint force.
+    Vec3 jointImpulseResponse(std::size_t link, const Vec3& genImpulse, bool commit);
+
     // Articulated impulse response, using the cached factorization: applies a world impulse
     // at a link point and returns the resulting world velocity change *of that point*.
     // Shared by inverseEffectiveMass (probe, `commit` = false) and applyImpulse (commit into

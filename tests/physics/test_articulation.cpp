@@ -11,6 +11,7 @@
 #include <fire_engine/physics/articulation.hpp>
 #include <fire_engine/physics/articulation_contact.hpp>
 #include <fire_engine/physics/collider_shape.hpp>
+#include <fire_engine/physics/physics_constants.hpp>
 #include <fire_engine/physics/physics_world.hpp>
 #include <fire_engine/physics/spatial.hpp>
 
@@ -493,6 +494,113 @@ TEST_CASE("Articulation.ImpulseThroughLinkageSolvesContactVelocity", "[Articulat
     CHECK(std::abs(vn1) < 1e-4f);
 }
 
+TEST_CASE("Articulation.IncrementalLinkVelocityMatchesRecompute", "[Articulation]")
+{
+    // The unified velocity model underpinning the iterated solve: applyImpulse folds its
+    // per-link velocity change into the cached linkVelWorld_, so successive impulses in one
+    // sweep read current velocities without a full recompute (whose classical transport drifts
+    // from the Plücker impulse response). The incremental cache must equal a fresh recompute —
+    // on a *floating* chain, so the base-recoil path is exercised, not just joint propagation.
+    Articulation a;
+    a.baseFixed(false);
+    ArticulationLinkDesc base;
+    base.mass = 2.0f;
+    base.inertiaLocal = Vec3{0.2f, 0.2f, 0.2f};
+    a.addRootLink(base);
+    for (int j = 0; j < 2; ++j)
+    {
+        ArticulationLinkDesc rod;
+        rod.parent = j;
+        rod.joint = ArticulationJointType::Revolute;
+        rod.jointAxis = Vec3{0.0f, 0.0f, 1.0f};
+        rod.mass = 1.0f;
+        rod.comLocal = Vec3{0.5f, 0.0f, 0.0f};
+        rod.inertiaLocal = Vec3{0.01f, 0.1f, 0.1f};
+        rod.parentToJoint = RigidTransform{Quaternion::identity(), Vec3{1.0f, 0.0f, 0.0f}};
+        a.addLink(rod);
+    }
+    a.baseTransform(RigidTransform{Quaternion::identity(), Vec3{0.0f, 5.0f, 0.0f}});
+    a.baseVelocity(SpatialVector{Vec3{0.0f, 0.0f, 0.4f}, Vec3{0.3f, -0.2f, 0.0f}});
+    a.q(0, 0.4f);
+    a.q(1, -0.6f);
+    a.qDot(0, 1.5f);
+    a.qDot(1, -2.0f);
+    a.factorizeArticulatedInertia();
+    a.computeLinkVelocities();
+
+    const Vec3 tip = a.linkWorld(2).transformPoint(Vec3{1.0f, 0.0f, 0.0f});
+    const Vec3 normal{0.0f, 1.0f, 0.0f};
+    const float invEff = a.inverseEffectiveMass(2, tip, normal);
+    const float vn0 = Vec3::dotProduct(a.pointVelocity(2, tip), normal);
+    a.applyImpulse(2, tip, normal * (-vn0 / invEff));
+
+    // Point velocities from the incremental cache (no recompute), per link.
+    std::array<Vec3, 3> incremental;
+    for (std::size_t i = 0; i < 3; ++i)
+    {
+        incremental[i] = a.pointVelocity(i, a.linkWorld(i).translation);
+    }
+    // A fresh recompute from the updated qDot / baseVel must agree.
+    a.computeLinkVelocities();
+    for (std::size_t i = 0; i < 3; ++i)
+    {
+        const Vec3 recomputed = a.pointVelocity(i, a.linkWorld(i).translation);
+        CHECK(std::abs(incremental[i].x() - recomputed.x()) < 1e-4f);
+        CHECK(std::abs(incremental[i].y() - recomputed.y()) < 1e-4f);
+        CHECK(std::abs(incremental[i].z() - recomputed.z()) < 1e-4f);
+    }
+}
+
+TEST_CASE("Articulation.JointImpulseConservesLinearMomentum", "[Articulation]")
+{
+    // A joint-limit impulse is internal (a generalized force on a joint's DOFs), so on a free
+    // articulation it must leave the total linear momentum — and thus the COM velocity —
+    // unchanged: the base recoils to absorb it. This is the invariant the velocity-level limit
+    // relies on (clamping a joint rate stays physical). Two spherical links on a floating base.
+    Articulation a;
+    a.baseFixed(false);
+    ArticulationLinkDesc base;
+    base.mass = 2.0f;
+    base.inertiaLocal = Vec3{0.2f, 0.2f, 0.2f};
+    a.addRootLink(base);
+    for (int j = 0; j < 2; ++j)
+    {
+        ArticulationLinkDesc rod;
+        rod.parent = j;
+        rod.joint = ArticulationJointType::Spherical;
+        rod.mass = 1.0f;
+        rod.comLocal = Vec3{0.0f, 0.0f, 0.5f};
+        rod.inertiaLocal = Vec3{0.1f, 0.1f, 0.02f};
+        rod.parentToJoint = RigidTransform{Quaternion::identity(), Vec3{0.0f, 0.0f, 1.0f}};
+        a.addLink(rod);
+    }
+    a.qDot(0, 1.0f);
+    a.qDot(4, -1.5f);
+    a.factorizeArticulatedInertia();
+    a.computeLinkVelocities();
+
+    const float m = 4.0f; // total mass
+    const auto comVel = [&]
+    {
+        Vec3 p{};
+        for (std::size_t i = 0; i < a.linkCount(); ++i)
+        {
+            const float mi = (i == 0) ? 2.0f : 1.0f;
+            const Vec3 com =
+                a.linkWorld(i).transformPoint(i == 0 ? Vec3{} : Vec3{0.0f, 0.0f, 0.5f});
+            p = p + a.pointVelocity(i, com) * mi;
+        }
+        return p * (1.0f / m);
+    };
+
+    const Vec3 before = comVel();
+    a.applyJointImpulse(1, Vec3{0.0f, 0.7f, 0.0f}); // internal generalized impulse
+    const Vec3 after = comVel();
+    CHECK(std::abs(after.x() - before.x()) < 1e-4f);
+    CHECK(std::abs(after.y() - before.y()) < 1e-4f);
+    CHECK(std::abs(after.z() - before.z()) < 1e-4f);
+}
+
 TEST_CASE("Articulation.SphericalJointMatchesRevoluteInPlane", "[Articulation]")
 {
     // A spherical (3-DOF) joint driven only in the plane must reproduce the equivalent
@@ -627,6 +735,28 @@ Articulation sphericalRod(float swingLimit, float twistLimit, float stiffness, f
     return a;
 }
 
+// Step an articulation with its cone-twist limits (now velocity-level, solved like contacts):
+// the TGS substep shape — velocities, biased limit sweep, position integration, relax sweeps.
+void stepWithLimits(Articulation& a, const Vec3& g, float dt, float damping)
+{
+    const float h = dt / static_cast<float>(fire_engine::kSubstepCount);
+    const float invH = 1.0f / h;
+    for (int s = 0; s < fire_engine::kSubstepCount; ++s)
+    {
+        a.computeAccelerations(g, damping);
+        a.integrateVelocities(h);
+        a.computeLinkVelocities();
+        a.solveJointLimits(invH, true, fire_engine::kJointLimitErp,
+                           fire_engine::kJointLimitMaxPush);
+        a.integratePositions(h);
+        for (int r = 1; r < fire_engine::kArticulationVelocityIterations; ++r)
+        {
+            a.solveJointLimits(invH, false, fire_engine::kJointLimitErp,
+                               fire_engine::kJointLimitMaxPush);
+        }
+    }
+}
+
 } // namespace
 
 TEST_CASE("Articulation.ConeLimitHoldsSphericalSwing", "[Articulation]")
@@ -642,10 +772,8 @@ TEST_CASE("Articulation.ConeLimitHoldsSphericalSwing", "[Articulation]")
     Articulation free = sphericalRod(pi, pi, 0.0f, 0.0f);
     for (int i = 0; i < 3000; ++i)
     {
-        limited.computeAccelerations(g, 0.1f);
-        limited.integrate(1.0f / 240.0f);
-        free.computeAccelerations(g, 0.1f);
-        free.integrate(1.0f / 240.0f);
+        stepWithLimits(limited, g, 1.0f / 240.0f, 0.1f);
+        stepWithLimits(free, g, 1.0f / 240.0f, 0.1f);
     }
     const float limitedSwing = swingAngle(limited, twistAxis);
     const float freeSwing = swingAngle(free, twistAxis);
@@ -663,8 +791,7 @@ TEST_CASE("Articulation.TwistLimitArrestsSpin", "[Articulation]")
     a.qDot(2, 4.0f); // spin about the twist axis
     for (int i = 0; i < 2000; ++i)
     {
-        a.computeAccelerations(Vec3{}, 0.05f);
-        a.integrate(1.0f / 240.0f);
+        stepWithLimits(a, Vec3{}, 1.0f / 240.0f, 0.05f);
     }
     CHECK(std::abs(twistAngle(a, twistAxis)) < 0.7f); // arrested near the ±0.6 limit
 }

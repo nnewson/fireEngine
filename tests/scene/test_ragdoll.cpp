@@ -749,6 +749,59 @@ TEST_CASE("Ragdoll.ArticulatedTwoJointDemoSettlesOnFloor", "[Ragdoll][Demos]")
     CHECK(r.baseSpeed < 0.3f); // came (near) to rest
 }
 
+TEST_CASE("Ragdoll.ArticulatedCesiumManSkeletonSettles", "[Ragdoll][CesiumMan]")
+{
+    // Phase F3 gate, headless: the real CesiumMan skin (19 small bones) bound to one
+    // reduced-coordinate articulation must fall and settle on a floor. Only the skinned render
+    // needs the GPU; the skeleton physics is testable here.
+    const std::filesystem::path gltfPath = "../assets/CesiumMan/CesiumMan.gltf";
+    const fastgltf::Asset asset = parseGltfAsset(gltfPath);
+
+    SceneGraph sg;
+    std::vector<Node*> bones = buildRagdollDemoBones(sg, asset);
+    REQUIRE(bones.size() >= 10U);
+
+    float minBoneY = 1e9f;
+    for (const Node* bone : bones)
+    {
+        minBoneY = std::min(minBoneY, nodeWorldPos(*bone).y());
+    }
+
+    RagdollParams params;
+    params.radius = 0.06f;
+    PhysicsWorld physics;
+    fire_engine::PhysicsBodyDesc floor;
+    floor.type = fire_engine::PhysicsBodyType::Static;
+    const float floorTop = minBoneY - 0.35f;
+    floor.position = {0.0f, floorTop - 0.5f, 0.0f};
+    floor.material = fire_engine::PhysicsMaterial{.restitution = 0.0f, .friction = 0.6f};
+    const auto floorBody = physics.createBody(floor);
+    static_cast<void>(physics.createCollider(
+        floorBody, fire_engine::ColliderDesc{.shape = fire_engine::BoxShape{Vec3{6.0f, 0.5f, 6.0f}},
+                                             .material = fire_engine::PhysicsMaterial{
+                                                 .restitution = 0.0f, .friction = 0.6f}}));
+
+    Ragdoll rag = Ragdoll::makeArticulated(physics, bones, params);
+    const fire_engine::Articulation* art = physics.articulation(rag.articulation());
+    REQUIRE(art != nullptr);
+
+    float minEver = 1e9f;
+    for (int i = 0; i < 1500; ++i)
+    {
+        physics.step(1.0f / 60.0f);
+        for (std::size_t link = 0; link < art->linkCount(); ++link)
+        {
+            minEver = std::min(minEver, art->linkWorld(link).translation.y());
+        }
+        REQUIRE(std::isfinite(art->baseVelocity().linear.magnitude())); // never diverges
+    }
+    const float baseSpeed = art->baseVelocity().linear.magnitude();
+    INFO("bones=" << bones.size() << " floorTop=" << floorTop << " minEver=" << minEver
+                  << " baseSpeed=" << baseSpeed);
+    CHECK(minEver > floorTop - 0.2f); // never tunnelled far through the floor
+    CHECK(baseSpeed < 0.5f);          // came to rest
+}
+
 TEST_CASE("Ragdoll.ArticulatedHumanoidSettlesOnFloor", "[Ragdoll][Demos]")
 {
     // The Phase F2 gate: the full 17-bone humanoid (branching, multi-child) bound to a single

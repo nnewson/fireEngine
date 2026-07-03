@@ -74,6 +74,20 @@ inline constexpr float kWarmStartMatchRadius = 0.02f;
 // near-touching pairs; the motion term scales it so fast movers can't tunnel.
 inline constexpr float kSpeculativeDistance = 0.02f;
 
+// Sequential-impulse velocity iterations per substep for a reduced-coordinate articulation's
+// contact + joint-limit solve. Unlike the rigid solver (whose bodies each carry their own
+// velocity), an articulation's contacts are strongly coupled through the shared kinematic
+// chain, so a single Gauss-Seidel sweep under-converges a stiff many-contact collapse. The
+// unified velocity model (applyImpulse folds its per-link velocity change into the cached link
+// velocities) lets these sweeps iterate to convergence within one substep.
+inline constexpr int kArticulationVelocityIterations = 4;
+
+// Velocity-level cone-twist joint-limit push-out (solveJointLimits): close a fraction
+// kJointLimitErp of the angular over-limit per step, capped at kJointLimitMaxPush rad/s so a
+// deep violation can't fling the joint back. A projection, not a spring — stable at any inertia.
+inline constexpr float kJointLimitErp = 0.2f;
+inline constexpr float kJointLimitMaxPush = 3.0f;
+
 // Joints (P4) reuse the same sequential-impulse machinery as contacts, but use a
 // **soft / compliant** constraint (Erin Catto / Box2D-v3 `b2MakeSoft`) instead of a hard
 // Baumgarte velocity bias (P9.1). A soft constraint is a damped spring: it has finite
