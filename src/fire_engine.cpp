@@ -42,33 +42,32 @@ FireEngine::~FireEngine()
     System::destroy();
 }
 
-void FireEngine::run(size_t width, size_t height, std::string_view app_name,
-                     std::string_view scene_path, std::string_view skybox_path, bool addFloor,
-                     bool addParticles, bool addCloth, bool addCharacter, bool addQueryProbe,
-                     RendererDebug debug)
+void FireEngine::run(size_t width, size_t height, std::string_view appName,
+                     const RunOptions& options)
 {
-    window_ = std::make_unique<Window>(width, height, app_name);
+    window_ = std::make_unique<Window>(width, height, appName);
 
-    renderer_ = std::make_unique<Renderer>(*window_, std::string(skybox_path), debug);
+    renderer_ =
+        std::make_unique<Renderer>(*window_, std::string(options.skyboxPath), options.debug);
 
-    loadScene(scene_path);
-    if (addFloor)
+    loadScene(options.scenePath);
+    if (options.addFloor)
     {
         addFloorPlane();
     }
-    if (addParticles)
+    if (options.addParticles)
     {
         addParticleFountain();
     }
-    if (addCloth)
+    if (options.addCloth)
     {
         addClothDemo();
     }
-    if (addCharacter)
+    if (options.addCharacter)
     {
         addCharacterDemo();
     }
-    if (addQueryProbe)
+    if (options.addQueryProbe)
     {
         addQueryProbeDemo();
     }
@@ -549,124 +548,130 @@ void FireEngine::loadScene(std::string_view scene_path)
 
 void FireEngine::mainLoop()
 {
-    constexpr float fixedDt = 1.0f / 60.0f;
     constexpr float maxFrameTime = 0.25f;
     double lastTime = System::getTime();
     float accumulator = 0.0f;
-    bool f1Down = false;
     while (!window_->shouldClose())
     {
-        double now = System::getTime();
-        float dt = std::min(static_cast<float>(now - lastTime), maxFrameTime);
+        const double now = System::getTime();
+        const float dt = std::min(static_cast<float>(now - lastTime), maxFrameTime);
         lastTime = now;
-
-        // F1 toggles the debug overlay (edge-detected so a held key fires once).
-        const bool f1 = glfwGetKey(window_->handle(), GLFW_KEY_F1) == GLFW_PRESS;
-        if (f1 && !f1Down)
-        {
-            renderer_->toggleOverlay();
-        }
-        f1Down = f1;
 
         // Suppress camera/keyboard movement while the overlay is capturing input
         // so dragging a widget doesn't also fly the camera.
         auto input_state = input_.update(*window_, dt, renderer_->overlayWantsMouse(),
                                          renderer_->overlayWantsKeyboard());
         input_state.time(now);
+        if (input_state.overlayTogglePressed())
+        {
+            renderer_->toggleOverlay();
+        }
         scene_.update(input_state);
-        updateCharacter(dt);
-        scene_.submitPhysics(physics_);
 
-        accumulator += dt;
-        while (accumulator >= fixedDt)
-        {
-            physics_.step(fixedDt);
-            accumulator -= fixedDt;
-        }
-
-        scene_.applyPhysics(physics_);
-
-        // Articulated ragdolls drive their bone nodes from the articulation's link FK, which
-        // applyPhysics (body-bound nodes only) does not cover — push it every frame so the
-        // skinned mesh renders the simulated pose.
-        for (Ragdoll& ragdoll : ragdolls_)
-        {
-            if (ragdoll.active() && ragdoll.articulated())
-            {
-                ragdoll.syncNodes();
-            }
-        }
-
-        // Ragdoll diagnostic (FE_RAGDOLL_DBG=1): once a second, report each articulated ragdoll's
-        // max joint rate + base speed so the app can be compared directly against the headless
-        // settle test — the two must agree or the test isn't measuring what ships.
-        static const bool kRagdollDebug = std::getenv("FE_RAGDOLL_DBG") != nullptr;
-        if (kRagdollDebug)
-        {
-            static int frame = 0;
-            if (++frame % 60 == 0)
-            {
-                for (const Ragdoll& ragdoll : ragdolls_)
-                {
-                    if (!ragdoll.articulated())
-                    {
-                        continue;
-                    }
-                    const Articulation* art = physics_.articulation(ragdoll.articulation());
-                    if (art == nullptr)
-                    {
-                        continue;
-                    }
-                    float jr = 0.0f;
-                    for (const float v : art->qDot())
-                    {
-                        jr = std::max(jr, std::abs(v));
-                    }
-                    std::fprintf(stderr,
-                                 "[ragdoll] frame %d maxJointRate=%.3f baseLin=%.3f baseAng=%.3f "
-                                 "baseY=%.3f\n",
-                                 frame, static_cast<double>(jr),
-                                 static_cast<double>(art->baseVelocity().linear.magnitude()),
-                                 static_cast<double>(art->baseVelocity().angular.magnitude()),
-                                 static_cast<double>(art->baseTransform().translation.y()));
-                }
-            }
-        }
-
-        // World colliders for the cloth solver: physics bodies + the ground plane.
-        auto colliders = physics_.gatherColliders();
-        // Physics debug draw uses the authored shapes (pre-plane); only gather the
-        // rest of the debug data when a debug-draw category is enabled. The query-probe
-        // rays draw independently of the --debug-physics categories.
-        if (renderer_->physicsDebugWanted() || queryProbeActive_)
-        {
-            PhysicsDebugData debugData;
-            debugData.queryLines = queryProbeLines(now);
-            if (renderer_->physicsDebugWanted())
-            {
-                debugData.aabbs = physics_.debugColliderBounds();
-                debugData.shapes = colliders;
-                debugData.contacts = physics_.debugContacts();
-                debugData.shapesAsleep = physics_.debugColliderSleeping();
-                for (const DebugJointAnchor& joint : physics_.debugJointAnchors())
-                {
-                    debugData.jointLinks.push_back(DebugCapsule{
-                        joint.originA, joint.originB, 0.025f, Colour3{0.1f, 0.65f, 1.0f}});
-                    const float stretch = (joint.anchorA - joint.anchorB).magnitude();
-                    const Colour3 colour =
-                        stretch > 0.02f ? Colour3{1.0f, 0.2f, 0.1f} : Colour3{0.1f, 0.9f, 0.35f};
-                    debugData.queryLines.push_back(DebugLine{joint.anchorA, joint.anchorB, colour});
-                }
-            }
-            renderer_->setPhysicsDebug(std::move(debugData));
-        }
-        colliders.push_back(makePlaneCollider(Vec3{0.0f, 1.0f, 0.0f}, 0.0f));
-        renderer_->setClothColliders(colliders);
+        stepSimulation(dt, accumulator);
+        syncRenderState(now);
 
         renderer_->drawFrame(*window_, scene_, camera_->worldPosition(), camera_->worldTarget(),
                              dt);
     }
     renderer_->waitIdle();
+}
+
+void FireEngine::stepSimulation(float dt, float& accumulator)
+{
+    constexpr float fixedDt = 1.0f / 60.0f;
+
+    updateCharacter(dt);
+    scene_.submitPhysics(physics_);
+
+    accumulator += dt;
+    while (accumulator >= fixedDt)
+    {
+        physics_.step(fixedDt);
+        accumulator -= fixedDt;
+    }
+
+    scene_.applyPhysics(physics_);
+
+    // Articulated ragdolls drive their bone nodes from the articulation's link FK, which
+    // applyPhysics (body-bound nodes only) does not cover — push it every frame so the
+    // skinned mesh renders the simulated pose.
+    for (Ragdoll& ragdoll : ragdolls_)
+    {
+        if (ragdoll.active() && ragdoll.articulated())
+        {
+            ragdoll.syncNodes();
+        }
+    }
+
+    // Ragdoll diagnostic (FE_RAGDOLL_DBG=1): once a second, report each articulated ragdoll's
+    // max joint rate + base speed so the app can be compared directly against the headless
+    // settle test — the two must agree or the test isn't measuring what ships.
+    static const bool kRagdollDebug = std::getenv("FE_RAGDOLL_DBG") != nullptr;
+    if (kRagdollDebug)
+    {
+        static int frame = 0;
+        if (++frame % 60 == 0)
+        {
+            for (const Ragdoll& ragdoll : ragdolls_)
+            {
+                if (!ragdoll.articulated())
+                {
+                    continue;
+                }
+                const Articulation* art = physics_.articulation(ragdoll.articulation());
+                if (art == nullptr)
+                {
+                    continue;
+                }
+                float jr = 0.0f;
+                for (const float v : art->qDot())
+                {
+                    jr = std::max(jr, std::abs(v));
+                }
+                std::fprintf(stderr,
+                             "[ragdoll] frame %d maxJointRate=%.3f baseLin=%.3f baseAng=%.3f "
+                             "baseY=%.3f\n",
+                             frame, static_cast<double>(jr),
+                             static_cast<double>(art->baseVelocity().linear.magnitude()),
+                             static_cast<double>(art->baseVelocity().angular.magnitude()),
+                             static_cast<double>(art->baseTransform().translation.y()));
+            }
+        }
+    }
+}
+
+void FireEngine::syncRenderState(double time)
+{
+    // World colliders for the cloth solver: physics bodies + the ground plane.
+    auto colliders = physics_.gatherColliders();
+    // Physics debug draw uses the authored shapes (pre-plane); only gather the
+    // rest of the debug data when a debug-draw category is enabled. The query-probe
+    // rays draw independently of the --debug-physics categories.
+    if (renderer_->physicsDebugWanted() || queryProbeActive_)
+    {
+        PhysicsDebugData debugData;
+        debugData.queryLines = queryProbeLines(time);
+        if (renderer_->physicsDebugWanted())
+        {
+            debugData.aabbs = physics_.debugColliderBounds();
+            debugData.shapes = colliders;
+            debugData.contacts = physics_.debugContacts();
+            debugData.shapesAsleep = physics_.debugColliderSleeping();
+            for (const DebugJointAnchor& joint : physics_.debugJointAnchors())
+            {
+                debugData.jointLinks.push_back(
+                    DebugCapsule{joint.originA, joint.originB, 0.025f, Colour3{0.1f, 0.65f, 1.0f}});
+                const float stretch = (joint.anchorA - joint.anchorB).magnitude();
+                const Colour3 colour =
+                    stretch > 0.02f ? Colour3{1.0f, 0.2f, 0.1f} : Colour3{0.1f, 0.9f, 0.35f};
+                debugData.queryLines.push_back(DebugLine{joint.anchorA, joint.anchorB, colour});
+            }
+        }
+        renderer_->setPhysicsDebug(std::move(debugData));
+    }
+    colliders.push_back(makePlaneCollider(Vec3{0.0f, 1.0f, 0.0f}, 0.0f));
+    renderer_->setClothColliders(colliders);
 }
 
 } // namespace fire_engine

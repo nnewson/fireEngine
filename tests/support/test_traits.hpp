@@ -218,6 +218,8 @@ concept has_nothrow_input_state_operations =
         { state.variantState(variant) } noexcept -> std::same_as<void>;
         { const_state.deltaTime() } noexcept -> std::same_as<float>;
         { state.deltaTime(0.0f) } noexcept -> std::same_as<void>;
+        { const_state.overlayTogglePressed() } noexcept -> std::same_as<bool>;
+        { state.overlayTogglePressed(false) } noexcept -> std::same_as<void>;
         { const_state.time() } noexcept -> std::same_as<double>;
         { state.time(0.0) } noexcept -> std::same_as<void>;
     };

@@ -90,12 +90,22 @@ public:
         deltaTime_ = dt;
     }
 
+    [[nodiscard]] bool overlayTogglePressed() const noexcept
+    {
+        return overlayTogglePressed_;
+    }
+    void overlayTogglePressed(bool pressed) noexcept
+    {
+        overlayTogglePressed_ = pressed;
+    }
+
 private:
     CameraState cameraState_{};
     AnimationState animationState_{};
     ControllerState controllerState_{};
     VariantState variantState_{};
     float deltaTime_{0.0f};
+    bool overlayTogglePressed_{false};
 };
 
 } // namespace fire_engine

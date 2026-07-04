@@ -28,6 +28,7 @@ enum class Key : std::size_t
     RightShift,
     Left,
     Right,
+    F1,
     Count,
 };
 
