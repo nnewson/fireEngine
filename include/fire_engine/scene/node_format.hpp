@@ -10,8 +10,8 @@
 namespace fire_engine::detail
 {
 
-inline auto formatNode(const fire_engine::Node& node, std::format_context& ctx, int depth)
-    -> std::format_context::iterator
+inline std::format_context::iterator formatNode(const fire_engine::Node& node,
+                                                std::format_context& ctx, int depth)
 {
     auto indent = std::string(static_cast<std::size_t>(depth * 2), ' ');
 
