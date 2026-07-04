@@ -9,7 +9,9 @@ namespace fire_engine
 class Vec4 : public VecBase<Vec4, 4>
 {
 public:
-    constexpr Vec4(float x = 0.0f, float y = 0.0f, float z = 0.0f, float w = 0.0f) noexcept
+    constexpr Vec4() noexcept = default;
+
+    constexpr Vec4(float x, float y, float z, float w) noexcept
     {
         data_[0] = x;
         data_[1] = y;

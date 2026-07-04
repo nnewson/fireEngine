@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <type_traits>
 
 #include <fire_engine/math/constants.hpp>
 #include <fire_engine/math/quaternion.hpp>
@@ -19,6 +20,12 @@ using namespace fire_engine;
 
 namespace
 {
+
+using InverseEffectiveMassFn = float (Articulation::*)(std::size_t, const Vec3&, const Vec3&);
+static_assert(std::is_invocable_v<InverseEffectiveMassFn, Articulation&, std::size_t, const Vec3&,
+                                  const Vec3&>);
+static_assert(!std::is_invocable_v<InverseEffectiveMassFn, const Articulation&, std::size_t,
+                                   const Vec3&, const Vec3&>);
 
 // Build a planar two-link revolute chain in the XY plane, each joint about +Z:
 //   base (root) → link1 (joint 1m along +X, body 1m further) → link2 (same offsets).

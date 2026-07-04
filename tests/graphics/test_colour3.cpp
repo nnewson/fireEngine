@@ -1,6 +1,7 @@
 #include <fire_engine/graphics/colour3.hpp>
 
 #include <limits>
+#include <type_traits>
 
 #include <support/test_traits.hpp>
 
@@ -36,13 +37,11 @@ TEST_CASE("Colour3Construction.ExplicitValues", "[Colour3Construction]")
     expectNear(c, 0.1f, 0.5f, 0.9f);
 }
 
-TEST_CASE("Colour3Construction.PartialArgs", "[Colour3Construction]")
+TEST_CASE("Colour3Construction.RejectsPartialArgs", "[Colour3Construction]")
 {
-    Colour3 cr{0.5f};
-    expectNear(cr, 0.5f, 0.0f, 0.0f);
-
-    Colour3 crg{0.5f, 0.6f};
-    expectNear(crg, 0.5f, 0.6f, 0.0f);
+    static_assert(!std::is_constructible_v<Colour3, float>);
+    static_assert(!std::is_constructible_v<Colour3, float, float>);
+    static_assert(!std::is_convertible_v<float, Colour3>);
 }
 
 TEST_CASE("Colour3Construction.White", "[Colour3Construction]")

@@ -8,7 +8,9 @@ namespace fire_engine
 class Vec3 : public VecBase<Vec3, 3>
 {
 public:
-    constexpr Vec3(float x = 0.0f, float y = 0.0f, float z = 0.0f) noexcept
+    constexpr Vec3() noexcept = default;
+
+    constexpr Vec3(float x, float y, float z) noexcept
     {
         data_[0] = x;
         data_[1] = y;

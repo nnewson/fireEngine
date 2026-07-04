@@ -6,7 +6,9 @@ namespace fire_engine
 class Colour3
 {
 public:
-    constexpr Colour3(float r = 0.0f, float g = 0.0f, float b = 0.0f) noexcept
+    constexpr Colour3() noexcept = default;
+
+    constexpr Colour3(float r, float g, float b) noexcept
         : r_(r),
           g_(g),
           b_(b)
@@ -60,9 +62,9 @@ public:
     }
 
 private:
-    float r_;
-    float g_;
-    float b_;
+    float r_{0.0f};
+    float g_{0.0f};
+    float b_{0.0f};
 };
 
 } // namespace fire_engine
