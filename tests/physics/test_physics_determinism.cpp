@@ -76,8 +76,8 @@ std::uint64_t simulate(PhysicsWorld& world, std::span<const PhysicsBodyHandle> h
     // kSubstepRefreshRotation gate at impact, so their manifolds are re-collided mid-step
     // and the end state intentionally changed.
 #if defined(__linux__) && defined(__x86_64__)
-    // STALE — pre-P9.6 value. Re-baseline via the local Docker CI replica before merge
-    // (this platform's golden must be recorded on the platform itself).
+    // Recorded via the local Docker CI replica (tools/ci/run-local-ci.sh) — a platform's
+    // golden must be recorded on that platform.
     return 0x640fc158fb6ac02bULL;
 #else
     return 0x2b31386354735d8bULL;
