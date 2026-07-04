@@ -15,7 +15,7 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
 endif()
 set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS Dev Debug Release RelWithDebInfo MinSizeRel)
 
-option(FIRE_ENGINE_WARNINGS_AS_ERRORS "Treat first-party compiler warnings as errors" OFF)
+option(FIRE_ENGINE_WARNINGS_AS_ERRORS "Treat first-party compiler warnings as errors" ON)
 
 # --- Dependencies -------------------------------------------------------
 

@@ -55,15 +55,9 @@ Node* GltfLoader::loadScene(const std::string& path, SceneGraph& scene, Resource
 
     presizeAssets(asset, assets);
 
-    GltfLoadContext context{.asset = asset,
-                            .baseDir = gltfPath.parent_path().string(),
-                            .resources = resources,
-                            .assets = assets,
-                            .physics = physics,
-                            .controllableNodeIndices = std::move(controllableNodeIndices),
-                            .physicsNodeConfigs = std::move(physicsNodeConfigs),
-                            .clothNodeConfigs = std::move(clothNodeConfigs),
-                            .ragdollNodeConfigs = std::move(ragdollNodeConfigs)};
+    GltfLoadContext context(asset, gltfPath.parent_path().string(), resources, assets, physics,
+                            std::move(controllableNodeIndices), std::move(physicsNodeConfigs),
+                            std::move(clothNodeConfigs), std::move(ragdollNodeConfigs));
     GltfSceneBuilder builder{std::move(context)};
     return builder.build(scene, clothRegistrations, ragdolls);
 }

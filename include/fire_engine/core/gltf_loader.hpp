@@ -177,6 +177,29 @@ private:
         MeshMap meshMap;
         std::size_t nextAnimSlot{0};
         Node* activeCamera{nullptr};
+
+        // Constructor to centralize initialization and avoid missing-field-initializers warnings.
+        GltfLoadContext(const fastgltf::Asset& assetRef, std::string baseDir_,
+                        Resources& resourcesRef, Assets& assetsRef, PhysicsWorld& physicsRef,
+                        std::unordered_set<std::size_t> controllableNodeIndices_ = {},
+                        std::unordered_map<std::size_t, PhysicsConfig> physicsNodeConfigs_ = {},
+                        std::unordered_map<std::size_t, ClothMeshParams> clothNodeConfigs_ = {},
+                        std::unordered_map<std::size_t, RagdollParams> ragdollNodeConfigs_ = {})
+            : asset(assetRef),
+              baseDir(std::move(baseDir_)),
+              resources(resourcesRef),
+              assets(assetsRef),
+              physics(physicsRef),
+              controllableNodeIndices(std::move(controllableNodeIndices_)),
+              physicsNodeConfigs(std::move(physicsNodeConfigs_)),
+              clothNodeConfigs(std::move(clothNodeConfigs_)),
+              ragdollNodeConfigs(std::move(ragdollNodeConfigs_)),
+              nodeMap(),
+              meshMap(),
+              nextAnimSlot(0),
+              activeCamera(nullptr)
+        {
+        }
     };
 
     class GltfSceneBuilder
