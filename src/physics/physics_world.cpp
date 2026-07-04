@@ -494,6 +494,8 @@ PhysicsArticulationHandle PhysicsWorld::createArticulation()
     nextArticulationHandle_ = PhysicsArticulationHandle{nextArticulationHandle_.value() + 1U};
     articulationIndexByHandle_.emplace(handle.value(), articulations_.size());
     articulations_.emplace_back();
+    articulationSleepTimers_.push_back(0.0f);
+    articulationSleeping_.push_back(0U);
     return handle;
 }
 
@@ -687,6 +689,8 @@ void PhysicsWorld::clear()
     colliders_.clear();
     joints_.clear();
     articulations_.clear();
+    articulationSleepTimers_.clear();
+    articulationSleeping_.clear();
     bodyIndexByHandle_.clear();
     colliderIndexByHandle_.clear();
     jointIndexByHandle_.clear();
@@ -855,6 +859,34 @@ namespace
     return body.linearVelocity().magnitudeSquared() <
                kLinearSleepThreshold * kLinearSleepThreshold &&
            body.angularVelocity().magnitudeSquared() < angularThreshold * angularThreshold;
+}
+
+[[nodiscard]] float maxJointRate(const Articulation& art) noexcept
+{
+    float maxRate = 0.0f;
+    for (const float qDot : art.qDot())
+    {
+        maxRate = std::max(maxRate, std::abs(qDot));
+    }
+    return maxRate;
+}
+
+[[nodiscard]] bool belowArticulationSleepThreshold(const Articulation& art,
+                                                   float angularThreshold) noexcept
+{
+    const SpatialVector baseVel = art.baseVelocity();
+    return baseVel.linear.magnitudeSquared() < kLinearSleepThreshold * kLinearSleepThreshold &&
+           baseVel.angular.magnitudeSquared() < angularThreshold * angularThreshold &&
+           maxJointRate(art) < angularThreshold;
+}
+
+void zeroArticulationVelocity(Articulation& art) noexcept
+{
+    art.baseVelocity(SpatialVector{});
+    for (int dof = 0; dof < art.dofCount(); ++dof)
+    {
+        art.qDot(dof, 0.0f);
+    }
 }
 
 // Compose an authored shape with an already-built world matrix / rotation / per-axis
@@ -1520,6 +1552,16 @@ void PhysicsWorld::stepArticulations(float dt)
     // explicit integrator (see the Phase B double-pendulum finding); per-joint limits and
     // drives add the rest. Exposed via RagdollParams once the Ragdoll binding lands.
     constexpr float kArticulationDamping = 0.2f;
+    constexpr float kArticulationAngularSleepThreshold = 0.15f;
+
+    if (articulationSleepTimers_.size() != articulations_.size())
+    {
+        articulationSleepTimers_.resize(articulations_.size(), 0.0f);
+    }
+    if (articulationSleeping_.size() != articulations_.size())
+    {
+        articulationSleeping_.resize(articulations_.size(), 0U);
+    }
 
     // Gather each articulation's contacts from this step's broadphase pairs. A link collider
     // paired with a *static* rigid collider yields one plane contact per manifold point,
@@ -1648,8 +1690,44 @@ void PhysicsWorld::stepArticulations(float dt)
     // Step every articulation (contacts or not — they all fall under gravity).
     for (std::size_t i = 0; i < articulations_.size(); ++i)
     {
-        stepArticulationOnPlanes(articulations_[i], perArticulation[i], gravity_, dt,
-                                 kArticulationDamping, perArticulationLink[i]);
+        Articulation& art = articulations_[i];
+        if (!sleepingEnabled_)
+        {
+            articulationSleepTimers_[i] = 0.0f;
+            articulationSleeping_[i] = 0U;
+            stepArticulationOnPlanes(art, perArticulation[i], gravity_, dt, kArticulationDamping,
+                                     perArticulationLink[i]);
+            continue;
+        }
+
+        if (articulationSleeping_[i] != 0U)
+        {
+            if (belowArticulationSleepThreshold(art, kArticulationAngularSleepThreshold))
+            {
+                zeroArticulationVelocity(art);
+                continue;
+            }
+            articulationSleeping_[i] = 0U;
+            articulationSleepTimers_[i] = 0.0f;
+        }
+
+        stepArticulationOnPlanes(art, perArticulation[i], gravity_, dt, kArticulationDamping,
+                                 perArticulationLink[i]);
+
+        if (belowArticulationSleepThreshold(art, kArticulationAngularSleepThreshold))
+        {
+            articulationSleepTimers_[i] += dt;
+        }
+        else
+        {
+            articulationSleepTimers_[i] = 0.0f;
+        }
+
+        if (articulationSleepTimers_[i] >= kSleepTime)
+        {
+            zeroArticulationVelocity(art);
+            articulationSleeping_[i] = 1U;
+        }
     }
 }
 

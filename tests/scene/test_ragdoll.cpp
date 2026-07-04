@@ -4,6 +4,7 @@
 #include <cmath>
 #include <filesystem>
 #include <memory>
+#include <string_view>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -277,6 +278,42 @@ float skinnedGyration(const SkinData& sd, const fire_engine::Articulation& art, 
         sumSq += (s - centroid).magnitudeSquared();
     }
     return std::sqrt(sumSq / static_cast<float>(skinned.size()));
+}
+
+std::size_t boneIndexNamed(std::span<Node* const> bones, std::string_view name)
+{
+    const auto it = std::ranges::find_if(bones, [name](const Node* bone)
+                                         { return bone != nullptr && bone->name() == name; });
+    REQUIRE(it != bones.end());
+    return static_cast<std::size_t>(std::distance(bones.begin(), it));
+}
+
+Vec3 linkWorldPos(const fire_engine::Articulation& art, const Ragdoll& rag, std::size_t bone)
+{
+    const int link = rag.link(bone);
+    REQUIRE(link >= 0);
+    return art.linkWorld(static_cast<std::size_t>(link)).translation;
+}
+
+float cesiumHeadFootChord(const fire_engine::Articulation& art, const Ragdoll& rag,
+                          std::span<Node* const> bones)
+{
+    const Vec3 head = linkWorldPos(art, rag, boneIndexNamed(bones, "Skeleton_neck_joint_2"));
+    const Vec3 leftFoot = linkWorldPos(art, rag, boneIndexNamed(bones, "leg_joint_L_5"));
+    const Vec3 rightFoot = linkWorldPos(art, rag, boneIndexNamed(bones, "leg_joint_R_5"));
+    const Vec3 feet = (leftFoot + rightFoot) * 0.5f;
+    return (head - feet).magnitude();
+}
+
+float cesiumHeadFootHorizontalChord(const fire_engine::Articulation& art, const Ragdoll& rag,
+                                    std::span<Node* const> bones)
+{
+    const Vec3 head = linkWorldPos(art, rag, boneIndexNamed(bones, "Skeleton_neck_joint_2"));
+    const Vec3 leftFoot = linkWorldPos(art, rag, boneIndexNamed(bones, "leg_joint_L_5"));
+    const Vec3 rightFoot = linkWorldPos(art, rag, boneIndexNamed(bones, "leg_joint_R_5"));
+    const Vec3 feet = (leftFoot + rightFoot) * 0.5f;
+    const Vec3 d = head - feet;
+    return std::sqrt(d.x() * d.x() + d.z() * d.z());
 }
 
 } // namespace
@@ -674,28 +711,66 @@ TEST_CASE("Ragdoll.CesiumManRagdollAppFaithful", "[Ragdoll][CesiumMan]")
     rag.activate();
     const SkinData skin = loadSkinData(asset);
     const float bindGyr = skinnedGyration(skin, *art, rag);
+    const float bindHeadFoot = cesiumHeadFootChord(*art, rag, bones);
 
-    for (int i = 0; i < 1500; ++i)
+    constexpr int kSettleFrames = 1500;
+    for (int i = 0; i < kSettleFrames; ++i)
     {
         physics.step(1.0f / 60.0f);
         sg.applyPhysics(physics); // mirror the app's per-step calls exactly
         rag.syncNodes();
         REQUIRE(std::isfinite(art->baseVelocity().linear.magnitude()));
     }
+    const float settledGyr = skinnedGyration(skin, *art, rag);
+    const float settledHeadFoot = cesiumHeadFootChord(*art, rag, bones);
+    const float settledHeadFootHorizontal = cesiumHeadFootHorizontalChord(*art, rag, bones);
+
+    // The slow failure mode happens after the ragdoll looks settled: tiny residual contact/limit
+    // corrections keep curling the skeleton into a C. Continue past the old settle check and make
+    // sure the head-to-feet chord does not keep collapsing.
+    constexpr int kLateFrames = 1800;
+    for (int i = 0; i < kLateFrames; ++i)
+    {
+        physics.step(1.0f / 60.0f);
+        sg.applyPhysics(physics);
+        rag.syncNodes();
+        REQUIRE(std::isfinite(art->baseVelocity().linear.magnitude()));
+    }
+
     float jointRate = 0.0f;
     for (const float v : art->qDot())
     {
         jointRate = std::max(jointRate, std::abs(v));
     }
-    const float settledGyr = skinnedGyration(skin, *art, rag);
+    const float lateGyr = skinnedGyration(skin, *art, rag);
+    const float lateHeadFoot = cesiumHeadFootChord(*art, rag, bones);
+    const float lateHeadFootHorizontal = cesiumHeadFootHorizontalChord(*art, rag, bones);
     INFO("jointRate=" << jointRate << " baseLin=" << art->baseVelocity().linear.magnitude()
                       << " baseAng=" << art->baseVelocity().angular.magnitude()
-                      << " gyrRatio=" << settledGyr / bindGyr);
+                      << " settledGyrRatio=" << settledGyr / bindGyr
+                      << " lateGyrRatio=" << lateGyr / bindGyr
+                      << " settledHeadFootRatio=" << settledHeadFoot / bindHeadFoot
+                      << " lateHeadFootRatio=" << lateHeadFoot / bindHeadFoot
+                      << " settledHeadFootHorizontal=" << settledHeadFootHorizontal
+                      << " lateHeadFootHorizontal=" << lateHeadFootHorizontal);
     // The app's failure mode was a spawn-interpenetration blast (the ragdoll built from a collapsed
     // animated skeleton) that spun the base to ~12 rad/s and NEVER settled. The fix builds from the
     // bind pose; so the ragdoll must come to REST (not keep churning) and keep a body's shape.
+    // It also must not keep curling after rest: head-to-feet chord loss after the settle window is
+    // the visible "C shape around Y" regression.
     CHECK(jointRate < 0.15f);
     CHECK(art->baseVelocity().linear.magnitude() < 0.01f);
     CHECK(art->baseVelocity().angular.magnitude() < 0.1f);
+    CHECK(jointRate == Catch::Approx(0.0f).margin(1.0e-5f));
+    CHECK(art->baseVelocity().linear.magnitude() == Catch::Approx(0.0f).margin(1.0e-5f));
+    CHECK(art->baseVelocity().angular.magnitude() == Catch::Approx(0.0f).margin(1.0e-5f));
     CHECK(settledGyr > 0.6f * bindGyr);
+    CHECK(lateGyr > 0.6f * bindGyr);
+    CHECK(settledHeadFoot > 0.45f * bindHeadFoot);
+    CHECK(lateHeadFoot > 0.45f * bindHeadFoot);
+    CHECK(lateHeadFoot > 0.85f * settledHeadFoot);
+    if (settledHeadFootHorizontal > 0.1f)
+    {
+        CHECK(lateHeadFootHorizontal > 0.85f * settledHeadFootHorizontal);
+    }
 }

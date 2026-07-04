@@ -360,6 +360,8 @@ private:
     // articulation() stay stable as more are added (links/colliders cache the handle, not
     // a pointer). Keyed for O(1) lookup by handle value.
     std::deque<Articulation> articulations_;
+    std::vector<float> articulationSleepTimers_;
+    std::vector<std::uint8_t> articulationSleeping_;
     std::unordered_map<std::uint32_t, std::size_t> articulationIndexByHandle_;
     // Side-tables for O(1) lookup into the entry containers, keyed by handle
     // value and (for the broadphase's pair pointers) by Collider address.
