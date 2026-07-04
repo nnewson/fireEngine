@@ -137,6 +137,8 @@ namespace
 {
     const std::uint64_t lo = a < b ? a : b;
     const std::uint64_t hi = a < b ? b : a;
+    // Pack two 20-bit link indices as an unordered pair key; larger indices would alias.
+    assert(hi < (1ULL << 20) && "self-collision link index exceeds packed key range");
     return (lo << 20) | hi;
 }
 } // namespace
@@ -606,12 +608,12 @@ Vec3 Articulation::impulseResponse(std::size_t link, const Vec3& worldPoint,
 }
 
 float Articulation::inverseEffectiveMass(std::size_t link, const Vec3& worldPoint,
-                                         const Vec3& worldDir) const
+                                         const Vec3& worldDir)
 {
     // A unit impulse along worldDir; the point-velocity response projected back onto worldDir
-    // is dᵀ (J M⁻¹ Jᵀ) d = the inverse effective mass. const via a non-committing probe.
-    const Vec3 dv =
-        const_cast<Articulation*>(this)->impulseResponse(link, worldPoint, worldDir, false);
+    // is dᵀ (J M⁻¹ Jᵀ) d = the inverse effective mass. The probe does not commit velocity
+    // changes, but it does reuse the articulation's scratch buffers.
+    const Vec3 dv = impulseResponse(link, worldPoint, worldDir, false);
     return Vec3::dotProduct(dv, worldDir);
 }
 

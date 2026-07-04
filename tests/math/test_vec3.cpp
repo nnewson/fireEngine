@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <limits>
+#include <type_traits>
 
 #include <support/test_traits.hpp>
 
@@ -37,13 +38,11 @@ TEST_CASE("Vec3Construction.ExplicitValues", "[Vec3Construction]")
     expectNear(v, 1.0f, 2.0f, 3.0f);
 }
 
-TEST_CASE("Vec3Construction.PartialArgs", "[Vec3Construction]")
+TEST_CASE("Vec3Construction.RejectsPartialArgs", "[Vec3Construction]")
 {
-    Vec3 vx{5.0f};
-    expectNear(vx, 5.0f, 0.0f, 0.0f);
-
-    Vec3 vxy{5.0f, 6.0f};
-    expectNear(vxy, 5.0f, 6.0f, 0.0f);
+    static_assert(!std::is_constructible_v<Vec3, float>);
+    static_assert(!std::is_constructible_v<Vec3, float, float>);
+    static_assert(!std::is_convertible_v<float, Vec3>);
 }
 
 TEST_CASE("Vec3Construction.NegativeValues", "[Vec3Construction]")

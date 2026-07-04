@@ -600,7 +600,8 @@ void FireEngine::mainLoop()
         // Ragdoll diagnostic (FE_RAGDOLL_DBG=1): once a second, report each articulated ragdoll's
         // max joint rate + base speed so the app can be compared directly against the headless
         // settle test — the two must agree or the test isn't measuring what ships.
-        if (std::getenv("FE_RAGDOLL_DBG") != nullptr)
+        static const bool kRagdollDebug = std::getenv("FE_RAGDOLL_DBG") != nullptr;
+        if (kRagdollDebug)
         {
             static int frame = 0;
             if (++frame % 60 == 0)

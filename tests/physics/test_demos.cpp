@@ -12,11 +12,17 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <numbers>
 #include <vector>
 
+#include <fastgltf/core.hpp>
+#include <fastgltf/tools.hpp>
+#include <fastgltf/types.hpp>
+
 #include <fire_engine/collision/ray.hpp>
 #include <fire_engine/core/convex_hull_builder.hpp>
+#include <fire_engine/core/gltf_loader.hpp>
 #include <fire_engine/physics/collider_shape.hpp>
 #include <fire_engine/physics/physics_world.hpp>
 
@@ -525,4 +531,105 @@ TEST_CASE("Demos.Query.RaycastAndOverlapFindBodies", "[Demos]")
     // overlapSphere finds both bodies when its radius reaches the ring, none when tiny.
     CHECK(world.overlapSphere(origin, 5.0f).size() == 2);
     CHECK(world.overlapSphere(origin, 1.0f).empty());
+}
+
+// Diagnostic probe (hidden): replay ConvexHullDemo from the ACTUAL gltf (fastgltf TRS +
+// GltfLoader::meshConvexHull — the loader's own hull path, bit-identical inputs) and trace the
+// orange tetra (Tetra0)'s yaw / |w| / up-axis / sleep per step, to explain the reported
+// "snap rotation about Y just before sleeping".
+TEST_CASE("Demos.ConvexHull.Tetra0YawProbe", "[.][ConvexProbe]")
+{
+    fastgltf::Parser parser;
+    auto data = fastgltf::GltfDataBuffer::FromPath("../assets/physics_demos/ConvexHullDemo.gltf");
+    REQUIRE(data.error() == fastgltf::Error::None);
+    auto result = parser.loadGltf(data.get(), "../assets/physics_demos",
+                                  fastgltf::Options::LoadExternalBuffers);
+    REQUIRE(result.error() == fastgltf::Error::None);
+    const fastgltf::Asset& asset = result.get();
+
+    PhysicsWorld world;
+    addStaticFloor(world, 6.0f, 0.5f); // node 0: authored Static box, top at y=0, friction .5
+
+    std::vector<PhysicsBodyHandle> tetras;
+    for (std::size_t ni = 1; ni <= 3; ++ni) // Tetra0..2
+    {
+        const fastgltf::Node& n = asset.nodes[ni];
+        const auto* trs = std::get_if<fastgltf::TRS>(&n.transform);
+        REQUIRE(trs != nullptr);
+        PhysicsBodyDesc desc;
+        desc.type = PhysicsBodyType::Dynamic;
+        desc.position = {trs->translation.x(), trs->translation.y(), trs->translation.z()};
+        desc.rotation = {trs->rotation.x(), trs->rotation.y(), trs->rotation.z(),
+                         trs->rotation.w()};
+        desc.mass = 1.0f;
+        desc.gravityScale = 1.0f;
+        desc.material = PhysicsMaterial{.restitution = 0.0f, .friction = 0.5f};
+        const PhysicsBodyHandle body = world.createBody(desc);
+        ColliderDesc collider;
+        collider.shape = GltfLoader::meshConvexHull(asset, asset.meshes[n.meshIndex.value()]);
+        collider.material = desc.material;
+        static_cast<void>(world.createCollider(body, collider));
+        tetras.push_back(body);
+    }
+
+    const PhysicsBodyHandle orange = tetras[0]; // Tetra0 = Mat1 (orange)
+    float prevYaw = 0.0f;
+    bool prevAsleep = false;
+    Quaternion prevQ = Quaternion::identity();
+    float twistAccum = 0.0f;
+    for (int i = 0; i < 900; ++i)
+    {
+        world.step(kFixedDt);
+        const auto t = world.bodyTransform(orange);
+        REQUIRE(t.has_value());
+        const Quaternion q = t->rotation();
+        const Vec3 xw = q.rotate(Vec3{1.0f, 0.0f, 0.0f});
+        const Vec3 up = q.rotate(Vec3{0.0f, 1.0f, 0.0f});
+        const float yaw = std::atan2(xw.z(), xw.x()) * 180.0f / std::numbers::pi_v<float>;
+        const float w = world.body(orange)->angularVelocity().magnitude();
+        const float v = world.body(orange)->linearVelocity().magnitude();
+        const bool asleep = world.sleeping(orange);
+        float dyaw = yaw - prevYaw;
+        if (dyaw > 180.0f)
+        {
+            dyaw -= 360.0f;
+        }
+        if (dyaw < -180.0f)
+        {
+            dyaw += 360.0f;
+        }
+        // Contacts on Tetra0 this step (position near the body's XZ, i.e. around x=-1.6).
+        int contacts = 0;
+        for (const DebugContact& c : world.debugContacts())
+        {
+            if (std::abs(c.point.x() - t->position().x()) < 0.8f &&
+                std::abs(c.point.z() - t->position().z()) < 0.8f)
+            {
+                ++contacts;
+            }
+        }
+        const float wy = world.body(orange)->angularVelocity().y();
+        // True rotation about world Y this step: twist decomposition of the delta rotation.
+        const Quaternion dq = Quaternion::normalise(q * prevQ.conjugate());
+        const float twistDeg =
+            2.0f * std::atan2(dq.y(), dq.w()) * 180.0f / std::numbers::pi_v<float>;
+        if (i > 40)
+        {
+            twistAccum += twistDeg;
+        }
+        prevQ = q;
+        // Print the settle window in full detail, plus periodic lines and the sleep transition.
+        if ((i >= 40 && i <= 70) || i % 30 == 0 || asleep != prevAsleep)
+        {
+            std::printf("[t0] step %3d yaw=%8.2f dyaw=%7.2f twist=%7.2f acc=%7.2f |w|=%6.3f "
+                        "wy=%7.3f upY=%5.2f y=%6.3f c=%d%s\n",
+                        i, static_cast<double>(yaw), static_cast<double>(dyaw),
+                        static_cast<double>(twistDeg), static_cast<double>(twistAccum),
+                        static_cast<double>(w), static_cast<double>(wy),
+                        static_cast<double>(up.y()), static_cast<double>(t->position().y()),
+                        contacts, asleep ? "  <SLEEP>" : "");
+        }
+        prevYaw = yaw;
+        prevAsleep = asleep;
+    }
 }

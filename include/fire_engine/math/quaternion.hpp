@@ -12,7 +12,9 @@ namespace fire_engine
 class Quaternion
 {
 public:
-    constexpr Quaternion(float x = 0.0f, float y = 0.0f, float z = 0.0f, float w = 1.0f) noexcept
+    constexpr Quaternion() noexcept = default;
+
+    constexpr Quaternion(float x, float y, float z, float w) noexcept
         : x_(x),
           y_(y),
           z_(z),
@@ -386,10 +388,10 @@ public:
     }
 
 private:
-    float x_;
-    float y_;
-    float z_;
-    float w_;
+    float x_{0.0f};
+    float y_{0.0f};
+    float z_{0.0f};
+    float w_{1.0f};
 };
 
 } // namespace fire_engine

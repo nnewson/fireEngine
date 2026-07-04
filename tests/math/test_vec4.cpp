@@ -1,6 +1,7 @@
 #include <fire_engine/math/vec4.hpp>
 
 #include <cmath>
+#include <type_traits>
 
 #include <support/test_traits.hpp>
 
@@ -37,16 +38,12 @@ TEST_CASE("Vec4Construction.ExplicitValues", "[Vec4Construction]")
     expectNear(v, 1.0f, 2.0f, 3.0f, 4.0f);
 }
 
-TEST_CASE("Vec4Construction.PartialArgs", "[Vec4Construction]")
+TEST_CASE("Vec4Construction.RejectsPartialArgs", "[Vec4Construction]")
 {
-    Vec4 vx{5.0f};
-    expectNear(vx, 5.0f, 0.0f, 0.0f, 0.0f);
-
-    Vec4 vxy{5.0f, 6.0f};
-    expectNear(vxy, 5.0f, 6.0f, 0.0f, 0.0f);
-
-    Vec4 vxyz{5.0f, 6.0f, 7.0f};
-    expectNear(vxyz, 5.0f, 6.0f, 7.0f, 0.0f);
+    static_assert(!std::is_constructible_v<Vec4, float>);
+    static_assert(!std::is_constructible_v<Vec4, float, float>);
+    static_assert(!std::is_constructible_v<Vec4, float, float, float>);
+    static_assert(!std::is_convertible_v<float, Vec4>);
 }
 
 TEST_CASE("Vec4Construction.NegativeValues", "[Vec4Construction]")

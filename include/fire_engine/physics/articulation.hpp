@@ -241,9 +241,9 @@ public:
 
     // Inverse effective mass along `worldDir` at `worldPoint`: dᵀ (J M⁻¹ Jᵀ) d, the point's
     // response to a unit impulse. The solver uses 1/this as the constraint effective mass.
+    // This is non-const because the articulated response uses the class scratch buffers.
     [[nodiscard]]
-    float inverseEffectiveMass(std::size_t link, const Vec3& worldPoint,
-                               const Vec3& worldDir) const;
+    float inverseEffectiveMass(std::size_t link, const Vec3& worldPoint, const Vec3& worldDir);
 
     // Apply a world impulse at a link point, updating q̇ via the articulated impulse response
     // (Δq̇ = M⁻¹ Jᵀ·impulse), so the whole chain reacts — the seam's applyImpulse.

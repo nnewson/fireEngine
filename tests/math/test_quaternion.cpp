@@ -1,6 +1,7 @@
 #include <fire_engine/math/quaternion.hpp>
 
 #include <cmath>
+#include <type_traits>
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -51,6 +52,14 @@ TEST_CASE("QuaternionConstruction.ExplicitValues", "[QuaternionConstruction]")
 {
     Quaternion q{0.1f, 0.2f, 0.3f, 0.4f};
     expectNear(q, 0.1f, 0.2f, 0.3f, 0.4f);
+}
+
+TEST_CASE("QuaternionConstruction.RejectsPartialArgs", "[QuaternionConstruction]")
+{
+    static_assert(!std::is_constructible_v<Quaternion, float>);
+    static_assert(!std::is_constructible_v<Quaternion, float, float>);
+    static_assert(!std::is_constructible_v<Quaternion, float, float, float>);
+    static_assert(!std::is_convertible_v<float, Quaternion>);
 }
 
 TEST_CASE("QuaternionConstruction.IdentityFactory", "[QuaternionConstruction]")
