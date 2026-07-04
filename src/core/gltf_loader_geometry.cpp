@@ -4,7 +4,6 @@
 
 #include <array>
 #include <cstdint>
-#include <iostream>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -15,6 +14,7 @@
 #include <fastgltf/tools.hpp>
 #include <fastgltf/types.hpp>
 
+#include <fire_engine/core/log.hpp>
 #include <fire_engine/graphics/assets.hpp>
 #include <fire_engine/graphics/geometry.hpp>
 #include <fire_engine/graphics/material.hpp>
@@ -377,9 +377,10 @@ GltfLoader::GltfSceneBuilder::loadGeometry(const fastgltf::Primitive& primitive,
 
     if (!isSupportedPrimitiveType(primitive.type))
     {
-        std::clog << "Skipping glTF primitive with unsupported mode: "
-                  << primitiveTypeName(primitive.type)
-                  << " (only Triangles is currently rendered).\n";
+        log::warn(log::category::gltf,
+                  "Skipping glTF primitive with unsupported mode: {} (only Triangles is "
+                  "currently rendered).",
+                  primitiveTypeName(primitive.type));
         return {};
     }
 

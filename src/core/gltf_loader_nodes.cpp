@@ -1,7 +1,6 @@
 #include <fire_engine/core/gltf_loader.hpp>
 
 #include <cstddef>
-#include <iostream>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -16,6 +15,7 @@
 #include <fastgltf/types.hpp>
 
 #include <fire_engine/animation/animation.hpp>
+#include <fire_engine/core/log.hpp>
 #include <fire_engine/graphics/assets.hpp>
 #include <fire_engine/graphics/object.hpp>
 #include <fire_engine/math/constants.hpp>
@@ -79,8 +79,10 @@ void applyLight(const fastgltf::Asset& asset, const fastgltf::Node& gltfNode, No
     }
     if (!std::holds_alternative<Empty>(node.component()))
     {
-        std::clog << "glTF: skipping KHR_lights_punctual on node '" << node.name()
-                  << "' -- node already has a non-Empty component (mesh/animator)\n";
+        log::warn(log::category::gltf,
+                  "skipping KHR_lights_punctual on node '{}' -- node already has a non-Empty "
+                  "component (mesh/animator)",
+                  node.name());
         return;
     }
     const auto& gl = asset.lights[gltfNode.lightIndex.value()];

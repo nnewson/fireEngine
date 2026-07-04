@@ -4,7 +4,6 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
-#include <iostream>
 #include <limits>
 #include <memory>
 #include <type_traits>
@@ -15,6 +14,7 @@
 #include <fire_engine/collision/dynamic_aabb_tree_broad_phase.hpp>
 #include <fire_engine/collision/gjk_epa.hpp>
 #include <fire_engine/collision/narrow_phase.hpp>
+#include <fire_engine/core/log.hpp>
 #include <fire_engine/math/constants.hpp>
 #include <fire_engine/math/mat4.hpp>
 #include <fire_engine/math/vec4.hpp>
@@ -428,7 +428,7 @@ PhysicsColliderHandle PhysicsWorld::createMeshCollider(PhysicsBodyHandle bodyHan
     }
     if (owner->body.type() != PhysicsBodyType::Static)
     {
-        std::clog << "PhysicsWorld: mesh colliders are static-only; ignoring.\n";
+        log::warn(log::category::physics, "mesh colliders are static-only; ignoring.");
         return {};
     }
 

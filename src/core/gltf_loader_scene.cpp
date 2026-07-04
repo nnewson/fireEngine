@@ -1,7 +1,6 @@
 #include <fire_engine/core/gltf_loader.hpp>
 
 #include <filesystem>
-#include <iostream>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -14,6 +13,7 @@
 #include <fastgltf/core.hpp>
 #include <fastgltf/types.hpp>
 
+#include <fire_engine/core/log.hpp>
 #include <fire_engine/graphics/assets.hpp>
 #include <fire_engine/graphics/geometry.hpp>
 #include <fire_engine/physics/physics_world.hpp>
@@ -94,8 +94,8 @@ Node* GltfLoader::GltfSceneBuilder::build(SceneGraph& scene,
         const auto& gltfNode = asset.nodes[nodeIndex];
         if (!gltfNode.meshIndex.has_value())
         {
-            std::clog << "glTF: node '" << nodeName(asset, gltfNode)
-                      << "' has Cloth extras but no mesh; ignoring.\n";
+            log::warn(log::category::gltf, "node '{}' has Cloth extras but no mesh; ignoring.",
+                      nodeName(asset, gltfNode));
             continue;
         }
         const std::size_t geoIdx = firstGeometryIndex(gltfNode.meshIndex.value());
@@ -139,8 +139,9 @@ Node* GltfLoader::GltfSceneBuilder::build(SceneGraph& scene,
             const auto& gltfNode = asset.nodes[nodeIndex];
             if (!gltfNode.skinIndex.has_value())
             {
-                std::clog << "glTF: node '" << nodeName(asset, gltfNode)
-                          << "' has Ragdoll extras but no skin; ignoring.\n";
+                log::warn(log::category::gltf,
+                          "node '{}' has Ragdoll extras but no skin; ignoring.",
+                          nodeName(asset, gltfNode));
                 continue;
             }
             const auto& gltfSkin = asset.skins[gltfNode.skinIndex.value()];
@@ -169,9 +170,9 @@ Node* GltfLoader::GltfSceneBuilder::build(SceneGraph& scene,
                                   ? Ragdoll::makeArticulated(context_.physics, bones, params)
                                   : Ragdoll::make(context_.physics, bones, params);
             ragdoll.activate();
-            std::clog << "glTF: built " << (params.articulated ? "articulated" : "maximal")
-                      << " ragdoll for node '" << nodeName(asset, gltfNode) << "' with "
-                      << bones.size() << " bones\n";
+            log::info(log::category::gltf, "built {} ragdoll for node '{}' with {} bones",
+                      params.articulated ? "articulated" : "maximal", nodeName(asset, gltfNode),
+                      bones.size());
             ragdolls->push_back(std::move(ragdoll));
         }
     }
