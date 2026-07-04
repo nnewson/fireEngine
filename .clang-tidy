@@ -1,0 +1,39 @@
+# Disabled checks:
+# -*: start from an explicit allowlist so new clang-tidy releases do not silently enable extra
+#   checks and churn the baseline.
+# -bugprone-easily-swappable-parameters: too noisy for established math/render APIs that
+#   intentionally take adjacent Vec3, handle, index, and scalar parameters.
+# -bugprone-narrowing-conversions: useful long term, but the first pass would be dominated by
+#   existing size/index and graphics API conversions rather than the safety issues we want first.
+# -modernize-avoid-c-arrays: GPU/ABI payload structs and Vulkan-facing data often require fixed
+#   C arrays with exact layout; replacing them with std::array is not mechanically safe.
+# -modernize-return-braced-init-list: style preference only; explicit Vulkan RAII return types are
+#   easier to read and audit.
+# -modernize-use-auto: this project often keeps explicit types at casts and API boundaries for
+#   readability and data-layout review.
+# -modernize-use-designated-initializers: useful selectively, but noisy for small local aggregate
+#   adapters and would create churn unrelated to correctness.
+# -modernize-use-trailing-return-type: conflicts with the existing declaration style.
+Checks: >
+  -*,
+  bugprone-*,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-narrowing-conversions,
+  performance-*,
+  modernize-*,
+  -modernize-avoid-c-arrays,
+  -modernize-return-braced-init-list,
+  -modernize-use-auto,
+  -modernize-use-designated-initializers,
+  -modernize-use-trailing-return-type,
+  google-explicit-constructor,
+  readability-implicit-bool-conversion,
+  cppcoreguidelines-special-member-functions
+WarningsAsErrors: ''
+HeaderFilterRegex: '^(include/fire_engine|src)/.*'
+FormatStyle: file
+CheckOptions:
+  - key: readability-implicit-bool-conversion.AllowIntegerConditions
+    value: 'false'
+  - key: readability-implicit-bool-conversion.AllowPointerConditions
+    value: 'true'

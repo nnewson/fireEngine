@@ -6,5 +6,6 @@ CMakeUserPresets.json
 CMakeCache.txt
 .cache
 CMakeFiles
+Testing
 .DS_Store
 *.pyc

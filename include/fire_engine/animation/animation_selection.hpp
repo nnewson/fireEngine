@@ -9,8 +9,8 @@ namespace fire_engine
 {
 
 template <typename Entry>
-[[nodiscard]] std::optional<std::size_t>
-findAnimationEntryIndex(std::span<const Entry> entries, std::size_t id) noexcept
+[[nodiscard]] std::optional<std::size_t> findAnimationEntryIndex(std::span<const Entry> entries,
+                                                                 std::size_t id) noexcept
 {
     const auto found = std::ranges::find(entries, id, &Entry::id);
     if (found == entries.end())

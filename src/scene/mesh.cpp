@@ -32,7 +32,7 @@ void Mesh::addMorphAnimation(std::size_t id, Animation* anim)
 void Mesh::activeMorphAnimation(std::size_t id) noexcept
 {
     (void)selectAnimationEntry<MorphAnimationEntry>(morphAnimations_, id, activeMorphIndex_,
-                                                   activeMorphAnimationId_, morphInitialized_);
+                                                    activeMorphAnimationId_, morphInitialized_);
 }
 
 void Mesh::update(const InputState& input_state, const Transform& /*transform*/)
@@ -51,9 +51,9 @@ void Mesh::update(const InputState& input_state, const Transform& /*transform*/)
         const auto index = findMorphAnimationIndex(id);
         if (index && *index != activeMorphIndex_)
         {
-            (void)selectAnimationEntry<MorphAnimationEntry>(
-                morphAnimations_, id, activeMorphIndex_, activeMorphAnimationId_,
-                morphInitialized_);
+            (void)selectAnimationEntry<MorphAnimationEntry>(morphAnimations_, id, activeMorphIndex_,
+                                                            activeMorphAnimationId_,
+                                                            morphInitialized_);
         }
     }
 

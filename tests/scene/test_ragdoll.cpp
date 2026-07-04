@@ -372,7 +372,7 @@ TEST_CASE("Ragdoll.ActivateSetsWorldOverrideOnBones", "[Ragdoll]")
     CHECK_FALSE(b0.hasWorldOverride());
 }
 
-TEST_CASE("Ragdoll.HumanoidSettlesOnFloor", "[Ragdoll]")
+TEST_CASE("Ragdoll.HumanoidSettlesOnFloor", "[Ragdoll][slow]")
 {
     // P9.1 gate: a complex articulated ragdoll (17 bones / 16 joints, branching) dropped
     // onto a floor must come to REST. With the old hard-Baumgarte joints this never
@@ -437,7 +437,7 @@ TEST_CASE("Ragdoll.HumanoidSettlesOnFloor", "[Ragdoll]")
     CHECK(vmax < 0.05f); // came to rest — no joint-driven limit cycle
 }
 
-TEST_CASE("Ragdoll.GeneratedSingleJointDemoAssetRestsOnFloor", "[Ragdoll][Demos]")
+TEST_CASE("Ragdoll.GeneratedSingleJointDemoAssetRestsOnFloor", "[Ragdoll][Demos][slow]")
 {
     const std::filesystem::path gltfPath = "../assets/physics_demos/SingleJointRagdollDemo.gltf";
     const fastgltf::Asset asset = parseGltfAsset(gltfPath);
@@ -489,7 +489,7 @@ TEST_CASE("Ragdoll.GeneratedSingleJointDemoAssetRestsOnFloor", "[Ragdoll][Demos]
     CHECK(physics.sleeping(rag.body(0)));
 }
 
-TEST_CASE("Ragdoll.GeneratedTwoJointDemoAssetStaysConnected", "[Ragdoll][Demos]")
+TEST_CASE("Ragdoll.GeneratedTwoJointDemoAssetStaysConnected", "[Ragdoll][Demos][slow]")
 {
     const std::filesystem::path gltfPath = "../assets/physics_demos/TwoJointRagdollDemo.gltf";
     const fastgltf::Asset asset = parseGltfAsset(gltfPath);
@@ -660,7 +660,7 @@ ArticulatedRest dropArticulated(std::span<Node* const> bones, const RagdollParam
 
 } // namespace
 
-TEST_CASE("Ragdoll.ArticulatedTwoJointDemoSettlesOnFloor", "[Ragdoll][Demos]")
+TEST_CASE("Ragdoll.ArticulatedTwoJointDemoSettlesOnFloor", "[Ragdoll][Demos][slow]")
 {
     // Phase F2: the reduced-coordinate path binds the generated two-joint ragdoll (a floating
     // pelvis + one spherical child) and settles it on the floor — joint error is zero by
@@ -680,7 +680,7 @@ TEST_CASE("Ragdoll.ArticulatedTwoJointDemoSettlesOnFloor", "[Ragdoll][Demos]")
     CHECK(r.baseSpeed < 0.3f); // came (near) to rest
 }
 
-TEST_CASE("Ragdoll.CesiumManRagdollAppFaithful", "[Ragdoll][CesiumMan]")
+TEST_CASE("Ragdoll.CesiumManRagdollAppFaithful", "[Ragdoll][CesiumMan][slow]")
 {
     // Faithful to what the app actually runs (`fireEngineApp CesiumManRagdoll.gltf skybox.hdr -f`):
     // the *tagged* asset (pre-raised +0.4 Y), its own extras.Ragdoll params (as the loader reads),

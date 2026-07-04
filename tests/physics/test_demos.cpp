@@ -229,7 +229,7 @@ float reboundApex(float restitution)
 
 } // namespace
 
-TEST_CASE("Demos.FallRest.BoxComesToRestOnFloor", "[Demos]")
+TEST_CASE("Demos.FallRest.BoxComesToRestOnFloor", "[Demos][slow]")
 {
     // FallRestDemo.gltf: a single Dynamic box dropped onto a Static floor should
     // fall, settle, and come to rest with its bottom face on the floor (centre at
@@ -251,7 +251,7 @@ TEST_CASE("Demos.FallRest.BoxComesToRestOnFloor", "[Demos]")
     CHECK(std::abs(vel.z()) < 0.05f);
 }
 
-TEST_CASE("Demos.Restitution.HigherRestitutionBouncesHigher", "[Demos]")
+TEST_CASE("Demos.Restitution.HigherRestitutionBouncesHigher", "[Demos][slow]")
 {
     // RestitutionDemo.gltf: three spheres dropped from the same height bounce to
     // rebound heights ordered by restitution (rebound ~ restitution^2 * drop). The
@@ -269,7 +269,7 @@ TEST_CASE("Demos.Restitution.HigherRestitutionBouncesHigher", "[Demos]")
     CHECK(apex09 > 1.0f);
 }
 
-TEST_CASE("Demos.Friction.HighFrictionStaysLowFrictionSlides", "[Demos]")
+TEST_CASE("Demos.Friction.HighFrictionStaysLowFrictionSlides", "[Demos][slow]")
 {
     // FrictionRampDemo.gltf: two boxes on a 25-degree ramp. Combined friction is
     // sqrt(a*b); the box slides when the slope exceeds atan(mu). The sticky box
@@ -315,7 +315,7 @@ TEST_CASE("Demos.Friction.HighFrictionStaysLowFrictionSlides", "[Demos]")
     CHECK(Vec3::dotProduct(slipVel, slipVel) < 0.09f); // |v| < 0.3
 }
 
-TEST_CASE("Demos.Stack.SettlesAndStaysStill", "[Demos]")
+TEST_CASE("Demos.Stack.SettlesAndStaysStill", "[Demos][slow]")
 {
     // StackDemo.gltf: a 5-high tower of boxes dropped with small gaps settles into a
     // resting stack at centres 0.5, 1.5, 2.5, 3.5, 4.5 and stays still (no collapse, no
@@ -348,7 +348,7 @@ TEST_CASE("Demos.Stack.SettlesAndStaysStill", "[Demos]")
     }
 }
 
-TEST_CASE("Demos.Topple.TallBoxTopplesOntoSide", "[Demos]")
+TEST_CASE("Demos.Topple.TallBoxTopplesOntoSide", "[Demos][slow]")
 {
     // ToppleDemo.gltf: a tall box (half 0.3 x 1.0 x 0.3) tilted 30 deg — past its
     // ~16.7 deg balance angle — topples onto its long side (local +y ends up
@@ -368,7 +368,7 @@ TEST_CASE("Demos.Topple.TallBoxTopplesOntoSide", "[Demos]")
     CHECK(world.body(box)->angularVelocity().approxEqual(Vec3{0.0f, 0.0f, 0.0f}, 0.1f));
 }
 
-TEST_CASE("Demos.ConvexHull.PileSettlesAtRest", "[Demos]")
+TEST_CASE("Demos.ConvexHull.PileSettlesAtRest", "[Demos][slow]")
 {
     // ConvexHullDemo.gltf: tetrahedra (built as ConvexHullShape from their mesh)
     // dropped onto the floor tumble through the GJK/EPA convex narrowphase, land on a
@@ -398,7 +398,7 @@ TEST_CASE("Demos.ConvexHull.PileSettlesAtRest", "[Demos]")
     }
 }
 
-TEST_CASE("Demos.Sleep.StackSleepsThenWakesOnImpact", "[Demos]")
+TEST_CASE("Demos.Sleep.StackSleepsThenWakesOnImpact", "[Demos][slow]")
 {
     // SleepDemo.gltf: a 3-box stack settles and the island sleeps; a striker slides
     // in along the floor, wakes it on impact (~step 103), then friction stops the
@@ -442,7 +442,7 @@ TEST_CASE("Demos.Sleep.StackSleepsThenWakesOnImpact", "[Demos]")
     CHECK(world.sleeping(striker));
 }
 
-TEST_CASE("Demos.StaticMesh.BodiesSettleInValley", "[Demos]")
+TEST_CASE("Demos.StaticMesh.BodiesSettleInValley", "[Demos][slow]")
 {
     // StaticMeshDemo.gltf: boxes + a sphere dropped onto a triangulated valley (a
     // Static triangle-mesh collider, not a box) land on the flat bottom (y = 0) and
@@ -468,7 +468,7 @@ TEST_CASE("Demos.StaticMesh.BodiesSettleInValley", "[Demos]")
     }
 }
 
-TEST_CASE("Demos.Compound.LShapeRestsOnFloor", "[Demos]")
+TEST_CASE("Demos.Compound.LShapeRestsOnFloor", "[Demos][slow]")
 {
     // CompoundDemo.gltf: an L-shaped compound (bar + upright) has its centre of mass
     // offset toward the corner (engine-aggregated, volume-weighted), so it rests
@@ -501,7 +501,7 @@ TEST_CASE("Demos.Compound.LShapeRestsOnFloor", "[Demos]")
     CHECK(world.sleeping(body));
 }
 
-TEST_CASE("Demos.Query.RaycastAndOverlapFindBodies", "[Demos]")
+TEST_CASE("Demos.Query.RaycastAndOverlapFindBodies", "[Demos][slow]")
 {
     // The -q query-probe demo casts raycasts (a rotating fan) and an overlap sphere at
     // a ring of static bodies. This verifies the underlying queries: a ray hits the
@@ -587,7 +587,6 @@ TEST_CASE("Demos.ConvexHull.Tetra0YawProbe", "[.][ConvexProbe]")
         const Vec3 up = q.rotate(Vec3{0.0f, 1.0f, 0.0f});
         const float yaw = std::atan2(xw.z(), xw.x()) * 180.0f / std::numbers::pi_v<float>;
         const float w = world.body(orange)->angularVelocity().magnitude();
-        const float v = world.body(orange)->linearVelocity().magnitude();
         const bool asleep = world.sleeping(orange);
         float dyaw = yaw - prevYaw;
         if (dyaw > 180.0f)

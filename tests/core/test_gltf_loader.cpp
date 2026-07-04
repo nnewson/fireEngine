@@ -25,6 +25,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 using fire_engine::AlphaMode;
+using fire_engine::BoxShape;
 using fire_engine::ClearcoatParams;
 using fire_engine::ClothMeshParams;
 using fire_engine::GltfLoader;
@@ -33,7 +34,6 @@ using fire_engine::Material;
 using fire_engine::MaterialTextureSlot;
 using fire_engine::Node;
 using fire_engine::PhysicsBodyType;
-using fire_engine::BoxShape;
 using fire_engine::SphereShape;
 using fire_engine::TransmissionParams;
 using fire_engine::Vec3;
