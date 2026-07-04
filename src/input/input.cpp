@@ -81,6 +81,10 @@ InputState Input::update(Window& window, float deltaTime, bool suppressMouse, bo
     state.cameraState(cameraState);
     state.controllerState(controllerState);
 
+    const bool overlayToggleKey = keyboard_.pressed(Key::F1);
+    state.overlayTogglePressed(overlayToggleKey && !previousOverlayToggleKey_);
+    previousOverlayToggleKey_ = overlayToggleKey;
+
     if (!suppressKeyboard && keyboard_.pressed(Key::One))
     {
         state.animationState().activeAnimation(0);

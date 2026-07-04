@@ -50,6 +50,12 @@ TEST_CASE("InputStateConstruction.DefaultVariantStateHasNoCycleCommand", "[Input
     CHECK(s.variantState().cycleDelta() == 0);
 }
 
+TEST_CASE("InputStateConstruction.DefaultOverlayToggleIsFalse", "[InputStateConstruction]")
+{
+    InputState s;
+    CHECK_FALSE(s.overlayTogglePressed());
+}
+
 // ==========================================================================
 // Accessors
 // ==========================================================================
@@ -106,6 +112,13 @@ TEST_CASE("InputStateAccessors.SetDeltaTime", "[InputStateAccessors]")
     CHECK(s.deltaTime() == Catch::Approx(1.25f).margin(1e-5f));
 }
 
+TEST_CASE("InputStateAccessors.SetOverlayTogglePressed", "[InputStateAccessors]")
+{
+    InputState s;
+    s.overlayTogglePressed(true);
+    CHECK(s.overlayTogglePressed());
+}
+
 TEST_CASE("InputStateAccessors.MutableCameraStateRef", "[InputStateAccessors]")
 {
     InputState s;
@@ -145,12 +158,14 @@ TEST_CASE("InputStateCopy.CopyConstructCreatesIndependentCopy", "[InputStateCopy
     a.animationState().activeAnimation(5);
     a.controllerState().deltaPosition({1.0f, 0.0f, 0.0f});
     a.variantState().cycleDelta(1);
+    a.overlayTogglePressed(true);
 
     InputState b{a};
     CHECK(b.time() == Catch::Approx(10.0).margin(1e-5f));
     CHECK(*b.animationState().activeAnimation() == 5);
     CHECK(b.controllerState().deltaPosition().x() == Catch::Approx(1.0f).margin(1e-5f));
     CHECK(b.variantState().cycleDelta() == 1);
+    CHECK(b.overlayTogglePressed());
 
     b.time(20.0);
     CHECK(a.time() == Catch::Approx(10.0).margin(1e-5f));

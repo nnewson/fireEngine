@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <memory>
 #include <optional>
+#include <string_view>
 #include <vector>
 
 #include <fire_engine/graphics/assets.hpp>
@@ -19,6 +20,18 @@
 namespace fire_engine
 {
 
+struct RunOptions
+{
+    std::string_view scenePath{};
+    std::string_view skyboxPath{};
+    bool addFloor{false};
+    bool addParticles{false};
+    bool addCloth{false};
+    bool addCharacter{false};
+    bool addQueryProbe{false};
+    RendererDebug debug{};
+};
+
 // ---------------------------------------------------------------------------
 // Application
 // ---------------------------------------------------------------------------
@@ -33,10 +46,7 @@ public:
     FireEngine(FireEngine&&) noexcept = delete;
     FireEngine& operator=(FireEngine&&) noexcept = delete;
 
-    void run(size_t width, size_t height, std::string_view app_name,
-             std::string_view scene_path = "", std::string_view skybox_path = "",
-             bool addFloor = false, bool addParticles = false, bool addCloth = false,
-             bool addCharacter = false, bool addQueryProbe = false, RendererDebug debug = {});
+    void run(size_t width, size_t height, std::string_view appName, const RunOptions& options = {});
 
 private:
     std::unique_ptr<Window> window_;
@@ -86,6 +96,8 @@ private:
     void updateCharacter(float dt);
     void addTestCube();
     void mainLoop();
+    void stepSimulation(float dt, float& accumulator);
+    void syncRenderState(double time);
 };
 
 } // namespace fire_engine

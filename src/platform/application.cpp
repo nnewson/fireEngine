@@ -16,9 +16,15 @@ int main(int argc, char* argv[])
     try
     {
         FireEngine app;
-        app.run(800, 600, "FireEngine Demo", args.scenePath, args.skyboxPath, args.addFloor,
-                args.addParticles, args.addCloth, args.addCharacter, args.addQueryProbe,
-                args.debug);
+        const RunOptions options{.scenePath = args.scenePath,
+                                 .skyboxPath = args.skyboxPath,
+                                 .addFloor = args.addFloor,
+                                 .addParticles = args.addParticles,
+                                 .addCloth = args.addCloth,
+                                 .addCharacter = args.addCharacter,
+                                 .addQueryProbe = args.addQueryProbe,
+                                 .debug = args.debug};
+        app.run(800, 600, "FireEngine Demo", options);
     }
     catch (const std::exception& e)
     {
