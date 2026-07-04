@@ -5,8 +5,7 @@ ColumnLimit: 100
 IndentAccessModifiers: false
 AccessModifierOffset: -4
 PackConstructorInitializers: Never
-# BreakTemplateDeclarations: Yes
-AlwaysBreakTemplateDeclarations: Yes
+BreakTemplateDeclarations: Yes
 AllowShortFunctionsOnASingleLine: None
 PointerAlignment: Left
 InsertBraces: True

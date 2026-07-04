@@ -12,13 +12,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install clang-format
-        run: sudo apt-get update && sudo apt-get install -y clang-format
+      - name: Install clang-format-22
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget lsb-release software-properties-common
+          wget -qO - https://apt.llvm.org/llvm-snapshot.gpg.key | sudo apt-key add -
+          sudo add-apt-repository "deb http://apt.llvm.org/$(lsb_release -cs)/ llvm-toolchain-$(lsb_release -cs)-22 main"
+          sudo apt-get update
+          sudo apt-get install -y clang-format-22
       - name: Check formatting
         run: |
           find include src tests -type f \( \
             -name '*.hpp' -o -name '*.cpp' -o -name '*.h' -o -name '*.cxx' \
-          \) -print0 | xargs -0 clang-format --dry-run -Werror
+          \) -print0 | xargs -0 clang-format-22 --dry-run -Werror
 
   build-and-test:
     name: build and test
