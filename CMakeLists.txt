@@ -186,17 +186,34 @@ set(SHADER_SOURCES
     shaders/cloth_finalize.comp
 )
 
+# Prefer glslc (Shaderc); if absent, fall back to glslangValidator (glslang-tools).
+find_program(GLSLC_EXECUTABLE NAMES glslc)
+find_program(GLSLANG_VALIDATOR_EXECUTABLE NAMES glslangValidator)
+if(NOT GLSLC_EXECUTABLE AND NOT GLSLANG_VALIDATOR_EXECUTABLE)
+  message(FATAL_ERROR "Neither glslc nor glslangValidator was found; please install shader compiler tools (shaderc or glslang-tools).")
+endif()
+
 foreach(shader IN LISTS SHADER_SOURCES)
   get_filename_component(SHADER_NAME ${shader} NAME)
   set(SHADER_SPV ${CMAKE_CURRENT_BINARY_DIR}/${SHADER_NAME}.spv)
 
-  add_custom_command(
-    OUTPUT ${SHADER_SPV}
-    COMMAND glslc ${PROJECT_SOURCE_DIR}/${shader} -o ${SHADER_SPV}
-    DEPENDS ${PROJECT_SOURCE_DIR}/${shader}
-    COMMENT "Compiling ${SHADER_NAME} -> ${SHADER_NAME}.spv"
-    VERBATIM
-  )
+  if(GLSLC_EXECUTABLE)
+    add_custom_command(
+      OUTPUT ${SHADER_SPV}
+      COMMAND ${GLSLC_EXECUTABLE} ${PROJECT_SOURCE_DIR}/${shader} -o ${SHADER_SPV}
+      DEPENDS ${PROJECT_SOURCE_DIR}/${shader}
+      COMMENT "Compiling ${SHADER_NAME} -> ${SHADER_NAME}.spv"
+      VERBATIM
+    )
+  else()
+    add_custom_command(
+      OUTPUT ${SHADER_SPV}
+      COMMAND ${GLSLANG_VALIDATOR_EXECUTABLE} -V -o ${SHADER_SPV} ${PROJECT_SOURCE_DIR}/${shader}
+      DEPENDS ${PROJECT_SOURCE_DIR}/${shader}
+      COMMENT "Compiling ${SHADER_NAME} -> ${SHADER_NAME}.spv"
+      VERBATIM
+    )
+  endif()
 
   list(APPEND SHADER_SPVS ${SHADER_SPV})
 endforeach()
