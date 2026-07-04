@@ -396,16 +396,16 @@ bool primitiveNeedsTangents(const fastgltf::Asset& asset, const fastgltf::Primit
 }
 } // namespace
 
-Object GltfLoader::loadMesh(const fastgltf::Asset& asset, const fastgltf::Mesh& mesh,
-                            const std::string& baseDir, Resources& resources, Assets& assets,
-                            std::size_t meshIndex)
+Object GltfLoader::GltfSceneBuilder::loadMesh(const fastgltf::Mesh& mesh, std::size_t meshIndex)
 {
+    const fastgltf::Asset& asset = context_.asset;
+    Assets& assets = context_.assets;
     Object object;
     const std::size_t geoStartIdx = firstGeometryIndexForMesh(asset, meshIndex);
     const std::string meshName = meshDisplayName(mesh, meshIndex);
 
     auto resolveTexture = [&](std::size_t textureIndex, TextureEncoding encoding)
-    { return resolveTextureIndex(asset, textureIndex, baseDir, resources, assets, encoding); };
+    { return resolveTextureIndex(textureIndex, encoding); };
 
     for (std::size_t primIdx = 0; primIdx < mesh.primitives.size(); ++primIdx)
     {
@@ -413,8 +413,8 @@ Object GltfLoader::loadMesh(const fastgltf::Asset& asset, const fastgltf::Mesh& 
         const auto baseMaterialIndex = primitive.materialIndex;
         std::size_t geoIdx = geoStartIdx + primIdx;
 
-        auto tangentResult = loadGeometry(
-            asset, primitive, primitiveNeedsTangents(asset, primitive), resources, assets, geoIdx);
+        auto tangentResult =
+            loadGeometry(primitive, primitiveNeedsTangents(asset, primitive), geoIdx);
 
         auto loadMaterialWithTextures = [&](std::optional<std::size_t> materialIndex,
                                             std::optional<std::size_t> variantIndex = std::nullopt)
@@ -446,7 +446,7 @@ Object GltfLoader::loadMesh(const fastgltf::Asset& asset, const fastgltf::Mesh& 
         }
     }
 
-    object.load(resources);
+    object.load(context_.resources);
     return object;
 }
 

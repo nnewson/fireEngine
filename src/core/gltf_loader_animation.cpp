@@ -354,9 +354,10 @@ void GltfLoader::loadWeightChannel(const fastgltf::Asset& asset,
     }
 }
 
-void GltfLoader::loadAnimation(const fastgltf::Asset& asset, std::size_t gltfAnimIndex,
-                               std::size_t nodeIndex, Animation& la, std::size_t numMorphTargets)
+void GltfLoader::GltfSceneBuilder::loadAnimation(std::size_t gltfAnimIndex, std::size_t nodeIndex,
+                                                 Animation& la, std::size_t numMorphTargets)
 {
+    const fastgltf::Asset& asset = context_.asset;
     float sharedDuration = computeSharedDuration(asset, gltfAnimIndex);
 
     const auto& anim = asset.animations[gltfAnimIndex];
@@ -394,11 +395,11 @@ void GltfLoader::loadAnimation(const fastgltf::Asset& asset, std::size_t gltfAni
 // Skin loading helpers
 // ---------------------------------------------------------------------------
 
-void GltfLoader::loadSkin(const fastgltf::Asset& asset, std::size_t skinIndex,
-                          const NodeMap& nodeMap, Assets& assets)
+void GltfLoader::GltfSceneBuilder::loadSkin(std::size_t skinIndex)
 {
+    const fastgltf::Asset& asset = context_.asset;
     const auto& gltfSkin = asset.skins[skinIndex];
-    auto& skin = assets.skin(skinIndex);
+    auto& skin = context_.assets.skin(skinIndex);
 
     if (!gltfSkin.name.empty())
     {
@@ -429,8 +430,8 @@ void GltfLoader::loadSkin(const fastgltf::Asset& asset, std::size_t skinIndex,
     for (std::size_t i = 0; i < gltfSkin.joints.size(); ++i)
     {
         auto jointNodeIndex = gltfSkin.joints[i];
-        auto it = nodeMap.find(jointNodeIndex);
-        if (it == nodeMap.end())
+        auto it = context_.nodeMap.find(jointNodeIndex);
+        if (it == context_.nodeMap.end())
         {
             throw std::runtime_error("Skin joint references unknown node index " +
                                      std::to_string(jointNodeIndex));
@@ -439,10 +440,10 @@ void GltfLoader::loadSkin(const fastgltf::Asset& asset, std::size_t skinIndex,
     }
 }
 
-void GltfLoader::applySkins(const fastgltf::Asset& asset, const NodeMap& nodeMap,
-                            const MeshMap& meshMap, Assets& assets)
+void GltfLoader::GltfSceneBuilder::applySkins()
 {
-    for (const auto& [nodeIndex, nodePtr] : nodeMap)
+    const fastgltf::Asset& asset = context_.asset;
+    for (const auto& [nodeIndex, nodePtr] : context_.nodeMap)
     {
         const auto& gltfNode = asset.nodes[nodeIndex];
         if (!gltfNode.skinIndex.has_value())
@@ -451,15 +452,15 @@ void GltfLoader::applySkins(const fastgltf::Asset& asset, const NodeMap& nodeMap
         }
 
         auto skinIndex = gltfNode.skinIndex.value();
-        if (assets.skin(skinIndex).empty())
+        if (context_.assets.skin(skinIndex).empty())
         {
-            loadSkin(asset, skinIndex, nodeMap, assets);
+            loadSkin(skinIndex);
         }
 
-        auto meshIt = meshMap.find(nodeIndex);
-        if (meshIt != meshMap.end())
+        auto meshIt = context_.meshMap.find(nodeIndex);
+        if (meshIt != context_.meshMap.end())
         {
-            meshIt->second->skin(&assets.skin(skinIndex));
+            meshIt->second->skin(&context_.assets.skin(skinIndex));
         }
     }
 }

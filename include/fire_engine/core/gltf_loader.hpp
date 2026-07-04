@@ -162,6 +162,67 @@ private:
 
     static void presizeAssets(const fastgltf::Asset& asset, Assets& assets);
 
+    struct GltfLoadContext
+    {
+        const fastgltf::Asset& asset;
+        std::string baseDir;
+        Resources& resources;
+        Assets& assets;
+        PhysicsWorld& physics;
+        std::unordered_set<std::size_t> controllableNodeIndices;
+        std::unordered_map<std::size_t, PhysicsConfig> physicsNodeConfigs;
+        std::unordered_map<std::size_t, ClothMeshParams> clothNodeConfigs;
+        std::unordered_map<std::size_t, RagdollParams> ragdollNodeConfigs;
+        NodeMap nodeMap;
+        MeshMap meshMap;
+        std::size_t nextAnimSlot{0};
+        Node* activeCamera{nullptr};
+    };
+
+    class GltfSceneBuilder
+    {
+    public:
+        explicit GltfSceneBuilder(GltfLoadContext context);
+
+        Node* build(SceneGraph& scene, std::vector<ClothRegistration>* clothRegistrations,
+                    std::vector<Ragdoll>* ragdolls);
+
+    private:
+        GltfLoadContext context_;
+
+        void loadRootNode(SceneGraph& scene, std::size_t nodeIndex);
+        void configureAnimatedNode(std::size_t nodeIndex, Node& node);
+        void loadNode(std::size_t nodeIndex, Node& node);
+        Mesh& attachMeshToNode(std::size_t nodeIndex, std::size_t meshIndex, Node& meshNode,
+                               Node& physicsNode);
+        void validatePhysicsTarget(std::size_t nodeIndex, const fastgltf::Node& gltfNode) const;
+        void applyPhysicsConfig(std::size_t nodeIndex, const fastgltf::Mesh& mesh, Node& node);
+
+        void loadSkin(std::size_t skinIndex);
+        void applySkins();
+
+        [[nodiscard]]
+        Object loadMesh(const fastgltf::Mesh& mesh, std::size_t meshIndex);
+
+        [[nodiscard]]
+        TangentGenerationResult loadGeometry(const fastgltf::Primitive& primitive,
+                                             bool needsTangents, std::size_t geoIdx);
+
+        [[nodiscard]]
+        Image loadImage(std::size_t imageIndex);
+
+        [[nodiscard]]
+        KtxImage loadKtxImage(std::size_t imageIndex);
+
+        [[nodiscard]]
+        const Texture* resolveTextureIndex(std::size_t textureIndex, TextureEncoding encoding);
+
+        void loadAnimation(std::size_t gltfAnimIndex, std::size_t nodeIndex, Animation& anim,
+                           std::size_t numMorphTargets = 0);
+
+        Node& attachCamera(Node& node);
+    };
+
     // Node helpers
     static void applyControllable(std::size_t nodeIndex,
                                   const std::unordered_set<std::size_t>& controllableNodeIndices,
@@ -176,81 +237,20 @@ private:
     [[nodiscard]]
     static std::string nodeName(const fastgltf::Asset& asset, const fastgltf::Node& gltfNode);
 
-    static Node& attachCamera(Node& node, Node*& activeCamera);
-
-    static void
-    configureAnimatedNode(const fastgltf::Asset& asset, std::size_t nodeIndex, Node& node,
-                          const std::string& baseDir, Resources& resources, Assets& assets,
-                          NodeMap& nodeMap, MeshMap& meshMap, std::size_t& nextAnimSlot,
-                          Node*& activeCamera,
-                          const std::unordered_set<std::size_t>& controllableNodeIndices,
-                          const std::unordered_map<std::size_t, PhysicsConfig>& physicsNodeConfigs,
-                          PhysicsWorld& physics);
-
-    static void loadNode(const fastgltf::Asset& asset, std::size_t nodeIndex, Node& parentNode,
-                         const std::string& baseDir, Resources& resources, Assets& assets,
-                         NodeMap& nodeMap, MeshMap& meshMap, std::size_t& nextAnimSlot,
-                         Node*& activeCamera,
-                         const std::unordered_set<std::size_t>& controllableNodeIndices,
-                         const std::unordered_map<std::size_t, PhysicsConfig>& physicsNodeConfigs,
-                         PhysicsWorld& physics);
-
-    static Mesh&
-    attachMeshToNode(const fastgltf::Asset& asset, std::size_t nodeIndex, std::size_t meshIndex,
-                     Node& meshNode, Node& physicsNode, const std::string& baseDir,
-                     Resources& resources, Assets& assets, MeshMap& meshMap,
-                     const std::unordered_map<std::size_t, PhysicsConfig>& physicsNodeConfigs,
-                     PhysicsWorld& physics);
-
-    // Skin loading
-    static void loadSkin(const fastgltf::Asset& asset, std::size_t skinIndex,
-                         const NodeMap& nodeMap, Assets& assets);
-
-    static void applySkins(const fastgltf::Asset& asset, const NodeMap& nodeMap,
-                           const MeshMap& meshMap, Assets& assets);
-
     // Mesh loading
     [[nodiscard]]
     static std::optional<AABB> primitiveBounds(const fastgltf::Asset& asset,
                                                const fastgltf::Primitive& primitive);
 
     [[nodiscard]]
-    static Object loadMesh(const fastgltf::Asset& asset, const fastgltf::Mesh& mesh,
-                           const std::string& baseDir, Resources& resources, Assets& assets,
-                           std::size_t meshIndex);
-
-    [[nodiscard]]
-    static TangentGenerationResult
-    loadGeometry(const fastgltf::Asset& asset, const fastgltf::Primitive& primitive,
-                 bool needsTangents, Resources& resources, Assets& assets, std::size_t geoIdx);
-
-    [[nodiscard]]
     static Material loadMaterial(const fastgltf::Asset& asset,
                                  std::optional<std::size_t> materialIndex);
-
-    [[nodiscard]]
-    static Image loadImage(const fastgltf::Asset& asset, std::size_t imageIndex,
-                           const std::string& baseDir);
-
-    [[nodiscard]]
-    static KtxImage loadKtxImage(const fastgltf::Asset& asset, std::size_t imageIndex,
-                                 const std::string& baseDir);
-
-    [[nodiscard]]
-    static const Texture* resolveTextureIndex(const fastgltf::Asset& asset,
-                                              std::size_t textureIndex, const std::string& baseDir,
-                                              Resources& resources, Assets& assets,
-                                              TextureEncoding encoding);
 
     // Animation
     static void applyRestTRS(const fastgltf::Node& gltfNode, Animation& anim);
 
     [[nodiscard]]
     static bool nodeHasAnimation(const fastgltf::Asset& asset, std::size_t nodeIndex);
-
-    static void loadAnimation(const fastgltf::Asset& asset, std::size_t gltfAnimIndex,
-                              std::size_t nodeIndex, Animation& anim,
-                              std::size_t numMorphTargets = 0);
 
     [[nodiscard]]
     static float computeSharedDuration(const fastgltf::Asset& asset, std::size_t gltfAnimIndex);

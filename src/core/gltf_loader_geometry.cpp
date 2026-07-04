@@ -365,12 +365,11 @@ std::vector<Vec3> GltfLoader::generateSmoothNormals(std::span<const Vec3> positi
     return normals;
 }
 
-TangentGenerationResult GltfLoader::loadGeometry(const fastgltf::Asset& asset,
-                                                 const fastgltf::Primitive& primitive,
-                                                 bool needsTangents, Resources& resources,
-                                                 Assets& assets, std::size_t geoIdx)
+TangentGenerationResult
+GltfLoader::GltfSceneBuilder::loadGeometry(const fastgltf::Primitive& primitive, bool needsTangents,
+                                           std::size_t geoIdx)
 {
-    auto& geometry = assets.geometry(geoIdx);
+    auto& geometry = context_.assets.geometry(geoIdx);
     if (geometry.loaded())
     {
         return {};
@@ -384,16 +383,16 @@ TangentGenerationResult GltfLoader::loadGeometry(const fastgltf::Asset& asset,
         return {};
     }
 
-    auto data = readPrimitiveGeometryData(asset, primitive);
+    auto data = readPrimitiveGeometryData(context_.asset, primitive);
     generateMissingNormals(data);
 
     TangentGenerationResult tangentResult;
     auto tangents = buildTangents(data, needsTangents, tangentResult);
     geometry.vertices(buildVertices(data, tangents));
     geometry.indices(std::move(data.indices));
-    loadMorphTargets(asset, primitive, data.positions.size(), geometry);
+    loadMorphTargets(context_.asset, primitive, data.positions.size(), geometry);
 
-    geometry.load(resources);
+    geometry.load(context_.resources);
     return tangentResult;
 }
 

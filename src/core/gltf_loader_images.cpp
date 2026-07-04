@@ -186,10 +186,10 @@ ImageSourceData resolveImageSourceData(const fastgltf::Asset& asset, std::size_t
 
 } // namespace
 
-Image GltfLoader::loadImage(const fastgltf::Asset& asset, std::size_t imageIndex,
-                            const std::string& baseDir)
+Image GltfLoader::GltfSceneBuilder::loadImage(std::size_t imageIndex)
 {
-    const ImageSourceData source = resolveImageSourceData(asset, imageIndex, baseDir);
+    const ImageSourceData source =
+        resolveImageSourceData(context_.asset, imageIndex, context_.baseDir);
     if (source.path.has_value())
     {
         return Image::load_from_file(source.path->string());
@@ -199,10 +199,10 @@ Image GltfLoader::loadImage(const fastgltf::Asset& asset, std::size_t imageIndex
                                    source.bytes.size(), source.label);
 }
 
-KtxImage GltfLoader::loadKtxImage(const fastgltf::Asset& asset, std::size_t imageIndex,
-                                  const std::string& baseDir)
+KtxImage GltfLoader::GltfSceneBuilder::loadKtxImage(std::size_t imageIndex)
 {
-    const ImageSourceData source = resolveImageSourceData(asset, imageIndex, baseDir);
+    const ImageSourceData source =
+        resolveImageSourceData(context_.asset, imageIndex, context_.baseDir);
     if (source.path.has_value())
     {
         return KtxImage::load_from_file(source.path->string());
@@ -212,26 +212,25 @@ KtxImage GltfLoader::loadKtxImage(const fastgltf::Asset& asset, std::size_t imag
                                       source.bytes.size(), source.label);
 }
 
-const Texture* GltfLoader::resolveTextureIndex(const fastgltf::Asset& asset,
-                                               std::size_t textureIndex, const std::string& baseDir,
-                                               Resources& resources, Assets& assets,
-                                               TextureEncoding encoding)
+const Texture* GltfLoader::GltfSceneBuilder::resolveTextureIndex(std::size_t textureIndex,
+                                                                 TextureEncoding encoding)
 {
-    auto& texture = assets.texture(textureIndex);
+    auto& texture = context_.assets.texture(textureIndex);
     if (!texture.loaded())
     {
-        auto settings = extractSamplerSettings(asset, textureIndex);
-        const auto& gltfTexture = asset.textures[textureIndex];
+        auto settings = extractSamplerSettings(context_.asset, textureIndex);
+        const auto& gltfTexture = context_.asset.textures[textureIndex];
 
         if (gltfTexture.basisuImageIndex.has_value())
         {
-            auto image = loadKtxImage(asset, gltfTexture.basisuImageIndex.value(), baseDir);
-            texture = Texture::load_from_ktx_image(std::move(image), resources, settings, encoding);
+            auto image = loadKtxImage(gltfTexture.basisuImageIndex.value());
+            texture = Texture::load_from_ktx_image(std::move(image), context_.resources, settings,
+                                                   encoding);
         }
         else if (gltfTexture.imageIndex.has_value())
         {
-            auto image = loadImage(asset, gltfTexture.imageIndex.value(), baseDir);
-            texture = Texture::load_from_image(image, resources, settings, encoding);
+            auto image = loadImage(gltfTexture.imageIndex.value());
+            texture = Texture::load_from_image(image, context_.resources, settings, encoding);
         }
         else
         {

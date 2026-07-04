@@ -23,6 +23,11 @@
 
 namespace fire_engine
 {
+GltfLoader::GltfSceneBuilder::GltfSceneBuilder(GltfLoadContext context)
+    : context_{std::move(context)}
+{
+}
+
 Node* GltfLoader::loadScene(const std::string& path, SceneGraph& scene, Resources& resources,
                             Assets& assets, PhysicsWorld& physics,
                             std::vector<ClothRegistration>* clothRegistrations,
@@ -50,6 +55,26 @@ Node* GltfLoader::loadScene(const std::string& path, SceneGraph& scene, Resource
 
     presizeAssets(asset, assets);
 
+    GltfLoadContext context{.asset = asset,
+                            .baseDir = gltfPath.parent_path().string(),
+                            .resources = resources,
+                            .assets = assets,
+                            .physics = physics,
+                            .controllableNodeIndices = std::move(controllableNodeIndices),
+                            .physicsNodeConfigs = std::move(physicsNodeConfigs),
+                            .clothNodeConfigs = std::move(clothNodeConfigs),
+                            .ragdollNodeConfigs = std::move(ragdollNodeConfigs)};
+    GltfSceneBuilder builder{std::move(context)};
+    return builder.build(scene, clothRegistrations, ragdolls);
+}
+
+Node* GltfLoader::GltfSceneBuilder::build(SceneGraph& scene,
+                                          std::vector<ClothRegistration>* clothRegistrations,
+                                          std::vector<Ragdoll>* ragdolls)
+{
+    const fastgltf::Asset& asset = context_.asset;
+    Assets& assets = context_.assets;
+
     // Cloth nodes: resolve each to its mesh's first-primitive geometry index and
     // flag that geometry for a storage vertex buffer *before* the graph build loads
     // it (so the solver can write it in place). The registration is filled in after
@@ -64,7 +89,7 @@ Node* GltfLoader::loadScene(const std::string& path, SceneGraph& scene, Resource
         return geoIdx;
     };
     std::vector<std::pair<std::size_t, ClothMeshParams>> clothGeometries; // (geoIdx, params)
-    for (const auto& [nodeIndex, params] : clothNodeConfigs)
+    for (const auto& [nodeIndex, params] : context_.clothNodeConfigs)
     {
         const auto& gltfNode = asset.nodes[nodeIndex];
         if (!gltfNode.meshIndex.has_value())
@@ -85,34 +110,13 @@ Node* GltfLoader::loadScene(const std::string& path, SceneGraph& scene, Resource
     }
 
     const auto& gltfScene = asset.scenes[sceneIndex];
-    std::string baseDir = gltfPath.parent_path().string();
-    NodeMap nodeMap;
-    MeshMap meshMap;
-    std::size_t nextAnimSlot = 0;
-    Node* activeCamera = nullptr;
     for (auto nodeIndex : gltfScene.nodeIndices)
     {
-        auto rootNode = std::make_unique<Node>(nodeName(asset, asset.nodes[nodeIndex]));
-        auto& rootRef = scene.addNode(std::move(rootNode));
-        nodeMap[nodeIndex] = &rootRef;
-        applyControllable(nodeIndex, controllableNodeIndices, rootRef);
-
-        if (nodeHasAnimation(asset, nodeIndex))
-        {
-            configureAnimatedNode(asset, nodeIndex, rootRef, baseDir, resources, assets, nodeMap,
-                                  meshMap, nextAnimSlot, activeCamera, controllableNodeIndices,
-                                  physicsNodeConfigs, physics);
-        }
-        else
-        {
-            loadNode(asset, nodeIndex, rootRef, baseDir, resources, assets, nodeMap, meshMap,
-                     nextAnimSlot, activeCamera, controllableNodeIndices, physicsNodeConfigs,
-                     physics);
-        }
+        loadRootNode(scene, nodeIndex);
     }
 
     // Resolve skins after the full scene graph is built
-    applySkins(asset, nodeMap, meshMap, assets);
+    applySkins();
 
     // Build a cloth from each flagged geometry now that it's loaded (CPU vertices +
     // indices retained, storage vertex buffer allocated). The caller registers
@@ -128,9 +132,9 @@ Node* GltfLoader::loadScene(const std::string& path, SceneGraph& scene, Resource
     // Auto-build a ragdoll from each `extras.Ragdoll` node's skin. Resolve once so
     // the bones carry their bind-pose composed-world (the ragdoll seeds bodies from
     // it); the per-frame update() recomputes it afterwards.
-    if (!ragdollNodeConfigs.empty())
+    if (!context_.ragdollNodeConfigs.empty())
     {
-        for (const auto& [nodeIndex, params] : ragdollNodeConfigs)
+        for (const auto& [nodeIndex, params] : context_.ragdollNodeConfigs)
         {
             const auto& gltfNode = asset.nodes[nodeIndex];
             if (!gltfNode.skinIndex.has_value())
@@ -144,8 +148,8 @@ Node* GltfLoader::loadScene(const std::string& path, SceneGraph& scene, Resource
             bones.reserve(gltfSkin.joints.size());
             for (const auto jointNodeIndex : gltfSkin.joints)
             {
-                const auto it = nodeMap.find(jointNodeIndex);
-                if (it != nodeMap.end())
+                const auto it = context_.nodeMap.find(jointNodeIndex);
+                if (it != context_.nodeMap.end())
                 {
                     // Seed the ragdoll from the BIND pose: an *animated* skeleton's joint nodes
                     // aren't at their bind transform at load time (the animation hasn't been
@@ -161,8 +165,9 @@ Node* GltfLoader::loadScene(const std::string& path, SceneGraph& scene, Resource
                 continue;
             }
             scene.resolve(); // compose the just-restored bind pose before seeding the ragdoll
-            Ragdoll ragdoll = params.articulated ? Ragdoll::makeArticulated(physics, bones, params)
-                                                 : Ragdoll::make(physics, bones, params);
+            Ragdoll ragdoll = params.articulated
+                                  ? Ragdoll::makeArticulated(context_.physics, bones, params)
+                                  : Ragdoll::make(context_.physics, bones, params);
             ragdoll.activate();
             std::clog << "glTF: built " << (params.articulated ? "articulated" : "maximal")
                       << " ragdoll for node '" << nodeName(asset, gltfNode) << "' with "
@@ -171,7 +176,7 @@ Node* GltfLoader::loadScene(const std::string& path, SceneGraph& scene, Resource
         }
     }
 
-    return activeCamera;
+    return context_.activeCamera;
 }
 
 } // namespace fire_engine
