@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <numbers>
 #include <type_traits>
 
 #include <fire_engine/math/constants.hpp>
@@ -93,6 +94,35 @@ TEST_CASE("Articulation.ForwardKinematicsMatchesHandComputedPose", "[Articulatio
     // The link's orientation is the accumulated +90° about Z: it maps local +X onto world +Y.
     const Vec3 link1X = arm.linkWorld(1).transformDirection(Vec3{1.0f, 0.0f, 0.0f});
     CHECK(link1X.approxEqual(Vec3{0.0f, 1.0f, 0.0f}, 1e-5f));
+}
+
+TEST_CASE("Articulation.InterpolatedLinkWorldBlendsBaselineTowardsCurrent", "[Articulation]")
+{
+    // CR-20: captureRenderBaseline snapshots the current FK pose; interpolatedLinkWorld blends
+    // that baseline towards the pose after the next FK by alpha.
+    Articulation arm = makeTwoLinkChain();
+    arm.forwardKinematics();
+
+    // No baseline yet: any alpha reads the current pose (link1 straight along +X at (2,0,0)).
+    CHECK(
+        arm.interpolatedLinkWorld(1, 0.5f).translation.approxEqual(Vec3{2.0f, 0.0f, 0.0f}, 1e-5f));
+
+    arm.captureRenderBaseline(); // baseline = straight pose
+    arm.q(0, pi / 2.0f);
+    arm.forwardKinematics(); // current = link1 swung to (1,1,0)
+
+    CHECK(
+        arm.interpolatedLinkWorld(1, 0.0f).translation.approxEqual(Vec3{2.0f, 0.0f, 0.0f}, 1e-5f));
+    CHECK(
+        arm.interpolatedLinkWorld(1, 1.0f).translation.approxEqual(Vec3{1.0f, 1.0f, 0.0f}, 1e-5f));
+    // Midpoint: translation is the straight linear blend of the two endpoints.
+    CHECK(
+        arm.interpolatedLinkWorld(1, 0.5f).translation.approxEqual(Vec3{1.5f, 0.5f, 0.0f}, 1e-5f));
+    // Orientation is slerped, so at alpha 0.5 local +X points along the 45° bisector.
+    const Vec3 halfX =
+        arm.interpolatedLinkWorld(1, 0.5f).transformDirection(Vec3{1.0f, 0.0f, 0.0f});
+    const float invSqrt2 = std::numbers::sqrt2_v<float> * 0.5f;
+    CHECK(halfX.approxEqual(Vec3{invSqrt2, invSqrt2, 0.0f}, 1e-5f));
 }
 
 TEST_CASE("Articulation.FloatingBaseOffsetsEveryLink", "[Articulation]")

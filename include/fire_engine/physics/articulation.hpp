@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -190,6 +191,31 @@ public:
         return linkWorld_[i];
     }
 
+    // Snapshot the current link world transforms as the render-interpolation baseline, so a
+    // faster display can blend towards the next simulated pose (CR-20). Called at the start of
+    // a step before the solve advances q.
+    void captureRenderBaseline()
+    {
+        previousLinkWorld_ = linkWorld_;
+    }
+
+    // Link `i`'s world transform blended from the render baseline towards the current pose by
+    // `alpha` (translation lerp, orientation slerp). Before the first baseline is captured this
+    // returns the current transform. `alpha` is clamped to [0, 1].
+    [[nodiscard]]
+    RigidTransform interpolatedLinkWorld(std::size_t i, float alpha) const noexcept
+    {
+        if (previousLinkWorld_.size() != linkWorld_.size())
+        {
+            return linkWorld_[i];
+        }
+        const float t = std::clamp(alpha, 0.0f, 1.0f);
+        const RigidTransform& prev = previousLinkWorld_[i];
+        const RigidTransform& curr = linkWorld_[i];
+        return RigidTransform{Quaternion::slerp(prev.rotation, curr.rotation, t),
+                              prev.translation + (curr.translation - prev.translation) * t};
+    }
+
     // Fixed vs floating base. When fixed (default) the root link is an immovable anchor
     // (world) and only the joint DOFs move — a robot arm / pendulum bolted to the ground.
     // Floating-base dynamics (the free 6-DOF root a ragdoll needs) arrive next.
@@ -336,7 +362,8 @@ private:
     };
 
     std::vector<Link> links_;
-    std::vector<RigidTransform> linkWorld_; // FK output, 1:1 with links_
+    std::vector<RigidTransform> linkWorld_;         // FK output, 1:1 with links_
+    std::vector<RigidTransform> previousLinkWorld_; // render-interp baseline (CR-20), 1:1 or empty
     RigidTransform base_{};
     std::vector<float> q_;
     std::vector<float> qDot_;

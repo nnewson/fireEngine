@@ -48,7 +48,10 @@ public:
     void update(const InputState& input_state);
     void resolve();
     void submitPhysics(PhysicsWorld& physics) const;
-    void applyPhysics(const PhysicsWorld& physics);
+    // Write body-bound node poses from the physics world, interpolated by `alpha` towards the
+    // latest simulated pose (CR-20). `alpha = accumulator / fixedDt`; pass 1.0f to snap to the
+    // last simulated state.
+    void applyPhysics(const PhysicsWorld& physics, float alpha = 1.0f);
     void render(const RenderContext& ctx);
 
     // Refresh the scene culler and return the rigid renderable nodes outside every

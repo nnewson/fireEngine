@@ -201,6 +201,15 @@ public:
     [[nodiscard]]
     std::optional<Transform> bodyTransform(PhysicsBodyHandle handle) const noexcept;
 
+    // Render-interpolated transform: blends the body's pose at the start of the most recent
+    // step() towards its current pose by `alpha` (position lerp, orientation slerp). With a
+    // fixed 60 Hz sim driving a faster display, `alpha = accumulator / fixedDt` renders the
+    // in-between frames smoothly instead of snapping to the last simulated state. `alpha` is
+    // clamped to [0, 1]; alpha == 1 reproduces bodyTransform().
+    [[nodiscard]]
+    std::optional<Transform> interpolatedBodyTransform(PhysicsBodyHandle handle,
+                                                       float alpha) const noexcept;
+
     void setBodyTransform(PhysicsBodyHandle handle, const Transform& transform) noexcept;
     void setBodyVelocity(PhysicsBodyHandle handle, Vec3 velocity) noexcept;
 
@@ -265,6 +274,10 @@ private:
         PhysicsBodyHandle handle;
         PhysicsBody body;
         Transform transform;
+        // Pose at the start of the most recent step(), kept so rendering can interpolate
+        // between it and `transform` (CR-20). Seeded to `transform` at creation and reseeded
+        // on any external reposition so no interpolation spans a teleport.
+        Transform previousRenderTransform;
         Vec3 previousPosition{};
         bool active{true};
         std::vector<PhysicsColliderHandle> colliders;
@@ -493,6 +506,10 @@ private:
     void updateColliders(float dt);
     void resetResolvedColliders();
     void capturePreviousPositions() noexcept;
+
+    // Snapshot each body's (and articulation's) current pose as the render-interpolation
+    // baseline, called at the start of step() before anything advances (CR-20).
+    void captureRenderBaseline() noexcept;
 
     // Reduced-coordinate articulation dynamics (Phase F1). Steps every articulation one
     // fixed step under gravity + joint damping, resolving link-collider contacts against
