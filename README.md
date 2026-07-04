@@ -71,16 +71,18 @@ The frame loop makes the authority split explicit:
 scene_.update(input_state);
 scene_.submitPhysics(physics_);
 
+accumulator += dt;
 while (accumulator >= fixedDt)
 {
     physics_.step(fixedDt);
     accumulator -= fixedDt;
 }
 
-scene_.applyPhysics(physics_);
+const float alpha = accumulator / fixedDt;   // fixed-step render interpolation
+scene_.applyPhysics(physics_, alpha);
 ```
 
-`submitPhysics()` pushes non-dynamic scene transforms into `PhysicsWorld`: static bodies are scene-authored, and kinematic bodies are gameplay/input-authored. `PhysicsWorld::step()` refreshes collider AABBs, updates broadphase candidates, builds shape-specific contact manifolds, then runs the TGS soft-step solve (substepped gravity → warm-start → bias solve → integrate → relax, with end-of-step restitution and a kinematic-only position pass), and captures previous positions. `applyPhysics()` pulls non-static physics transforms back onto scene nodes, so dynamic simulation and kinematic collision correction are visible before rendering.
+`submitPhysics()` pushes non-dynamic scene transforms into `PhysicsWorld`: static bodies are scene-authored, and kinematic bodies are gameplay/input-authored. `PhysicsWorld::step()` snapshots each body's start-of-step pose (the render-interpolation baseline), refreshes collider AABBs, updates broadphase candidates, builds shape-specific contact manifolds, then runs the TGS soft-step solve (substepped gravity → warm-start → bias solve → integrate → relax, with end-of-step restitution and a kinematic-only position pass), and captures previous positions. `applyPhysics(physics, alpha)` pulls non-static physics transforms back onto scene nodes, so dynamic simulation and kinematic collision correction are visible before rendering. Because the sim advances in fixed 60 Hz increments while the display refreshes faster, `alpha = accumulator / fixedDt` blends each body between its previous and current pose (position lerp, orientation slerp) so motion stays smooth on a 120 Hz panel; this is purely visual, leaving the simulated state (and thus determinism) untouched. Articulated ragdoll bones are driven separately by `Ragdoll::syncNodes(alpha)`, which interpolates the articulation's link transforms the same way.
 
 Physics can be authored in glTF through node `extras.Physics`. The loader creates bodies/colliders, assigns handles to the node, and rejects unsupported combinations such as a `Dynamic` body on a `Controllable` node.
 
@@ -182,7 +184,7 @@ The transient pipelines are destroyed once the bake completes; only the resultin
 2. `SceneGraph::update()` propagates `InputState` and transforms down the node tree; each Node caches its `composedWorld` matrix for skin joint lookups.
 3. `scene_.submitPhysics(physics_)` pushes static/kinematic scene transforms into `PhysicsWorld`.
 4. `PhysicsWorld::step(1.0f / 60.0f)` runs zero or more fixed substeps from the frame accumulator.
-5. `scene_.applyPhysics(physics_)` pulls dynamic and corrected kinematic transforms back into scene nodes and resolves composed-world matrices.
+5. `scene_.applyPhysics(physics_, alpha)` pulls dynamic and corrected kinematic transforms back into scene nodes — interpolated by `alpha = accumulator / fixedDt` between the last two simulated poses for smooth motion above 60 Hz — and resolves composed-world matrices.
 6. `Renderer::drawFrame()` acquires a swapchain image and records the frame passes:
    - **Shadow passes** — directional cascades render both the full CSM and a world-only CSM that excludes skinned casters. Each skinned self-shadow slot renders two tightly-fit passes: the first captures the nearest light-facing surface, and the second samples that first depth and discards it so the forward shader can sample the next useful self-occluder. Spot and point shadow passes replay the same compatible shadow draw commands through their per-layer/per-face depth attachment views. Skin and morph still apply in the shadow vertex shader
    - **Forward pass** — begin the HDR offscreen pass, draw the skybox (LEQUAL depth, no write), then call `scene.render(ctx)`; Mesh/Object emit `DrawCommand`s that the Renderer buckets into opaque, transmissive, and blend lists, sorts the blend bucket back-to-front by `sortDepth`, and replays through the same bind/draw loop resolving handles via `Resources`
