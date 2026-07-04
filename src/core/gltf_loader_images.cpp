@@ -160,13 +160,20 @@ struct ImageSourceData
     std::optional<std::filesystem::path> path;
     std::vector<std::byte> bytes;
     std::string label;
+
+    explicit ImageSourceData(std::string lbl = {}) noexcept
+        : path(),
+          bytes(),
+          label(std::move(lbl))
+    {
+    }
 };
 
 ImageSourceData resolveImageSourceData(const fastgltf::Asset& asset, std::size_t imageIndex,
                                        const std::string& baseDir)
 {
     const auto& image = asset.images[imageIndex];
-    ImageSourceData result{.label = "image[" + std::to_string(imageIndex) + "]"};
+    ImageSourceData result("image[" + std::to_string(imageIndex) + "]");
 
     if (auto* uri = std::get_if<fastgltf::sources::URI>(&image.data);
         uri != nullptr && uri->uri.isLocalPath() && !uri->uri.isDataUri() &&

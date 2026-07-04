@@ -265,8 +265,9 @@ Setup [vcpkg](https://vcpkg.io/en/) on the build machine, and ensure that `VCPKG
 Details of how to do this can be found at steps 1 and 2 in this [getting started doc](https://learn.microsoft.com/en-gb/vcpkg/get_started/get-started).
 Ensure the `vcpkg` executable is available in your `PATH`.
 
-Configure CMake, which will install and build dependencies via vcpkg.
-Additionally, since I use `NeoVim`, I export the `compile_commands.json` to the build directory for use with `clangd`:
+Configure CMake, which will install and build dependencies via vcpkg. The `vcpkg`
+preset selects the `Dev` build type (`-O2 -g`, assertions/validation still enabled)
+and exports `build/compile_commands.json` for `clangd`:
 
 ```bash
 cmake --preset=vcpkg -DCMAKE_EXPORT_COMPILE_COMMANDS=1
@@ -278,17 +279,44 @@ Build:
 cmake --build build
 ```
 
-Run the Catch2 test binary:
+Run the Catch2 test binary directly:
 
 ```bash
 ./build/test_fire_engine
 ```
 
-Run the full CTest suite, including the graphics-layer include guard:
+Run the fast CTest suite (source root, via preset):
+
+```bash
+ctest --preset fast
+```
+
+Or from the build directory:
 
 ```bash
 ctest --test-dir build --output-on-failure
 ```
+
+Run the full Catch2 suite, including `[slow]` tests, plus the graphics-layer include guard:
+
+```bash
+cmake --build --preset full
+```
+
+The equivalent build-directory command is:
+
+```bash
+cmake --build build --target tests-full
+```
+
+Optional local tooling targets:
+
+```bash
+cmake --build build --target run-clang-tidy   # if clang-tidy is installed
+```
+
+CI builds with `FIRE_ENGINE_WARNINGS_AS_ERRORS=ON`, runs `run-clang-tidy`, runs
+`tests-full`, and checks `clang-format --dry-run -Werror`.
 
 Run the application:
 

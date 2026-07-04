@@ -1,0 +1,74 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  clang-format:
+    name: clang-format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install clang-format-22
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget lsb-release software-properties-common
+          wget -qO - https://apt.llvm.org/llvm-snapshot.gpg.key | sudo apt-key add -
+          sudo add-apt-repository "deb http://apt.llvm.org/$(lsb_release -cs)/ llvm-toolchain-$(lsb_release -cs)-22 main"
+          sudo apt-get update
+          sudo apt-get install -y clang-format-22
+      - name: Check formatting
+        run: |
+          find include src tests -type f \( \
+            -name '*.hpp' -o -name '*.cpp' -o -name '*.h' -o -name '*.cxx' \
+          \) -print0 | xargs -0 clang-format-22 --dry-run -Werror
+
+  build-and-test:
+    name: build and test
+    runs-on: ubuntu-latest
+    env:
+      VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build cmake clang-tidy glslang-tools libvulkan-dev \
+            xorg-dev libxinerama-dev libxcursor-dev libglu1-mesa-dev pkg-config
+
+      - name: Checkout vcpkg
+        uses: actions/checkout@v4
+        with:
+          repository: microsoft/vcpkg
+          path: vcpkg
+
+      - name: Bootstrap vcpkg
+        run: ./vcpkg/bootstrap-vcpkg.sh
+
+      - name: Cache vcpkg packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            build/vcpkg_installed
+            vcpkg/downloads
+            vcpkg/buildtrees
+            vcpkg/packages
+          key: ${{ runner.os }}-vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json') }}
+          restore-keys: |
+            ${{ runner.os }}-vcpkg-
+
+      - name: Configure
+        run: cmake --preset vcpkg -DFIRE_ENGINE_WARNINGS_AS_ERRORS=ON
+
+      - name: Build
+        run: cmake --build build
+
+      - name: clang-tidy
+        run: cmake --build build --target run-clang-tidy
+
+      - name: Test
+        run: cmake --build build --target tests-full

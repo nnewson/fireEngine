@@ -6,7 +6,31 @@
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build",
       "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Dev",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
         "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "default",
+      "configurePreset": "vcpkg"
+    },
+    {
+      "name": "full",
+      "configurePreset": "vcpkg",
+      "targets": [
+        "tests-full"
+      ]
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "fast",
+      "configurePreset": "vcpkg",
+      "output": {
+        "outputOnFailure": true
       }
     }
   ]

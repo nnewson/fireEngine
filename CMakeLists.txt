@@ -6,14 +6,16 @@ project(fire_engine
     LANGUAGES CXX
 )
 
-# Optimize by default. With no explicit CMAKE_BUILD_TYPE the compiler defaults to -O0, which
-# leaves all the math (Vec3/Mat3/SpatialVector accessors + ctors) as un-inlined function calls —
-# ~20x slower, enough to make the physics (e.g. an articulated ragdoll) miss real-time. Apply -O2
-# WITHOUT -DNDEBUG so the Vulkan validation layers + asserts still run (see CLAUDE.md). An explicit
-# build type (e.g. -DCMAKE_BUILD_TYPE=Debug for -O0 -g) overrides this.
+# Dev is the default single-config build: optimized enough for physics settle tests, with debug
+# info, asserts, and Vulkan validation still enabled (no NDEBUG).
+set(CMAKE_CXX_FLAGS_DEV "-O2 -g" CACHE STRING "Flags used by Dev builds" FORCE)
+set(CMAKE_C_FLAGS_DEV "-O2 -g" CACHE STRING "Flags used by Dev builds" FORCE)
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
-    add_compile_options(-O2)
+    set(CMAKE_BUILD_TYPE Dev CACHE STRING "Build type" FORCE)
 endif()
+set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS Dev Debug Release RelWithDebInfo MinSizeRel)
+
+option(FIRE_ENGINE_WARNINGS_AS_ERRORS "Treat first-party compiler warnings as errors" ON)
 
 # --- Dependencies -------------------------------------------------------
 
@@ -116,6 +118,9 @@ add_library(fireengine SHARED
 target_include_directories(fireengine PUBLIC ${PROJECT_SOURCE_DIR}/include ${Stb_INCLUDE_DIR})
 target_compile_features(fireengine PUBLIC cxx_std_23)
 target_compile_options(fireengine PRIVATE -Wall -Wextra -Wpedantic)
+if(FIRE_ENGINE_WARNINGS_AS_ERRORS)
+    target_compile_options(fireengine PRIVATE -Werror)
+endif()
 target_compile_definitions(fireengine PRIVATE
     VK_ENABLE_BETA_EXTENSIONS
 )
@@ -144,6 +149,9 @@ add_executable(fireEngineApp
 
 target_link_libraries(fireEngineApp PRIVATE fireengine Vulkan::Vulkan glfw)
 target_compile_options(fireEngineApp PRIVATE -Wall -Wextra -Wpedantic)
+if(FIRE_ENGINE_WARNINGS_AS_ERRORS)
+    target_compile_options(fireEngineApp PRIVATE -Werror)
+endif()
 
 # --- Shaders ------------------------------------------------------------
 
@@ -178,17 +186,34 @@ set(SHADER_SOURCES
     shaders/cloth_finalize.comp
 )
 
+# Prefer glslc (Shaderc); if absent, fall back to glslangValidator (glslang-tools).
+find_program(GLSLC_EXECUTABLE NAMES glslc)
+find_program(GLSLANG_VALIDATOR_EXECUTABLE NAMES glslangValidator)
+if(NOT GLSLC_EXECUTABLE AND NOT GLSLANG_VALIDATOR_EXECUTABLE)
+  message(FATAL_ERROR "Neither glslc nor glslangValidator was found; please install shader compiler tools (shaderc or glslang-tools).")
+endif()
+
 foreach(shader IN LISTS SHADER_SOURCES)
   get_filename_component(SHADER_NAME ${shader} NAME)
   set(SHADER_SPV ${CMAKE_CURRENT_BINARY_DIR}/${SHADER_NAME}.spv)
 
-  add_custom_command(
-    OUTPUT ${SHADER_SPV}
-    COMMAND glslc ${PROJECT_SOURCE_DIR}/${shader} -o ${SHADER_SPV}
-    DEPENDS ${PROJECT_SOURCE_DIR}/${shader}
-    COMMENT "Compiling ${SHADER_NAME} -> ${SHADER_NAME}.spv"
-    VERBATIM
-  )
+  if(GLSLC_EXECUTABLE)
+    add_custom_command(
+      OUTPUT ${SHADER_SPV}
+      COMMAND ${GLSLC_EXECUTABLE} ${PROJECT_SOURCE_DIR}/${shader} -o ${SHADER_SPV}
+      DEPENDS ${PROJECT_SOURCE_DIR}/${shader}
+      COMMENT "Compiling ${SHADER_NAME} -> ${SHADER_NAME}.spv"
+      VERBATIM
+    )
+  else()
+    add_custom_command(
+      OUTPUT ${SHADER_SPV}
+      COMMAND ${GLSLANG_VALIDATOR_EXECUTABLE} -V -o ${SHADER_SPV} ${PROJECT_SOURCE_DIR}/${shader}
+      DEPENDS ${PROJECT_SOURCE_DIR}/${shader}
+      COMMENT "Compiling ${SHADER_NAME} -> ${SHADER_NAME}.spv"
+      VERBATIM
+    )
+  endif()
 
   list(APPEND SHADER_SPVS ${SHADER_SPV})
 endforeach()
@@ -305,6 +330,9 @@ add_executable(test_fire_engine
 target_include_directories(test_fire_engine PRIVATE ${PROJECT_SOURCE_DIR}/tests)
 target_link_libraries(test_fire_engine PRIVATE fireengine Catch2::Catch2WithMain)
 target_compile_options(test_fire_engine PRIVATE -Wall -Wextra -Wpedantic)
+if(FIRE_ENGINE_WARNINGS_AS_ERRORS)
+    target_compile_options(test_fire_engine PRIVATE -Werror)
+endif()
 
 file(GLOB_RECURSE TEST_ASSETS "${PROJECT_SOURCE_DIR}/tests/assets/*")
 foreach(f IN LISTS TEST_ASSETS)
@@ -312,8 +340,14 @@ foreach(f IN LISTS TEST_ASSETS)
   configure_file("${f}" "${CMAKE_CURRENT_BINARY_DIR}/test_assets/${name}" COPYONLY)
 endforeach()
 
-include(Catch)
-catch_discover_tests(test_fire_engine)
+add_test(NAME test_fire_engine COMMAND test_fire_engine "~[slow]")
+
+add_custom_target(tests-full
+  COMMAND $<TARGET_FILE:test_fire_engine>
+  COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure -R graphics_layer_no_render_includes
+  DEPENDS test_fire_engine
+  COMMENT "Running the full test suite, including [slow] tests"
+)
 
 # Layering guard: the Vulkan-free graphics layer must not include render/ from
 # its public headers. Runs as a CTest case so `ctest` catches regressions
@@ -324,3 +358,18 @@ add_test(
     -DGRAPHICS_INCLUDE_DIR=${PROJECT_SOURCE_DIR}/include/fire_engine/graphics
     -P ${PROJECT_SOURCE_DIR}/cmake/check_graphics_layering.cmake
 )
+
+find_program(CLANG_TIDY_EXE NAMES clang-tidy)
+if(CLANG_TIDY_EXE)
+  file(GLOB_RECURSE FIRE_ENGINE_TIDY_SOURCES CONFIGURE_DEPENDS
+    "${PROJECT_SOURCE_DIR}/src/*.cpp"
+  )
+  add_custom_target(run-clang-tidy
+    COMMAND ${CLANG_TIDY_EXE}
+      -p ${CMAKE_BINARY_DIR}
+      ${FIRE_ENGINE_TIDY_SOURCES}
+    WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
+    COMMENT "Running clang-tidy on src and include/fire_engine"
+    VERBATIM
+  )
+endif()
