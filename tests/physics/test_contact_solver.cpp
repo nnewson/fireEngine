@@ -2,11 +2,13 @@
 
 #include <array>
 #include <cmath>
+#include <cstdint>
 #include <vector>
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
+#include <fire_engine/math/quaternion.hpp>
 #include <fire_engine/physics/physics_constants.hpp>
 
 using fire_engine::ContactSolver;
@@ -271,4 +273,175 @@ TEST_CASE("ContactSolver.CentredContactProducesNoSpin", "[ContactSolver]")
 
     CHECK(bodies[0].velocity.y() == Catch::Approx(0.0f).margin(1e-3f));
     CHECK(bodies[0].angularVelocity.approxEqual(Vec3{0.0f, 0.0f, 0.0f}, 1e-5f));
+}
+
+// --- Mid-step manifold refresh (P9.6 stage 1) -------------------------------------------
+
+namespace
+{
+
+// A single-point contact with explicit body indices / point / key (the refresh tests need
+// multiple pairs and non-zero keys — refresh() walks points_ by per-contact unique key runs).
+SolverContactInput makeContactAt(int bodyA, int bodyB, Vec3 normal, Vec3 point, float penetration,
+                                 float restitution, std::uint64_t key)
+{
+    SolverContactInput c;
+    c.bodyA = bodyA;
+    c.bodyB = bodyB;
+    c.normal = normal;
+    c.points[0] = point;
+    c.penetration[0] = penetration;
+    c.pointCount = 1;
+    c.restitution = restitution;
+    c.friction = 0.0f;
+    c.key = key;
+    return c;
+}
+
+} // namespace
+
+TEST_CASE("ContactSolver.RefreshAtUnmovedPoseIsANoOp", "[ContactSolver]")
+{
+    // Two identical "substeps" with a refresh injected between them (same pose, same manifold)
+    // must produce exactly the trajectory of the run without the refresh: rows rebuild
+    // identically and the accumulated impulse / restitution state carries over.
+    const auto run = [](bool withRefresh)
+    {
+        std::vector<SolverBody> bodies(2);
+        bodies[0].velocity = {0.0f, -2.0f, 0.0f};
+        bodies[0].invMass = 1.0f;
+        const std::vector<SolverContactInput> contacts{
+            makeContactAt(0, 1, {0.0f, 1.0f, 0.0f}, {}, 0.0f, 1.0f, 7ULL)};
+
+        ContactSolver solver;
+        solver.prepare(bodies, contacts, kTestH);
+        solver.warmStart(bodies);
+        solver.solveVelocity(bodies, true);
+        solver.solveVelocity(bodies, false);
+        if (withRefresh)
+        {
+            const std::vector<std::uint8_t> flags{1};
+            solver.refresh(bodies, contacts, flags);
+        }
+        solver.warmStart(bodies);
+        solver.solveVelocity(bodies, true);
+        solver.solveVelocity(bodies, false);
+        solver.applyRestitution(bodies);
+        return bodies[0].velocity;
+    };
+
+    const Vec3 without = run(false);
+    const Vec3 with = run(true);
+    CHECK(with.x() == without.x());
+    CHECK(with.y() == without.y());
+    CHECK(with.z() == without.z());
+}
+
+TEST_CASE("ContactSolver.RefreshCarriesImpulseAndRestitutionAcrossRotatedPose", "[ContactSolver]")
+{
+    // A body impacts at 2 m/s (restitution 1); the first "substep" cancels most of the approach
+    // and accumulates the impulse. The body then rotates slightly (as the substep integration
+    // would) and the manifold is refreshed at the new pose. relVelN0 and maxNormalImpulse must
+    // survive the refresh: end-of-step restitution still rebounds to +2 m/s. (If relVelN0 were
+    // recomputed at refresh time it would read the already-cancelled approach ≈ 0 and the
+    // rebound would vanish.)
+    std::vector<SolverBody> bodies(2);
+    bodies[0].position = {0.0f, 0.5f, 0.0f}; // COM 0.5 above the contact: a real lever
+    bodies[0].velocity = {0.0f, -2.0f, 0.0f};
+    bodies[0].invMass = 1.0f;
+    bodies[0].inverseInertiaLocal = {2.0f, 2.0f, 2.0f};
+    const Vec3 contactPoint{0.0f, 0.0f, 0.0f};
+    std::vector<SolverContactInput> contacts{
+        makeContactAt(0, 1, {0.0f, 1.0f, 0.0f}, contactPoint, 0.0f, 1.0f, 7ULL)};
+
+    ContactSolver solver;
+    solver.prepare(bodies, contacts, kTestH);
+    solver.warmStart(bodies);
+    solver.solveVelocity(bodies, true);
+    solver.solveVelocity(bodies, false);
+
+    // Mid-step: the body has rotated a little; the re-collided manifold finds the contact
+    // where the old anchor now tracks to (what a real narrowphase re-run would report).
+    bodies[0].orientation = fire_engine::Quaternion::fromAxisAngle({0.0f, 0.0f, 1.0f}, 0.02f);
+    const Vec3 tracked =
+        bodies[0].position + bodies[0].orientation.rotate(contactPoint - bodies[0].position);
+    contacts[0] = makeContactAt(0, 1, {0.0f, 1.0f, 0.0f}, tracked, 0.0f, 1.0f, 7ULL);
+    const std::vector<std::uint8_t> flags{1};
+    solver.refresh(bodies, contacts, flags);
+
+    solver.warmStart(bodies);
+    solver.solveVelocity(bodies, true);
+    solver.solveVelocity(bodies, false);
+    solver.applyRestitution(bodies);
+
+    CHECK(bodies[0].velocity.y() == Catch::Approx(2.0f).margin(0.1f));
+}
+
+TEST_CASE("ContactSolver.RefreshLeavesUnflaggedRowsUntouched", "[ContactSolver]")
+{
+    // Two independent pairs; only the second is flagged. The first pair's rows are copied
+    // verbatim, so its body's trajectory is bit-identical to a run without any refresh.
+    const auto run = [](bool withRefresh)
+    {
+        std::vector<SolverBody> bodies(3);
+        bodies[0].velocity = {0.0f, -1.0f, 0.0f};
+        bodies[0].invMass = 1.0f;
+        bodies[1].position = {5.0f, 0.5f, 0.0f};
+        bodies[1].velocity = {0.0f, -3.0f, 0.0f};
+        bodies[1].invMass = 1.0f;
+        const std::vector<SolverContactInput> contacts{
+            makeContactAt(0, 2, {0.0f, 1.0f, 0.0f}, {}, 0.0f, 0.0f, 111ULL),
+            makeContactAt(1, 2, {0.0f, 1.0f, 0.0f}, {5.0f, 0.0f, 0.0f}, 0.0f, 0.0f, 222ULL)};
+
+        ContactSolver solver;
+        solver.prepare(bodies, contacts, kTestH);
+        solver.warmStart(bodies);
+        solver.solveVelocity(bodies, true);
+        solver.solveVelocity(bodies, false);
+        if (withRefresh)
+        {
+            const std::vector<std::uint8_t> flags{0, 1};
+            solver.refresh(bodies, contacts, flags);
+        }
+        solver.warmStart(bodies);
+        solver.solveVelocity(bodies, true);
+        solver.solveVelocity(bodies, false);
+        return bodies[0].velocity;
+    };
+
+    const Vec3 without = run(false);
+    const Vec3 with = run(true);
+    CHECK(with.x() == without.x());
+    CHECK(with.y() == without.y());
+    CHECK(with.z() == without.z());
+}
+
+TEST_CASE("ContactSolver.RefreshWithEmptyManifoldDropsRows", "[ContactSolver]")
+{
+    // The re-collide found nothing (the body rotated away mid-step): the pair's rows drop and
+    // the solver stops producing impulses — the body keeps its velocity through warm start,
+    // solve, and restitution.
+    std::vector<SolverBody> bodies(2);
+    bodies[0].velocity = {0.0f, -2.0f, 0.0f};
+    bodies[0].invMass = 1.0f;
+    std::vector<SolverContactInput> contacts{
+        makeContactAt(0, 1, {0.0f, 1.0f, 0.0f}, {}, 0.0f, 1.0f, 7ULL)};
+
+    ContactSolver solver;
+    solver.prepare(bodies, contacts, kTestH);
+    solver.warmStart(bodies);
+    solver.solveVelocity(bodies, true);
+    solver.solveVelocity(bodies, false);
+
+    contacts[0].pointCount = 0; // mid-step separation
+    const std::vector<std::uint8_t> flags{1};
+    solver.refresh(bodies, contacts, flags);
+    CHECK(solver.empty());
+
+    const Vec3 before = bodies[0].velocity;
+    solver.warmStart(bodies);
+    solver.solveVelocity(bodies, true);
+    solver.solveVelocity(bodies, false);
+    solver.applyRestitution(bodies);
+    CHECK(bodies[0].velocity.y() == before.y());
 }

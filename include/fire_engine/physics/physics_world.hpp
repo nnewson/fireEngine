@@ -476,6 +476,12 @@ private:
     [[nodiscard]]
     WorldShape worldShape(const ColliderEntry& entry) const;
 
+    // As worldShape, but against an explicit owner pose rather than the stored body
+    // transform — the mid-step manifold refresh composes shapes at the in-flight
+    // SolverBody pose (P9.6).
+    [[nodiscard]]
+    WorldShape worldShapeAt(const ColliderEntry& entry, const OwnerPose& owner) const;
+
     // Shared overlap core for overlapShape / overlapSphere: every active collider whose
     // bounds intersect `queryAabb` and which actually overlaps `query`.
     [[nodiscard]]
@@ -531,9 +537,27 @@ private:
     // Solve one island: run the contact + joint solvers over the island's input
     // subset (indexing the shared `solverBodies` array), then integrate the island's
     // dynamic bodies' velocities into positions/orientations and position-correct.
+    // `solverContacts` is the step's full SolverContact list (same indexing as
+    // `contactInputs`) — the mid-step manifold refresh re-collides through it.
     void solveIsland(const Island& island, std::vector<SolverBody>& solverBodies,
                      std::span<const SolverContactInput> contactInputs,
+                     std::span<const SolverContact> solverContacts,
                      std::span<const JointInput> jointInputs, float dt);
+
+    // Mid-step manifold refresh (P9.6 stage 1). Once per step, at substep
+    // kSubstepCount/2: for each of the island's non-mesh contacts whose either body is
+    // Dynamic and sweeping more than kSubstepRefreshRotation this step (|ω|·dt at the
+    // current solver velocity), re-collide the pair at the in-flight SolverBody poses
+    // and overwrite that entry's manifold in `islandContacts` (empty result ⇒
+    // pointCount 0, the rows drop). Sets `flags[k] = 1` per refreshed entry; returns
+    // whether anything was refreshed (the caller then re-prepares the flagged solver
+    // rows via ContactSolver::refresh). A stale step-start manifold under fast rotation
+    // concentrates impact impulses on wrongly-placed points — the "settle snap" /
+    // rotational-tunnelling family.
+    bool refreshIslandContacts(const Island& island, std::span<const SolverBody> solverBodies,
+                               std::span<const SolverContact> solverContacts,
+                               std::vector<SolverContactInput>& islandContacts,
+                               std::vector<std::uint8_t>& flags, float dt, float remaining);
 
     // Whether the whole island may sleep this step: sleeping enabled, every dynamic
     // member allows sleeping and has been below the thresholds for kSleepTime, and no

@@ -361,15 +361,31 @@ add_test(
 
 find_program(CLANG_TIDY_EXE NAMES clang-tidy)
 if(CLANG_TIDY_EXE)
-  file(GLOB_RECURSE FIRE_ENGINE_TIDY_SOURCES CONFIGURE_DEPENDS
-    "${PROJECT_SOURCE_DIR}/src/*.cpp"
-  )
-  add_custom_target(run-clang-tidy
-    COMMAND ${CLANG_TIDY_EXE}
-      -p ${CMAKE_BINARY_DIR}
-      ${FIRE_ENGINE_TIDY_SOURCES}
-    WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
-    COMMENT "Running clang-tidy on src and include/fire_engine"
-    VERBATIM
-  )
+    get_target_property(FIRE_ENGINE_TIDY_SOURCES fireengine SOURCES)
+    set(FIRE_ENGINE_TIDY_TARGETS)
+
+    foreach(tidy_source IN LISTS FIRE_ENGINE_TIDY_SOURCES)
+        if(tidy_source MATCHES "\\.(cc|cpp|cxx)$")
+            get_filename_component(tidy_source_abs "${tidy_source}" ABSOLUTE
+                BASE_DIR "${PROJECT_SOURCE_DIR}"
+            )
+            file(RELATIVE_PATH tidy_source_rel "${PROJECT_SOURCE_DIR}" "${tidy_source_abs}")
+            string(MAKE_C_IDENTIFIER "${tidy_source_rel}" tidy_source_id)
+
+            add_custom_target(run-clang-tidy-${tidy_source_id}
+                COMMAND ${CLANG_TIDY_EXE}
+                    -p ${CMAKE_BINARY_DIR}
+                    ${tidy_source_abs}
+                WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
+                COMMENT "Running clang-tidy on ${tidy_source_rel}"
+                VERBATIM
+            )
+            list(APPEND FIRE_ENGINE_TIDY_TARGETS run-clang-tidy-${tidy_source_id})
+        endif()
+    endforeach()
+
+    add_custom_target(run-clang-tidy
+        DEPENDS ${FIRE_ENGINE_TIDY_TARGETS}
+        COMMENT "Running clang-tidy on fireengine sources"
+    )
 endif()

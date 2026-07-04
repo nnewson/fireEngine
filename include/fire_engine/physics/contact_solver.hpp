@@ -69,6 +69,18 @@ public:
     void prepare(std::span<const SolverBody> bodies, std::span<const SolverContactInput> contacts,
                  float h);
 
+    // Mid-step re-prepare (P9.6): rebuild the rows of the contacts flagged in `refreshed`
+    // (1 = re-collided by the caller; `contacts[i]`'s manifold holds the refreshed points)
+    // at the CURRENT body poses, copying every other contact's rows verbatim — re-preparing
+    // a stale step-start manifold at an advanced pose would corrupt its separations. New
+    // points inherit normalImpulse, relVelN0 and maxNormalImpulse from the old row of the
+    // same pair whose *tracked current* anchor position is nearest (within
+    // kWarmStartMatchRadius); friction is not carried (the cross-frame convention).
+    // Recomputes the world inverse inertias, which are equally stale under fast rotation.
+    // `contacts` must be the same list (same order, same keys) prepare() was given.
+    void refresh(std::span<const SolverBody> bodies, std::span<const SolverContactInput> contacts,
+                 std::span<const std::uint8_t> refreshed);
+
     // Apply the (warm-started) accumulated impulses. Called once per substep, after
     // the velocity integration, before solving.
     void warmStart(std::vector<SolverBody>& bodies) const;

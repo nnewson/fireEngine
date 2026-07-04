@@ -315,6 +315,10 @@ Optional local tooling targets:
 cmake --build build --target run-clang-tidy   # if clang-tidy is installed
 ```
 
+`run-clang-tidy` is split per source file, so Ninja can run it in parallel. Use
+`cmake --build build --target run-clang-tidy --parallel <jobs>` or
+`CMAKE_BUILD_PARALLEL_LEVEL` to cap local CPU/memory use.
+
 CI builds with `FIRE_ENGINE_WARNINGS_AS_ERRORS=ON`, runs `run-clang-tidy`, runs
 `tests-full`, and checks `clang-format --dry-run -Werror`.
 

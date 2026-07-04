@@ -23,6 +23,7 @@
 #include <fire_engine/collision/ray.hpp>
 #include <fire_engine/core/convex_hull_builder.hpp>
 #include <fire_engine/core/gltf_loader.hpp>
+#include <fire_engine/math/quaternion.hpp>
 #include <fire_engine/physics/collider_shape.hpp>
 #include <fire_engine/physics/physics_world.hpp>
 
@@ -630,5 +631,107 @@ TEST_CASE("Demos.ConvexHull.Tetra0YawProbe", "[.][ConvexProbe]")
         }
         prevYaw = yaw;
         prevAsleep = asleep;
+    }
+}
+
+// P9.6 gate: the ConvexHullDemo tetras' settle must not "snap" about the vertical. Before the
+// mid-step manifold refresh, the orange tetra's final tip-onto-face slammed down at ~2.9 rad/s
+// onto a step-start (stale) manifold and picked up 10.5 deg of world-Y rotation inside a single
+// 16 ms step; with the refresh the same landing measures ~0.5 deg/step. The 3-degree bound
+// separates the failure mode (~10 deg) from healthy behaviour (<1 deg) with cross-platform
+// headroom (the settle is chaotic; macOS/arm64 and Linux/x86_64 trajectories diverge in FP
+// last-bits). Replays the ACTUAL gltf (fastgltf TRS + the loader's own hull path) so it tests
+// what the app runs; the hidden [ConvexProbe] variant prints the full per-step trace.
+// The scene provably exercises the refresh path (its bodies exceed kSubstepRefreshRotation at
+// impact), so the bit-identical replay check also guards the refresh path's determinism.
+TEST_CASE("Demos.ConvexHull.TetraSettleTwistBounded", "[Demos]")
+{
+    fastgltf::Parser parser;
+    auto data = fastgltf::GltfDataBuffer::FromPath("../assets/physics_demos/ConvexHullDemo.gltf");
+    REQUIRE(data.error() == fastgltf::Error::None);
+    auto result = parser.loadGltf(data.get(), "../assets/physics_demos",
+                                  fastgltf::Options::LoadExternalBuffers);
+    REQUIRE(result.error() == fastgltf::Error::None);
+    const fastgltf::Asset& asset = result.get();
+
+    const auto buildWorld = [&](PhysicsWorld& world)
+    {
+        addStaticFloor(world, 6.0f, 0.5f);
+        std::vector<PhysicsBodyHandle> tetras;
+        for (std::size_t ni = 1; ni <= 3; ++ni)
+        {
+            const fastgltf::Node& n = asset.nodes[ni];
+            const auto* trs = std::get_if<fastgltf::TRS>(&n.transform);
+            REQUIRE(trs != nullptr);
+            PhysicsBodyDesc desc;
+            desc.type = PhysicsBodyType::Dynamic;
+            desc.position = {trs->translation.x(), trs->translation.y(), trs->translation.z()};
+            desc.rotation = {trs->rotation.x(), trs->rotation.y(), trs->rotation.z(),
+                             trs->rotation.w()};
+            desc.mass = 1.0f;
+            desc.gravityScale = 1.0f;
+            desc.material = PhysicsMaterial{.restitution = 0.0f, .friction = 0.5f};
+            const PhysicsBodyHandle body = world.createBody(desc);
+            ColliderDesc collider;
+            collider.shape = GltfLoader::meshConvexHull(asset, asset.meshes[n.meshIndex.value()]);
+            collider.material = desc.material;
+            static_cast<void>(world.createCollider(body, collider));
+            tetras.push_back(body);
+        }
+        return tetras;
+    };
+
+    const auto run = [&](std::array<float, 3>& maxTwistDeg, std::array<Vec3, 3>& finalPos)
+    {
+        PhysicsWorld world;
+        const auto tetras = buildWorld(world);
+        std::array<Quaternion, 3> prevQ{};
+        maxTwistDeg = {};
+        bool allAsleep = false;
+        for (int i = 0; i < 900 && !allAsleep; ++i)
+        {
+            world.step(kFixedDt);
+            allAsleep = true;
+            for (std::size_t t = 0; t < tetras.size(); ++t)
+            {
+                const auto tf = world.bodyTransform(tetras[t]);
+                REQUIRE(tf.has_value());
+                const Quaternion q = tf->rotation();
+                const Quaternion dq = Quaternion::normalise(q * prevQ[t].conjugate());
+                const float twist =
+                    2.0f * std::atan2(dq.y(), dq.w()) * 180.0f / std::numbers::pi_v<float>;
+                // Skip the ballistic tumble (steps < 40): a free tumble legitimately rotates.
+                // The bound guards the *settle* — contact-driven motion.
+                if (i > 40 && !world.sleeping(tetras[t]))
+                {
+                    maxTwistDeg[t] = std::max(maxTwistDeg[t], std::abs(twist));
+                }
+                prevQ[t] = q;
+                allAsleep = allAsleep && world.sleeping(tetras[t]);
+                finalPos[t] = tf->position();
+            }
+        }
+        return allAsleep;
+    };
+
+    std::array<float, 3> maxTwist{};
+    std::array<Vec3, 3> finalPos{};
+    const bool slept = run(maxTwist, finalPos);
+    for (std::size_t t = 0; t < 3; ++t)
+    {
+        INFO("tetra " << t << " max settle twist " << maxTwist[t] << " deg");
+        CHECK(maxTwist[t] < 3.0f);
+    }
+    CHECK(slept); // the pile still comes to rest and sleeps
+
+    // Bit-identical replay: the refresh path must be deterministic.
+    std::array<float, 3> maxTwist2{};
+    std::array<Vec3, 3> finalPos2{};
+    static_cast<void>(run(maxTwist2, finalPos2));
+    for (std::size_t t = 0; t < 3; ++t)
+    {
+        CHECK(finalPos[t].x() == finalPos2[t].x());
+        CHECK(finalPos[t].y() == finalPos2[t].y());
+        CHECK(finalPos[t].z() == finalPos2[t].z());
     }
 }

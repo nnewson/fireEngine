@@ -74,6 +74,16 @@ inline constexpr float kWarmStartMatchRadius = 0.02f;
 // near-touching pairs; the motion term scales it so fast movers can't tunnel.
 inline constexpr float kSpeculativeDistance = 0.02f;
 
+// Mid-step manifold refresh (P9.6 stage 1). Contact manifolds are detected once per fixed
+// step at the step-start pose; a body sweeping more than this rotation in one step (|ω|·dt,
+// radians) has its non-mesh manifolds re-collided once at substep kSubstepCount/2 and the
+// solver rows re-prepared at the current mid-step pose — a stale manifold under fast rotation
+// concentrates the impact impulses on 1–2 wrongly-placed points, producing intra-step yaw
+// bursts (a settling tetra visibly "snaps") and rotational tunnelling. 0.03 rad triggers at
+// ≥ ~1.8 rad/s; the motivating ConvexHullDemo tetra face-slam tumbles at ~2.9 rad/s
+// (0.048 rad/step). Slow bodies never trip the gate and pay nothing.
+inline constexpr float kSubstepRefreshRotation = 0.03f;
+
 // Sequential-impulse velocity iterations per substep for a reduced-coordinate articulation's
 // contact + joint-limit solve. Unlike the rigid solver (whose bodies each carry their own
 // velocity), an articulation's contacts are strongly coupled through the shared kinematic
