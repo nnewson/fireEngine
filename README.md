@@ -39,7 +39,7 @@ I've no doubt these are all solved problems nowadays with the Unreal engine et a
 - **Single source of truth for tunables** — every scalar rendering knob (light intensity, IBL strengths, shadow biases, cascade split λ, bloom strength, IBL extents, camera FOV) lives in `include/fire_engine/render/constants.hpp`. GPU data-layout limits that the Vulkan-free graphics layer also needs (frames-in-flight, joint/morph/light counts, shadow caster caps + matrix layout, cascade count) live one layer down in `include/fire_engine/graphics/gpu_limits.hpp`, which `constants.hpp` includes — so render-side code still sees every constant through one include, while graphics headers stay free of `render/`
 - **Texture mapping** via [stb_image](https://github.com/nothings/stb), including HDR equirectangular loading for the skybox; uploaded to GPU through staging buffers
 - **First-person camera** with keyboard (WASD + E/F for vertical) and mouse controls
-- **GLSL shaders** compiled to SPIR-V at build time via `glslc`
+- **GLSL shaders** compiled to SPIR-V at build time via `glslc` or `glslangValidator`
 
 ## How It Works
 
@@ -318,6 +318,18 @@ cmake --build build --target run-clang-tidy   # if clang-tidy is installed
 CI builds with `FIRE_ENGINE_WARNINGS_AS_ERRORS=ON`, runs `run-clang-tidy`, runs
 `tests-full`, and checks `clang-format --dry-run -Werror`.
 
+To reproduce the Linux CI toolchain locally through Docker:
+
+```bash
+tools/ci/run-local-ci.sh all
+```
+
+The runner copies the current working tree into an Ubuntu 24.04 container, keeps
+Linux build/vcpkg state in Docker volumes, and accepts `format`, `configure`,
+`build`, `tidy`, `test`, `all`, or `shell` to isolate a CI stage. It defaults to
+`linux/amd64` to match GitHub Actions; set `DOCKER_PLATFORM=linux/arm64` for a
+faster native Apple Silicon check.
+
 Run the application:
 
 ```bash
@@ -368,7 +380,7 @@ a vendored imgui backend; the Clang switch removed all of that.
 
 Also requires:
 
-- Vulkan SDK (for `glslc` shader compiler)
+- Vulkan SDK or `glslang-tools` (for the SPIR-V shader compiler)
 
 ## Assets
 
