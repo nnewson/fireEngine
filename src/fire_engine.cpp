@@ -590,7 +590,13 @@ void FireEngine::stepSimulation(float dt, float& accumulator)
         accumulator -= fixedDt;
     }
 
-    scene_.applyPhysics(physics_);
+    // Fixed-step render interpolation (CR-20): the sim advances in 60 Hz increments but the
+    // display refreshes faster, so blend the leftover accumulator fraction between the last two
+    // simulated poses. This is purely visual — it never feeds back into the sim, so determinism
+    // is unaffected.
+    const float alpha = accumulator / fixedDt;
+
+    scene_.applyPhysics(physics_, alpha);
 
     // Articulated ragdolls drive their bone nodes from the articulation's link FK, which
     // applyPhysics (body-bound nodes only) does not cover — push it every frame so the
@@ -599,7 +605,7 @@ void FireEngine::stepSimulation(float dt, float& accumulator)
     {
         if (ragdoll.active() && ragdoll.articulated())
         {
-            ragdoll.syncNodes();
+            ragdoll.syncNodes(alpha);
         }
     }
 

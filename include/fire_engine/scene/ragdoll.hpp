@@ -85,11 +85,13 @@ public:
     void activate();
     void deactivate();
 
-    // Push the current simulated pose to the bone nodes' world-overrides. Call every frame after
-    // the physics step: an articulated ragdoll's bones are not physics-body-bound, so
-    // SceneGraph::applyPhysics does not sync them. No-op until activate(). Idempotent for a
-    // maximal ragdoll (applyPhysics already syncs its body-bound bones).
-    void syncNodes();
+    // Push the current simulated pose to the bone nodes' world-overrides, interpolated by
+    // `alpha` towards the latest simulated pose (CR-20; matches SceneGraph::applyPhysics). Call
+    // every frame after the physics step: an articulated ragdoll's bones are not
+    // physics-body-bound, so SceneGraph::applyPhysics does not sync them. No-op until
+    // activate(). Idempotent for a maximal ragdoll (applyPhysics already syncs its body-bound
+    // bones). `alpha = accumulator / fixedDt`; pass 1.0f to snap to the last simulated state.
+    void syncNodes(float alpha = 1.0f);
 
     [[nodiscard]]
     bool active() const noexcept

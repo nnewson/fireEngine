@@ -349,7 +349,9 @@ PhysicsBodyHandle PhysicsWorld::createBody(const PhysicsBodyDesc& desc)
     transform.update(Mat4::identity());
 
     bodyIndexByHandle_.emplace(handle.value(), bodies_.size());
-    bodies_.push_back({handle, body, transform, desc.position, true, {}});
+    // previousRenderTransform seeds to the initial pose so the first frames rendered before
+    // the body's first step() interpolate against itself (no snap from the origin).
+    bodies_.push_back({handle, body, transform, transform, desc.position, true, {}});
     return handle;
 }
 
@@ -630,6 +632,11 @@ void PhysicsWorld::step(float fixedDt)
         return;
     }
 
+    // Snapshot the start-of-step pose so rendering can interpolate towards the post-step pose
+    // (CR-20). Captured before FK / integration advance anything; when the accumulator runs
+    // several steps in a frame this leaves the last step's start pose as the interpolation base.
+    captureRenderBaseline();
+
     // Refresh articulation link world transforms from their generalized coordinates so the
     // link colliders' swept bounds (updateColliders, below) track the current pose. Phase A
     // articulations are kinematic (q is set externally), so this is pure forward kinematics;
@@ -750,6 +757,30 @@ std::optional<Transform> PhysicsWorld::bodyTransform(PhysicsBodyHandle handle) c
     return entry->transform;
 }
 
+std::optional<Transform> PhysicsWorld::interpolatedBodyTransform(PhysicsBodyHandle handle,
+                                                                 float alpha) const noexcept
+{
+    const BodyEntry* entry = findBody(handle);
+    if (entry == nullptr)
+    {
+        return std::nullopt;
+    }
+
+    const float t = std::clamp(alpha, 0.0f, 1.0f);
+    const Transform& prev = entry->previousRenderTransform;
+    const Transform& curr = entry->transform;
+
+    Transform blended;
+    blended.position(prev.position() + (curr.position() - prev.position()) * t);
+    blended.rotation(Quaternion::slerp(prev.rotation(), curr.rotation(), t));
+    blended.scale(prev.scale() + (curr.scale() - prev.scale()) * t);
+    // World matrix against an identity parent: body-bound bone nodes read world() straight
+    // through worldOverride (no parent composition); body-bound scene nodes ignore world()
+    // and are recomposed in resolve().
+    blended.update(Mat4::identity());
+    return blended;
+}
+
 void PhysicsWorld::setBodyTransform(PhysicsBodyHandle handle, const Transform& transform) noexcept
 {
     BodyEntry* entry = findBody(handle);
@@ -760,6 +791,9 @@ void PhysicsWorld::setBodyTransform(PhysicsBodyHandle handle, const Transform& t
 
     entry->transform = transform;
     entry->transform.update(Mat4::identity());
+    // An external reposition must not be interpolated across — collapse the render baseline
+    // onto the new pose so the body appears there immediately.
+    entry->previousRenderTransform = entry->transform;
     // An externally repositioned body must re-simulate.
     entry->sleeping = false;
     entry->sleepTimer = 0.0f;
@@ -857,6 +891,18 @@ void PhysicsWorld::capturePreviousPositions() noexcept
         {
             body.previousPosition = body.transform.position();
         }
+    }
+}
+
+void PhysicsWorld::captureRenderBaseline() noexcept
+{
+    for (BodyEntry& body : bodies_)
+    {
+        body.previousRenderTransform = body.transform;
+    }
+    for (Articulation& art : articulations_)
+    {
+        art.captureRenderBaseline();
     }
 }
 

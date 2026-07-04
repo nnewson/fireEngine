@@ -410,7 +410,7 @@ Ragdoll Ragdoll::makeArticulated(PhysicsWorld& physics, std::span<Node* const> b
     return rag;
 }
 
-void Ragdoll::syncNodes()
+void Ragdoll::syncNodes(float alpha)
 {
     if (physics_ == nullptr)
     {
@@ -432,7 +432,8 @@ void Ragdoll::syncNodes()
         {
             if (bone.link >= 0)
             {
-                const RigidTransform lw = art->linkWorld(static_cast<std::size_t>(bone.link));
+                const RigidTransform lw =
+                    art->interpolatedLinkWorld(static_cast<std::size_t>(bone.link), alpha);
                 bone.node->worldOverride(Mat4::translate(lw.translation) * lw.rotation.toMat4());
             }
         }
@@ -441,7 +442,7 @@ void Ragdoll::syncNodes()
     {
         for (Bone& bone : bones_)
         {
-            const auto transform = physics_->bodyTransform(bone.body);
+            const auto transform = physics_->interpolatedBodyTransform(bone.body, alpha);
             if (transform.has_value())
             {
                 bone.node->worldOverride(transform->world());

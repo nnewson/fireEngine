@@ -181,6 +181,51 @@ TEST_CASE("PhysicsWorld.DynamicBodyIntegratesVelocityOnStep", "[PhysicsWorld]")
     CHECK(transform->position() == Vec3(1.0f, 0.0f, -0.5f));
 }
 
+TEST_CASE("PhysicsWorld.InterpolatedTransformBlendsAcrossTheLastStep", "[PhysicsWorld]")
+{
+    // CR-20: render interpolation blends the start-of-step pose towards the post-step pose.
+    PhysicsWorld physics;
+    auto body = createBox(physics, PhysicsBodyType::Dynamic, {}, {2.0f, 0.0f, 0.0f});
+
+    // Before any step the baseline is seeded to the initial pose, so every alpha reads the
+    // origin — the first rendered frames must not slide out from nowhere.
+    CHECK(physics.interpolatedBodyTransform(body, 0.0f)->position() == Vec3(0.0f, 0.0f, 0.0f));
+    CHECK(physics.interpolatedBodyTransform(body, 1.0f)->position() == Vec3(0.0f, 0.0f, 0.0f));
+
+    physics.step(0.5f); // moves {0,0,0} -> {1,0,0}
+
+    // alpha == 1 reproduces the current pose; alpha == 0 the pre-step pose; 0.5 the midpoint.
+    CHECK(physics.interpolatedBodyTransform(body, 1.0f)->position() == Vec3(1.0f, 0.0f, 0.0f));
+    CHECK(physics.interpolatedBodyTransform(body, 0.0f)->position() == Vec3(0.0f, 0.0f, 0.0f));
+    CHECK(physics.interpolatedBodyTransform(body, 0.5f)
+              ->position()
+              .approxEqual(Vec3(0.5f, 0.0f, 0.0f), 1e-5f));
+
+    // alpha is clamped to [0, 1] — no extrapolation past the simulated endpoints.
+    CHECK(physics.interpolatedBodyTransform(body, 2.0f)->position() == Vec3(1.0f, 0.0f, 0.0f));
+    CHECK(physics.interpolatedBodyTransform(body, -1.0f)->position() == Vec3(0.0f, 0.0f, 0.0f));
+
+    // bodyTransform (the sim state) is untouched by interpolation — determinism is unaffected.
+    CHECK(physics.bodyTransform(body)->position() == Vec3(1.0f, 0.0f, 0.0f));
+}
+
+TEST_CASE("PhysicsWorld.InterpolatedTransformDoesNotSpanATeleport", "[PhysicsWorld]")
+{
+    // An external reposition collapses the render baseline, so the body snaps to the new pose
+    // instead of sliding across the gap over the next frame's alphas.
+    PhysicsWorld physics;
+    auto body = createBox(physics, PhysicsBodyType::Dynamic, {}, {2.0f, 0.0f, 0.0f});
+    physics.step(0.5f); // {0,0,0} -> {1,0,0}
+
+    fire_engine::Transform teleport;
+    teleport.position(Vec3(10.0f, 0.0f, 0.0f));
+    physics.setBodyTransform(body, teleport);
+
+    CHECK(physics.interpolatedBodyTransform(body, 0.0f)->position() == Vec3(10.0f, 0.0f, 0.0f));
+    CHECK(physics.interpolatedBodyTransform(body, 0.5f)->position() == Vec3(10.0f, 0.0f, 0.0f));
+    CHECK(physics.interpolatedBodyTransform(body, 1.0f)->position() == Vec3(10.0f, 0.0f, 0.0f));
+}
+
 TEST_CASE("PhysicsWorld.DynamicBodySettlesAgainstStaticContact", "[PhysicsWorld]")
 {
     // P2 sequential-impulse solver: a slow dynamic body driven into a static box has

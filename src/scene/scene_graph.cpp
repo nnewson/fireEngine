@@ -68,13 +68,13 @@ void submitPhysicsRecursive(const Node& node, PhysicsWorld& physics)
     }
 }
 
-void applyPhysicsRecursive(Node& node, const PhysicsWorld& physics)
+void applyPhysicsRecursive(Node& node, const PhysicsWorld& physics, float alpha)
 {
     const PhysicsBodyHandle handle = node.physicsBodyHandle();
     if (handle.valid())
     {
         const PhysicsBody* body = physics.body(handle);
-        auto transform = physics.bodyTransform(handle);
+        auto transform = physics.interpolatedBodyTransform(handle, alpha);
         if (body != nullptr && transform.has_value() && body->type() != PhysicsBodyType::Static)
         {
             if (node.hasWorldOverride())
@@ -95,7 +95,7 @@ void applyPhysicsRecursive(Node& node, const PhysicsWorld& physics)
 
     for (const auto& child : node.children())
     {
-        applyPhysicsRecursive(*child, physics);
+        applyPhysicsRecursive(*child, physics, alpha);
     }
 }
 } // namespace
@@ -130,11 +130,11 @@ void SceneGraph::submitPhysics(PhysicsWorld& physics) const
     }
 }
 
-void SceneGraph::applyPhysics(const PhysicsWorld& physics)
+void SceneGraph::applyPhysics(const PhysicsWorld& physics, float alpha)
 {
     for (auto& node : nodes_)
     {
-        applyPhysicsRecursive(*node, physics);
+        applyPhysicsRecursive(*node, physics, alpha);
     }
     resolve();
 }
