@@ -73,6 +73,11 @@ add_library(fireengine SHARED
     src/physics/joint_solver.cpp
     src/physics/physics_body.cpp
     src/physics/physics_world.cpp
+    src/physics/physics_world_articulation.cpp
+    src/physics/physics_world_debug.cpp
+    src/physics/physics_world_events.cpp
+    src/physics/physics_world_queries.cpp
+    src/physics/physics_world_shapes.cpp
     src/render/compute_pipeline.cpp
     src/render/debug_draw.cpp
     src/render/debug_overlay.cpp
