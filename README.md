@@ -352,6 +352,8 @@ Both fall back to built-in defaults when omitted. A single `.hdr`/`.exr` argumen
 skybox path, so `./fireEngineApp nightbox.hdr` keeps the default scene and swaps only the
 environment.
 
+Use `--maximized` (or `--maximised`) to ask GLFW to create the application window maximized.
+
 Runtime diagnostics use `FE_LOG`. With no `FE_LOG`, warnings and errors are printed; info/debug
 logs are quiet. Set a global level (`debug`, `info`, `warn`, `error`, `off`) or category-specific
 levels (`category:level`) with comma-separated entries:

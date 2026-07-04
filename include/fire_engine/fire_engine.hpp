@@ -29,6 +29,7 @@ struct RunOptions
     bool addCloth{false};
     bool addCharacter{false};
     bool addQueryProbe{false};
+    bool startMaximized{false};
     RendererDebug debug{};
 };
 

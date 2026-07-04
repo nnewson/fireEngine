@@ -28,6 +28,8 @@ struct ApplicationArgs
     // -q flag: drop a query-probe demo — a ring of static bodies with a rotating fan of
     // raycasts + a pulsing overlap sphere, drawn each frame from PhysicsWorld queries.
     bool addQueryProbe{false};
+    // --maximized / --maximised: ask the platform window to start maximized when supported.
+    bool startMaximized{false};
     // Forwarded straight to the Renderer. Multiple --debug-* flags collapse to
     // the last one parsed (single debug view at a time); --no-shadows is
     // independent and combines with any view.
@@ -126,6 +128,11 @@ struct ApplicationArgs
         if (arg == "--overlay")
         {
             args.debug.overlayVisible = true;
+            continue;
+        }
+        if (arg == "--maximized" || arg == "--maximised")
+        {
+            args.startMaximized = true;
             continue;
         }
         if (arg == "--debug-physics")

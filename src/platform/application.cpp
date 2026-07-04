@@ -23,6 +23,7 @@ int main(int argc, char* argv[])
                                  .addCloth = args.addCloth,
                                  .addCharacter = args.addCharacter,
                                  .addQueryProbe = args.addQueryProbe,
+                                 .startMaximized = args.startMaximized,
                                  .debug = args.debug};
         app.run(800, 600, "FireEngine Demo", options);
     }

@@ -43,7 +43,8 @@ FireEngine::~FireEngine()
 void FireEngine::run(size_t width, size_t height, std::string_view appName,
                      const RunOptions& options)
 {
-    window_ = std::make_unique<Window>(width, height, appName);
+    window_ = std::make_unique<Window>(width, height, appName,
+                                       WindowOptions{.startMaximized = options.startMaximized});
 
     renderer_ =
         std::make_unique<Renderer>(*window_, std::string(options.skyboxPath), options.debug);
