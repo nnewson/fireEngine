@@ -37,7 +37,7 @@ jobs:
       - name: Install system packages
         run: |
           sudo apt-get update
-          sudo apt-get install -y ninja-build cmake clang-tidy glslang-tools libvulkan-dev \
+          sudo apt-get install -y ninja-build cmake clang-tidy glslang-tools shaderc libvulkan-dev \
             xorg-dev libxinerama-dev libxcursor-dev libglu1-mesa-dev pkg-config
 
       - name: Checkout vcpkg
