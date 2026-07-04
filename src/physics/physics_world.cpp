@@ -1256,8 +1256,94 @@ std::vector<JointInput> PhysicsWorld::buildJointInputs() const
     return inputs;
 }
 
+bool PhysicsWorld::refreshIslandContacts(const Island& island,
+                                         std::span<const SolverBody> solverBodies,
+                                         std::span<const SolverContact> solverContacts,
+                                         std::vector<SolverContactInput>& islandContacts,
+                                         std::vector<std::uint8_t>& flags, float dt,
+                                         float remaining)
+{
+    flags.assign(islandContacts.size(), 0);
+
+    // A Dynamic body sweeping more than kSubstepRefreshRotation this step (at its current
+    // solver angular velocity — the impact itself generates the spin) has a stale manifold.
+    // Squared compare, no sqrt.
+    const auto fastRotating = [&](const BodyEntry* entry)
+    {
+        if (entry->body.type() != PhysicsBodyType::Dynamic)
+        {
+            return false;
+        }
+        const auto b = static_cast<std::size_t>(entry - bodies_.data());
+        return solverBodies[b].angularVelocity.magnitudeSquared() * dt * dt >
+               kSubstepRefreshRotation * kSubstepRefreshRotation;
+    };
+
+    // The hypothetical owner pose of a body at its in-flight SolverBody state. The solver
+    // integrates about the world centre of mass; convert back to the transform origin
+    // exactly as the end-of-step writeback does (origin = COM − R·comLocal), then compose
+    // the same TRS Transform::update builds. Static/Kinematic solver poses never advance
+    // mid-step and were seeded from the same transform, so this is exact for them too.
+    const auto ownerPoseAt = [&](const BodyEntry* entry)
+    {
+        const auto b = static_cast<std::size_t>(entry - bodies_.data());
+        const SolverBody& sb = solverBodies[b];
+        const Vec3 origin = sb.position - sb.orientation.rotate(entry->body.centerOfMassLocal());
+        const Vec3 scale = entry->transform.scale();
+        const Mat4 world = Mat4::translate(origin) * sb.orientation.toMat4() * Mat4::scale(scale);
+        return OwnerPose{world, sb.orientation, scale, true};
+    };
+
+    bool any = false;
+    for (std::size_t k = 0; k < island.contacts.size(); ++k)
+    {
+        const SolverContact& source = solverContacts[static_cast<std::size_t>(island.contacts[k])];
+        if (source.subKey != 0)
+        {
+            continue; // mesh-triangle contacts are not refreshed (P9.6 stage 1)
+        }
+        if (!fastRotating(source.moving) && !fastRotating(source.target))
+        {
+            continue;
+        }
+
+        // Re-collide at the current poses, with the speculative band sized for the
+        // remaining travel this step (mirrors the step-start closingReach).
+        const auto mi = static_cast<std::size_t>(source.moving - bodies_.data());
+        const auto ti = static_cast<std::size_t>(source.target - bodies_.data());
+        const float closingReach =
+            (solverBodies[mi].velocity.magnitude() + solverBodies[ti].velocity.magnitude()) *
+                remaining +
+            kSpeculativeDistance;
+        const auto manifold = narrowPhase_->collide(
+            worldShapeAt(*source.movingCollider, ownerPoseAt(source.moving)),
+            worldShapeAt(*source.targetCollider, ownerPoseAt(source.target)), closingReach);
+
+        SolverContactInput& in = islandContacts[k];
+        if (!manifold.has_value() || manifold->count == 0)
+        {
+            in.pointCount = 0; // mid-step separation: the rows drop
+        }
+        else
+        {
+            in.normal = manifold->normal;
+            in.pointCount = manifold->count;
+            for (int p = 0; p < manifold->count; ++p)
+            {
+                const auto pi = static_cast<std::size_t>(p);
+                in.points[pi] = manifold->points[pi].position;
+                in.penetration[pi] = manifold->points[pi].penetration;
+            }
+        }
+        flags[k] = 1;
+        any = true;
+    }
+    return any;
+}
+
 void PhysicsWorld::solveIsland(const Island& island, std::vector<SolverBody>& solverBodies,
                                std::span<const SolverContactInput> contactInputs,
+                               std::span<const SolverContact> solverContacts,
                                std::span<const JointInput> jointInputs, float dt)
 {
     // Narrow the global constraint inputs to this island's subset (the solvers index
@@ -1295,8 +1381,21 @@ void PhysicsWorld::solveIsland(const Island& island, std::vector<SolverBody>& so
         jointSolver_->prepare(solverBodies, islandJoints, h);
     }
 
+    std::vector<std::uint8_t> refreshFlags;
+
     for (int s = 0; s < kSubstepCount; ++s)
     {
+        // Mid-step manifold refresh (P9.6): halfway through the substeps, re-collide the
+        // contacts of fast-rotating bodies at their current in-flight poses and re-prepare
+        // those solver rows — the step-start manifold is stale by up to half the body's
+        // per-step sweep by now. Gated, so slow bodies never pay for it.
+        if (s == kSubstepCount / 2 && haveContacts &&
+            refreshIslandContacts(island, solverBodies, solverContacts, islandContacts,
+                                  refreshFlags, dt, dt - h * static_cast<float>(s)))
+        {
+            solver_->refresh(solverBodies, islandContacts, refreshFlags);
+        }
+
         // Integrate velocities: gravity on this island's dynamic bodies (Kinematic
         // members are scene-driven nodes; Static are boundaries).
         for (const int bi : island.bodies)
@@ -1548,7 +1647,7 @@ bool PhysicsWorld::solveAndIntegrate(std::span<const SolverContact> contacts, fl
             }
         }
 
-        solveIsland(island, solverBodies, inputs, jointInputs, dt);
+        solveIsland(island, solverBodies, inputs, contacts, jointInputs, dt);
 
         // Accumulate each dynamic member's sleep timer from its post-solve velocity.
         for (const int bi : island.bodies)

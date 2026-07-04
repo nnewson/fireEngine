@@ -175,6 +175,121 @@ void ContactSolver::prepare(std::span<const SolverBody> bodies,
     }
 }
 
+void ContactSolver::refresh(std::span<const SolverBody> bodies,
+                            std::span<const SolverContactInput> contacts,
+                            std::span<const std::uint8_t> refreshed)
+{
+    // World inverse inertias are as stale as the anchors under fast rotation — rebuild them
+    // from the current orientations. (Non-refreshed rows keep effective masses built from the
+    // old inertia while impulses now apply through the new one: a Gauss-Seidel preconditioner
+    // mismatch that shifts convergence rate, not the fixed point.)
+    for (std::size_t i = 0; i < bodies.size(); ++i)
+    {
+        invInertiaWorld_[i] =
+            worldInverseInertia(bodies[i].orientation, bodies[i].inverseInertiaLocal);
+    }
+
+    // Rebuild points_ by walking the contacts in prepare() order. Each contact's rows are the
+    // contiguous run in points_ with its (unique) key — copy the run verbatim for unflagged
+    // contacts, rebuild it from the re-collided manifold at the current pose for flagged ones.
+    std::vector<ConstraintPoint> newPoints;
+    newPoints.reserve(points_.size());
+    std::size_t cursor = 0;
+
+    for (std::size_t c = 0; c < contacts.size(); ++c)
+    {
+        const SolverContactInput& contact = contacts[c];
+        const std::size_t runBegin = cursor;
+        while (cursor < points_.size() && points_[cursor].key == contact.key)
+        {
+            ++cursor;
+        }
+        const std::size_t runEnd = cursor;
+
+        if (refreshed[c] == 0)
+        {
+            for (std::size_t i = runBegin; i < runEnd; ++i)
+            {
+                newPoints.push_back(points_[i]);
+            }
+            continue;
+        }
+
+        const SolverBody& bodyA = bodies[static_cast<std::size_t>(contact.bodyA)];
+        const SolverBody& bodyB = bodies[static_cast<std::size_t>(contact.bodyB)];
+        const Mat3& iA = invInertiaWorld_[static_cast<std::size_t>(contact.bodyA)];
+        const Mat3& iB = invInertiaWorld_[static_cast<std::size_t>(contact.bodyB)];
+
+        Vec3 tangent1;
+        Vec3 tangent2;
+        buildTangents(contact.normal, tangent1, tangent2);
+
+        for (int i = 0; i < contact.pointCount; ++i)
+        {
+            ConstraintPoint cp;
+            cp.a = contact.bodyA;
+            cp.b = contact.bodyB;
+            cp.invMassA = bodyA.invMass;
+            cp.invMassB = bodyB.invMass;
+            cp.posWeightA = bodyA.positionWeight;
+            cp.posWeightB = bodyB.positionWeight;
+            cp.normal = contact.normal;
+            cp.tangent1 = tangent1;
+            cp.tangent2 = tangent2;
+            cp.point = contact.points[static_cast<std::size_t>(i)];
+
+            const Vec3 rA0 = cp.point - bodyA.position;
+            const Vec3 rB0 = cp.point - bodyB.position;
+            cp.anchorLocalA = bodyA.orientation.conjugate().rotate(rA0);
+            cp.anchorLocalB = bodyB.orientation.conjugate().rotate(rB0);
+            cp.adjustedSeparation = -contact.penetration[static_cast<std::size_t>(i)];
+
+            cp.restitution = contact.restitution;
+            cp.friction = contact.friction;
+
+            cp.normalMass =
+                effectiveMassAlong(cp.invMassA, cp.invMassB, rA0, rB0, cp.normal, iA, iB);
+            cp.posNormalMass =
+                effectiveMassAlong(cp.posWeightA, cp.posWeightB, rA0, rB0, cp.normal, iA, iB);
+            tangentMass2x2(cp.invMassA, cp.invMassB, rA0, rB0, tangent1, tangent2, iA, iB,
+                           cp.tangentMass00, cp.tangentMass01, cp.tangentMass11);
+            cp.key = contact.key;
+            cp.relVelN0 = dot(relativeVelocity(bodyA, bodyB, rA0, rB0), cp.normal);
+
+            // Carry the accumulated state from the nearest OLD row of this pair, matched by its
+            // *tracked current* anchor position (orientation·anchorLocal — the same expression
+            // solveVelocity tracks with). The prepare-time cp.point would be rotation-stale by
+            // exactly the sweep this refresh exists to correct. Inherit the normal impulse (the
+            // warm start), relVelN0 (so end-of-step restitution still sees the true approach
+            // speed, not the mid-impact residual), and maxNormalImpulse (the restitution
+            // engagement flag). Friction is not carried — the cross-frame convention.
+            float bestDistSq = kWarmStartMatchRadius * kWarmStartMatchRadius;
+            const ConstraintPoint* match = nullptr;
+            for (std::size_t j = runBegin; j < runEnd; ++j)
+            {
+                const ConstraintPoint& old = points_[j];
+                const Vec3 trackedA = bodyA.position + bodyA.orientation.rotate(old.anchorLocalA);
+                const float distSq = (trackedA - cp.point).magnitudeSquared();
+                if (distSq <= bestDistSq)
+                {
+                    bestDistSq = distSq;
+                    match = &old;
+                }
+            }
+            if (match != nullptr)
+            {
+                cp.normalImpulse = match->normalImpulse;
+                cp.relVelN0 = match->relVelN0;
+                cp.maxNormalImpulse = match->maxNormalImpulse;
+            }
+
+            newPoints.push_back(cp);
+        }
+    }
+
+    points_ = std::move(newPoints);
+}
+
 void ContactSolver::warmStart(std::vector<SolverBody>& bodies) const
 {
     for (const ConstraintPoint& cp : points_)

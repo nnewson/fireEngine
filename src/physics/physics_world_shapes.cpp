@@ -169,19 +169,25 @@ PhysicsWorld::OwnerPose PhysicsWorld::colliderOwnerPose(const ColliderEntry& ent
     return OwnerPose{world, owner->transform.rotation(), matrixScale(world), true};
 }
 
+WorldShape PhysicsWorld::worldShapeAt(const ColliderEntry& entry, const OwnerPose& owner) const
+{
+    // Compose the owner world with the collider's local offset (identity for a plain
+    // single collider; a compound child's placement otherwise). Shape dimensions take
+    // the owner scale; orientation is owner × child rotation. Split from worldShape so a
+    // caller can compose against a *hypothetical* owner pose (the mid-step manifold
+    // refresh builds one from the in-flight SolverBody state).
+    const Mat4 world =
+        owner.world * (Mat4::translate(entry.localPosition) * entry.localRotation.toMat4());
+    const Quaternion rot = owner.rotation * entry.localRotation;
+    return composeWorldShape(entry.shape, world, rot, owner.scale);
+}
+
 WorldShape PhysicsWorld::worldShape(const ColliderEntry& entry) const
 {
     // Owner world pose — a rigid body's transform or an articulation link's
     // forward-kinematics pose (identity when the owner is missing, which shouldn't happen
     // for an active collider).
-    const OwnerPose owner = colliderOwnerPose(entry);
-    // Compose the owner world with the collider's local offset (identity for a plain
-    // single collider; a compound child's placement otherwise). Shape dimensions take
-    // the owner scale; orientation is owner × child rotation.
-    const Mat4 world =
-        owner.world * (Mat4::translate(entry.localPosition) * entry.localRotation.toMat4());
-    const Quaternion rot = owner.rotation * entry.localRotation;
-    return composeWorldShape(entry.shape, world, rot, owner.scale);
+    return worldShapeAt(entry, colliderOwnerPose(entry));
 }
 
 AABB PhysicsWorld::localBounds(const ColliderShape& shape) const noexcept

@@ -72,10 +72,15 @@ std::uint64_t simulate(PhysicsWorld& world, std::span<const PhysicsBodyHandle> h
 
 [[nodiscard]] constexpr std::uint64_t goldenHash() noexcept
 {
+    // Re-baselined for P9.6 (mid-step manifold refresh): the falling boxes exceed the
+    // kSubstepRefreshRotation gate at impact, so their manifolds are re-collided mid-step
+    // and the end state intentionally changed.
 #if defined(__linux__) && defined(__x86_64__)
-    return 0x77168f4d7082f616ULL;
+    // STALE — pre-P9.6 value. Re-baseline via the local Docker CI replica before merge
+    // (this platform's golden must be recorded on the platform itself).
+    return 0x640fc158fb6ac02bULL;
 #else
-    return 0x9c433ce1d9ec997eULL;
+    return 0x2b31386354735d8bULL;
 #endif
 }
 
