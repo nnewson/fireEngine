@@ -59,6 +59,7 @@ TEST_CASE("ApplicationArgs.EmptyArgsUseDefaults", "[ApplicationArgs]")
     CHECK_FALSE(args.addFloor);
     CHECK_FALSE(args.addParticles);
     CHECK_FALSE(args.addCloth);
+    CHECK_FALSE(args.startMaximized);
 }
 
 TEST_CASE("ApplicationArgs.SingleSceneArgumentSetsScenePath", "[ApplicationArgs]")
@@ -194,6 +195,18 @@ TEST_CASE("ApplicationArgs.OverlayFlagShowsDebugOverlay", "[ApplicationArgs]")
     const auto& args = parsed.args;
 
     CHECK(args.debug.overlayVisible);
+}
+
+TEST_CASE("ApplicationArgs.MaximizedFlagSetsStartupWindowState", "[ApplicationArgs]")
+{
+    const auto flag = GENERATE(values<std::string_view>({"--maximized", "--maximised"}));
+    CAPTURE(flag);
+
+    const auto parsed = parseArgs({"fireEngineApp", flag, "RiggedSimple/RiggedSimple.gltf"});
+    const auto& args = parsed.args;
+
+    CHECK(args.startMaximized);
+    CHECK(args.scenePath == "RiggedSimple/RiggedSimple.gltf");
 }
 
 TEST_CASE("ApplicationArgs.UnknownFlagIsTreatedAsPositional", "[ApplicationArgs]")

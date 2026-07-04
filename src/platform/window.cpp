@@ -5,9 +5,10 @@
 namespace fire_engine
 {
 
-Window::Window(size_t width, size_t height, std::string_view title)
+Window::Window(size_t width, size_t height, std::string_view title, WindowOptions options)
 {
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+    glfwWindowHint(GLFW_MAXIMIZED, options.startMaximized ? GLFW_TRUE : GLFW_FALSE);
     window_ = glfwCreateWindow(static_cast<int>(width), static_cast<int>(height), title.data(),
                                nullptr, nullptr);
     if (window_ == nullptr)

@@ -12,10 +12,16 @@
 namespace fire_engine
 {
 
+struct WindowOptions
+{
+    bool startMaximized{false};
+};
+
 class Window
 {
 public:
-    explicit Window(size_t width, size_t height, std::string_view title);
+    explicit Window(size_t width, size_t height, std::string_view title,
+                    WindowOptions options = {});
     ~Window();
 
     Window(const Window&) = delete;
