@@ -70,6 +70,15 @@ std::uint64_t simulate(PhysicsWorld& world, std::span<const PhysicsBodyHandle> h
     return test::hashBodyState(world, handles);
 }
 
+[[nodiscard]] constexpr std::uint64_t goldenHash() noexcept
+{
+#if defined(__linux__) && defined(__x86_64__)
+    return 0x77168f4d7082f616ULL;
+#else
+    return 0x9c433ce1d9ec997eULL;
+#endif
+}
+
 } // namespace
 
 TEST_CASE("Determinism.ReplayIsBitIdentical", "[Determinism]")
@@ -145,7 +154,12 @@ TEST_CASE("Determinism.GoldenHash", "[Determinism]")
     // INTENTIONALLY (and review why) when that happens, never reflexively.
     // Re-baselined for the P9.2 TGS soft-step solver (substepped gravity, soft contacts
     // + restitution at the true impact velocity) and the inelastic default material.
-    constexpr std::uint64_t kGoldenHash = 0x9c433ce1d9ec997eULL;
+    //
+    // The hash is raw float bits. Replays are bit-identical on a given platform, but
+    // macOS/arm64 and Linux/x86_64 differ by a few last-bit contact-solver operations
+    // after the first box/box impact, so each supported CI platform records its own
+    // intentional golden.
+    constexpr std::uint64_t kGoldenHash = goldenHash();
 
     PhysicsWorld world;
     const auto handles = buildScene(world);
