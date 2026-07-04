@@ -25,6 +25,55 @@ namespace
     return {m[0, 3], m[1, 3], m[2, 3]};
 }
 
+struct BoneFrames
+{
+    std::vector<Vec3> pos;
+    std::vector<Quaternion> rot;
+    std::vector<int> parent;
+};
+
+[[nodiscard]] BoneFrames gatherBoneFrames(std::span<Node* const> boneNodes)
+{
+    const std::size_t count = boneNodes.size();
+
+    // Node → bone index, for resolving each bone's parent bone (the nearest ancestor
+    // node that is itself a bone).
+    std::unordered_map<const Node*, int> indexOf;
+    indexOf.reserve(count);
+    for (std::size_t i = 0; i < count; ++i)
+    {
+        indexOf[boneNodes[i]] = static_cast<int>(i);
+    }
+
+    // World pose of each bone from its current composed world (the bind/animated
+    // pose the ragdoll is seeded from).
+    BoneFrames frames;
+    frames.pos.resize(count);
+    frames.rot.resize(count);
+    frames.parent.assign(count, -1);
+    for (std::size_t i = 0; i < count; ++i)
+    {
+        const Mat4& w = boneNodes[i]->composedWorld();
+        frames.pos[i] = translation(w);
+        frames.rot[i] = Quaternion::fromMatrix(w);
+    }
+
+    for (std::size_t i = 0; i < count; ++i)
+    {
+        for (const Node* p = boneNodes[i]->parent(); p != nullptr; p = p->parent())
+        {
+            const auto it = indexOf.find(p);
+            if (it != indexOf.end())
+            {
+                frames.parent[i] = it->second;
+                break;
+            }
+        }
+    }
+
+    return frames;
+}
+
 // Squared distance between two segments [p1,q1] and [p2,q2] (Ericson, Real-Time Collision
 // Detection). Used to detect which bone capsules overlap in the bind pose.
 [[nodiscard]] float segmentSegmentDistanceSq(const Vec3& p1, const Vec3& q1, const Vec3& p2,
@@ -97,39 +146,10 @@ Ragdoll Ragdoll::make(PhysicsWorld& physics, std::span<Node* const> boneNodes,
     rag.physics_ = &physics;
 
     const std::size_t count = boneNodes.size();
-
-    // Node → bone index, for resolving each bone's parent bone (the nearest ancestor
-    // node that is itself a bone).
-    std::unordered_map<const Node*, int> indexOf;
-    for (std::size_t i = 0; i < count; ++i)
-    {
-        indexOf[boneNodes[i]] = static_cast<int>(i);
-    }
-
-    // World pose of each bone from its current composed world (the bind/animated
-    // pose the ragdoll is seeded from).
-    std::vector<Vec3> pos(count);
-    std::vector<Quaternion> rot(count);
-    for (std::size_t i = 0; i < count; ++i)
-    {
-        const Mat4& w = boneNodes[i]->composedWorld();
-        pos[i] = translation(w);
-        rot[i] = Quaternion::fromMatrix(w);
-    }
-
-    std::vector<int> parent(count, -1);
-    for (std::size_t i = 0; i < count; ++i)
-    {
-        for (const Node* p = boneNodes[i]->parent(); p != nullptr; p = p->parent())
-        {
-            const auto it = indexOf.find(p);
-            if (it != indexOf.end())
-            {
-                parent[i] = it->second;
-                break;
-            }
-        }
-    }
+    const BoneFrames frames = gatherBoneFrames(boneNodes);
+    const std::vector<Vec3>& pos = frames.pos;
+    const std::vector<Quaternion>& rot = frames.rot;
+    const std::vector<int>& parent = frames.parent;
 
     // Pass 1: a capsule body per bone. Capsule length spans the bone-to-parent gap
     // (falling back to the default for roots / coincident joints).
@@ -222,36 +242,14 @@ Ragdoll Ragdoll::makeArticulated(PhysicsWorld& physics, std::span<Node* const> b
         return rag;
     }
 
-    std::unordered_map<const Node*, int> indexOf;
-    for (std::size_t i = 0; i < count; ++i)
-    {
-        indexOf[boneNodes[i]] = static_cast<int>(i);
-    }
+    const BoneFrames frames = gatherBoneFrames(boneNodes);
+    const std::vector<Vec3>& pos = frames.pos;
+    const std::vector<Quaternion>& rot = frames.rot;
+    const std::vector<int>& parent = frames.parent;
 
-    // Bind-pose world transform of each bone (the articulation is seeded to reproduce it).
-    std::vector<Vec3> pos(count);
-    std::vector<Quaternion> rot(count);
-    for (std::size_t i = 0; i < count; ++i)
-    {
-        const Mat4& w = boneNodes[i]->composedWorld();
-        pos[i] = translation(w);
-        rot[i] = Quaternion::fromMatrix(w);
-    }
-
-    // Parent bone = nearest ancestor node that is itself a bone.
-    std::vector<int> parent(count, -1);
     int root = -1;
     for (std::size_t i = 0; i < count; ++i)
     {
-        for (const Node* p = boneNodes[i]->parent(); p != nullptr; p = p->parent())
-        {
-            const auto it = indexOf.find(p);
-            if (it != indexOf.end())
-            {
-                parent[i] = it->second;
-                break;
-            }
-        }
         if (parent[i] < 0)
         {
             root = root < 0 ? static_cast<int>(i) : root; // first root wins (single-root model)

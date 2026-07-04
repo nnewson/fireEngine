@@ -1547,13 +1547,6 @@ void PhysicsWorld::resetResolvedColliders()
 
 void PhysicsWorld::stepArticulations(float dt)
 {
-    // Uniform passive joint damping for the articulation solve. Modest but non-zero: a
-    // chaotic reduced-coordinate chain needs some dissipation to stay stable under the
-    // explicit integrator (see the Phase B double-pendulum finding); per-joint limits and
-    // drives add the rest. Exposed via RagdollParams once the Ragdoll binding lands.
-    constexpr float kArticulationDamping = 0.2f;
-    constexpr float kArticulationAngularSleepThreshold = 0.15f;
-
     if (articulationSleepTimers_.size() != articulations_.size())
     {
         articulationSleepTimers_.resize(articulations_.size(), 0.0f);

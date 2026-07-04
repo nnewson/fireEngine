@@ -75,6 +75,11 @@ struct ArticulationLinkDesc
 class Articulation
 {
 public:
+    // --- Authoring/state API ---
+    //
+    // Used by loaders/binders to build the link tree and seed/read its generalized state.
+    // These methods do not run the solver by themselves; call forwardKinematics() after
+    // changing pose state when linkWorld() must be current.
     Articulation() = default;
 
     // Add the floating-base root link (index 0). Its body frame *is* the base frame, so
@@ -216,23 +221,15 @@ public:
     void integrateVelocities(float dt);
     void integratePositions(float dt);
 
-    [[nodiscard]]
-    std::span<const float> qDDot() const noexcept
-    {
-        return qDDot_;
-    }
-
-    // --- Contact/constraint coupling (Phase C: the ConstraintBody seam) ---
+    // --- Solver seam (PhysicsWorld / articulation_contact / ConstraintBody) ---
     //
-    // These let the contact solver treat an articulation link like any other constraint
-    // body: read the world velocity of a contact point, ask how much that point resists an
-    // impulse along a direction (the operational-space effective mass), and apply an impulse
-    // that propagates through the whole linkage into q̇. All world-space; `link` indexes a
-    // link, `worldPoint` is on it.
+    // These methods are public so the physics-world articulation step and ConstraintBody can
+    // run the reduced-coordinate solve without making Articulation own contact generation. They
+    // expose solver internals intentionally and are not a general gameplay API.
     //
-    // Call factorizeArticulatedInertia() + computeLinkVelocities() once per solve step
-    // (after setting q/q̇) before using the three below; both depend only on the current
-    // pose/velocity, not on the impulses applied during the solve.
+    // The velocity seam is: factorizeArticulatedInertia() + computeLinkVelocities() once per
+    // solve step, then pointVelocity / inverseEffectiveMass / applyImpulse rows may iterate on
+    // the cached state.
     void factorizeArticulatedInertia();
     void computeLinkVelocities();
 
@@ -258,14 +255,6 @@ public:
     // and contacts converge together. `invH` = 1/substep.
     void solveJointLimits(float invH, bool useBias, float erp, float maxPush);
 
-    // Apply a generalized impulse on link `link`'s spherical joint DOFs (child frame), reacting
-    // the whole chain + floating base through the articulated response. The primitive the
-    // velocity-level joint limits are built on; exposed for direct use / testing.
-    void applyJointImpulse(std::size_t link, const Vec3& genImpulse)
-    {
-        jointImpulseResponse(link, genImpulse, true);
-    }
-
     // Self-collision seam: a contact between two links of the *same* articulation. The inverse
     // effective mass of the RELATIVE point velocity to an impulse pair (+dir at A, −dir at B),
     // and the application of such a pair. Both go through one shared articulated response, so a
@@ -282,6 +271,24 @@ public:
                           const Vec3& worldPointB, const Vec3& worldImpulse)
     {
         pairImpulseResponse(linkA, worldPointA, linkB, worldPointB, worldImpulse, true);
+    }
+
+    // --- Test hooks / diagnostics ---
+    //
+    // These expose internal solver quantities for focused unit tests. Runtime contact solving
+    // should use the solver seam above instead of driving these directly.
+    [[nodiscard]]
+    std::span<const float> qDDot() const noexcept
+    {
+        return qDDot_;
+    }
+
+    // Apply a generalized impulse on link `link`'s spherical joint DOFs (child frame), reacting
+    // the whole chain + floating base through the articulated response. Kept public for tests of
+    // the joint-limit primitive; production limit solving goes through solveJointLimits().
+    void applyJointImpulse(std::size_t link, const Vec3& genImpulse)
+    {
+        jointImpulseResponse(link, genImpulse, true);
     }
 
 private:
