@@ -27,6 +27,7 @@
 #include <fire_engine/scene/light.hpp>
 #include <fire_engine/scene/mesh.hpp>
 #include <fire_engine/scene/node.hpp>
+#include <fire_engine/scene/scene_graph.hpp>
 
 namespace fire_engine
 {
@@ -63,102 +64,6 @@ Light::Type toLightType(fastgltf::LightType t) noexcept
     case fastgltf::LightType::Directional:
     default:
         return Light::Type::Directional;
-    }
-}
-
-void applyPhysicsConfig(std::size_t nodeIndex,
-                        const std::unordered_map<std::size_t, GltfLoader::PhysicsConfig>& configs,
-                        const fastgltf::Asset& asset, const fastgltf::Mesh& mesh, Node& node,
-                        PhysicsWorld& physics)
-{
-    auto it = configs.find(nodeIndex);
-    if (it == configs.end())
-    {
-        return;
-    }
-
-    Transform transform = node.transform();
-    transform.update(Mat4::identity());
-
-    PhysicsBodyDesc bodyDesc;
-    bodyDesc.type = it->second.bodyType;
-    bodyDesc.position = transform.position();
-    bodyDesc.rotation = transform.rotation();
-    bodyDesc.scale = transform.scale();
-    bodyDesc.linearVelocity = it->second.velocity;
-    bodyDesc.mass = it->second.mass;
-    bodyDesc.gravityScale = it->second.gravityScale;
-    bodyDesc.material = PhysicsMaterial{it->second.restitution, it->second.friction};
-
-    PhysicsBodyHandle bodyHandle = physics.createBody(bodyDesc);
-    node.physicsBodyHandle(bodyHandle);
-
-    // Compound: one child collider per authored child (aggregate mass properties).
-    if (!it->second.compoundChildren.empty())
-    {
-        node.physicsColliderHandle(physics.createCompoundCollider(
-            bodyHandle, it->second.compoundChildren, it->second.layer, it->second.mask));
-        return;
-    }
-    // Static triangle mesh from the node geometry.
-    if (it->second.staticMeshFromMesh)
-    {
-        node.physicsColliderHandle(
-            physics.createMeshCollider(bodyHandle, GltfLoader::meshTriangles(asset, mesh),
-                                       PhysicsMaterial{it->second.restitution, it->second.friction},
-                                       it->second.layer, it->second.mask));
-        return;
-    }
-
-    ColliderDesc colliderDesc;
-    colliderDesc.collisionLayer = it->second.layer;
-    colliderDesc.collisionMask = it->second.mask;
-    colliderDesc.isTrigger = it->second.isTrigger;
-    colliderDesc.material = bodyDesc.material;
-    if (it->second.shape.has_value())
-    {
-        colliderDesc.shape = it->second.shape.value();
-    }
-    else if (it->second.convexHullFromMesh)
-    {
-        ConvexHullShape hull = GltfLoader::meshConvexHull(asset, mesh);
-        if (!hull.faces.empty())
-        {
-            colliderDesc.shape = std::move(hull);
-        }
-        else if (auto bounds = GltfLoader::meshBounds(asset, mesh); bounds.has_value())
-        {
-            colliderDesc.shape = AabbShape{bounds.value()}; // degenerate hull -> AABB
-        }
-    }
-    else if (auto bounds = GltfLoader::meshBounds(asset, mesh); bounds.has_value())
-    {
-        colliderDesc.shape = AabbShape{bounds.value()};
-    }
-    node.physicsColliderHandle(physics.createCollider(bodyHandle, colliderDesc));
-}
-
-void validatePhysicsTarget(
-    std::size_t nodeIndex, const std::unordered_set<std::size_t>& controllableNodeIndices,
-    const std::unordered_map<std::size_t, GltfLoader::PhysicsConfig>& physicsNodeConfigs,
-    const fastgltf::Node& gltfNode)
-{
-    const auto config = physicsNodeConfigs.find(nodeIndex);
-    if (config == physicsNodeConfigs.end())
-    {
-        return;
-    }
-
-    if (config->second.bodyType == PhysicsBodyType::Dynamic &&
-        controllableNodeIndices.contains(nodeIndex))
-    {
-        throw std::runtime_error("glTF node '" + std::string(gltfNode.name) +
-                                 "' cannot be both dynamic physics and Controllable");
-    }
-    if (!gltfNode.meshIndex.has_value())
-    {
-        throw std::runtime_error("glTF node '" + std::string(gltfNode.name) +
-                                 "' has Physics extras but no mesh");
     }
 }
 
@@ -268,7 +173,99 @@ std::string GltfLoader::nodeName(const fastgltf::Asset& asset, const fastgltf::N
     return "Node";
 }
 
-Node& GltfLoader::attachCamera(Node& node, Node*& activeCamera)
+void GltfLoader::GltfSceneBuilder::validatePhysicsTarget(std::size_t nodeIndex,
+                                                         const fastgltf::Node& gltfNode) const
+{
+    const auto config = context_.physicsNodeConfigs.find(nodeIndex);
+    if (config == context_.physicsNodeConfigs.end())
+    {
+        return;
+    }
+
+    if (config->second.bodyType == PhysicsBodyType::Dynamic &&
+        context_.controllableNodeIndices.contains(nodeIndex))
+    {
+        throw std::runtime_error("glTF node '" + std::string(gltfNode.name) +
+                                 "' cannot be both dynamic physics and Controllable");
+    }
+    if (!gltfNode.meshIndex.has_value())
+    {
+        throw std::runtime_error("glTF node '" + std::string(gltfNode.name) +
+                                 "' has Physics extras but no mesh");
+    }
+}
+
+void GltfLoader::GltfSceneBuilder::applyPhysicsConfig(std::size_t nodeIndex,
+                                                      const fastgltf::Mesh& mesh, Node& node)
+{
+    auto it = context_.physicsNodeConfigs.find(nodeIndex);
+    if (it == context_.physicsNodeConfigs.end())
+    {
+        return;
+    }
+
+    Transform transform = node.transform();
+    transform.update(Mat4::identity());
+
+    PhysicsBodyDesc bodyDesc;
+    bodyDesc.type = it->second.bodyType;
+    bodyDesc.position = transform.position();
+    bodyDesc.rotation = transform.rotation();
+    bodyDesc.scale = transform.scale();
+    bodyDesc.linearVelocity = it->second.velocity;
+    bodyDesc.mass = it->second.mass;
+    bodyDesc.gravityScale = it->second.gravityScale;
+    bodyDesc.material = PhysicsMaterial{it->second.restitution, it->second.friction};
+
+    PhysicsBodyHandle bodyHandle = context_.physics.createBody(bodyDesc);
+    node.physicsBodyHandle(bodyHandle);
+
+    // Compound: one child collider per authored child (aggregate mass properties).
+    if (!it->second.compoundChildren.empty())
+    {
+        node.physicsColliderHandle(context_.physics.createCompoundCollider(
+            bodyHandle, it->second.compoundChildren, it->second.layer, it->second.mask));
+        return;
+    }
+    // Static triangle mesh from the node geometry.
+    if (it->second.staticMeshFromMesh)
+    {
+        node.physicsColliderHandle(context_.physics.createMeshCollider(
+            bodyHandle, GltfLoader::meshTriangles(context_.asset, mesh),
+            PhysicsMaterial{it->second.restitution, it->second.friction}, it->second.layer,
+            it->second.mask));
+        return;
+    }
+
+    ColliderDesc colliderDesc;
+    colliderDesc.collisionLayer = it->second.layer;
+    colliderDesc.collisionMask = it->second.mask;
+    colliderDesc.isTrigger = it->second.isTrigger;
+    colliderDesc.material = bodyDesc.material;
+    if (it->second.shape.has_value())
+    {
+        colliderDesc.shape = it->second.shape.value();
+    }
+    else if (it->second.convexHullFromMesh)
+    {
+        ConvexHullShape hull = GltfLoader::meshConvexHull(context_.asset, mesh);
+        if (!hull.faces.empty())
+        {
+            colliderDesc.shape = std::move(hull);
+        }
+        else if (auto bounds = GltfLoader::meshBounds(context_.asset, mesh); bounds.has_value())
+        {
+            colliderDesc.shape = AabbShape{bounds.value()}; // degenerate hull -> AABB
+        }
+    }
+    else if (auto bounds = GltfLoader::meshBounds(context_.asset, mesh); bounds.has_value())
+    {
+        colliderDesc.shape = AabbShape{bounds.value()};
+    }
+    node.physicsColliderHandle(context_.physics.createCollider(bodyHandle, colliderDesc));
+}
+
+Node& GltfLoader::GltfSceneBuilder::attachCamera(Node& node)
 {
     auto configureCamera = [](Camera& camera)
     {
@@ -289,40 +286,52 @@ Node& GltfLoader::attachCamera(Node& node, Node*& activeCamera)
         configureCamera(cameraNode->component().emplace<Camera>());
     }
 
-    if (activeCamera == nullptr)
+    if (context_.activeCamera == nullptr)
     {
-        activeCamera = cameraNode;
+        context_.activeCamera = cameraNode;
     }
 
     return *cameraNode;
 }
 
-Mesh& GltfLoader::attachMeshToNode(
-    const fastgltf::Asset& asset, std::size_t nodeIndex, std::size_t meshIndex, Node& meshNode,
-    Node& physicsNode, const std::string& baseDir, Resources& resources, Assets& assets,
-    MeshMap& meshMap, const std::unordered_map<std::size_t, PhysicsConfig>& physicsNodeConfigs,
-    PhysicsWorld& physics)
+Mesh& GltfLoader::GltfSceneBuilder::attachMeshToNode(std::size_t nodeIndex, std::size_t meshIndex,
+                                                     Node& meshNode, Node& physicsNode)
 {
-    const auto& gltfMesh = asset.meshes[meshIndex];
-    auto object = loadMesh(asset, gltfMesh, baseDir, resources, assets, meshIndex);
+    const auto& gltfMesh = context_.asset.meshes[meshIndex];
+    auto object = loadMesh(gltfMesh, meshIndex);
     meshNode.component().emplace<Mesh>(std::move(object));
 
     auto& mesh = std::get<Mesh>(meshNode.component());
-    mesh.variantNames(asset.materialVariants);
-    applyPhysicsConfig(nodeIndex, physicsNodeConfigs, asset, gltfMesh, physicsNode, physics);
-    meshMap[nodeIndex] = &mesh;
+    mesh.variantNames(context_.asset.materialVariants);
+    applyPhysicsConfig(nodeIndex, gltfMesh, physicsNode);
+    context_.meshMap[nodeIndex] = &mesh;
     return mesh;
 }
 
-void GltfLoader::configureAnimatedNode(
-    const fastgltf::Asset& asset, std::size_t nodeIndex, Node& node, const std::string& baseDir,
-    Resources& resources, Assets& assets, NodeMap& nodeMap, MeshMap& meshMap,
-    std::size_t& nextAnimSlot, Node*& activeCamera,
-    const std::unordered_set<std::size_t>& controllableNodeIndices,
-    const std::unordered_map<std::size_t, PhysicsConfig>& physicsNodeConfigs, PhysicsWorld& physics)
+void GltfLoader::GltfSceneBuilder::loadRootNode(SceneGraph& scene, std::size_t nodeIndex)
 {
+    const fastgltf::Asset& asset = context_.asset;
+    auto rootNode = std::make_unique<Node>(nodeName(asset, asset.nodes[nodeIndex]));
+    auto& rootRef = scene.addNode(std::move(rootNode));
+    context_.nodeMap[nodeIndex] = &rootRef;
+    applyControllable(nodeIndex, context_.controllableNodeIndices, rootRef);
+
+    if (nodeHasAnimation(asset, nodeIndex))
+    {
+        configureAnimatedNode(nodeIndex, rootRef);
+    }
+    else
+    {
+        loadNode(nodeIndex, rootRef);
+    }
+}
+
+void GltfLoader::GltfSceneBuilder::configureAnimatedNode(std::size_t nodeIndex, Node& node)
+{
+    const fastgltf::Asset& asset = context_.asset;
+    Assets& assets = context_.assets;
     const auto& gltfNode = asset.nodes[nodeIndex];
-    validatePhysicsTarget(nodeIndex, controllableNodeIndices, physicsNodeConfigs, gltfNode);
+    validatePhysicsTarget(nodeIndex, gltfNode);
 
     // Determine morph target count from the mesh (if any)
     std::size_t numMorphTargets = 0;
@@ -388,9 +397,9 @@ void GltfLoader::configureAnimatedNode(
             continue;
         }
 
-        auto& la = assets.animation(nextAnimSlot);
-        ++nextAnimSlot;
-        loadAnimation(asset, ai, nodeIndex, la, numMorphTargets);
+        auto& la = assets.animation(context_.nextAnimSlot);
+        ++context_.nextAnimSlot;
+        loadAnimation(ai, nodeIndex, la, numMorphTargets);
         applyRestTRS(gltfNode, la);
         la.name(std::string(asset.animations[ai].name));
         nodeAnimations.push_back({ai, &la});
@@ -413,9 +422,7 @@ void GltfLoader::configureAnimatedNode(
                                                          : std::string(gltfMesh.name);
             auto meshNode = std::make_unique<Node>(std::move(meshName));
             auto& meshRef = node.addChild(std::move(meshNode));
-            Mesh& mesh =
-                attachMeshToNode(asset, nodeIndex, gltfNode.meshIndex.value(), meshRef, node,
-                                 baseDir, resources, assets, meshMap, physicsNodeConfigs, physics);
+            Mesh& mesh = attachMeshToNode(nodeIndex, gltfNode.meshIndex.value(), meshRef, node);
 
             if (hasWeightAnim)
             {
@@ -431,9 +438,7 @@ void GltfLoader::configureAnimatedNode(
     {
         // Only weight animation -- mesh goes directly on this node
         const auto& gltfMesh = asset.meshes[gltfNode.meshIndex.value()];
-        Mesh& mesh =
-            attachMeshToNode(asset, nodeIndex, gltfNode.meshIndex.value(), node, node, baseDir,
-                             resources, assets, meshMap, physicsNodeConfigs, physics);
+        Mesh& mesh = attachMeshToNode(nodeIndex, gltfNode.meshIndex.value(), node, node);
 
         if (hasWeightAnim)
         {
@@ -449,41 +454,32 @@ void GltfLoader::configureAnimatedNode(
 
     if (gltfNode.cameraIndex.has_value())
     {
-        attachCamera(node, activeCamera);
+        attachCamera(node);
     }
 
     for (auto childIndex : gltfNode.children)
     {
         auto childNode = std::make_unique<Node>(nodeName(asset, asset.nodes[childIndex]));
         auto& childRef = node.addChild(std::move(childNode));
-        nodeMap[childIndex] = &childRef;
-        applyControllable(childIndex, controllableNodeIndices, childRef);
+        context_.nodeMap[childIndex] = &childRef;
+        applyControllable(childIndex, context_.controllableNodeIndices, childRef);
 
         if (nodeHasAnimation(asset, childIndex))
         {
-            configureAnimatedNode(asset, childIndex, childRef, baseDir, resources, assets, nodeMap,
-                                  meshMap, nextAnimSlot, activeCamera, controllableNodeIndices,
-                                  physicsNodeConfigs, physics);
+            configureAnimatedNode(childIndex, childRef);
         }
         else
         {
-            loadNode(asset, childIndex, childRef, baseDir, resources, assets, nodeMap, meshMap,
-                     nextAnimSlot, activeCamera, controllableNodeIndices, physicsNodeConfigs,
-                     physics);
+            loadNode(childIndex, childRef);
         }
     }
 }
 
-void GltfLoader::loadNode(const fastgltf::Asset& asset, std::size_t nodeIndex, Node& node,
-                          const std::string& baseDir, Resources& resources, Assets& assets,
-                          NodeMap& nodeMap, MeshMap& meshMap, std::size_t& nextAnimSlot,
-                          Node*& activeCamera,
-                          const std::unordered_set<std::size_t>& controllableNodeIndices,
-                          const std::unordered_map<std::size_t, PhysicsConfig>& physicsNodeConfigs,
-                          PhysicsWorld& physics)
+void GltfLoader::GltfSceneBuilder::loadNode(std::size_t nodeIndex, Node& node)
 {
+    const fastgltf::Asset& asset = context_.asset;
     const auto& gltfNode = asset.nodes[nodeIndex];
-    validatePhysicsTarget(nodeIndex, controllableNodeIndices, physicsNodeConfigs, gltfNode);
+    validatePhysicsTarget(nodeIndex, gltfNode);
     applyTRS(gltfNode, node);
 
     applyLight(asset, gltfNode, node);
@@ -491,9 +487,7 @@ void GltfLoader::loadNode(const fastgltf::Asset& asset, std::size_t nodeIndex, N
     if (gltfNode.meshIndex.has_value())
     {
         const auto& gltfMesh = asset.meshes[gltfNode.meshIndex.value()];
-        Mesh& mesh =
-            attachMeshToNode(asset, nodeIndex, gltfNode.meshIndex.value(), node, node, baseDir,
-                             resources, assets, meshMap, physicsNodeConfigs, physics);
+        Mesh& mesh = attachMeshToNode(nodeIndex, gltfNode.meshIndex.value(), node, node);
 
         // Static meshes with morph targets still honour mesh.weights (e.g.
         // MorphPrimitivesTest). Without this, weights stay at zero and the
@@ -507,27 +501,23 @@ void GltfLoader::loadNode(const fastgltf::Asset& asset, std::size_t nodeIndex, N
 
     if (gltfNode.cameraIndex.has_value())
     {
-        attachCamera(node, activeCamera);
+        attachCamera(node);
     }
 
     for (auto childIndex : gltfNode.children)
     {
         auto childNode = std::make_unique<Node>(nodeName(asset, asset.nodes[childIndex]));
         auto& childRef = node.addChild(std::move(childNode));
-        nodeMap[childIndex] = &childRef;
-        applyControllable(childIndex, controllableNodeIndices, childRef);
+        context_.nodeMap[childIndex] = &childRef;
+        applyControllable(childIndex, context_.controllableNodeIndices, childRef);
 
         if (nodeHasAnimation(asset, childIndex))
         {
-            configureAnimatedNode(asset, childIndex, childRef, baseDir, resources, assets, nodeMap,
-                                  meshMap, nextAnimSlot, activeCamera, controllableNodeIndices,
-                                  physicsNodeConfigs, physics);
+            configureAnimatedNode(childIndex, childRef);
         }
         else
         {
-            loadNode(asset, childIndex, childRef, baseDir, resources, assets, nodeMap, meshMap,
-                     nextAnimSlot, activeCamera, controllableNodeIndices, physicsNodeConfigs,
-                     physics);
+            loadNode(childIndex, childRef);
         }
     }
 }
