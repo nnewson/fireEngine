@@ -11,11 +11,17 @@
 #include <utility>
 #include <variant>
 
+#include <fire_engine/collision/broad_phase.hpp>
+#include <fire_engine/collision/dynamic_aabb_tree_broad_phase.hpp>
 #include <fire_engine/collision/gjk_epa.hpp>
+#include <fire_engine/collision/narrow_phase.hpp>
 #include <fire_engine/math/constants.hpp>
 #include <fire_engine/math/mat4.hpp>
 #include <fire_engine/math/vec4.hpp>
 #include <fire_engine/physics/articulation_contact.hpp>
+#include <fire_engine/physics/contact_solver.hpp>
+#include <fire_engine/physics/island.hpp>
+#include <fire_engine/physics/joint_solver.hpp>
 #include <fire_engine/physics/physics_constants.hpp>
 
 namespace fire_engine
@@ -235,14 +241,6 @@ namespace
     return {lo, hi};
 }
 
-// Per-axis scale from the world matrix columns.
-[[nodiscard]] Vec3 matrixScale(const Mat4& m)
-{
-    return {Vec3{m[0, 0], m[1, 0], m[2, 0]}.magnitude(),
-            Vec3{m[0, 1], m[1, 1], m[2, 1]}.magnitude(),
-            Vec3{m[0, 2], m[1, 2], m[2, 2]}.magnitude()};
-}
-
 struct CompoundMassProperties
 {
     Vec3 com;
@@ -310,6 +308,25 @@ struct CompoundMassProperties
 }
 
 } // namespace
+
+PhysicsWorld::PhysicsWorld()
+    : PhysicsWorld{std::make_unique<DynamicAabbTreeBroadPhase>()}
+{
+}
+
+PhysicsWorld::PhysicsWorld(std::unique_ptr<BroadPhase> broadPhase)
+    : broadPhase_{std::move(broadPhase)},
+      narrowPhase_{std::make_unique<NarrowPhase>()},
+      solver_{std::make_unique<ContactSolver>()},
+      jointSolver_{std::make_unique<JointSolver>()}
+{
+}
+
+PhysicsWorld::~PhysicsWorld() = default;
+
+PhysicsWorld::PhysicsWorld(PhysicsWorld&&) noexcept = default;
+
+PhysicsWorld& PhysicsWorld::operator=(PhysicsWorld&&) noexcept = default;
 
 PhysicsBodyHandle PhysicsWorld::createBody(const PhysicsBodyDesc& desc)
 {
@@ -488,108 +505,6 @@ PhysicsWorld::addColliderEntry(BodyEntry& owner, const ColliderShape& shape,
     return handle;
 }
 
-PhysicsArticulationHandle PhysicsWorld::createArticulation()
-{
-    const PhysicsArticulationHandle handle = nextArticulationHandle_;
-    nextArticulationHandle_ = PhysicsArticulationHandle{nextArticulationHandle_.value() + 1U};
-    articulationIndexByHandle_.emplace(handle.value(), articulations_.size());
-    articulations_.emplace_back();
-    articulationSleepTimers_.push_back(0.0f);
-    articulationSleeping_.push_back(0U);
-    return handle;
-}
-
-Articulation* PhysicsWorld::findArticulation(PhysicsArticulationHandle handle) noexcept
-{
-    const auto it = articulationIndexByHandle_.find(handle.value());
-    return it != articulationIndexByHandle_.end() ? &articulations_[it->second] : nullptr;
-}
-
-const Articulation* PhysicsWorld::findArticulation(PhysicsArticulationHandle handle) const noexcept
-{
-    const auto it = articulationIndexByHandle_.find(handle.value());
-    return it != articulationIndexByHandle_.end() ? &articulations_[it->second] : nullptr;
-}
-
-Articulation* PhysicsWorld::articulation(PhysicsArticulationHandle handle) noexcept
-{
-    return findArticulation(handle);
-}
-
-const Articulation* PhysicsWorld::articulation(PhysicsArticulationHandle handle) const noexcept
-{
-    return findArticulation(handle);
-}
-
-std::size_t PhysicsWorld::articulationCount() const noexcept
-{
-    return articulations_.size();
-}
-
-PhysicsColliderHandle PhysicsWorld::attachLinkCollider(PhysicsArticulationHandle handle, int link,
-                                                       const ColliderDesc& desc)
-{
-    const Articulation* art = findArticulation(handle);
-    if (art == nullptr || link < 0 || static_cast<std::size_t>(link) >= art->linkCount())
-    {
-        return PhysicsColliderHandle{};
-    }
-    return addLinkColliderEntry(handle, link, desc.shape, desc.material, desc.collisionLayer,
-                                desc.collisionMask, Vec3{}, desc.localRotation, desc.isTrigger);
-}
-
-PhysicsColliderHandle PhysicsWorld::addLinkColliderEntry(
-    PhysicsArticulationHandle articulationHandle, int link, const ColliderShape& shape,
-    const PhysicsMaterial& material, std::uint32_t collisionLayer, std::uint32_t collisionMask,
-    const Vec3& localPosition, const Quaternion& localRotation, bool isTrigger)
-{
-    const PhysicsColliderHandle handle = nextColliderHandle_;
-    nextColliderHandle_ = PhysicsColliderHandle{nextColliderHandle_.value() + 1U};
-
-    Collider collider;
-    const Mat4 childMat = Mat4::translate(localPosition) * localRotation.toMat4();
-    collider.localBounds(transformAabb(childMat, localBounds(shape)));
-    collider.collisionLayer(collisionLayer);
-    collider.collisionMask(collisionMask);
-    collider.isTrigger(isTrigger);
-
-    colliderIndexByHandle_.emplace(handle.value(), colliders_.size());
-    colliders_.push_back({handle, PhysicsBodyHandle{}, articulationHandle, link,
-                          std::move(collider), shape, material, localPosition, localRotation, true,
-                          nullptr});
-    ColliderEntry& entry = colliders_.back();
-    colliderIndexByPointer_.emplace(&entry.collider, colliders_.size() - 1);
-    // Seed the swept bound from the link's current forward-kinematics pose.
-    const OwnerPose owner = colliderOwnerPose(entry);
-    entry.collider.resetFrame(owner.world);
-    broadPhase_->addCollider(entry.collider);
-    return handle;
-}
-
-PhysicsWorld::OwnerPose PhysicsWorld::colliderOwnerPose(const ColliderEntry& entry) const
-{
-    if (entry.isLinkCollider())
-    {
-        const Articulation* art = findArticulation(entry.articulation);
-        if (art == nullptr || entry.link < 0 ||
-            static_cast<std::size_t>(entry.link) >= art->linkCount())
-        {
-            return OwnerPose{};
-        }
-        const RigidTransform lw = art->linkWorld(static_cast<std::size_t>(entry.link));
-        const Mat4 world = Mat4::translate(lw.translation) * lw.rotation.toMat4();
-        return OwnerPose{world, lw.rotation, Vec3{1.0f, 1.0f, 1.0f}, true};
-    }
-
-    const BodyEntry* owner = findBody(entry.body);
-    if (owner == nullptr)
-    {
-        return OwnerPose{};
-    }
-    const Mat4 world = owner->transform.world();
-    return OwnerPose{world, owner->transform.rotation(), matrixScale(world), true};
-}
-
 void PhysicsWorld::deactivateCollider(ColliderEntry& collider)
 {
     if (!collider.active)
@@ -754,67 +669,6 @@ void PhysicsWorld::step(float fixedDt)
     capturePreviousPositions();
 }
 
-void PhysicsWorld::captureDebugContacts(std::span<const SolverContact> contacts)
-{
-    debugContacts_.clear();
-    for (const SolverContact& contact : contacts)
-    {
-        // Real manifold points + normal (target -> moving) from the narrowphase.
-        // Speculative gap points (penetration < 0) are predictions, not actual
-        // contacts, so they are filtered out of the debug view.
-        for (int i = 0; i < contact.manifold.count; ++i)
-        {
-            if (contact.manifold.points[i].penetration < 0.0f)
-            {
-                continue;
-            }
-            debugContacts_.push_back(
-                DebugContact{contact.manifold.points[i].position, contact.manifold.normal});
-        }
-    }
-}
-
-std::vector<AABB> PhysicsWorld::debugColliderBounds() const
-{
-    std::vector<AABB> bounds;
-    bounds.reserve(colliderCount());
-    for (const ColliderEntry& entry : colliders_)
-    {
-        if (entry.active)
-        {
-            bounds.push_back(entry.collider.worldBounds());
-        }
-    }
-    return bounds;
-}
-
-std::vector<DebugJointAnchor> PhysicsWorld::debugJointAnchors() const
-{
-    std::vector<DebugJointAnchor> anchors;
-    anchors.reserve(jointCount());
-    for (const JointEntry& entry : joints_)
-    {
-        if (!entry.active)
-        {
-            continue;
-        }
-
-        const BodyEntry* a = findBody(entry.desc.bodyA);
-        const BodyEntry* b = findBody(entry.desc.bodyB);
-        if (a == nullptr || b == nullptr || !a->active || !b->active)
-        {
-            continue;
-        }
-
-        const Mat3 ra = Mat3::fromQuaternion(a->transform.rotation());
-        const Mat3 rb = Mat3::fromQuaternion(b->transform.rotation());
-        anchors.push_back(DebugJointAnchor{a->transform.position(), b->transform.position(),
-                                           a->transform.position() + ra * entry.desc.anchorA,
-                                           b->transform.position() + rb * entry.desc.anchorB});
-    }
-    return anchors;
-}
-
 bool PhysicsWorld::valid(PhysicsBodyHandle handle) const noexcept
 {
     return findBody(handle) != nullptr;
@@ -849,6 +703,16 @@ std::size_t PhysicsWorld::jointCount() const noexcept
         std::ranges::count_if(joints_, [](const JointEntry& entry) { return entry.active; }));
 }
 
+const std::vector<CollisionPair>& PhysicsWorld::possiblePairs() const noexcept
+{
+    return broadPhase_->possiblePairs();
+}
+
+bool PhysicsWorld::validateBroadPhase() const
+{
+    return broadPhase_->validate();
+}
+
 namespace
 {
 
@@ -861,463 +725,7 @@ namespace
            body.angularVelocity().magnitudeSquared() < angularThreshold * angularThreshold;
 }
 
-[[nodiscard]] float maxJointRate(const Articulation& art) noexcept
-{
-    float maxRate = 0.0f;
-    for (const float qDot : art.qDot())
-    {
-        maxRate = std::max(maxRate, std::abs(qDot));
-    }
-    return maxRate;
-}
-
-[[nodiscard]] bool belowArticulationSleepThreshold(const Articulation& art,
-                                                   float angularThreshold) noexcept
-{
-    const SpatialVector baseVel = art.baseVelocity();
-    return baseVel.linear.magnitudeSquared() < kLinearSleepThreshold * kLinearSleepThreshold &&
-           baseVel.angular.magnitudeSquared() < angularThreshold * angularThreshold &&
-           maxJointRate(art) < angularThreshold;
-}
-
-void zeroArticulationVelocity(Articulation& art) noexcept
-{
-    art.baseVelocity(SpatialVector{});
-    for (int dof = 0; dof < art.dofCount(); ++dof)
-    {
-        art.qDot(dof, 0.0f);
-    }
-}
-
-// Compose an authored shape with an already-built world matrix / rotation / per-axis
-// scale into a neutral world-space primitive. Shared by worldShape (collider entries)
-// and the spatial-query path (free query shapes). Spheres/capsules take the max-axis
-// scale (uniform); boxes scale per axis.
-[[nodiscard]] WorldShape composeWorldShape(const ColliderShape& shape, const Mat4& world,
-                                           const Quaternion& rot, const Vec3& scale)
-{
-    const float uniform = std::max({scale.x(), scale.y(), scale.z()});
-
-    if (const auto* sphere = std::get_if<SphereShape>(&shape))
-    {
-        return WorldSphere{transformPoint(world, sphere->center), sphere->radius * uniform};
-    }
-    if (const auto* box = std::get_if<BoxShape>(&shape))
-    {
-        return WorldBox{transformPoint(world, box->center),
-                        Vec3{box->halfExtents.x() * scale.x(), box->halfExtents.y() * scale.y(),
-                             box->halfExtents.z() * scale.z()},
-                        rot};
-    }
-    if (const auto* capsule = std::get_if<CapsuleShape>(&shape))
-    {
-        const Vec3 c = capsule->center;
-        const Vec3 p0 = transformPoint(world, Vec3{c.x(), c.y() - capsule->halfHeight, c.z()});
-        const Vec3 p1 = transformPoint(world, Vec3{c.x(), c.y() + capsule->halfHeight, c.z()});
-        return WorldCapsule{p0, p1, capsule->radius * uniform};
-    }
-    if (const auto* hull = std::get_if<ConvexHullShape>(&shape))
-    {
-        WorldConvex convex;
-        convex.vertices.reserve(hull->vertices.size());
-        for (const Vec3& v : hull->vertices)
-        {
-            convex.vertices.push_back(transformPoint(world, v));
-        }
-        convex.faces = hull->faces;
-        return convex;
-    }
-    const auto& aabb = std::get<AabbShape>(shape);
-    const Vec3 he = aabb.bounds.extent() * 0.5f;
-    return WorldBox{transformPoint(world, aabb.bounds.center()),
-                    Vec3{he.x() * scale.x(), he.y() * scale.y(), he.z() * scale.z()}, rot};
-}
-
-// A collider passes a query filter when each side's mask admits the other's layer.
-[[nodiscard]] bool passesFilter(const Collider& collider, QueryFilter filter) noexcept
-{
-    return (filter.mask & collider.collisionLayer()) != 0U &&
-           (collider.collisionMask() & filter.layer) != 0U;
-}
-
-// World AABB enclosing a neutral shape (for broadphase reject + mesh BVH queries).
-[[nodiscard]] AABB aabbOfWorldShape(const WorldShape& shape) noexcept
-{
-    return std::visit(
-        [](const auto& s) -> AABB
-        {
-            using T = std::decay_t<decltype(s)>;
-            if constexpr (std::is_same_v<T, WorldSphere>)
-            {
-                const Vec3 r{s.radius, s.radius, s.radius};
-                return AABB{s.center - r, s.center + r};
-            }
-            else if constexpr (std::is_same_v<T, WorldBox>)
-            {
-                const Vec3 ax = s.orientation.rotate(Vec3{1.0f, 0.0f, 0.0f});
-                const Vec3 ay = s.orientation.rotate(Vec3{0.0f, 1.0f, 0.0f});
-                const Vec3 az = s.orientation.rotate(Vec3{0.0f, 0.0f, 1.0f});
-                const Vec3 e{
-                    std::abs(ax.x()) * s.halfExtents.x() + std::abs(ay.x()) * s.halfExtents.y() +
-                        std::abs(az.x()) * s.halfExtents.z(),
-                    std::abs(ax.y()) * s.halfExtents.x() + std::abs(ay.y()) * s.halfExtents.y() +
-                        std::abs(az.y()) * s.halfExtents.z(),
-                    std::abs(ax.z()) * s.halfExtents.x() + std::abs(ay.z()) * s.halfExtents.y() +
-                        std::abs(az.z()) * s.halfExtents.z()};
-                return AABB{s.center - e, s.center + e};
-            }
-            else if constexpr (std::is_same_v<T, WorldCapsule>)
-            {
-                const Vec3 lo{std::min(s.p0.x(), s.p1.x()), std::min(s.p0.y(), s.p1.y()),
-                              std::min(s.p0.z(), s.p1.z())};
-                const Vec3 hi{std::max(s.p0.x(), s.p1.x()), std::max(s.p0.y(), s.p1.y()),
-                              std::max(s.p0.z(), s.p1.z())};
-                const Vec3 r{s.radius, s.radius, s.radius};
-                return AABB{lo - r, hi + r};
-            }
-            else
-            {
-                Vec3 lo{s.vertices[0]};
-                Vec3 hi{s.vertices[0]};
-                for (const Vec3& v : s.vertices)
-                {
-                    lo = {std::min(lo.x(), v.x()), std::min(lo.y(), v.y()),
-                          std::min(lo.z(), v.z())};
-                    hi = {std::max(hi.x(), v.x()), std::max(hi.y(), v.y()),
-                          std::max(hi.z(), v.z())};
-                }
-                return AABB{lo, hi};
-            }
-        },
-        shape);
-}
-
 } // namespace
-
-WorldShape PhysicsWorld::worldShape(const ColliderEntry& entry) const
-{
-    // Owner world pose — a rigid body's transform or an articulation link's
-    // forward-kinematics pose (identity when the owner is missing, which shouldn't happen
-    // for an active collider).
-    const OwnerPose owner = colliderOwnerPose(entry);
-    // Compose the owner world with the collider's local offset (identity for a plain
-    // single collider; a compound child's placement otherwise). Shape dimensions take
-    // the owner scale; orientation is owner × child rotation.
-    const Mat4 world =
-        owner.world * (Mat4::translate(entry.localPosition) * entry.localRotation.toMat4());
-    const Quaternion rot = owner.rotation * entry.localRotation;
-    return composeWorldShape(entry.shape, world, rot, owner.scale);
-}
-
-std::optional<RaycastHit> PhysicsWorld::raycast(const Ray& ray, QueryFilter filter) const
-{
-    std::optional<RaycastHit> best;
-    const auto consider = [&](const RayHit& hit, const ColliderEntry& e)
-    {
-        if (!best.has_value() || hit.distance < best->distance)
-        {
-            best = RaycastHit{e.handle, e.body, hit.point, hit.normal, hit.distance};
-        }
-    };
-
-    for (const ColliderEntry& e : colliders_)
-    {
-        if (!e.active || !passesFilter(e.collider, filter))
-        {
-            continue;
-        }
-        float tNear = 0.0f;
-        if (!rayIntersectsAabb(ray, e.collider.worldBounds(), tNear))
-        {
-            continue;
-        }
-        if (best.has_value() && tNear >= best->distance)
-        {
-            continue; // the whole AABB is farther than the closest hit so far
-        }
-
-        if (e.mesh)
-        {
-            const MeshCollisionData& mesh = *e.mesh;
-            mesh.bvh.traverse(
-                [&](const AABB& box)
-                {
-                    float t = 0.0f;
-                    return rayIntersectsAabb(ray, box, t);
-                },
-                [&](int proxy)
-                {
-                    const auto base = static_cast<std::size_t>(mesh.bvh.payload(proxy)) * 3;
-                    const Vec3& v0 = mesh.worldVertices[mesh.indices[base + 0]];
-                    const Vec3& v1 = mesh.worldVertices[mesh.indices[base + 1]];
-                    const Vec3& v2 = mesh.worldVertices[mesh.indices[base + 2]];
-                    if (auto hit = rayIntersectTriangle(ray, v0, v1, v2))
-                    {
-                        consider(*hit, e);
-                    }
-                });
-        }
-        else if (auto hit = rayIntersect(ray, worldShape(e)))
-        {
-            consider(*hit, e);
-        }
-    }
-    return best;
-}
-
-std::vector<RaycastHit> PhysicsWorld::raycastAll(const Ray& ray, QueryFilter filter) const
-{
-    std::vector<RaycastHit> hits;
-    for (const ColliderEntry& e : colliders_)
-    {
-        if (!e.active || !passesFilter(e.collider, filter))
-        {
-            continue;
-        }
-        float tNear = 0.0f;
-        if (!rayIntersectsAabb(ray, e.collider.worldBounds(), tNear))
-        {
-            continue;
-        }
-
-        if (e.mesh)
-        {
-            const MeshCollisionData& mesh = *e.mesh;
-            std::optional<RayHit> nearest;
-            mesh.bvh.traverse(
-                [&](const AABB& box)
-                {
-                    float t = 0.0f;
-                    return rayIntersectsAabb(ray, box, t);
-                },
-                [&](int proxy)
-                {
-                    const auto base = static_cast<std::size_t>(mesh.bvh.payload(proxy)) * 3;
-                    const Vec3& v0 = mesh.worldVertices[mesh.indices[base + 0]];
-                    const Vec3& v1 = mesh.worldVertices[mesh.indices[base + 1]];
-                    const Vec3& v2 = mesh.worldVertices[mesh.indices[base + 2]];
-                    if (auto hit = rayIntersectTriangle(ray, v0, v1, v2))
-                    {
-                        if (!nearest.has_value() || hit->distance < nearest->distance)
-                        {
-                            nearest = hit;
-                        }
-                    }
-                });
-            if (nearest.has_value())
-            {
-                hits.push_back(RaycastHit{e.handle, e.body, nearest->point, nearest->normal,
-                                          nearest->distance});
-            }
-        }
-        else if (auto hit = rayIntersect(ray, worldShape(e)))
-        {
-            hits.push_back(RaycastHit{e.handle, e.body, hit->point, hit->normal, hit->distance});
-        }
-    }
-    return hits;
-}
-
-std::optional<ShapecastHit> PhysicsWorld::shapecast(const ColliderShape& shape,
-                                                    const Transform& pose, Vec3 direction,
-                                                    float maxDistance, QueryFilter filter) const
-{
-    const Vec3 dir = Vec3::normalise(direction);
-    const WorldShape moving =
-        composeWorldShape(shape, pose.world(), pose.rotation(), matrixScale(pose.world()));
-    // Sweep AABB: the moving shape's bounds extended along the sweep.
-    AABB sweptBounds = aabbOfWorldShape(moving);
-    const Vec3 sweep = dir * maxDistance;
-    sweptBounds = AABB{{std::min(sweptBounds.min.x(), sweptBounds.min.x() + sweep.x()),
-                        std::min(sweptBounds.min.y(), sweptBounds.min.y() + sweep.y()),
-                        std::min(sweptBounds.min.z(), sweptBounds.min.z() + sweep.z())},
-                       {std::max(sweptBounds.max.x(), sweptBounds.max.x() + sweep.x()),
-                        std::max(sweptBounds.max.y(), sweptBounds.max.y() + sweep.y()),
-                        std::max(sweptBounds.max.z(), sweptBounds.max.z() + sweep.z())}};
-
-    std::optional<ShapecastHit> best;
-    const auto consider = [&](const ToiHit& hit, const ColliderEntry& e)
-    {
-        if (!best.has_value() || hit.distance < best->distance)
-        {
-            best = ShapecastHit{e.handle, e.body, hit.point, hit.normal, hit.distance};
-        }
-    };
-
-    for (const ColliderEntry& e : colliders_)
-    {
-        if (!e.active || !passesFilter(e.collider, filter))
-        {
-            continue;
-        }
-        if (!aabbOverlaps(e.collider.worldBounds(), sweptBounds))
-        {
-            continue;
-        }
-
-        if (e.mesh)
-        {
-            const MeshCollisionData& mesh = *e.mesh;
-            mesh.bvh.query(
-                sweptBounds,
-                [&](int proxy)
-                {
-                    const auto base = static_cast<std::size_t>(mesh.bvh.payload(proxy)) * 3;
-                    const std::array<ConvexFace, 1> faces{
-                        ConvexFace{Vec3{}, std::vector<int>{0, 1, 2}}};
-                    WorldConvex triangle;
-                    triangle.vertices = {mesh.worldVertices[mesh.indices[base + 0]],
-                                         mesh.worldVertices[mesh.indices[base + 1]],
-                                         mesh.worldVertices[mesh.indices[base + 2]]};
-                    triangle.faces = faces;
-                    if (auto hit = shapeCast(moving, dir, maxDistance, WorldShape{triangle}))
-                    {
-                        consider(*hit, e);
-                    }
-                });
-        }
-        else if (auto hit = shapeCast(moving, dir, maxDistance, worldShape(e)))
-        {
-            consider(*hit, e);
-        }
-    }
-    return best;
-}
-
-std::vector<OverlapHit> PhysicsWorld::overlapWorldShape(const WorldShape& query,
-                                                        const AABB& queryAabb,
-                                                        QueryFilter filter) const
-{
-    std::vector<OverlapHit> hits;
-    for (const ColliderEntry& e : colliders_)
-    {
-        if (!e.active || !passesFilter(e.collider, filter))
-        {
-            continue;
-        }
-        if (!aabbOverlaps(e.collider.worldBounds(), queryAabb))
-        {
-            continue;
-        }
-
-        if (e.mesh)
-        {
-            const MeshCollisionData& mesh = *e.mesh;
-            bool overlapped = false;
-            mesh.bvh.query(queryAabb,
-                           [&](int proxy)
-                           {
-                               if (overlapped)
-                               {
-                                   return;
-                               }
-                               const auto base =
-                                   static_cast<std::size_t>(mesh.bvh.payload(proxy)) * 3;
-                               const std::array<ConvexFace, 1> faces{
-                                   ConvexFace{Vec3{}, std::vector<int>{0, 1, 2}}};
-                               WorldConvex triangle;
-                               triangle.vertices = {mesh.worldVertices[mesh.indices[base + 0]],
-                                                    mesh.worldVertices[mesh.indices[base + 1]],
-                                                    mesh.worldVertices[mesh.indices[base + 2]]};
-                               triangle.faces = faces;
-                               if (gjkEpaContact(query, WorldShape{triangle}).colliding)
-                               {
-                                   overlapped = true;
-                               }
-                           });
-            if (overlapped)
-            {
-                hits.push_back(OverlapHit{e.handle, e.body});
-            }
-        }
-        else if (gjkEpaContact(query, worldShape(e)).colliding)
-        {
-            hits.push_back(OverlapHit{e.handle, e.body});
-        }
-    }
-    return hits;
-}
-
-std::vector<OverlapHit> PhysicsWorld::overlapShape(const ColliderShape& shape,
-                                                   const Transform& pose, QueryFilter filter) const
-{
-    const WorldShape query =
-        composeWorldShape(shape, pose.world(), pose.rotation(), matrixScale(pose.world()));
-    return overlapWorldShape(query, aabbOfWorldShape(query), filter);
-}
-
-std::vector<OverlapHit> PhysicsWorld::overlapSphere(Vec3 center, float radius,
-                                                    QueryFilter filter) const
-{
-    const WorldShape query = WorldSphere{center, radius};
-    return overlapWorldShape(query, aabbOfWorldShape(query), filter);
-}
-
-std::vector<std::uint8_t> PhysicsWorld::debugColliderSleeping() const
-{
-    // Mirror gatherColliders()'s iteration + skip conditions exactly so the flags
-    // line up one-to-one with its emitted shapes. Keep the two in sync.
-    std::vector<std::uint8_t> out;
-    out.reserve(colliderCount());
-    for (const ColliderEntry& entry : colliders_)
-    {
-        if (!entry.active || entry.mesh != nullptr || findBody(entry.body) == nullptr)
-        {
-            continue;
-        }
-        // Convex hulls have no ClothCollider encoding (gatherColliders skips them).
-        const bool encodable =
-            std::visit([](const auto& shape)
-                       { return !std::is_same_v<std::decay_t<decltype(shape)>, WorldConvex>; },
-                       worldShape(entry));
-        if (!encodable)
-        {
-            continue;
-        }
-        out.push_back(sleeping(entry.body) ? std::uint8_t{1} : std::uint8_t{0});
-    }
-    return out;
-}
-
-std::vector<ClothCollider> PhysicsWorld::gatherColliders() const
-{
-    std::vector<ClothCollider> out;
-    out.reserve(colliderCount());
-
-    for (const ColliderEntry& entry : colliders_)
-    {
-        // Mesh colliders have no cloth-collider encoding (the AabbShape proxy is only
-        // a broadphase bound); the cloth solver skips them.
-        if (!entry.active || entry.mesh != nullptr || findBody(entry.body) == nullptr)
-        {
-            continue;
-        }
-        // Reuse the shared world-space composition, then encode as a ClothCollider.
-        std::visit(
-            [&out](const auto& shape)
-            {
-                using T = std::decay_t<decltype(shape)>;
-                if constexpr (std::is_same_v<T, WorldSphere>)
-                {
-                    out.push_back(makeSphereCollider(shape.center, shape.radius));
-                }
-                else if constexpr (std::is_same_v<T, WorldBox>)
-                {
-                    out.push_back(
-                        makeBoxCollider(shape.center, shape.halfExtents, shape.orientation));
-                }
-                else if constexpr (std::is_same_v<T, WorldCapsule>)
-                {
-                    out.push_back(makeCapsuleCollider(shape.p0, shape.p1, shape.radius));
-                }
-                // WorldConvex has no ClothCollider encoding — the cloth solver only
-                // supports plane/sphere/box/capsule, so convex hulls are skipped here.
-            },
-            worldShape(entry));
-    }
-
-    return out;
-}
 
 const PhysicsBody* PhysicsWorld::body(PhysicsBodyHandle handle) const noexcept
 {
@@ -1439,289 +847,6 @@ PhysicsWorld::ColliderEntry* PhysicsWorld::findCollider(const Collider* collider
     }
     ColliderEntry& entry = colliders_[it->second];
     return entry.active ? &entry : nullptr;
-}
-
-AABB PhysicsWorld::localBounds(const ColliderShape& shape) const noexcept
-{
-    return std::visit(
-        [](const auto& value) -> AABB
-        {
-            using Shape = std::decay_t<decltype(value)>;
-            if constexpr (std::is_same_v<Shape, AabbShape>)
-            {
-                return value.bounds;
-            }
-            else if constexpr (std::is_same_v<Shape, BoxShape>)
-            {
-                return {value.center - value.halfExtents, value.center + value.halfExtents};
-            }
-            else if constexpr (std::is_same_v<Shape, SphereShape>)
-            {
-                const Vec3 extents{value.radius, value.radius, value.radius};
-                return {value.center - extents, value.center + extents};
-            }
-            else if constexpr (std::is_same_v<Shape, CapsuleShape>)
-            {
-                const Vec3 extents{value.radius, value.radius + value.halfHeight, value.radius};
-                return {value.center - extents, value.center + extents};
-            }
-            else // ConvexHullShape — AABB of the hull vertices
-            {
-                AABB bounds{value.vertices.empty() ? Vec3{} : value.vertices.front(),
-                            value.vertices.empty() ? Vec3{} : value.vertices.front()};
-                for (const Vec3& v : value.vertices)
-                {
-                    bounds.min = {std::min(bounds.min.x(), v.x()), std::min(bounds.min.y(), v.y()),
-                                  std::min(bounds.min.z(), v.z())};
-                    bounds.max = {std::max(bounds.max.x(), v.x()), std::max(bounds.max.y(), v.y()),
-                                  std::max(bounds.max.z(), v.z())};
-                }
-                return bounds;
-            }
-        },
-        shape);
-}
-
-void PhysicsWorld::updateCollider(ColliderEntry& collider, float dt)
-{
-    const OwnerPose owner = colliderOwnerPose(collider);
-    if (!owner.valid)
-    {
-        return;
-    }
-
-    // Predicted displacement this step (rigid Dynamic bodies only — kinematic/static were
-    // already moved into place by the scene before step(); a link collider's motion comes
-    // from forward kinematics, so it carries no separate linear-velocity term in Phase A).
-    // Threaded into the swept bound so the broadphase pairs fast movers with what they
-    // are about to reach.
-    Vec3 motion{};
-    if (!collider.isLinkCollider())
-    {
-        const BodyEntry* body = findBody(collider.body);
-        if (body != nullptr && body->body.type() == PhysicsBodyType::Dynamic)
-        {
-            motion = body->body.linearVelocity() * dt;
-        }
-    }
-
-    const Mat4 childMat = Mat4::translate(collider.localPosition) * collider.localRotation.toMat4();
-    collider.collider.localBounds(transformAabb(childMat, localBounds(collider.shape)));
-    collider.collider.update(owner.world, motion);
-}
-
-void PhysicsWorld::resetCollider(ColliderEntry& collider)
-{
-    const OwnerPose owner = colliderOwnerPose(collider);
-    if (!owner.valid)
-    {
-        return;
-    }
-
-    const Mat4 childMat = Mat4::translate(collider.localPosition) * collider.localRotation.toMat4();
-    collider.collider.localBounds(transformAabb(childMat, localBounds(collider.shape)));
-    collider.collider.resetFrame(owner.world);
-}
-
-void PhysicsWorld::updateColliders(float dt)
-{
-    for (ColliderEntry& collider : colliders_)
-    {
-        if (collider.active)
-        {
-            updateCollider(collider, dt);
-        }
-    }
-}
-
-void PhysicsWorld::resetResolvedColliders()
-{
-    for (ColliderEntry& collider : colliders_)
-    {
-        if (collider.active)
-        {
-            resetCollider(collider);
-        }
-    }
-}
-
-void PhysicsWorld::stepArticulations(float dt)
-{
-    if (articulationSleepTimers_.size() != articulations_.size())
-    {
-        articulationSleepTimers_.resize(articulations_.size(), 0.0f);
-    }
-    if (articulationSleeping_.size() != articulations_.size())
-    {
-        articulationSleeping_.resize(articulations_.size(), 0U);
-    }
-
-    // Gather each articulation's contacts from this step's broadphase pairs. A link collider
-    // paired with a *static* rigid collider yields one plane contact per manifold point,
-    // stored in link-local space so the substep loop tracks it as the link moves. Link-vs-
-    // dynamic-rigid and link-vs-link (self-collision) are deferred to the full pipeline.
-    std::vector<std::vector<ArticulationPlaneContact>> perArticulation(articulations_.size());
-    std::vector<std::vector<ArticulationLinkContact>> perArticulationLink(articulations_.size());
-
-    for (const CollisionPair& pair : broadPhase_->possiblePairs())
-    {
-        ColliderEntry* first = findCollider(pair.first);
-        ColliderEntry* second = findCollider(pair.second);
-        if (first == nullptr || second == nullptr)
-        {
-            continue;
-        }
-
-        // Self-collision: both colliders are links of the *same* articulation. Skip adjacent
-        // (parent-child) bones — they share a joint and always overlap there — and solve the rest
-        // as link-vs-link contacts so limbs stack into a plausible pose instead of folding through
-        // each other.
-        if (first->isLinkCollider() && second->isLinkCollider())
-        {
-            if (first->articulation.value() != second->articulation.value())
-            {
-                continue; // different articulations (cross-ragdoll collision) — deferred
-            }
-            const auto ai = articulationIndexByHandle_.find(first->articulation.value());
-            if (ai == articulationIndexByHandle_.end())
-            {
-                continue;
-            }
-            Articulation& art = articulations_[ai->second];
-            const auto a = static_cast<std::size_t>(first->link);
-            const auto b = static_cast<std::size_t>(second->link);
-            if (a >= art.linkCount() || b >= art.linkCount())
-            {
-                continue;
-            }
-            if (art.parent(a) == static_cast<int>(b) || art.parent(b) == static_cast<int>(a) ||
-                art.selfCollisionExcluded(a, b))
-            {
-                continue; // adjacent or rest-pose-overlapping bones — not a real self-contact
-            }
-            const auto manifold =
-                narrowPhase_.collide(worldShape(*first), worldShape(*second), kSpeculativeDistance);
-            if (!manifold.has_value() || manifold->count == 0)
-            {
-                continue;
-            }
-            const RigidTransform invA = art.linkWorld(a).inverse();
-            const RigidTransform invB = art.linkWorld(b).inverse();
-            const float friction = std::sqrt(std::max(first->material.friction, 0.0f) *
-                                             std::max(second->material.friction, 0.0f));
-            for (int p = 0; p < manifold->count; ++p)
-            {
-                const Vec3 wp = manifold->points[static_cast<std::size_t>(p)].position;
-                const float pen = manifold->points[static_cast<std::size_t>(p)].penetration;
-                // normal points B(second) -> A(first); offset = pen so prepare-time sep = -pen.
-                perArticulationLink[ai->second].push_back(
-                    ArticulationLinkContact{a, b, invA.transformPoint(wp), invB.transformPoint(wp),
-                                            manifold->normal, pen, friction});
-            }
-            continue;
-        }
-
-        ColliderEntry* link = nullptr;
-        ColliderEntry* other = nullptr;
-        if (first->isLinkCollider() && !second->isLinkCollider())
-        {
-            link = first;
-            other = second;
-        }
-        else if (second->isLinkCollider() && !first->isLinkCollider())
-        {
-            link = second;
-            other = first;
-        }
-        else
-        {
-            continue; // neither is a link — not this pass
-        }
-
-        const BodyEntry* otherBody = findBody(other->body);
-        if (otherBody == nullptr || otherBody->body.type() != PhysicsBodyType::Static)
-        {
-            continue; // link-vs-static only for now
-        }
-
-        const auto it = articulationIndexByHandle_.find(link->articulation.value());
-        if (it == articulationIndexByHandle_.end())
-        {
-            continue;
-        }
-        Articulation& art = articulations_[it->second];
-        const auto linkIndex = static_cast<std::size_t>(link->link);
-        if (link->link < 0 || linkIndex >= art.linkCount())
-        {
-            continue;
-        }
-
-        // Manifold with the normal pointing other -> link (the direction to push the link
-        // out of the static surface).
-        const auto manifold =
-            narrowPhase_.collide(worldShape(*link), worldShape(*other), kSpeculativeDistance);
-        if (!manifold.has_value() || manifold->count == 0)
-        {
-            continue;
-        }
-
-        const RigidTransform linkInv = art.linkWorld(linkIndex).inverse();
-        const float friction = std::sqrt(std::max(link->material.friction, 0.0f) *
-                                         std::max(other->material.friction, 0.0f));
-        for (int p = 0; p < manifold->count; ++p)
-        {
-            const Vec3 worldPoint = manifold->points[static_cast<std::size_t>(p)].position;
-            const float penetration = manifold->points[static_cast<std::size_t>(p)].penetration;
-            // Plane through the contact point with the manifold normal; offset chosen so the
-            // prepare-time separation is −penetration (dot(n, wp) − offset = −penetration).
-            perArticulation[it->second].push_back(ArticulationPlaneContact{
-                linkIndex, linkInv.transformPoint(worldPoint), manifold->normal,
-                Vec3::dotProduct(manifold->normal, worldPoint) + penetration, friction});
-        }
-    }
-
-    // Step every articulation (contacts or not — they all fall under gravity).
-    for (std::size_t i = 0; i < articulations_.size(); ++i)
-    {
-        Articulation& art = articulations_[i];
-        if (!sleepingEnabled_)
-        {
-            articulationSleepTimers_[i] = 0.0f;
-            articulationSleeping_[i] = 0U;
-            stepArticulationOnPlanes(art, perArticulation[i], gravity_, dt, kArticulationDamping,
-                                     perArticulationLink[i]);
-            continue;
-        }
-
-        if (articulationSleeping_[i] != 0U)
-        {
-            if (belowArticulationSleepThreshold(art, kArticulationAngularSleepThreshold))
-            {
-                zeroArticulationVelocity(art);
-                continue;
-            }
-            articulationSleeping_[i] = 0U;
-            articulationSleepTimers_[i] = 0.0f;
-        }
-
-        stepArticulationOnPlanes(art, perArticulation[i], gravity_, dt, kArticulationDamping,
-                                 perArticulationLink[i]);
-
-        if (belowArticulationSleepThreshold(art, kArticulationAngularSleepThreshold))
-        {
-            articulationSleepTimers_[i] += dt;
-        }
-        else
-        {
-            articulationSleepTimers_[i] = 0.0f;
-        }
-
-        if (articulationSleepTimers_[i] >= kSleepTime)
-        {
-            zeroArticulationVelocity(art);
-            articulationSleeping_[i] = 1U;
-        }
-    }
 }
 
 void PhysicsWorld::capturePreviousPositions() noexcept
@@ -1899,7 +1024,7 @@ PhysicsWorld::singleContact(const ContactCandidate& candidate, float dt)
     // i.e. the direction to push the moving body out of penetration.
     const WorldShape movingShape = worldShape(*candidate.movingCollider);
     const WorldShape targetShape = worldShape(*candidate.targetCollider);
-    auto manifold = narrowPhase_.collide(movingShape, targetShape, closingReach);
+    auto manifold = narrowPhase_->collide(movingShape, targetShape, closingReach);
     if (!manifold.has_value() || manifold->count == 0)
     {
         return std::nullopt;
@@ -1940,7 +1065,7 @@ bool PhysicsWorld::appendMeshContacts(const ContactCandidate& candidate, float d
             triangle.vertices = {v0, v1, v2};
             triangle.faces = faces;
 
-            auto manifold = narrowPhase_.collide(movingShape, WorldShape{triangle}, closingReach);
+            auto manifold = narrowPhase_->collide(movingShape, WorldShape{triangle}, closingReach);
             if (!manifold.has_value() || manifold->count == 0)
             {
                 return;
@@ -1998,87 +1123,6 @@ bool PhysicsWorld::appendMeshContacts(const ContactCandidate& candidate, float d
             }
         });
     return overlapped;
-}
-
-void PhysicsWorld::recordOverlap(PhysicsColliderHandle first, PhysicsColliderHandle second,
-                                 bool trigger)
-{
-    const std::uint32_t lo = std::min(first.value(), second.value());
-    const std::uint32_t hi = std::max(first.value(), second.value());
-    const std::uint64_t key = (static_cast<std::uint64_t>(lo) << 32) | hi;
-    (trigger ? triggerOverlaps_ : collisionOverlaps_).insert(key);
-}
-
-void PhysicsWorld::removeOverlapPairsForCollider(PhysicsColliderHandle collider)
-{
-    const auto containsCollider = [value = collider.value()](std::uint64_t key)
-    {
-        return static_cast<std::uint32_t>(key >> 32) == value ||
-               static_cast<std::uint32_t>(key & 0xFFFFFFFFULL) == value;
-    };
-    const auto eraseMatching = [&containsCollider](std::unordered_set<std::uint64_t>& set)
-    {
-        for (auto it = set.begin(); it != set.end();)
-        {
-            if (containsCollider(*it))
-            {
-                it = set.erase(it);
-            }
-            else
-            {
-                ++it;
-            }
-        }
-    };
-
-    eraseMatching(triggerOverlaps_);
-    eraseMatching(previousTriggerOverlaps_);
-    eraseMatching(collisionOverlaps_);
-    eraseMatching(previousCollisionOverlaps_);
-}
-
-void PhysicsWorld::updateOverlapEvents()
-{
-    const auto build = [](const std::unordered_set<std::uint64_t>& previous,
-                          const std::unordered_set<std::uint64_t>& current,
-                          std::vector<ContactEvent>& out)
-    {
-        out.clear();
-        const auto event = [](std::uint64_t key, EventPhase phase)
-        {
-            return ContactEvent{
-                PhysicsColliderHandle{static_cast<std::uint32_t>(key >> 32)},
-                PhysicsColliderHandle{static_cast<std::uint32_t>(key & 0xFFFFFFFFULL)}, phase};
-        };
-        for (const std::uint64_t key : current)
-        {
-            out.push_back(
-                event(key, previous.contains(key) ? EventPhase::Stay : EventPhase::Enter));
-        }
-        for (const std::uint64_t key : previous)
-        {
-            if (!current.contains(key))
-            {
-                out.push_back(event(key, EventPhase::Exit));
-            }
-        }
-        // Deterministic order regardless of hash-set iteration (events don't affect the
-        // simulation, but a stable order keeps consumers/tests reproducible).
-        std::sort(out.begin(), out.end(),
-                  [](const ContactEvent& a, const ContactEvent& b)
-                  {
-                      if (a.first.value() != b.first.value())
-                      {
-                          return a.first.value() < b.first.value();
-                      }
-                      return a.second.value() < b.second.value();
-                  });
-    };
-
-    build(previousTriggerOverlaps_, triggerOverlaps_, triggerEvents_);
-    build(previousCollisionOverlaps_, collisionOverlaps_, collisionEvents_);
-    previousTriggerOverlaps_ = triggerOverlaps_;
-    previousCollisionOverlaps_ = collisionOverlaps_;
 }
 
 float PhysicsWorld::velocityInvMass(const BodyEntry& body) noexcept
@@ -2244,11 +1288,11 @@ void PhysicsWorld::solveIsland(const Island& island, std::vector<SolverBody>& so
 
     if (haveContacts)
     {
-        solver_.prepare(solverBodies, islandContacts, h);
+        solver_->prepare(solverBodies, islandContacts, h);
     }
     if (haveJoints)
     {
-        jointSolver_.prepare(solverBodies, islandJoints, h);
+        jointSolver_->prepare(solverBodies, islandJoints, h);
     }
 
     for (int s = 0; s < kSubstepCount; ++s)
@@ -2268,22 +1312,22 @@ void PhysicsWorld::solveIsland(const Island& island, std::vector<SolverBody>& so
 
         if (haveJoints)
         {
-            jointSolver_.warmStart(solverBodies);
+            jointSolver_->warmStart(solverBodies);
         }
         if (haveContacts)
         {
-            solver_.warmStart(solverBodies);
+            solver_->warmStart(solverBodies);
         }
 
         for (int i = 0; i < kVelocityIterations; ++i)
         {
             if (haveJoints)
             {
-                jointSolver_.solveVelocity(solverBodies, /*useBias=*/true);
+                jointSolver_->solveVelocity(solverBodies, /*useBias=*/true);
             }
             if (haveContacts)
             {
-                solver_.solveVelocity(solverBodies, /*useBias=*/true);
+                solver_->solveVelocity(solverBodies, /*useBias=*/true);
             }
         }
 
@@ -2310,11 +1354,11 @@ void PhysicsWorld::solveIsland(const Island& island, std::vector<SolverBody>& so
         {
             if (haveJoints)
             {
-                jointSolver_.solveVelocity(solverBodies, /*useBias=*/false);
+                jointSolver_->solveVelocity(solverBodies, /*useBias=*/false);
             }
             if (haveContacts)
             {
-                solver_.solveVelocity(solverBodies, /*useBias=*/false);
+                solver_->solveVelocity(solverBodies, /*useBias=*/false);
             }
         }
     }
@@ -2322,11 +1366,11 @@ void PhysicsWorld::solveIsland(const Island& island, std::vector<SolverBody>& so
     // Single end-of-step restitution pass at the true impact velocity.
     if (haveContacts)
     {
-        solver_.applyRestitution(solverBodies);
+        solver_->applyRestitution(solverBodies);
         // Push scene-driven Kinematic bodies out of penetration (Dynamic bodies already
         // resolved via the soft bias; positionWeight is 0 for them, so this only moves
         // Kinematic members).
-        solver_.solvePosition(solverBodies);
+        solver_->solvePosition(solverBodies);
     }
 
     // Write the solved velocities back to the dynamic bodies (positions/orientations
@@ -2346,11 +1390,11 @@ void PhysicsWorld::solveIsland(const Island& island, std::vector<SolverBody>& so
 
     if (haveContacts)
     {
-        solver_.store();
+        solver_->store();
     }
     if (haveJoints)
     {
-        jointSolver_.store();
+        jointSolver_->store();
     }
 }
 
@@ -2470,8 +1514,8 @@ bool PhysicsWorld::solveAndIntegrate(std::span<const SolverContact> contacts, fl
     // One solver instance services every island in turn; the warm-start cache is
     // cleared once, appended per island, and committed once. Fully-settled islands
     // sleep — skipped entirely until disturbed.
-    solver_.beginStore();
-    jointSolver_.beginStore();
+    solver_->beginStore();
+    jointSolver_->beginStore();
     for (const Island& island : islands)
     {
         if (islandShouldSleep(island))
@@ -2525,8 +1569,8 @@ bool PhysicsWorld::solveAndIntegrate(std::span<const SolverContact> contacts, fl
             }
         }
     }
-    solver_.commitStore();
-    jointSolver_.commitStore();
+    solver_->commitStore();
+    jointSolver_->commitStore();
 
     // Write final positions + orientations back (everything but Static).
     bool moved = false;

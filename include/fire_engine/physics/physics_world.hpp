@@ -10,28 +10,32 @@
 #include <unordered_set>
 #include <vector>
 
-#include <fire_engine/collision/aabb.hpp>
-#include <fire_engine/collision/broad_phase.hpp>
-#include <fire_engine/collision/dynamic_aabb_tree_broad_phase.hpp>
-#include <fire_engine/collision/narrow_phase.hpp>
+#include <fire_engine/collision/aabb_bvh.hpp>
+#include <fire_engine/collision/collider.hpp>
+#include <fire_engine/collision/contact_manifold.hpp>
 #include <fire_engine/collision/ray.hpp>
-#include <fire_engine/collision/shape_cast.hpp>
+#include <fire_engine/collision/world_shape.hpp>
 #include <fire_engine/graphics/cloth.hpp>
 #include <fire_engine/physics/articulation.hpp>
 #include <fire_engine/physics/collider_shape.hpp>
 #include <fire_engine/physics/collision_event.hpp>
 #include <fire_engine/physics/contact.hpp>
-#include <fire_engine/physics/contact_solver.hpp>
-#include <fire_engine/physics/island.hpp>
 #include <fire_engine/physics/joint.hpp>
-#include <fire_engine/physics/joint_solver.hpp>
 #include <fire_engine/physics/physics_body.hpp>
-#include <fire_engine/physics/physics_handle.hpp>
 #include <fire_engine/physics/physics_query.hpp>
 #include <fire_engine/scene/transform.hpp>
 
 namespace fire_engine
 {
+
+class BroadPhase;
+class ContactSolver;
+struct CollisionPair;
+struct Island;
+class JointSolver;
+class NarrowPhase;
+struct SolverBody;
+struct SolverContactInput;
 
 struct DebugJointAnchor
 {
@@ -44,22 +48,19 @@ struct DebugJointAnchor
 class PhysicsWorld
 {
 public:
-    PhysicsWorld() = default;
+    PhysicsWorld();
 
     // Inject a broadphase implementation (testing / alternative strategies). The
     // default ctor uses a DynamicAabbTreeBroadPhase; this lets a caller substitute, say,
     // a SweepAndPruneBroadPhase without changing any call site.
-    explicit PhysicsWorld(std::unique_ptr<BroadPhase> broadPhase)
-        : broadPhase_{std::move(broadPhase)}
-    {
-    }
+    explicit PhysicsWorld(std::unique_ptr<BroadPhase> broadPhase);
 
-    ~PhysicsWorld() = default;
+    ~PhysicsWorld();
 
     PhysicsWorld(const PhysicsWorld&) = delete;
     PhysicsWorld& operator=(const PhysicsWorld&) = delete;
-    PhysicsWorld(PhysicsWorld&&) noexcept = default;
-    PhysicsWorld& operator=(PhysicsWorld&&) noexcept = default;
+    PhysicsWorld(PhysicsWorld&&) noexcept;
+    PhysicsWorld& operator=(PhysicsWorld&&) noexcept;
 
     [[nodiscard]]
     PhysicsBodyHandle createBody(const PhysicsBodyDesc& desc);
@@ -253,16 +254,10 @@ public:
     std::vector<OverlapHit> overlapSphere(Vec3 center, float radius, QueryFilter filter = {}) const;
 
     [[nodiscard]]
-    const std::vector<CollisionPair>& possiblePairs() const noexcept
-    {
-        return broadPhase_->possiblePairs();
-    }
+    const std::vector<CollisionPair>& possiblePairs() const noexcept;
 
     [[nodiscard]]
-    bool validateBroadPhase() const
-    {
-        return broadPhase_->validate();
-    }
+    bool validateBroadPhase() const;
 
 private:
     struct BodyEntry
@@ -374,10 +369,10 @@ private:
     // Owned via the BroadPhase interface so the implementation is swappable. Defaults to
     // the dynamic AABB tree; inject an alternative (e.g. SweepAndPruneBroadPhase) through
     // the unique_ptr constructor.
-    std::unique_ptr<BroadPhase> broadPhase_{std::make_unique<DynamicAabbTreeBroadPhase>()};
-    NarrowPhase narrowPhase_;
-    ContactSolver solver_;
-    JointSolver jointSolver_;
+    std::unique_ptr<BroadPhase> broadPhase_;
+    std::unique_ptr<NarrowPhase> narrowPhase_;
+    std::unique_ptr<ContactSolver> solver_;
+    std::unique_ptr<JointSolver> jointSolver_;
     Vec3 gravity_{0.0f, -9.81f, 0.0f};
     bool sleepingEnabled_{true};
     // Contacts from the most recent step(), kept for debug visualisation only.
@@ -468,6 +463,13 @@ private:
 
     [[nodiscard]]
     AABB localBounds(const ColliderShape& shape) const noexcept;
+
+    [[nodiscard]]
+    static WorldShape composeWorldShape(const ColliderShape& shape, const Mat4& world,
+                                        const Quaternion& rot, const Vec3& scale);
+
+    [[nodiscard]]
+    static AABB aabbOfWorldShape(const WorldShape& shape) noexcept;
 
     // Compose a collider's authored shape with its body's world transform into a
     // neutral world-space shape for the narrowphase (and gatherColliders).
