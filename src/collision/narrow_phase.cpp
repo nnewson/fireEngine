@@ -455,6 +455,15 @@ struct PolyFace
     std::vector<Vec3> verts;
 };
 
+struct PolytopeClosest
+{
+    Vec3 point{};
+    Vec3 normal{};
+    float distance{0.0f};
+    bool inside{false};
+    bool valid{false};
+};
+
 [[nodiscard]] std::vector<PolyFace> boxFaces(const WorldBox& box)
 {
     const std::array<Vec3, 3> axis{box.orientation.rotate({1.0f, 0.0f, 0.0f}),
@@ -479,6 +488,124 @@ struct PolyFace
         }
     }
     return faces;
+}
+
+[[nodiscard]] bool pointInsideFace(const Vec3& p, const PolyFace& face) noexcept
+{
+    Vec3 centroid{};
+    for (const Vec3& v : face.verts)
+    {
+        centroid += v;
+    }
+    centroid = centroid * (1.0f / static_cast<float>(face.verts.size()));
+
+    for (std::size_t i = 0; i < face.verts.size(); ++i)
+    {
+        const Vec3& v0 = face.verts[i];
+        const Vec3& v1 = face.verts[(i + 1) % face.verts.size()];
+        Vec3 sideN = Vec3::crossProduct(v1 - v0, face.normal);
+        if (dot(sideN, centroid - v0) > 0.0f)
+        {
+            sideN = sideN * -1.0f;
+        }
+        if (dot(sideN, p - v0) > kGeomEps)
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+[[nodiscard]] Vec3 closestPointOnFace(const Vec3& p, const PolyFace& face) noexcept
+{
+    const float signedPlaneDistance = dot(face.normal, p - face.verts[0]);
+    const Vec3 projected = p - face.normal * signedPlaneDistance;
+    if (pointInsideFace(projected, face))
+    {
+        return projected;
+    }
+
+    Vec3 best = face.verts[0];
+    float bestDist2 = std::numeric_limits<float>::infinity();
+    for (std::size_t i = 0; i < face.verts.size(); ++i)
+    {
+        const Vec3 candidate =
+            closestPointOnSegment(p, face.verts[i], face.verts[(i + 1) % face.verts.size()]);
+        const float dist2 = (p - candidate).magnitudeSquared();
+        if (dist2 < bestDist2)
+        {
+            bestDist2 = dist2;
+            best = candidate;
+        }
+    }
+    return best;
+}
+
+[[nodiscard]] PolytopeClosest closestPointOnPolytope(const Vec3& p,
+                                                     std::span<const PolyFace> faces) noexcept
+{
+    if (faces.empty())
+    {
+        return {};
+    }
+
+    int nearestPlane = 0;
+    float maxSignedDistance = -std::numeric_limits<float>::infinity();
+    bool inside = true;
+    for (std::size_t i = 0; i < faces.size(); ++i)
+    {
+        const float d = dot(faces[i].normal, p - faces[i].verts[0]);
+        if (d > maxSignedDistance)
+        {
+            maxSignedDistance = d;
+            nearestPlane = static_cast<int>(i);
+        }
+        inside = inside && d <= kGeomEps;
+    }
+
+    if (inside)
+    {
+        const PolyFace& face = faces[static_cast<std::size_t>(nearestPlane)];
+        return {p - face.normal * maxSignedDistance, face.normal, -maxSignedDistance, true, true};
+    }
+
+    Vec3 bestPoint{};
+    Vec3 bestNormal{};
+    float bestDist2 = std::numeric_limits<float>::infinity();
+    for (const PolyFace& face : faces)
+    {
+        const Vec3 candidate = closestPointOnFace(p, face);
+        const Vec3 delta = p - candidate;
+        const float dist2 = delta.magnitudeSquared();
+        if (dist2 < bestDist2)
+        {
+            bestDist2 = dist2;
+            bestPoint = candidate;
+            bestNormal =
+                dist2 > kGeomEps * kGeomEps ? delta * (1.0f / std::sqrt(dist2)) : face.normal;
+        }
+    }
+    return {bestPoint, bestNormal, std::sqrt(bestDist2), false, true};
+}
+
+[[nodiscard]] std::optional<ContactManifold> collideSpherePolytope(const WorldSphere& sphere,
+                                                                   std::span<const PolyFace> faces,
+                                                                   float margin) noexcept
+{
+    const PolytopeClosest closest = closestPointOnPolytope(sphere.center, faces);
+    if (!closest.valid)
+    {
+        return std::nullopt;
+    }
+
+    const float signedDepth =
+        closest.inside ? sphere.radius + closest.distance : sphere.radius - closest.distance;
+    if (signedDepth < -margin)
+    {
+        return std::nullopt;
+    }
+
+    return onePoint(closest.normal, closest.point, signedDepth);
 }
 
 [[nodiscard]] std::vector<PolyFace> convexFaces(const WorldConvex& hull)
@@ -653,6 +780,16 @@ struct PolyFace
 [[nodiscard]] std::optional<ContactManifold> collideConvex(const WorldShape& a, const WorldShape& b,
                                                            float margin)
 {
+    if (const auto* sphere = std::get_if<WorldSphere>(&a); sphere != nullptr && isPolytope(b))
+    {
+        return collideSpherePolytope(*sphere, polytopeFaces(b), margin);
+    }
+    if (const auto* sphere = std::get_if<WorldSphere>(&b); sphere != nullptr && isPolytope(a))
+    {
+        auto m = collideSpherePolytope(*sphere, polytopeFaces(a), margin);
+        return m ? std::optional<ContactManifold>{flipped(*m)} : std::nullopt;
+    }
+
     const ConvexContact c = gjkEpaContact(a, b);
     if (!c.colliding)
     {

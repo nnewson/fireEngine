@@ -1,8 +1,11 @@
 #include <fire_engine/collision/shape_cast.hpp>
 
+#include <cmath>
+#include <limits>
 #include <variant>
 
 #include <fire_engine/collision/gjk_epa.hpp>
+#include <fire_engine/collision/narrow_phase.hpp>
 
 namespace fire_engine
 {
@@ -49,6 +52,41 @@ constexpr float kClosingEpsilon = 1e-8f;
         shape);
 }
 
+[[nodiscard]] bool involvesConvex(const WorldShape& a, const WorldShape& b) noexcept
+{
+    return std::holds_alternative<WorldConvex>(a) || std::holds_alternative<WorldConvex>(b);
+}
+
+[[nodiscard]] ConvexContact contactForSweep(const WorldShape& moving, const WorldShape& target,
+                                            float maxDistance) noexcept
+{
+    if (!involvesConvex(moving, target))
+    {
+        NarrowPhase np;
+        if (const auto manifold = np.collide(moving, target, maxDistance + kDistanceTolerance))
+        {
+            int best = 0;
+            float signedDepth = -std::numeric_limits<float>::infinity();
+            for (int i = 0; i < manifold->count; ++i)
+            {
+                if (manifold->points[static_cast<std::size_t>(i)].penetration > signedDepth)
+                {
+                    signedDepth = manifold->points[static_cast<std::size_t>(i)].penetration;
+                    best = i;
+                }
+            }
+
+            return ConvexContact{signedDepth >= -kDistanceTolerance, manifold->normal,
+                                 std::abs(signedDepth),
+                                 manifold->points[static_cast<std::size_t>(best)].position,
+                                 manifold->points[static_cast<std::size_t>(best)].position};
+        }
+        return ConvexContact{false, {}, maxDistance + kDistanceTolerance, {}, {}};
+    }
+
+    return gjkEpaContact(moving, target);
+}
+
 } // namespace
 
 std::optional<ToiHit> shapeCast(const WorldShape& moving, const Vec3& direction, float maxDistance,
@@ -58,7 +96,7 @@ std::optional<ToiHit> shapeCast(const WorldShape& moving, const Vec3& direction,
     for (int iter = 0; iter < kMaxIterations; ++iter)
     {
         const WorldShape swept = translated(moving, direction * t);
-        const ConvexContact contact = gjkEpaContact(swept, target);
+        const ConvexContact contact = contactForSweep(swept, target, maxDistance - t);
 
         if (contact.colliding)
         {

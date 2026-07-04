@@ -3,7 +3,10 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
+#include <cmath>
+
 using Catch::Approx;
+using fire_engine::Quaternion;
 using fire_engine::shapeCast;
 using fire_engine::Vec3;
 using fire_engine::WorldBox;
@@ -62,4 +65,29 @@ TEST_CASE("ShapeCast.CapsuleHitsSphere", "[ShapeCast]")
     const auto hit = shapeCast(moving, Vec3{1.0f, 0.0f, 0.0f}, 10.0f, target);
     REQUIRE(hit.has_value());
     CHECK(hit->distance == Approx(3.0f).margin(1e-3f)); // capsule radius 0.5 + sphere 0.5
+}
+
+TEST_CASE("ShapeCast.CapsuleHitsBoxFaceAtAnalyticGap", "[ShapeCast]")
+{
+    const WorldShape moving = WorldCapsule{Vec3{0.0f, -1.0f, 0.0f}, Vec3{0.0f, 1.0f, 0.0f}, 0.5f};
+    const WorldShape target =
+        WorldBox{Vec3{4.0f, 0.0f, 0.0f}, Vec3{0.5f, 1.0f, 1.0f}, Quaternion::identity()};
+
+    const auto hit = shapeCast(moving, Vec3{1.0f, 0.0f, 0.0f}, 10.0f, target);
+    REQUIRE(hit.has_value());
+    CHECK(hit->distance == Approx(3.0f).margin(1e-3f));
+    CHECK(hit->normal.approxEqual(Vec3{-1.0f, 0.0f, 0.0f}, 1e-3f));
+}
+
+TEST_CASE("ShapeCast.CapsuleAgainstSteepBoxReportsSteepNormal", "[ShapeCast]")
+{
+    const float a = 1.2217f; // 70°
+    const Quaternion tilt =
+        Quaternion::fromVectors(Vec3{0.0f, 1.0f, 0.0f}, Vec3{-std::sin(a), std::cos(a), 0.0f});
+    const WorldShape moving = WorldCapsule{Vec3{0.0f, 0.5f, 0.0f}, Vec3{0.0f, 1.7f, 0.0f}, 0.35f};
+    const WorldShape target = WorldBox{Vec3{3.0f, 2.0f, 0.0f}, Vec3{1.5f, 0.25f, 4.0f}, tilt};
+
+    const auto hit = shapeCast(moving, Vec3{1.0f, 0.0f, 0.0f}, 5.0f, target);
+    REQUIRE(hit.has_value());
+    CHECK(hit->normal.y() == Approx(std::cos(a)).margin(2e-2f));
 }
