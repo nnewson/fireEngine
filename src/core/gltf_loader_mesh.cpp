@@ -5,7 +5,6 @@
 
 #include <algorithm>
 #include <cstdint>
-#include <iostream>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -16,6 +15,7 @@
 #include <fastgltf/tools.hpp>
 #include <fastgltf/types.hpp>
 
+#include <fire_engine/core/log.hpp>
 #include <fire_engine/graphics/assets.hpp>
 #include <fire_engine/graphics/geometry.hpp>
 #include <fire_engine/graphics/material.hpp>
@@ -229,13 +229,15 @@ void warnSkippedTangentTexture(std::string_view meshName, std::size_t primIdx,
                                std::string_view textureName,
                                const TangentGenerationResult& tangentResult)
 {
-    std::cerr << "Warning: Skipping tangent-space " << textureName << " for " << meshName
-              << " primitive " << primIdx;
     if (variantIndex.has_value())
     {
-        std::cerr << " variant " << variantIndex.value();
+        log::warn(log::category::gltf,
+                  "Skipping tangent-space {} for {} primitive {} variant {}: {}", textureName,
+                  meshName, primIdx, variantIndex.value(), tangentResult.reason);
+        return;
     }
-    std::cerr << ": " << tangentResult.reason << '\n';
+    log::warn(log::category::gltf, "Skipping tangent-space {} for {} primitive {}: {}", textureName,
+              meshName, primIdx, tangentResult.reason);
 }
 
 void applyResolvedMaterialTextures(Material& material, const ResolvedMaterialTextures& textures,

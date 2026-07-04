@@ -1,17 +1,15 @@
 #include <algorithm>
 #include <cmath>
-#include <cstdio>
-#include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <numbers>
-#include <print>
 #include <string>
 
 #include <fire_engine/fire_engine.hpp>
 
 #include <fire_engine/collision/ray.hpp>
 #include <fire_engine/core/gltf_loader.hpp>
+#include <fire_engine/core/log.hpp>
 #include <fire_engine/core/system.hpp>
 #include <fire_engine/graphics/cloth.hpp>
 #include <fire_engine/graphics/geometry.hpp>
@@ -543,7 +541,7 @@ void FireEngine::loadScene(std::string_view scene_path)
         scene_.addNode(std::move(sunNode));
     }
 
-    std::print("{}\n", scene_);
+    log::info(log::category::app, "{}", scene_);
 }
 
 void FireEngine::mainLoop()
@@ -604,11 +602,10 @@ void FireEngine::stepSimulation(float dt, float& accumulator)
         }
     }
 
-    // Ragdoll diagnostic (FE_RAGDOLL_DBG=1): once a second, report each articulated ragdoll's
-    // max joint rate + base speed so the app can be compared directly against the headless
-    // settle test — the two must agree or the test isn't measuring what ships.
-    static const bool kRagdollDebug = std::getenv("FE_RAGDOLL_DBG") != nullptr;
-    if (kRagdollDebug)
+    // Ragdoll diagnostic: once a second, report each articulated ragdoll's max joint
+    // rate + base speed so the app can be compared directly against the headless settle
+    // test. Enable with FE_LOG=ragdoll:debug.
+    if (log::enabled(log::Level::Debug, log::category::ragdoll))
     {
         static int frame = 0;
         if (++frame % 60 == 0)
@@ -629,13 +626,12 @@ void FireEngine::stepSimulation(float dt, float& accumulator)
                 {
                     jr = std::max(jr, std::abs(v));
                 }
-                std::fprintf(stderr,
-                             "[ragdoll] frame %d maxJointRate=%.3f baseLin=%.3f baseAng=%.3f "
-                             "baseY=%.3f\n",
-                             frame, static_cast<double>(jr),
-                             static_cast<double>(art->baseVelocity().linear.magnitude()),
-                             static_cast<double>(art->baseVelocity().angular.magnitude()),
-                             static_cast<double>(art->baseTransform().translation.y()));
+                log::debug(log::category::ragdoll,
+                           "frame {} maxJointRate={:.3f} baseLin={:.3f} baseAng={:.3f} "
+                           "baseY={:.3f}",
+                           frame, jr, art->baseVelocity().linear.magnitude(),
+                           art->baseVelocity().angular.magnitude(),
+                           art->baseTransform().translation.y());
             }
         }
     }

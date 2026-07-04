@@ -2,13 +2,13 @@
 #include <cstdint>
 #include <cstring>
 #include <fstream>
-#include <iostream>
 #include <set>
 #include <span>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
+#include <fire_engine/core/log.hpp>
 #include <fire_engine/render/device.hpp>
 
 namespace fire_engine
@@ -104,7 +104,7 @@ void Device::createInstance()
     auto exts = Window::requiredVulkanExtensions();
     exts.push_back(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
 
-    if (enableValidation)
+    if (enableValidation && log::enabled(log::Level::Debug, log::category::render))
     {
         printValidationInfo();
     }
@@ -124,20 +124,22 @@ void Device::createInstance()
 void Device::printValidationInfo() const
 {
     auto layersAvailable = context_.enumerateInstanceLayerProperties();
-    std::cout << "Available layers:\n";
+    std::string layers{"Available layers:"};
     for (const auto& layer : layersAvailable)
     {
-        std::cout << '\t' << layer.layerName << '\n';
+        layers += "\n\t";
+        layers += layer.layerName.data();
     }
-    std::cout << '\n';
+    log::debug(log::category::render, "{}", layers);
 
     auto extensions = context_.enumerateInstanceExtensionProperties();
-    std::cout << "Available extensions:\n";
+    std::string instanceExtensions{"Available instance extensions:"};
     for (const auto& ext : extensions)
     {
-        std::cout << '\t' << ext.extensionName << '\n';
+        instanceExtensions += "\n\t";
+        instanceExtensions += ext.extensionName.data();
     }
-    std::cout << '\n';
+    log::debug(log::category::render, "{}", instanceExtensions);
 }
 
 void Device::createSurface(const Window& window)
@@ -168,14 +170,15 @@ bool Device::isDeviceSuitable(const vk::raii::PhysicalDevice& d)
     }
 
     auto avail = d.enumerateDeviceExtensionProperties();
-    if (enableValidation)
+    if (enableValidation && log::enabled(log::Level::Debug, log::category::render))
     {
-        std::cout << "Available extensions:\n";
+        std::string deviceExtensionsList{"Available device extensions:"};
         for (const auto& extension : avail)
         {
-            std::cout << '\t' << extension.extensionName << '\n';
+            deviceExtensionsList += "\n\t";
+            deviceExtensionsList += extension.extensionName.data();
         }
-        std::cout << '\n';
+        log::debug(log::category::render, "{}", deviceExtensionsList);
     }
 
     std::set<std::string> required(deviceExtensions.begin(), deviceExtensions.end());

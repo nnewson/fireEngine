@@ -1,11 +1,11 @@
 // Vulkan rotating cube — matches shader.vert / shader.frag in this repo.
 // Dependencies: Vulkan SDK, GLFW 3.3+, glslc (for SPIR-V compilation via CMake).
 
+#include <fire_engine/core/log.hpp>
 #include <fire_engine/fire_engine.hpp>
 #include <fire_engine/platform/application_args.hpp>
 
 #include <cstdlib>
-#include <iostream>
 #include <string_view>
 
 using namespace fire_engine;
@@ -28,7 +28,7 @@ int main(int argc, char* argv[])
     }
     catch (const std::exception& e)
     {
-        std::cerr << "Fatal: " << e.what() << '\n';
+        log::error(log::category::app, "Fatal: {}", e.what());
         return EXIT_FAILURE;
     }
     return EXIT_SUCCESS;
