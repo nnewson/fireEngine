@@ -82,6 +82,12 @@ inline constexpr float kSpeculativeDistance = 0.02f;
 // velocities) lets these sweeps iterate to convergence within one substep.
 inline constexpr int kArticulationVelocityIterations = 4;
 
+// Uniform passive joint damping for the reduced-coordinate articulation solve. Modest but
+// non-zero: a chaotic chain needs dissipation to settle under the explicit integrator, while
+// per-joint drives and limits add pose-specific behaviour. This is a physics tunable kept here
+// until it graduates into RagdollParams.
+inline constexpr float kArticulationDamping = 0.2f;
+
 // Settle assist for a reduced-coordinate ragdoll's floating base: the joints damp via an explicit
 // −c·q̇ torque, but the free 6-DOF root has none, so a settled ragdoll keeps its residual
 // horizontal drift and slides. A *linear* base-velocity decay fixes it (angular damping
@@ -122,6 +128,9 @@ inline constexpr float kJointSlop = 0.0005f;
 // the linear (m/s) and angular (rad/s) speeds.
 inline constexpr float kLinearSleepThreshold = 0.05f;
 inline constexpr float kAngularSleepThreshold = 0.05f;
+// Articulations are jointed chains, so their angular and qDot sleep threshold mirrors the looser
+// jointed-island rigid-body threshold instead of the singleton rigid-body angular threshold.
+inline constexpr float kArticulationAngularSleepThreshold = 0.15f;
 inline constexpr float kSleepTime = 0.5f;
 
 // Static-mesh contacts (P6): a triangle contact point deeper than this below the
