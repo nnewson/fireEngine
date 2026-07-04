@@ -1,3 +1,5 @@
+[![CI](https://github.com/nnewson/fireEngine/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/nnewson/fireEngine/actions/workflows/ci.yml)
+
 # Fire Engine
 
 A Vulkan-based 3D renderer written in C++23, built on macOS with MoltenVK.
