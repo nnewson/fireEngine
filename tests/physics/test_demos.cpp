@@ -735,3 +735,125 @@ TEST_CASE("Demos.ConvexHull.TetraSettleTwistBounded", "[Demos]")
         CHECK(finalPos[t].z() == finalPos2[t].z());
     }
 }
+
+// Diagnostic sweep (hidden): rotational-tunnelling verification for P9.6. Drops fast-spinning
+// bodies (box family incl. the historic (0.3,1,1), a thin plate, and a tetra hull) onto a wide
+// static floor and reports each config's minimum body-centre height over 5 s — a tunnel reads as
+// minY far below the floor (the P9.5-era violent cases showed minY ≈ −75…−96). A/B protocol:
+// run as-is (refresh on), then temporarily set kSubstepRefreshRotation to a huge value (gate
+// never fires = pre-P9.6 behaviour), rebuild, rerun, compare, restore.
+TEST_CASE("Demos.RotationalTunnellingSweep", "[.][TunnelSweep]")
+{
+    struct ShapeCase
+    {
+        const char* name;
+        ColliderShape shape;
+    };
+    const std::array<Vec3, 4> tetraVerts{Vec3{0.4f, 0.4f, 0.4f}, Vec3{0.4f, -0.4f, -0.4f},
+                                         Vec3{-0.4f, 0.4f, -0.4f}, Vec3{-0.4f, -0.4f, 0.4f}};
+    const std::array<std::uint32_t, 12> tetraIdx{0, 1, 2, 0, 3, 1, 0, 2, 3, 1, 3, 2};
+    const std::vector<ShapeCase> shapes{
+        {"box(0.3,1,1)", BoxShape{Vec3{0.3f, 1.0f, 1.0f}, {}}},
+        {"plate(0.5,0.05,0.5)", BoxShape{Vec3{0.5f, 0.05f, 0.5f}, {}}},
+        {"tetra(0.4)", buildConvexHull(tetraVerts, tetraIdx)},
+    };
+    const std::vector<std::pair<const char*, Vec3>> axes{
+        {"x", Vec3{1.0f, 0.0f, 0.0f}},
+        {"z", Vec3{0.0f, 0.0f, 1.0f}},
+        {"diag", Vec3::normalise(Vec3{1.0f, 1.0f, 1.0f})},
+    };
+    const std::array<float, 3> speeds{10.0f, 20.0f, 40.0f};
+
+    int tunnels = 0;
+    for (const ShapeCase& sc : shapes)
+    {
+        for (const auto& [axisName, axis] : axes)
+        {
+            for (const float speed : speeds)
+            {
+                PhysicsWorld world;
+                addStaticFloor(world, 30.0f, 0.5f);
+                PhysicsBodyDesc desc;
+                desc.type = PhysicsBodyType::Dynamic;
+                desc.position = {0.0f, 1.5f, 0.0f};
+                desc.angularVelocity = axis * speed;
+                desc.mass = 1.0f;
+                desc.gravityScale = 1.0f;
+                desc.material = PhysicsMaterial{.restitution = 0.0f, .friction = 0.5f};
+                const PhysicsBodyHandle body = world.createBody(desc);
+                ColliderDesc collider;
+                collider.shape = sc.shape;
+                collider.material = desc.material;
+                static_cast<void>(world.createCollider(body, collider));
+
+                float minY = 1e9f;
+                for (int i = 0; i < 300; ++i)
+                {
+                    world.step(kFixedDt);
+                    minY = std::min(minY, world.bodyTransform(body)->position().y());
+                }
+                const float finalY = world.bodyTransform(body)->position().y();
+                const bool tunnelled = minY < -1.0f;
+                tunnels += tunnelled ? 1 : 0;
+                std::printf("[sweep] %-20s axis=%-4s w=%4.0f  minY=%8.3f finalY=%8.3f%s\n", sc.name,
+                            axisName, static_cast<double>(speed), static_cast<double>(minY),
+                            static_cast<double>(finalY), tunnelled ? "  <TUNNEL>" : "");
+            }
+        }
+    }
+    std::printf("[sweep] tunnelled configs: %d / 27\n", tunnels);
+}
+
+// P9.6 regression gate: fast-spinning bodies up to 20 rad/s must never tunnel through the
+// floor. Before the mid-step manifold refresh, box(0.3,1,1) at 20 rad/s (about x or the
+// diagonal) fell straight through (minY ≈ −45 / −5); with it, every ≤20 rad/s config in the
+// sweep rests on the surface. 40 rad/s flat-box spinners (~380 RPM) can still tunnel — a
+// single mid-step refresh is ~19° stale at that rate; that is the documented Stage-2
+// boundary (per-substep re-detection), not a regression. The hidden [TunnelSweep] variant
+// prints the full A/B table including the 40 rad/s cases.
+TEST_CASE("Demos.RotationalTunnellingBoundedTo20RadPerSec", "[Demos]")
+{
+    const std::array<Vec3, 4> tetraVerts{Vec3{0.4f, 0.4f, 0.4f}, Vec3{0.4f, -0.4f, -0.4f},
+                                         Vec3{-0.4f, 0.4f, -0.4f}, Vec3{-0.4f, -0.4f, 0.4f}};
+    const std::array<std::uint32_t, 12> tetraIdx{0, 1, 2, 0, 3, 1, 0, 2, 3, 1, 3, 2};
+    const std::vector<ColliderShape> shapes{
+        BoxShape{Vec3{0.3f, 1.0f, 1.0f}, {}},
+        BoxShape{Vec3{0.5f, 0.05f, 0.5f}, {}},
+        buildConvexHull(tetraVerts, tetraIdx),
+    };
+    const std::vector<Vec3> axes{Vec3{1.0f, 0.0f, 0.0f}, Vec3{0.0f, 0.0f, 1.0f},
+                                 Vec3::normalise(Vec3{1.0f, 1.0f, 1.0f})};
+
+    for (std::size_t s = 0; s < shapes.size(); ++s)
+    {
+        for (std::size_t a = 0; a < axes.size(); ++a)
+        {
+            for (const float speed : {10.0f, 20.0f})
+            {
+                PhysicsWorld world;
+                addStaticFloor(world, 30.0f, 0.5f);
+                PhysicsBodyDesc desc;
+                desc.type = PhysicsBodyType::Dynamic;
+                desc.position = {0.0f, 1.5f, 0.0f};
+                desc.angularVelocity = axes[a] * speed;
+                desc.mass = 1.0f;
+                desc.gravityScale = 1.0f;
+                desc.material = PhysicsMaterial{.restitution = 0.0f, .friction = 0.5f};
+                const PhysicsBodyHandle body = world.createBody(desc);
+                ColliderDesc collider;
+                collider.shape = shapes[s];
+                collider.material = desc.material;
+                static_cast<void>(world.createCollider(body, collider));
+
+                float minY = 1e9f;
+                for (int i = 0; i < 300; ++i)
+                {
+                    world.step(kFixedDt);
+                    minY = std::min(minY, world.bodyTransform(body)->position().y());
+                }
+                INFO("shape " << s << " axis " << a << " w=" << speed << " minY=" << minY);
+                CHECK(minY > -0.5f); // never tunnelled through the floor
+            }
+        }
+    }
+}
