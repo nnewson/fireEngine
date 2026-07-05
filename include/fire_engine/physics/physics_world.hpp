@@ -16,6 +16,7 @@
 #include <fire_engine/collision/ray.hpp>
 #include <fire_engine/collision/world_shape.hpp>
 #include <fire_engine/graphics/cloth.hpp>
+#include <fire_engine/graphics/generational_slot_pool.hpp>
 #include <fire_engine/physics/articulation.hpp>
 #include <fire_engine/physics/collider_shape.hpp>
 #include <fire_engine/physics/collision_event.hpp>
@@ -109,6 +110,11 @@ public:
     // not yet generate contact response — that is the Phase C ConstraintBody coupling.
     [[nodiscard]]
     PhysicsArticulationHandle createArticulation();
+
+    // Destroy an articulation and all of its link colliders, recycling their slots. Returns
+    // false for an unknown/already-destroyed handle. Enables runtime articulation churn
+    // (spawning/despawning ragdolls) with bounded storage + stale-handle detection (CR-11/12).
+    bool destroyArticulation(PhysicsArticulationHandle handle);
 
     [[nodiscard]]
     Articulation* articulation(PhysicsArticulationHandle handle) noexcept;
@@ -357,27 +363,28 @@ private:
         std::uint32_t subKey{0};
     };
 
-    PhysicsBodyHandle nextBodyHandle_{PhysicsBodyHandle{1U}};
-    PhysicsColliderHandle nextColliderHandle_{PhysicsColliderHandle{1U}};
-    PhysicsConstraintHandle nextJointHandle_{PhysicsConstraintHandle{1U}};
-    PhysicsArticulationHandle nextArticulationHandle_{PhysicsArticulationHandle{1U}};
     std::vector<BodyEntry> bodies_;
     std::deque<ColliderEntry> colliders_;
     std::vector<JointEntry> joints_;
+    // Slot lifecycle (index + generation) for the entry containers. acquire() recycles a
+    // released slot or grows; release() bumps the slot's generation so a stale handle to a
+    // recycled slot is detectably invalid (CR-11 bounded storage + CR-12 generations). The
+    // handle *encodes* its slot index + generation, so no handle→index side-table is needed.
+    GenerationalSlotPool bodySlots_;
+    GenerationalSlotPool colliderSlots_;
+    GenerationalSlotPool jointSlots_;
+    GenerationalSlotPool articulationSlots_;
     // Articulations live in a deque so the Articulation references handed out via
-    // articulation() stay stable as more are added (links/colliders cache the handle, not
-    // a pointer). Keyed for O(1) lookup by handle value.
+    // articulation() stay stable as slots are added/recycled (links/colliders cache the handle,
+    // not a pointer). Indexed directly by the handle's slot index (articulationSlots_); a freed
+    // slot holds a default (0-link) Articulation until reused. Sleep state is kept in the two
+    // parallel arrays below, sized 1:1 with articulations_ and indexed by the same slot.
     std::deque<Articulation> articulations_;
     std::vector<float> articulationSleepTimers_;
     std::vector<std::uint8_t> articulationSleeping_;
-    std::unordered_map<std::uint32_t, std::size_t> articulationIndexByHandle_;
-    // Side-tables for O(1) lookup into the entry containers, keyed by handle
-    // value and (for the broadphase's pair pointers) by Collider address.
-    // Backing entries stay in place so solver indices and broadphase pointers remain
-    // stable; lookup maps contain only live handles/pointers.
-    std::unordered_map<std::uint32_t, std::size_t> bodyIndexByHandle_;
-    std::unordered_map<std::uint32_t, std::size_t> colliderIndexByHandle_;
-    std::unordered_map<std::uint32_t, std::size_t> jointIndexByHandle_;
+    // Collider address → slot index, so a broadphase pair's `Collider*` resolves back to its
+    // entry. (Bodies/colliders/joints no longer need a handle→index map — the handle is the
+    // index; this side-table stays because the broadphase reports colliders by pointer.)
     std::unordered_map<const Collider*, std::size_t> colliderIndexByPointer_;
     // Owned via the BroadPhase interface so the implementation is swappable. Defaults to
     // the dynamic AABB tree; inject an alternative (e.g. SweepAndPruneBroadPhase) through

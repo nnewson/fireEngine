@@ -86,7 +86,7 @@ add_library(fireengine SHARED
     src/render/debug_overlay.cpp
     src/render/device.cpp
     src/render/descriptors.cpp
-    src/render/generational_slot_pool.cpp
+    src/graphics/generational_slot_pool.cpp
     src/render/vma_impl.cpp
     src/render/gpu_profiler.cpp
     src/render/environment_precompute.cpp
@@ -311,7 +311,7 @@ add_executable(test_fire_engine
     tests/graphics/test_sampler_settings.cpp
     tests/render/test_ubo.cpp
     tests/render/test_pipeline_config.cpp
-    tests/render/test_generational_slot_pool.cpp
+    tests/graphics/test_generational_slot_pool.cpp
     tests/scene/test_particle_emitter.cpp
     tests/core/test_shader_loader.cpp
     tests/core/test_system.cpp
