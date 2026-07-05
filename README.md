@@ -401,4 +401,6 @@ All glTF models are from the Khronos glTF Sample Models [repository](https://git
 
 HDR equirectangular skyboxes (`skybox.hdr`, `nightbox.hdr`) drive the IBL precompute.
 
+Both CLI args are optional. With **no scene** the app renders only programmatically-added content (the `-p`/`-c`/`-k`/`-q` demo flags) — there is no fallback asset. With **no skybox** the scene is still lit by the default environment's IBL, but no sky is drawn behind it (a neutral background) and the IBL runs at a calmer level; pass `skybox.hdr` or `nightbox.hdr` to draw *and* light with that environment at full strength.
+
 For manual visual sign-off, [`acceptance-testing.md`](acceptance-testing.md) is a per-asset runbook: a copy-paste command for every sample scene, physics demo, and generated feature (particles/cloth/character/query), each paired with its upstream Khronos source and reference image — the checklist to walk before a branch lands.

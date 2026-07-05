@@ -500,18 +500,23 @@ void FireEngine::updateCharacter(float dt)
 
 void FireEngine::loadScene(std::string_view scene_path)
 {
-    // Load glTF scene (CLI arg overrides default)
-    constexpr std::string_view default_scene = "RiggedSimple/RiggedSimple.gltf";
-    std::string_view path = scene_path.empty() ? default_scene : scene_path;
-    std::vector<GltfLoader::ClothRegistration> clothRegistrations;
-    Node* activeCamera = GltfLoader::loadScene(std::string(path), scene_, renderer_->resources(),
-                                               assets_, physics_, &clothRegistrations, &ragdolls_);
-
-    // Register any glTF `extras.Cloth` meshes with the soft-body solver. The
-    // geometry (Assets-owned) keeps its storage vertex buffer; the solver writes it.
-    for (auto& reg : clothRegistrations)
+    // Load the glTF scene when one was given. With no scene arg the app renders only
+    // programmatically-added content (the demo flags) plus the default camera + sun seeded below —
+    // there is no built-in fallback asset.
+    Node* activeCamera = nullptr;
+    if (!scene_path.empty())
     {
-        renderer_->addCloth(reg.mesh, reg.geometry->vertexBuffer());
+        std::vector<GltfLoader::ClothRegistration> clothRegistrations;
+        activeCamera =
+            GltfLoader::loadScene(std::string(scene_path), scene_, renderer_->resources(), assets_,
+                                  physics_, &clothRegistrations, &ragdolls_);
+
+        // Register any glTF `extras.Cloth` meshes with the soft-body solver. The
+        // geometry (Assets-owned) keeps its storage vertex buffer; the solver writes it.
+        for (auto& reg : clothRegistrations)
+        {
+            renderer_->addCloth(reg.mesh, reg.geometry->vertexBuffer());
+        }
     }
 
     if (activeCamera != nullptr)
