@@ -1,3 +1,4 @@
+#include <fire_engine/graphics/mapped_buffer.hpp>
 #include <fire_engine/render/ssao.hpp>
 
 #include <cstring>
@@ -214,7 +215,7 @@ void Ssao::update(const Mat4& jitteredProj, Vec3 sunViewDir, const RenderTunable
     data.screen[1] = static_cast<float>(extent.height);
     data.screen[2] = 1.0f / static_cast<float>(extent.width);
     data.screen[3] = 1.0f / static_cast<float>(extent.height);
-    std::memcpy(ubo_.mapped[frameIndex], &data, sizeof(data));
+    writeMapped(ubo_.mapped[frameIndex], data);
 }
 
 void Ssao::recordPass(vk::CommandBuffer cmd, uint32_t frameIndex) const

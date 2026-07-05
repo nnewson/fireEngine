@@ -307,7 +307,7 @@ private:
     // identity → slot index. Immutable per slot once written, so shared across
     // frames without double-buffering.
     BufferHandle materialBuffer_{NullBuffer};
-    void* materialMapped_{nullptr};
+    std::span<std::byte> materialMapped_{};
     uint32_t materialCount_{0};
     std::unordered_map<const Material*, uint32_t> materialIndices_;
 

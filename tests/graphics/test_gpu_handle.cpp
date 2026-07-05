@@ -222,18 +222,3 @@ TEST_CASE("GpuHandle.PackingIsConstexpr", "[GpuHandle]")
     static_assert(handleIndex(makeHandle<TextureHandle>(9u, 2u)) == 9u);
     static_assert(handleGeneration(makeHandle<TextureHandle>(9u, 2u)) == 2u);
 }
-
-// ---------------------------------------------------------------------------
-// MappedMemory alias
-// ---------------------------------------------------------------------------
-
-TEST_CASE("GpuHandle.MappedMemoryIsVoidPointer", "[GpuHandle]")
-{
-    static_assert(std::is_same_v<MappedMemory, void*>);
-}
-
-TEST_CASE("GpuHandle.MappedMemoryDefaultInitializesNull", "[GpuHandle]")
-{
-    MappedMemory ptr{};
-    CHECK(ptr == nullptr);
-}

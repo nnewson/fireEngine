@@ -1,3 +1,4 @@
+#include <fire_engine/graphics/mapped_buffer.hpp>
 #include <fire_engine/render/resources.hpp>
 
 #include <algorithm>
@@ -55,7 +56,7 @@ Resources::Resources(const Device& device, const Pipeline& pipeline)
             static_cast<vk::DeviceSize>(materialBytes), vk::BufferUsageFlagBits::eStorageBuffer,
             vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
         materialMapped_ = matBuf.mapped();
-        std::memset(materialMapped_, 0, materialBytes);
+        std::memset(materialMapped_.data(), 0, materialMapped_.size());
         materialBuffer_ = storeBuffer(std::move(matBuf));
 
         const vk::DescriptorBufferInfo matInfo{vulkanBuffer(materialBuffer_), 0,
@@ -113,7 +114,7 @@ BufferHandle Resources::createHostVisibleBuffer(vk::DeviceSize size, vk::BufferU
                                          vk::MemoryPropertyFlagBits::eHostCoherent);
     if (initialData != nullptr)
     {
-        std::memcpy(buf.mapped(), initialData, static_cast<std::size_t>(size));
+        writeMapped(buf.mapped(), initialData, static_cast<std::size_t>(size));
     }
     return storeBuffer(std::move(buf));
 }
@@ -516,7 +517,7 @@ void Resources::registerBindlessTexture(TextureHandle handle)
 
 uint32_t Resources::registerMaterial(const Material& material)
 {
-    if (materialMapped_ == nullptr)
+    if (materialMapped_.empty())
     {
         return 0; // no bindless set (e.g. headless contexts)
     }
@@ -531,9 +532,8 @@ uint32_t Resources::registerMaterial(const Material& material)
 
     const uint32_t index = materialCount_++;
     const MaterialUBO ubo = toMaterialUBO(material);
-    std::memcpy(static_cast<char*>(materialMapped_) +
-                    static_cast<std::size_t>(index) * sizeof(MaterialUBO),
-                &ubo, sizeof(MaterialUBO));
+    writeMapped(materialMapped_.subspan(static_cast<std::size_t>(index) * sizeof(MaterialUBO)),
+                ubo);
     materialIndices_.emplace(&material, index);
     return index;
 }
@@ -591,7 +591,7 @@ void Resources::uploadImageFromHost(TextureEntry& entry, const void* pixels, vk:
     auto stagingBuf = device_->createBuffer(bytes, vk::BufferUsageFlagBits::eTransferSrc,
                                             vk::MemoryPropertyFlagBits::eHostVisible |
                                                 vk::MemoryPropertyFlagBits::eHostCoherent);
-    std::memcpy(stagingBuf.mapped(), pixels, static_cast<std::size_t>(bytes));
+    writeMapped(stagingBuf.mapped(), pixels, static_cast<std::size_t>(bytes));
 
     allocateImage(entry, imageInfo);
 
@@ -1204,7 +1204,7 @@ Resources::MappedBufferSet Resources::createMappedStorageBuffer(std::size_t size
     for (int i = 0; i < kMaxFramesInFlight; ++i)
     {
         result.buffers[i] = handle;
-        result.mapped[i] = nullptr;
+        result.mapped[i] = {};
     }
     return result;
 }

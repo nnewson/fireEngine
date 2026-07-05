@@ -1,3 +1,4 @@
+#include <fire_engine/graphics/mapped_buffer.hpp>
 #include <fire_engine/render/particle_system.hpp>
 
 #include <algorithm>
@@ -237,7 +238,7 @@ void ParticleSystem::update(std::span<const EmitterState> emitters, const Mat4& 
         spawnAccumulators_[e] = 0.0f;
     }
 
-    std::memcpy(frameUbo_.mapped[frameIndex], &ubo, sizeof(ubo));
+    writeMapped(frameUbo_.mapped[frameIndex], ubo);
 }
 
 void ParticleSystem::recordSimulate(vk::CommandBuffer cmd, uint32_t frameIndex) const

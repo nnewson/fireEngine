@@ -1,3 +1,4 @@
+#include <fire_engine/graphics/mapped_buffer.hpp>
 #include <fire_engine/render/renderer.hpp>
 
 #include <algorithm>
@@ -302,7 +303,7 @@ void Renderer::updateLightData(Vec3 cameraPosition, Vec3 cameraTarget, float asp
 
     writeIblAndDebugParams(lightData);
     lightData_ = lightData;
-    std::memcpy(lightUbo_.mapped[currentFrame_], &lightData_, sizeof(lightData_));
+    writeMapped(lightUbo_.mapped[currentFrame_], lightData_);
 }
 
 void Renderer::computeShadowCascades(LightUBO& out, Vec3 cameraPosition, Vec3 cameraTarget,
@@ -501,7 +502,7 @@ void Renderer::assignSelfShadowSlots(std::span<DrawCommand> drawCommands)
         dc.selfShadowViewProj = lightData_.selfShadowViewProj[it->second];
     }
 
-    std::memcpy(lightUbo_.mapped[currentFrame_], &lightData_, sizeof(lightData_));
+    writeMapped(lightUbo_.mapped[currentFrame_], lightData_);
 }
 
 void Renderer::clearDrawBuckets(DrawBuckets& buckets) noexcept
@@ -1163,7 +1164,7 @@ void Renderer::recordSkybox(Vec3 cameraPosition, Vec3 cameraTarget,
     data.cameraUp[2] = basis.up.z();
     data.viewParams[0] = tanHalfFov;
     data.viewParams[1] = aspect;
-    std::memcpy(skyboxUbo_.mapped[currentFrame_], &data, sizeof(data));
+    writeMapped(skyboxUbo_.mapped[currentFrame_], data);
 
     DrawCommand dc;
     dc.vertexBuffer = NullBuffer;

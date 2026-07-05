@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstddef>
+#include <span>
 #include <utility>
 
 // vk_mem_alloc.h is a large third-party header; pull it in as cleanly as we can and silence
@@ -89,12 +91,13 @@ class UniqueVmaBuffer
 public:
     UniqueVmaBuffer() noexcept = default;
 
-    UniqueVmaBuffer(VmaAllocator allocator, VkBuffer buffer, VmaAllocation allocation,
-                    void* mapped) noexcept
+    UniqueVmaBuffer(VmaAllocator allocator, VkBuffer buffer, VmaAllocation allocation, void* mapped,
+                    std::size_t size) noexcept
         : allocator_(allocator),
           buffer_(buffer),
           allocation_(allocation),
-          mapped_(mapped)
+          mapped_(mapped),
+          size_(size)
     {
     }
 
@@ -110,7 +113,8 @@ public:
         : allocator_(other.allocator_),
           buffer_(std::exchange(other.buffer_, VK_NULL_HANDLE)),
           allocation_(std::exchange(other.allocation_, nullptr)),
-          mapped_(std::exchange(other.mapped_, nullptr))
+          mapped_(std::exchange(other.mapped_, nullptr)),
+          size_(std::exchange(other.size_, 0))
     {
     }
 
@@ -123,6 +127,7 @@ public:
             buffer_ = std::exchange(other.buffer_, VK_NULL_HANDLE);
             allocation_ = std::exchange(other.allocation_, nullptr);
             mapped_ = std::exchange(other.mapped_, nullptr);
+            size_ = std::exchange(other.size_, 0);
         }
         return *this;
     }
@@ -132,10 +137,12 @@ public:
         return vk::Buffer{buffer_};
     }
 
-    // Persistent mapped pointer for host-visible buffers (null for device-local).
-    [[nodiscard]] void* mapped() const noexcept
+    // Persistently-mapped bytes for host-visible buffers, sized to the requested buffer size so
+    // writes are bounds-checkable (CR-21). Empty span for device-local / unmapped buffers.
+    [[nodiscard]] std::span<std::byte> mapped() const noexcept
     {
-        return mapped_;
+        return mapped_ != nullptr ? std::span<std::byte>{static_cast<std::byte*>(mapped_), size_}
+                                  : std::span<std::byte>{};
     }
 
     explicit operator bool() const noexcept
@@ -152,6 +159,7 @@ private:
             buffer_ = VK_NULL_HANDLE;
             allocation_ = nullptr;
             mapped_ = nullptr;
+            size_ = 0;
         }
     }
 
@@ -159,6 +167,7 @@ private:
     VkBuffer buffer_{VK_NULL_HANDLE};
     VmaAllocation allocation_{nullptr};
     void* mapped_{nullptr};
+    std::size_t size_{0};
 };
 
 // A VkImage plus its VMA sub-allocation, owned as a unit (Approach A). Move-only; frees both

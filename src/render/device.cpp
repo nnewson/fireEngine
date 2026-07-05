@@ -417,7 +417,8 @@ UniqueVmaBuffer Device::createBuffer(vk::DeviceSize size, vk::BufferUsageFlags u
         throw std::runtime_error("failed to create buffer via VMA");
     }
     return UniqueVmaBuffer{allocator_.get(), buffer, allocation,
-                           hostVisible ? info.pMappedData : nullptr};
+                           hostVisible ? info.pMappedData : nullptr,
+                           static_cast<std::size_t>(size)};
 }
 
 } // namespace fire_engine
