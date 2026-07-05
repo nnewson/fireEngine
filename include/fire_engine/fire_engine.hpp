@@ -53,8 +53,11 @@ private:
     std::unique_ptr<Window> window_;
     std::unique_ptr<Renderer> renderer_;
     Input input_;
-    SceneGraph scene_;
+    // assets_ is declared before scene_ so it outlives it: scene_'s Objects cache Geometry*/
+    // Material* pointers into assets_ (kept stable by its deques — see Assets), and must not
+    // outlive what they point at.
     Assets assets_;
+    SceneGraph scene_;
     PhysicsWorld physics_;
     Camera* camera_{nullptr};
     // Ragdolls auto-built from `extras.Ragdoll` skinned nodes. Retained for the
@@ -62,30 +65,17 @@ private:
     // physics_, but the Ragdoll owns the activation/override state).
     std::vector<Ragdoll> ragdolls_;
 
-    // Floor plane — kept outside `assets_` because
-    // resizing the asset vector after the glTF loader populated it would
-    // invalidate every Object's cached Geometry pointer.
-    std::unique_ptr<Geometry> floorGeometry_;
-    // Demo cloth geometry (-c). Kept alive here for the same reason as the floor:
-    // Object caches a Geometry pointer, so it must not move.
-    std::unique_ptr<Geometry> clothGeometry_;
-    // Demo collision sphere the cloth drapes over (-c).
-    std::unique_ptr<Geometry> sphereGeometry_;
-
-    // Character-controller demo (-k): the kinematic capsule (driven by character_), its
-    // visible node, and the obstacle-course geometry. Geometries are kept here (not in
-    // assets_) so Object's cached Geometry pointers stay stable.
+    // Character-controller demo (-k): the kinematic capsule (driven by character_) and its
+    // visible node. Demo geometry (floor, cloth, sphere, capsule, obstacle course) lives in
+    // assets_ now — its deques keep Object's cached Geometry* stable across additions.
     std::optional<CharacterController> character_;
     Node* characterNode_{nullptr};
     float characterVerticalVelocity_{0.0f};
     bool characterGrounded_{true};
     Vec3 characterWalkDir_{1.0f, 0.0f, 0.0f};
-    std::unique_ptr<Geometry> characterGeometry_;
-    std::vector<std::unique_ptr<Geometry>> courseGeometries_;
 
     // Query-probe demo (-q): a ring of static bodies queried each frame.
     bool queryProbeActive_{false};
-    std::vector<std::unique_ptr<Geometry>> queryProbeGeometries_;
 
     void loadScene(std::string_view scene_path);
     void addFloorPlane();

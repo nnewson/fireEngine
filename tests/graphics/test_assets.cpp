@@ -117,6 +117,50 @@ TEST_CASE("Assets.MaterialPointerStableAfterModification", "[Assets]")
 }
 
 // ---------------------------------------------------------------------------
+// Pointer stability across growth (CR-10) — the core guarantee: a reference/pointer into a
+// collection stays valid when the collection grows later, so cached pointers (Object's Geometry*,
+// Geometry's Material*, etc.) never dangle when assets are added post-load.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("Assets.GeometryReferenceStaysValidAcrossAddGeometryGrowth", "[Assets]")
+{
+    Assets assets;
+    assets.resizeGeometries(2); // simulate the loader presizing, then a post-load addition
+    Geometry& added = assets.addGeometry(Geometry{});
+    added.indices(std::vector<uint16_t>{0, 1, 2});
+    Geometry* addedPtr = &added;
+
+    CHECK(assets.geometryCount() == 3u);
+    CHECK(&assets.geometry(2) == addedPtr); // returned ref is the appended element
+
+    // Many more insertions must not move the earlier element.
+    for (int i = 0; i < 1000; ++i)
+    {
+        (void)assets.addGeometry(Geometry{});
+    }
+
+    CHECK(&assets.geometry(2) == addedPtr);       // address unchanged
+    CHECK(assets.geometry(2).indexCount() == 3u); // value intact
+}
+
+TEST_CASE("Assets.MaterialReferenceStaysValidAcrossAddMaterialGrowth", "[Assets]")
+{
+    Assets assets;
+    Material& first = assets.addMaterial(Material{});
+    first.name("first");
+    Material* firstPtr = &first;
+
+    for (int i = 0; i < 1000; ++i)
+    {
+        (void)assets.addMaterial(Material{});
+    }
+
+    CHECK(assets.materialCount() == 1001u);
+    CHECK(&assets.material(0) == firstPtr);
+    CHECK(assets.material(0).name() == "first");
+}
+
+// ---------------------------------------------------------------------------
 // Move semantics
 // ---------------------------------------------------------------------------
 
