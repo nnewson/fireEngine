@@ -1,3 +1,4 @@
+#include <fire_engine/graphics/mapped_buffer.hpp>
 #include <fire_engine/render/soft_body_system.hpp>
 
 #include <algorithm>
@@ -182,7 +183,7 @@ void SoftBodySystem::recordSolve(vk::CommandBuffer cmd, float dt, uint32_t frame
     {
         ubo.colliders[k] = colliders[static_cast<std::size_t>(k)];
     }
-    std::memcpy(colliderBuffers_.mapped[frameIndex], &ubo, sizeof(ubo));
+    writeMapped(colliderBuffers_.mapped[frameIndex], ubo);
 
     auto particleBarrier = [&](const Cloth& c)
     {

@@ -1,3 +1,4 @@
+#include <fire_engine/graphics/mapped_buffer.hpp>
 #include <fire_engine/render/debug_draw.hpp>
 
 #include <array>
@@ -277,7 +278,7 @@ void DebugDraw::record(vk::CommandBuffer cmd, TextureHandle hdrTarget, const Mat
     {
         return;
     }
-    std::memcpy(vertexBuffers_.mapped[frameIndex], lines_.data(), lines_.size() * sizeof(Vertex));
+    writeMapped(vertexBuffers_.mapped[frameIndex], lines_.data(), lines_.size() * sizeof(Vertex));
 
     const auto extent = swapchain_->extent();
     vk::Rect2D renderArea{.offset = vk::Offset2D{.x = 0, .y = 0}, .extent = extent};

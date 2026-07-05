@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <cstddef>
 #include <optional>
 #include <span>
 #include <vector>
@@ -81,9 +82,9 @@ private:
         const Material* activeMaterial{nullptr};
         std::vector<const Material*> variantMaterials;
 
-        std::array<MappedMemory, kMaxFramesInFlight> skinMapped{};
-        std::array<MappedMemory, kMaxFramesInFlight> morphUboMapped{};
-        std::array<MappedMemory, kMaxFramesInFlight> shadowMapped{};
+        std::array<std::span<std::byte>, kMaxFramesInFlight> skinMapped{};
+        std::array<std::span<std::byte>, kMaxFramesInFlight> morphUboMapped{};
+        std::array<std::span<std::byte>, kMaxFramesInFlight> shadowMapped{};
         // Forward set-0 buffer handles (pushed inline per draw — no descriptor
         // set). Frame UBO is object-wide (Object::uniformBufs_); these are
         // per-geometry.
@@ -120,7 +121,7 @@ private:
     Resources* resources_{nullptr};
     uint32_t objectId_{0};
 
-    std::array<MappedMemory, kMaxFramesInFlight> uniformMapped_{};
+    std::array<std::span<std::byte>, kMaxFramesInFlight> uniformMapped_{};
     // Shared frame UBO buffer handles (pushed as forward set-0 binding 0 per draw).
     std::array<BufferHandle, kMaxFramesInFlight> uniformBufs_{NullBuffer, NullBuffer};
 

@@ -1,3 +1,4 @@
+#include <fire_engine/graphics/mapped_buffer.hpp>
 #include <fire_engine/graphics/object.hpp>
 
 #include <cstring>
@@ -153,7 +154,7 @@ void Object::createForwardBindings(Resources& resources)
         {
             binding.skinMapped[i] = skinSet.mapped[i];
             binding.skinBufs[i] = skinSet.buffers[i];
-            std::memcpy(skinSet.mapped[i], &skinUbo, sizeof(skinUbo));
+            writeMapped(skinSet.mapped[i], skinUbo);
         }
 
         // Morph UBO buffers
@@ -163,7 +164,7 @@ void Object::createForwardBindings(Resources& resources)
         {
             binding.morphUboMapped[i] = morphUboSet.mapped[i];
             binding.morphUboBufs[i] = morphUboSet.buffers[i];
-            std::memcpy(morphUboSet.mapped[i], &morphUbo, sizeof(morphUbo));
+            writeMapped(morphUboSet.mapped[i], morphUbo);
         }
 
         // Morph SSBO (exactly sized; the push descriptor binds it WholeSize). A
@@ -207,7 +208,7 @@ void Object::createShadowBindings(Resources& resources)
         {
             binding.shadowMapped[i] = shadowSet.mapped[i];
             binding.shadowBufs[i] = shadowSet.buffers[i];
-            std::memcpy(shadowSet.mapped[i], &initialShadow, sizeof(initialShadow));
+            writeMapped(shadowSet.mapped[i], initialShadow);
         }
     }
 }
@@ -366,7 +367,7 @@ void Object::writeForwardUniforms(const FrameInfo& frame, const Mat4& world,
     ubo.previousModel = previousWorld;
     ubo.currentViewProj = frame.currentViewProj;
     ubo.previousViewProj = frame.previousViewProj;
-    std::memcpy(uniformMapped_[frame.currentFrame], &ubo, sizeof(ubo));
+    writeMapped(uniformMapped_[frame.currentFrame], ubo);
 
     if (hasSkin)
     {
@@ -377,7 +378,7 @@ void Object::writeForwardUniforms(const FrameInfo& frame, const Mat4& world,
         }
         for (auto& binding : bindings_)
         {
-            std::memcpy(binding.skinMapped[frame.currentFrame], &skinUbo, sizeof(skinUbo));
+            writeMapped(binding.skinMapped[frame.currentFrame], skinUbo);
         }
     }
 
@@ -399,7 +400,7 @@ void Object::writeForwardUniforms(const FrameInfo& frame, const Mat4& world,
                 morphUbo.weights[w] = morphWeights_[w];
             }
         }
-        std::memcpy(binding.morphUboMapped[frame.currentFrame], &morphUbo, sizeof(morphUbo));
+        writeMapped(binding.morphUboMapped[frame.currentFrame], morphUbo);
     }
 }
 
@@ -417,7 +418,7 @@ void Object::writeShadowUniforms(const FrameInfo& frame, const Mat4& world, bool
     shadowData.hasSkin = hasSkin ? 1 : 0;
     for (auto& binding : bindings_)
     {
-        std::memcpy(binding.shadowMapped[frame.currentFrame], &shadowData, sizeof(shadowData));
+        writeMapped(binding.shadowMapped[frame.currentFrame], shadowData);
     }
 }
 

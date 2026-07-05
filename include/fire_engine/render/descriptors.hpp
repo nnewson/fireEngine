@@ -23,7 +23,7 @@ struct DrawCommand;
 struct MappedBufferSet
 {
     std::array<BufferHandle, kMaxFramesInFlight> buffers{NullBuffer, NullBuffer};
-    std::array<MappedMemory, kMaxFramesInFlight> mapped{};
+    std::array<std::span<std::byte>, kMaxFramesInFlight> mapped{};
 };
 
 // Per-frame globals for the forward pipeline's set 1 — bound once at the

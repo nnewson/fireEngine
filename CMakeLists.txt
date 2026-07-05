@@ -303,6 +303,7 @@ add_executable(test_fire_engine
     tests/graphics/test_material.cpp
     tests/graphics/test_geometry.cpp
     tests/graphics/test_gpu_handle.cpp
+    tests/graphics/test_mapped_buffer.cpp
     tests/graphics/test_bounds.cpp
     tests/graphics/test_draw_command.cpp
     tests/graphics/test_frame_info.cpp

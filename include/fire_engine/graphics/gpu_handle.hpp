@@ -54,7 +54,4 @@ template <typename Handle>
                   (index & kHandleIndexMask)};
 }
 
-// Semantic alias for mapped GPU memory pointers (replaces raw void*)
-using MappedMemory = void*;
-
 } // namespace fire_engine
