@@ -3,7 +3,6 @@
 #include <cstddef>
 #include <deque>
 #include <utility>
-#include <vector>
 
 #include <fire_engine/animation/animation.hpp>
 #include <fire_engine/graphics/geometry.hpp>
@@ -74,6 +73,15 @@ public:
         return materials_.back();
     }
 
+    // Append a geometry post-load (mirrors addMaterial). Safe to call after the loader has
+    // populated the collection: geometries_ is a deque, so existing references/pointers (e.g. an
+    // Object's cached Geometry*) stay valid across the insertion.
+    [[nodiscard]] Geometry& addGeometry(Geometry geometry)
+    {
+        geometries_.push_back(std::move(geometry));
+        return geometries_.back();
+    }
+
     [[nodiscard]] Geometry& geometry(std::size_t index) noexcept
     {
         return geometries_[index];
@@ -123,11 +131,17 @@ public:
     }
 
 private:
-    std::vector<Texture> textures_;
+    // Pointer-stability guarantee: every collection is a std::deque, so a reference or pointer
+    // handed out by the accessors above stays valid across later insertion (resize/addMaterial/
+    // addGeometry). This matters because other types cache raw pointers into these collections —
+    // Geometry caches Material*, Object caches Geometry*/Material*/Skin*, Material's TextureSlot
+    // caches Texture*, Animator caches Animation*. Never replace a deque here with a contiguous
+    // container (vector/array): growing it would move the elements and dangle every cached pointer.
+    std::deque<Texture> textures_;
     std::deque<Material> materials_;
-    std::vector<Geometry> geometries_;
-    std::vector<Skin> skins_;
-    std::vector<Animation> animations_;
+    std::deque<Geometry> geometries_;
+    std::deque<Skin> skins_;
+    std::deque<Animation> animations_;
 };
 
 } // namespace fire_engine

@@ -94,7 +94,7 @@ void FireEngine::addFloorPlane()
     mat.roughness(1.0f);
     mat.metallic(0.0f);
 
-    floorGeometry_ = std::make_unique<Geometry>();
+    Geometry& floorGeo = assets_.addGeometry(Geometry{});
     std::vector<Vertex> verts{
         Vertex{Vec3{-halfSize, 0.0f, -halfSize}, white, normal, Vec2{0.0f, 0.0f}},
         Vertex{Vec3{halfSize, 0.0f, -halfSize}, white, normal, Vec2{1.0f, 0.0f}},
@@ -105,14 +105,14 @@ void FireEngine::addFloorPlane()
     // back-face cull. The floor is a receiver-only debug plane; if it casts
     // into the CSM it self-shadows and greys out the whole scene.
     std::vector<uint32_t> indices{0, 2, 1, 0, 3, 2};
-    floorGeometry_->vertices(std::move(verts));
-    floorGeometry_->indices(std::move(indices));
-    floorGeometry_->material(&mat);
-    floorGeometry_->castsShadow(false);
-    floorGeometry_->load(renderer_->resources());
+    floorGeo.vertices(std::move(verts));
+    floorGeo.indices(std::move(indices));
+    floorGeo.material(&mat);
+    floorGeo.castsShadow(false);
+    floorGeo.load(renderer_->resources());
 
     Object floorObject;
-    floorObject.addGeometry(*floorGeometry_);
+    floorObject.addGeometry(floorGeo);
     floorObject.load(renderer_->resources());
 
     auto floorNode = std::make_unique<Node>("Floor");
@@ -224,12 +224,12 @@ void FireEngine::addClothDemo()
     sphereMat.baseColor(Colour3{0.25f, 0.3f, 0.4f});
     sphereMat.roughness(0.6f);
     sphereMat.metallic(0.0f);
-    sphereGeometry_ = std::make_unique<Geometry>();
-    buildUvSphere(*sphereGeometry_, sphereRadius, 24, 32, Colour3{1.0f, 1.0f, 1.0f});
-    sphereGeometry_->material(&sphereMat);
-    sphereGeometry_->load(renderer_->resources());
+    Geometry& sphereGeo = assets_.addGeometry(Geometry{});
+    buildUvSphere(sphereGeo, sphereRadius, 24, 32, Colour3{1.0f, 1.0f, 1.0f});
+    sphereGeo.material(&sphereMat);
+    sphereGeo.load(renderer_->resources());
     Object sphereObject;
-    sphereObject.addGeometry(*sphereGeometry_);
+    sphereObject.addGeometry(sphereGeo);
     sphereObject.load(renderer_->resources());
     auto sphereNode = std::make_unique<Node>("ClothSphere");
     sphereNode->component().emplace<Mesh>(std::move(sphereObject));
@@ -258,20 +258,20 @@ void FireEngine::addClothDemo()
     mat.metallic(0.0f);
     mat.doubleSided(true); // cloth is visible from both sides
 
-    clothGeometry_ = std::make_unique<Geometry>();
-    clothGeometry_->vertices(std::move(cloth.vertices));
-    clothGeometry_->indices(cloth.indices); // copy: addCloth still needs the indices
-    clothGeometry_->material(&mat);
-    clothGeometry_->storageVertices(true);
-    clothGeometry_->load(renderer_->resources());
+    Geometry& clothGeo = assets_.addGeometry(Geometry{});
+    clothGeo.vertices(std::move(cloth.vertices));
+    clothGeo.indices(cloth.indices); // copy: addCloth still needs the indices
+    clothGeo.material(&mat);
+    clothGeo.storageVertices(true);
+    clothGeo.load(renderer_->resources());
 
     Object clothObject;
-    clothObject.addGeometry(*clothGeometry_);
+    clothObject.addGeometry(clothGeo);
     clothObject.load(renderer_->resources());
 
     // The solver writes the storage vertex buffer; cloth simulates in world space,
     // so the node transform stays identity.
-    renderer_->addCloth(cloth, clothGeometry_->vertexBuffer());
+    renderer_->addCloth(cloth, clothGeo.vertexBuffer());
 
     auto clothNode = std::make_unique<Node>("ClothDemo");
     clothNode->component().emplace<Mesh>(std::move(clothObject));
@@ -293,15 +293,14 @@ void FireEngine::addCharacterDemo()
         mat.roughness(0.9f);
         mat.metallic(0.0f);
 
-        auto geo = std::make_unique<Geometry>();
-        buildBox(*geo, half, Colour3{1.0f, 1.0f, 1.0f});
-        geo->material(&mat);
-        geo->load(res);
+        Geometry& geo = assets_.addGeometry(Geometry{});
+        buildBox(geo, half, Colour3{1.0f, 1.0f, 1.0f});
+        geo.material(&mat);
+        geo.load(res);
 
         Object obj;
-        obj.addGeometry(*geo);
+        obj.addGeometry(geo);
         obj.load(res);
-        courseGeometries_.push_back(std::move(geo));
 
         auto node = std::make_unique<Node>(name);
         node->component().emplace<Mesh>(std::move(obj));
@@ -337,13 +336,13 @@ void FireEngine::addCharacterDemo()
     charMat.alpha(1.0f);
     charMat.roughness(0.4f);
     charMat.metallic(0.0f);
-    characterGeometry_ = std::make_unique<Geometry>();
-    buildUvSphere(*characterGeometry_, 0.5f, 16, 24, Colour3{1.0f, 1.0f, 1.0f});
-    characterGeometry_->material(&charMat);
-    characterGeometry_->load(res);
+    Geometry& charGeo = assets_.addGeometry(Geometry{});
+    buildUvSphere(charGeo, 0.5f, 16, 24, Colour3{1.0f, 1.0f, 1.0f});
+    charGeo.material(&charMat);
+    charGeo.load(res);
 
     Object charObject;
-    charObject.addGeometry(*characterGeometry_);
+    charObject.addGeometry(charGeo);
     charObject.load(res);
 
     // Start grounded on the floor (top y = 0; capsule centre rests at height/2 = 0.9).
@@ -371,15 +370,14 @@ void FireEngine::addQueryProbeDemo()
         mat.roughness(0.5f);
         mat.metallic(0.0f);
 
-        auto geo = std::make_unique<Geometry>();
-        buildUvSphere(*geo, radius, 16, 24, Colour3{1.0f, 1.0f, 1.0f});
-        geo->material(&mat);
-        geo->load(res);
+        Geometry& geo = assets_.addGeometry(Geometry{});
+        buildUvSphere(geo, radius, 16, 24, Colour3{1.0f, 1.0f, 1.0f});
+        geo.material(&mat);
+        geo.load(res);
 
         Object obj;
-        obj.addGeometry(*geo);
+        obj.addGeometry(geo);
         obj.load(res);
-        queryProbeGeometries_.push_back(std::move(geo));
 
         auto node = std::make_unique<Node>(name);
         node->component().emplace<Mesh>(std::move(obj));
