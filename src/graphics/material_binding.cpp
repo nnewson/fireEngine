@@ -82,8 +82,10 @@ MaterialUBO toMaterialUBO(const Material& mat)
     {
         const TextureSlot& slot = mat.texture(static_cast<Slot>(i));
         writeUv(ubo.uv[i], slot.transform);
+        // The shader indexes the bindless textures[] array by the handle's index bits only
+        // (the generation is validation metadata, not part of the array position).
         ubo.textureIndex[i] =
-            slot.has() ? static_cast<int32_t>(static_cast<uint32_t>(slot.texture->handle())) : 0;
+            slot.has() ? static_cast<int32_t>(handleIndex(slot.texture->handle())) : 0;
     }
 
     // Optional extension blocks: value_or({}) reproduces the old always-present

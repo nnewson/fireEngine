@@ -178,6 +178,52 @@ TEST_CASE("GpuHandle.PipelineHandleRoundTrip", "[GpuHandle]")
 }
 
 // ---------------------------------------------------------------------------
+// Index / generation packing (CR-12)
+// ---------------------------------------------------------------------------
+
+TEST_CASE("GpuHandle.MakeHandlePacksIndexAndGeneration", "[GpuHandle]")
+{
+    const auto handle = makeHandle<TextureHandle>(1234u, 7u);
+    CHECK(handleIndex(handle) == 1234u);
+    CHECK(handleGeneration(handle) == 7u);
+}
+
+TEST_CASE("GpuHandle.GenerationZeroLeavesRawValueAsIndex", "[GpuHandle]")
+{
+    // A generation-0 handle's raw value equals its index, so pre-generation call sites that
+    // built handles as raw indices keep round-tripping through handleIndex unchanged.
+    const auto handle = makeHandle<BufferHandle>(42u, 0u);
+    CHECK(static_cast<uint32_t>(handle) == 42u);
+    CHECK(handleIndex(handle) == 42u);
+    CHECK(handleGeneration(handle) == 0u);
+}
+
+TEST_CASE("GpuHandle.IndexAndGenerationOccupyDisjointBits", "[GpuHandle]")
+{
+    // Max 24-bit index and max 8-bit generation coexist without corrupting each other.
+    const auto handle = makeHandle<TextureHandle>(kHandleIndexMask, kHandleGenerationMask);
+    CHECK(handleIndex(handle) == kHandleIndexMask);
+    CHECK(handleGeneration(handle) == kHandleGenerationMask);
+}
+
+TEST_CASE("GpuHandle.SameSlotDifferentGenerationsAreDistinctHandles", "[GpuHandle]")
+{
+    // The crux of stale-handle detection: reusing a slot bumps the generation, so the old and
+    // new handles for the same index compare unequal.
+    const auto oldHandle = makeHandle<TextureHandle>(5u, 3u);
+    const auto newHandle = makeHandle<TextureHandle>(5u, 4u);
+    CHECK(oldHandle != newHandle);
+    CHECK(handleIndex(oldHandle) == handleIndex(newHandle));
+    CHECK(handleGeneration(oldHandle) != handleGeneration(newHandle));
+}
+
+TEST_CASE("GpuHandle.PackingIsConstexpr", "[GpuHandle]")
+{
+    static_assert(handleIndex(makeHandle<TextureHandle>(9u, 2u)) == 9u);
+    static_assert(handleGeneration(makeHandle<TextureHandle>(9u, 2u)) == 2u);
+}
+
+// ---------------------------------------------------------------------------
 // MappedMemory alias
 // ---------------------------------------------------------------------------
 

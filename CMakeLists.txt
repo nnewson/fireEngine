@@ -20,6 +20,7 @@ option(FIRE_ENGINE_WARNINGS_AS_ERRORS "Treat first-party compiler warnings as er
 # --- Dependencies -------------------------------------------------------
 
 find_package(Vulkan REQUIRED)
+find_package(VulkanMemoryAllocator CONFIG REQUIRED)
 find_package(glfw3 3.3 REQUIRED)
 find_package(Catch2 3 CONFIG REQUIRED)
 find_package(Stb REQUIRED)
@@ -85,6 +86,8 @@ add_library(fireengine SHARED
     src/render/debug_overlay.cpp
     src/render/device.cpp
     src/render/descriptors.cpp
+    src/render/generational_slot_pool.cpp
+    src/render/vma_impl.cpp
     src/render/gpu_profiler.cpp
     src/render/environment_precompute.cpp
     src/render/frame.cpp
@@ -134,12 +137,17 @@ target_compile_definitions(fireengine PRIVATE
 target_link_libraries(fireengine
     PUBLIC
         Vulkan::Vulkan
+        GPUOpen::VulkanMemoryAllocator
         glfw
         fastgltf::fastgltf
         KTX::ktx
     PRIVATE
         fireengine_imgui
 )
+
+# VMA's amalgamated implementation TU is third-party C++ — exempt it from the engine's
+# -Wall -Wextra -Wpedantic (-Werror) so our own code stays strict.
+set_source_files_properties(src/render/vma_impl.cpp PROPERTIES COMPILE_OPTIONS "-w")
 
 # --- Executable ---------------------------------------------------------
 
@@ -303,6 +311,7 @@ add_executable(test_fire_engine
     tests/graphics/test_sampler_settings.cpp
     tests/render/test_ubo.cpp
     tests/render/test_pipeline_config.cpp
+    tests/render/test_generational_slot_pool.cpp
     tests/scene/test_particle_emitter.cpp
     tests/core/test_shader_loader.cpp
     tests/core/test_system.cpp

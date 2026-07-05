@@ -173,15 +173,15 @@ TEST_CASE("MaterialBinding.AbsentBindlessTextureIndicesAreZero", "[MaterialBindi
 
 TEST_CASE("MaterialBinding.BindlessTextureIndexComesFromTheSlotHandle", "[MaterialBinding]")
 {
-    // toMaterialUBO writes each slot's bindless index from its texture handle, and
-    // only for the slots that carry a texture. A default Texture has handle ==
-    // NullTexture, which round-trips through the int32 index as its bit pattern.
+    // toMaterialUBO writes each slot's bindless index from its texture handle's *index bits*
+    // (the generation is validation metadata, not an array position — CR-12), and only for the
+    // slots that carry a texture.
     Texture tex;
     Material mat;
     mat.texture(Slot::Normal).texture = &tex;
 
     const MaterialUBO ubo = toMaterialUBO(mat);
-    const auto expected = static_cast<int32_t>(static_cast<uint32_t>(tex.handle()));
+    const auto expected = static_cast<int32_t>(handleIndex(tex.handle()));
     CHECK(ubo.textureIndex[slotIndex(Slot::Normal)] == expected);
     // Untouched slots stay 0.
     CHECK(ubo.textureIndex[slotIndex(Slot::BaseColour)] == 0);

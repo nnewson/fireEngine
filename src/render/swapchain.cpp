@@ -29,16 +29,19 @@ void Swapchain::createDepthResources(const Device& device)
         .sharingMode = vk::SharingMode::eExclusive,
         .initialLayout = vk::ImageLayout::eUndefined,
     };
-    depthImage_ = vk::raii::Image(*device_, ci);
+    const VkImageCreateInfo& cci = ci;
+    VmaAllocationCreateInfo aci{};
+    aci.usage = VMA_MEMORY_USAGE_AUTO;
+    aci.requiredFlags =
+        static_cast<VkMemoryPropertyFlags>(vk::MemoryPropertyFlagBits::eDeviceLocal);
 
-    auto req = depthImage_.getMemoryRequirements();
-    vk::MemoryAllocateInfo ai{
-        .allocationSize = req.size,
-        .memoryTypeIndex =
-            device.findMemoryType(req.memoryTypeBits, vk::MemoryPropertyFlagBits::eDeviceLocal),
-    };
-    depthMem_ = vk::raii::DeviceMemory(*device_, ai);
-    depthImage_.bindMemory(*depthMem_, 0);
+    VkImage image = VK_NULL_HANDLE;
+    VmaAllocation allocation = nullptr;
+    if (vmaCreateImage(device.allocator(), &cci, &aci, &image, &allocation, nullptr) != VK_SUCCESS)
+    {
+        throw std::runtime_error("failed to create depth image via VMA");
+    }
+    depthImage_ = UniqueVmaImage{device.allocator(), image, allocation};
     depthView_ = createImageView(*depthImage_, depthFmt, vk::ImageAspectFlagBits::eDepth);
 }
 
@@ -49,8 +52,7 @@ void Swapchain::recreate(const Device& device, const Window& window)
     // colour, bloom chain, scene-colour) after this call returns.
     views_.clear();
     depthView_ = nullptr;
-    depthImage_ = nullptr;
-    depthMem_ = nullptr;
+    depthImage_ = UniqueVmaImage{};
     swapchain_ = nullptr;
 
     createSwapchain(device, window);
