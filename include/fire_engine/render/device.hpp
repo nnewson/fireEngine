@@ -6,6 +6,7 @@
 #include <vulkan/vulkan_raii.hpp>
 
 #include <fire_engine/platform/window.hpp>
+#include <fire_engine/render/vma.hpp>
 
 namespace fire_engine
 {
@@ -61,17 +62,25 @@ public:
         return presentFamily_;
     }
 
-    [[nodiscard]] uint32_t findMemoryType(uint32_t filter, vk::MemoryPropertyFlags props) const;
+    // The process-wide VMA arena (Layer 3 of the GPU resource model). Every buffer/image
+    // allocation goes through this rather than a per-resource vkAllocateMemory.
+    [[nodiscard]] VmaAllocator allocator() const noexcept
+    {
+        return allocator_.get();
+    }
 
-    std::pair<vk::raii::Buffer, vk::raii::DeviceMemory>
-    createBuffer(vk::DeviceSize size, vk::BufferUsageFlags usage,
-                 vk::MemoryPropertyFlags props) const;
+    // Sub-allocates a buffer from the VMA arena. `props` carries the memory requirements the
+    // caller needs (host-visible/coherent vs device-local); a host-visible request is created
+    // persistently mapped, its pointer reachable via UniqueVmaBuffer::mapped().
+    [[nodiscard]] UniqueVmaBuffer createBuffer(vk::DeviceSize size, vk::BufferUsageFlags usage,
+                                               vk::MemoryPropertyFlags props) const;
 
 private:
     void createInstance();
     void createSurface(const Window& window);
     void pickPhysicalDevice();
     void createLogicalDevice();
+    void createAllocator();
     void createPipelineCache();
     void savePipelineCache() const noexcept;
 
@@ -90,6 +99,9 @@ private:
     vk::raii::Queue presentQueue_{nullptr};
     uint32_t graphicsFamily_{0};
     uint32_t presentFamily_{0};
+    // Declared last so it is destroyed first — before device_/instance_, which it was built
+    // from and which must outlive it.
+    VmaAllocatorHandle allocator_;
 };
 
 } // namespace fire_engine

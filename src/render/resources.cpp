@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <limits>
 #include <stdexcept>
 #include <string>
 
@@ -50,12 +51,12 @@ Resources::Resources(const Device& device, const Pipeline& pipeline)
         // Global materials[] SSBO: one persistently-mapped host-visible buffer,
         // written per material on first registerMaterial. Bound once here.
         const std::size_t materialBytes = kMaxMaterials * sizeof(MaterialUBO);
-        auto [matBuf, matMem] = device.createBuffer(
+        auto matBuf = device.createBuffer(
             static_cast<vk::DeviceSize>(materialBytes), vk::BufferUsageFlagBits::eStorageBuffer,
             vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
-        materialMapped_ = matMem.mapMemory(0, static_cast<vk::DeviceSize>(materialBytes));
+        materialMapped_ = matBuf.mapped();
         std::memset(materialMapped_, 0, materialBytes);
-        materialBuffer_ = storeBuffer(std::move(matBuf), std::move(matMem));
+        materialBuffer_ = storeBuffer(std::move(matBuf));
 
         const vk::DescriptorBufferInfo matInfo{vulkanBuffer(materialBuffer_), 0,
                                                static_cast<vk::DeviceSize>(materialBytes)};
@@ -97,26 +98,24 @@ Resources::Resources(const Device& device, const Pipeline& pipeline)
 
 // --- Buffer helpers ---
 
-BufferHandle Resources::storeBuffer(vk::raii::Buffer buf, vk::raii::DeviceMemory mem)
+BufferHandle Resources::storeBuffer(UniqueVmaBuffer buffer)
 {
     auto id = static_cast<uint32_t>(buffers_.size());
-    buffers_.push_back({std::move(buf), std::move(mem)});
+    buffers_.push_back({std::move(buffer)});
     return BufferHandle{id};
 }
 
 BufferHandle Resources::createHostVisibleBuffer(vk::DeviceSize size, vk::BufferUsageFlags usage,
                                                 const void* initialData)
 {
-    auto [buf, mem] = device_->createBuffer(size, usage,
-                                            vk::MemoryPropertyFlagBits::eHostVisible |
-                                                vk::MemoryPropertyFlagBits::eHostCoherent);
+    auto buf = device_->createBuffer(size, usage,
+                                     vk::MemoryPropertyFlagBits::eHostVisible |
+                                         vk::MemoryPropertyFlagBits::eHostCoherent);
     if (initialData != nullptr)
     {
-        void* data = mem.mapMemory(0, size);
-        std::memcpy(data, initialData, static_cast<std::size_t>(size));
-        mem.unmapMemory();
+        std::memcpy(buf.mapped(), initialData, static_cast<std::size_t>(size));
     }
-    return storeBuffer(std::move(buf), std::move(mem));
+    return storeBuffer(std::move(buf));
 }
 
 Resources::MappedBufferSet Resources::createMappedHostVisibleBuffers(std::size_t size,
@@ -125,11 +124,11 @@ Resources::MappedBufferSet Resources::createMappedHostVisibleBuffers(std::size_t
     MappedBufferSet result;
     for (int i = 0; i < kMaxFramesInFlight; ++i)
     {
-        auto [buf, mem] = device_->createBuffer(static_cast<vk::DeviceSize>(size), usage,
-                                                vk::MemoryPropertyFlagBits::eHostVisible |
-                                                    vk::MemoryPropertyFlagBits::eHostCoherent);
-        result.mapped[i] = mem.mapMemory(0, static_cast<vk::DeviceSize>(size));
-        result.buffers[i] = storeBuffer(std::move(buf), std::move(mem));
+        auto buf = device_->createBuffer(static_cast<vk::DeviceSize>(size), usage,
+                                         vk::MemoryPropertyFlagBits::eHostVisible |
+                                             vk::MemoryPropertyFlagBits::eHostCoherent);
+        result.mapped[i] = buf.mapped();
+        result.buffers[i] = storeBuffer(std::move(buf));
     }
     return result;
 }
@@ -335,15 +334,6 @@ makeImageSubresourceRange(vk::ImageAspectFlags aspectMask, uint32_t baseMipLevel
     };
 }
 
-[[nodiscard]] vk::MemoryAllocateInfo makeMemoryAllocateInfo(vk::MemoryRequirements requirements,
-                                                            uint32_t memoryTypeIndex)
-{
-    return vk::MemoryAllocateInfo{
-        .allocationSize = requirements.size,
-        .memoryTypeIndex = memoryTypeIndex,
-    };
-}
-
 [[nodiscard]] vk::CommandBufferAllocateInfo
 makeCommandBufferAllocateInfo(vk::CommandPool commandPool, uint32_t commandBufferCount)
 {
@@ -442,9 +432,12 @@ makeSamplerCreateInfo(vk::Filter magFilter, vk::Filter minFilter, vk::SamplerMip
 
 // Allocates a single primary command buffer from `pool`, runs `record(cmd)`
 // inside a one-time-submit begin/end pair, submits the buffer on the graphics
-// queue, and waits for the queue to idle before returning. Used for all the
-// blocking, setup-time GPU work the renderer issues outside the main frame
-// loop (texture uploads, layout transitions, etc).
+// queue, and waits on a fence for *this* submit to complete before returning.
+// Used for the genuinely one-off, blocking setup-time GPU work the renderer
+// issues outside the main frame loop (layout transitions, mip generation);
+// bulk load-time texture uploads instead coalesce through Resources' upload
+// batch. Waits on a per-submit fence rather than queue.waitIdle() so it stalls
+// only on its own work, not everything else in flight on the shared queue.
 template <typename F>
 void withOneTimeSubmit(const Device& device, vk::CommandPool pool, F&& record)
 {
@@ -456,8 +449,9 @@ void withOneTimeSubmit(const Device& device, vk::CommandPool pool, F&& record)
     cmd.end();
     vk::CommandBufferSubmitInfo cmdInfo{.commandBuffer = *cmd};
     vk::SubmitInfo2 submitInfo{.commandBufferInfoCount = 1, .pCommandBufferInfos = &cmdInfo};
-    device.graphicsQueue().submit2(submitInfo);
-    device.graphicsQueue().waitIdle();
+    vk::raii::Fence fence(device.device(), vk::FenceCreateInfo{});
+    device.graphicsQueue().submit2(submitInfo, *fence);
+    (void)device.device().waitForFences(*fence, vk::True, std::numeric_limits<uint64_t>::max());
 }
 
 // One-time transition Undefined → DepthStencilReadOnlyOptimal for every
@@ -486,11 +480,17 @@ void transitionDepthImageToReadOnly(const Device& device, vk::CommandPool pool, 
 Resources::TextureEntry& Resources::appendTextureEntry(TextureHandle& handle, vk::Format format,
                                                        uint32_t mipLevels)
 {
-    handle = TextureHandle{static_cast<uint32_t>(textures_.size())};
-    textures_.emplace_back();
-    TextureEntry& entry = textures_.back();
+    // Reuse a released slot (recycling its bindless index) or grow the table (CR-17). The pool
+    // grows in lockstep with textures_, so a grown slot's index equals the old table size.
+    const GenerationalSlotPool::Slot slot = textureSlots_.acquire();
+    if (slot.index >= textures_.size())
+    {
+        textures_.emplace_back();
+    }
+    TextureEntry& entry = textures_[slot.index]; // released slots were already reset payload-side
     entry.format = format;
     entry.mipLevels = mipLevels;
+    handle = makeHandle<TextureHandle>(slot.index, slot.generation);
     return entry;
 }
 
@@ -500,13 +500,13 @@ void Resources::registerBindlessTexture(TextureHandle handle)
     {
         return; // no forward pipeline / bindless set (e.g. headless contexts)
     }
-    const TextureEntry& entry = textures_[static_cast<uint32_t>(handle)];
+    const TextureEntry& entry = textures_[handleIndex(handle)];
     const vk::DescriptorImageInfo info{*entry.sampler, *entry.view,
                                        vk::ImageLayout::eShaderReadOnlyOptimal};
     const vk::WriteDescriptorSet write{
         .dstSet = *bindlessSet_,
         .dstBinding = bindingIndex(BindlessBinding::Textures),
-        .dstArrayElement = static_cast<uint32_t>(handle),
+        .dstArrayElement = handleIndex(handle),
         .descriptorCount = 1,
         .descriptorType = vk::DescriptorType::eCombinedImageSampler,
         .pImageInfo = &info,
@@ -540,14 +540,19 @@ uint32_t Resources::registerMaterial(const Material& material)
 
 void Resources::allocateImage(TextureEntry& entry, const vk::ImageCreateInfo& imageInfo)
 {
-    entry.image = vk::raii::Image(device_->device(), imageInfo);
+    const VkImageCreateInfo& ci = imageInfo;
+    VmaAllocationCreateInfo aci{};
+    aci.usage = VMA_MEMORY_USAGE_AUTO;
+    aci.requiredFlags =
+        static_cast<VkMemoryPropertyFlags>(vk::MemoryPropertyFlagBits::eDeviceLocal);
 
-    auto imageRequirements = entry.image.getMemoryRequirements();
-    vk::MemoryAllocateInfo allocateInfo = makeMemoryAllocateInfo(
-        imageRequirements, device_->findMemoryType(imageRequirements.memoryTypeBits,
-                                                   vk::MemoryPropertyFlagBits::eDeviceLocal));
-    entry.memory = vk::raii::DeviceMemory(device_->device(), allocateInfo);
-    entry.image.bindMemory(*entry.memory, 0);
+    VkImage image = VK_NULL_HANDLE;
+    VmaAllocation allocation = nullptr;
+    if (vmaCreateImage(device_->allocator(), &ci, &aci, &image, &allocation, nullptr) != VK_SUCCESS)
+    {
+        throw std::runtime_error("failed to create image via VMA");
+    }
+    entry.image = UniqueVmaImage{device_->allocator(), image, allocation};
 }
 
 void Resources::createImageView(TextureEntry& entry, vk::ImageViewType viewType,
@@ -583,42 +588,51 @@ void Resources::uploadImageFromHost(TextureEntry& entry, const void* pixels, vk:
                                     const vk::ImageCreateInfo& imageInfo,
                                     std::span<const vk::BufferImageCopy> regions)
 {
-    auto [stagingBuf, stagingMem] = device_->createBuffer(
-        bytes, vk::BufferUsageFlagBits::eTransferSrc,
-        vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
-    void* mapped = stagingMem.mapMemory(0, bytes);
-    std::memcpy(mapped, pixels, static_cast<std::size_t>(bytes));
-    stagingMem.unmapMemory();
+    auto stagingBuf = device_->createBuffer(bytes, vk::BufferUsageFlagBits::eTransferSrc,
+                                            vk::MemoryPropertyFlagBits::eHostVisible |
+                                                vk::MemoryPropertyFlagBits::eHostCoherent);
+    std::memcpy(stagingBuf.mapped(), pixels, static_cast<std::size_t>(bytes));
 
     allocateImage(entry, imageInfo);
 
     const uint32_t mipLevels = imageInfo.mipLevels;
     const uint32_t arrayLayers = imageInfo.arrayLayers;
 
-    withOneTimeSubmit(
-        *device_, *cmdPool_,
-        [&](vk::CommandBuffer cmd)
-        {
-            vk::ImageMemoryBarrier2 toTransfer = makeImageMemoryBarrier(
-                vk::PipelineStageFlagBits2::eTopOfPipe, {}, vk::PipelineStageFlagBits2::eTransfer,
-                vk::AccessFlagBits2::eTransferWrite, vk::ImageLayout::eUndefined,
-                vk::ImageLayout::eTransferDstOptimal, *entry.image,
-                makeImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, mipLevels, 0,
-                                          arrayLayers));
-            recordImageBarrier(cmd, toTransfer);
+    const auto record = [&](vk::CommandBuffer cmd)
+    {
+        vk::ImageMemoryBarrier2 toTransfer = makeImageMemoryBarrier(
+            vk::PipelineStageFlagBits2::eTopOfPipe, {}, vk::PipelineStageFlagBits2::eTransfer,
+            vk::AccessFlagBits2::eTransferWrite, vk::ImageLayout::eUndefined,
+            vk::ImageLayout::eTransferDstOptimal, *entry.image,
+            makeImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, mipLevels, 0,
+                                      arrayLayers));
+        recordImageBarrier(cmd, toTransfer);
 
-            cmd.copyBufferToImage(*stagingBuf, *entry.image, vk::ImageLayout::eTransferDstOptimal,
-                                  regions);
+        cmd.copyBufferToImage(*stagingBuf, *entry.image, vk::ImageLayout::eTransferDstOptimal,
+                              regions);
 
-            vk::ImageMemoryBarrier2 toShader = makeImageMemoryBarrier(
-                vk::PipelineStageFlagBits2::eTransfer, vk::AccessFlagBits2::eTransferWrite,
-                vk::PipelineStageFlagBits2::eFragmentShader, vk::AccessFlagBits2::eShaderRead,
-                vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal,
-                *entry.image,
-                makeImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, mipLevels, 0,
-                                          arrayLayers));
-            recordImageBarrier(cmd, toShader);
-        });
+        vk::ImageMemoryBarrier2 toShader = makeImageMemoryBarrier(
+            vk::PipelineStageFlagBits2::eTransfer, vk::AccessFlagBits2::eTransferWrite,
+            vk::PipelineStageFlagBits2::eFragmentShader, vk::AccessFlagBits2::eShaderRead,
+            vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal,
+            *entry.image,
+            makeImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, mipLevels, 0,
+                                      arrayLayers));
+        recordImageBarrier(cmd, toShader);
+    };
+
+    if (uploadBatch_.active)
+    {
+        // Record into the shared batch command buffer and keep the staging buffer alive until
+        // endUploadBatch's single fence signals. The recorded copy references the VkBuffer
+        // handle, which survives the move into the retained list unchanged.
+        record(*uploadBatch_.cmd);
+        uploadBatch_.staging.push_back(std::move(stagingBuf));
+    }
+    else
+    {
+        withOneTimeSubmit(*device_, *cmdPool_, record);
+    }
 }
 
 TextureHandle Resources::createUploaded2DTexture(const void* pixels, int width, int height,
@@ -981,7 +995,7 @@ TextureHandle Resources::createShadowMap(uint32_t extent, uint32_t layerCount)
 vk::ImageView Resources::vulkanShadowMapLayerView(TextureHandle handle,
                                                   uint32_t layer) const noexcept
 {
-    const auto& entry = textures_[static_cast<uint32_t>(handle)];
+    const auto& entry = textures_[handleIndex(handle)];
     return *entry.faceViews[layer];
 }
 
@@ -1029,7 +1043,7 @@ TextureHandle Resources::createPointShadowMap(uint32_t faceExtent, uint32_t cube
 vk::ImageView Resources::vulkanPointShadowFaceView(TextureHandle handle, uint32_t cubeIndex,
                                                    uint32_t face) const noexcept
 {
-    const auto& entry = textures_[static_cast<uint32_t>(handle)];
+    const auto& entry = textures_[handleIndex(handle)];
     return *entry.faceViews[6u * cubeIndex + face];
 }
 
@@ -1086,7 +1100,7 @@ TextureHandle Resources::createBloomChain(uint32_t width, uint32_t height, uint3
 
 vk::ImageView Resources::vulkanBloomMipView(TextureHandle handle, uint32_t mipLevel) const noexcept
 {
-    return *textures_[static_cast<uint32_t>(handle)].faceViews[mipLevel];
+    return *textures_[handleIndex(handle)].faceViews[mipLevel];
 }
 
 TextureHandle Resources::createSceneColorTarget(uint32_t width, uint32_t height, uint32_t mipLevels)
@@ -1115,14 +1129,51 @@ TextureHandle Resources::createSceneColorTarget(uint32_t width, uint32_t height,
 
 void Resources::releaseTexture(TextureHandle handle)
 {
-    auto& entry = textures_[static_cast<uint32_t>(handle)];
+    auto& entry = textures_[handleIndex(handle)];
     entry.sampler = vk::raii::Sampler{nullptr};
     entry.faceViews.clear();
     entry.view = vk::raii::ImageView{nullptr};
-    entry.image = vk::raii::Image{nullptr};
-    entry.memory = vk::raii::DeviceMemory{nullptr};
+    entry.image = UniqueVmaImage{}; // frees the VkImage + its VMA sub-allocation
     entry.format = vk::Format::eUndefined;
     entry.mipLevels = 1;
+    // Retire the slot for reuse and invalidate outstanding handles to it. Only internal render
+    // targets are ever released (post/SSAO/TAA/transmission/environment on resize) — never
+    // material textures — so a recycled slot never aliases a live bindless material index.
+    textureSlots_.release(handleIndex(handle));
+}
+
+bool Resources::validTexture(TextureHandle handle) const noexcept
+{
+    return textureSlots_.valid(handleIndex(handle), handleGeneration(handle));
+}
+
+void Resources::beginUploadBatch()
+{
+    vk::CommandBufferAllocateInfo cmdAi = makeCommandBufferAllocateInfo(*cmdPool_, 1);
+    uploadBatch_.cmd = std::move(device_->device().allocateCommandBuffers(cmdAi).front());
+    uploadBatch_.cmd.begin(makeOneTimeSubmitBeginInfo());
+    uploadBatch_.active = true;
+}
+
+void Resources::endUploadBatch()
+{
+    if (!uploadBatch_.active)
+    {
+        return;
+    }
+    uploadBatch_.active = false;
+    uploadBatch_.cmd.end();
+
+    // One submit + one fence for every texture uploaded in the batch, replacing the per-texture
+    // queue stall. An empty batch (no uploads recorded) still submits a no-op buffer harmlessly.
+    const vk::CommandBufferSubmitInfo cmdInfo{.commandBuffer = *uploadBatch_.cmd};
+    const vk::SubmitInfo2 submitInfo{.commandBufferInfoCount = 1, .pCommandBufferInfos = &cmdInfo};
+    vk::raii::Fence fence(device_->device(), vk::FenceCreateInfo{});
+    device_->graphicsQueue().submit2(submitInfo, *fence);
+    (void)device_->device().waitForFences(*fence, vk::True, std::numeric_limits<uint64_t>::max());
+
+    uploadBatch_.staging.clear();
+    uploadBatch_.cmd = nullptr;
 }
 
 // --- Mapped buffer sets ---
@@ -1171,30 +1222,30 @@ PipelineHandle Resources::registerPipeline(vk::Pipeline pipeline, vk::PipelineLa
 
 vk::Buffer Resources::vulkanBuffer(BufferHandle handle) const noexcept
 {
-    return *buffers_[static_cast<uint32_t>(handle)].buffer;
+    return *buffers_[handleIndex(handle)].buffer;
 }
 
 vk::ImageView Resources::vulkanImageView(TextureHandle handle) const noexcept
 {
-    return *textures_[static_cast<uint32_t>(handle)].view;
+    return *textures_[handleIndex(handle)].view;
 }
 
 vk::ImageView Resources::vulkanCubemapFaceView(TextureHandle handle, uint32_t face,
                                                uint32_t mipLevel) const noexcept
 {
-    const auto& entry = textures_[static_cast<uint32_t>(handle)];
+    const auto& entry = textures_[handleIndex(handle)];
     std::size_t index = static_cast<std::size_t>(mipLevel) * 6 + face;
     return *entry.faceViews[index];
 }
 
 vk::Image Resources::vulkanImage(TextureHandle handle) const noexcept
 {
-    return *textures_[static_cast<uint32_t>(handle)].image;
+    return *textures_[handleIndex(handle)].image;
 }
 
 vk::Sampler Resources::vulkanSampler(TextureHandle handle) const noexcept
 {
-    return *textures_[static_cast<uint32_t>(handle)].sampler;
+    return *textures_[handleIndex(handle)].sampler;
 }
 
 vk::Sampler Resources::vulkanShadowDebugSampler() const noexcept
@@ -1204,12 +1255,12 @@ vk::Sampler Resources::vulkanShadowDebugSampler() const noexcept
 
 vk::Format Resources::textureFormat(TextureHandle handle) const noexcept
 {
-    return textures_[static_cast<uint32_t>(handle)].format;
+    return textures_[handleIndex(handle)].format;
 }
 
 uint32_t Resources::textureMipLevels(TextureHandle handle) const noexcept
 {
-    return textures_[static_cast<uint32_t>(handle)].mipLevels;
+    return textures_[handleIndex(handle)].mipLevels;
 }
 
 vk::DescriptorSet Resources::vulkanDescriptorSet(DescriptorSetHandle handle) const noexcept
@@ -1219,12 +1270,12 @@ vk::DescriptorSet Resources::vulkanDescriptorSet(DescriptorSetHandle handle) con
 
 vk::Pipeline Resources::vulkanPipeline(PipelineHandle handle) const noexcept
 {
-    return pipelines_[static_cast<uint32_t>(handle)].pipeline;
+    return pipelines_[handleIndex(handle)].pipeline;
 }
 
 vk::PipelineLayout Resources::vulkanPipelineLayout(PipelineHandle handle) const noexcept
 {
-    return pipelines_[static_cast<uint32_t>(handle)].layout;
+    return pipelines_[handleIndex(handle)].layout;
 }
 
 } // namespace fire_engine

@@ -4,6 +4,7 @@
     "fastgltf",
     "stb",
     "vulkan-headers",
+    "vulkan-memory-allocator",
     "ktx",
     {
       "name": "imgui",

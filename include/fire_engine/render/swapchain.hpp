@@ -71,8 +71,7 @@ private:
     vk::Format format_{};
     vk::Extent2D extent_{};
 
-    vk::raii::Image depthImage_{nullptr};
-    vk::raii::DeviceMemory depthMem_{nullptr};
+    UniqueVmaImage depthImage_;
     vk::raii::ImageView depthView_{nullptr};
 };
 

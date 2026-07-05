@@ -88,6 +88,7 @@ Device::Device(const Window& window)
     createSurface(window);
     pickPhysicalDevice();
     createLogicalDevice();
+    createAllocator();
     createPipelineCache();
 }
 
@@ -320,6 +321,25 @@ void Device::createLogicalDevice()
     presentQueue_ = device_.getQueue(presentFamily_, 0);
 }
 
+void Device::createAllocator()
+{
+    VmaAllocatorCreateInfo ci{};
+    ci.instance = *instance_;
+    ci.physicalDevice = *physDevice_;
+    ci.device = *device_;
+    ci.vulkanApiVersion = VK_API_VERSION_1_4; // matches the instance's requested apiVersion
+    // The soft-body solver takes buffer device addresses; this lets VMA tag those allocations
+    // with VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT automatically (the device feature is already on).
+    ci.flags = VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
+
+    VmaAllocator allocator = nullptr;
+    if (vmaCreateAllocator(&ci, &allocator) != VK_SUCCESS)
+    {
+        throw std::runtime_error("failed to create VMA allocator");
+    }
+    allocator_ = VmaAllocatorHandle{allocator};
+}
+
 void Device::createPipelineCache()
 {
     // Seed the cache from disk so the driver's shader compilation is paid once *across* runs,
@@ -367,46 +387,37 @@ Device::~Device()
     savePipelineCache();
 }
 
-uint32_t Device::findMemoryType(uint32_t filter, vk::MemoryPropertyFlags props) const
+UniqueVmaBuffer Device::createBuffer(vk::DeviceSize size, vk::BufferUsageFlags usage,
+                                     vk::MemoryPropertyFlags props) const
 {
-    auto mem = physDevice_.getMemoryProperties();
-    for (uint32_t i = 0; i < mem.memoryTypeCount; ++i)
-    {
-        if ((filter & (1 << i)) && (mem.memoryTypes[i].propertyFlags & props) == props)
-        {
-            return i;
-        }
-    }
-    throw std::runtime_error("failed to find suitable memory type");
-}
-
-std::pair<vk::raii::Buffer, vk::raii::DeviceMemory>
-Device::createBuffer(vk::DeviceSize size, vk::BufferUsageFlags usage,
-                     vk::MemoryPropertyFlags props) const
-{
-    vk::BufferCreateInfo ci{
+    const vk::BufferCreateInfo ci{
         .size = size,
         .usage = usage,
         .sharingMode = vk::SharingMode::eExclusive,
     };
-    vk::raii::Buffer buf(device_, ci);
+    const VkBufferCreateInfo& cci = ci;
 
-    auto req = buf.getMemoryRequirements();
-    vk::MemoryAllocateInfo ai{
-        .allocationSize = req.size,
-        .memoryTypeIndex = findMemoryType(req.memoryTypeBits, props),
-    };
-    // Buffers whose addresses are taken (bufferDeviceAddress) must be allocated
-    // with the matching memory-allocate flag.
-    vk::MemoryAllocateFlagsInfo flagsInfo{.flags = vk::MemoryAllocateFlagBits::eDeviceAddress};
-    if (usage & vk::BufferUsageFlagBits::eShaderDeviceAddress)
+    const bool hostVisible = static_cast<bool>(props & vk::MemoryPropertyFlagBits::eHostVisible);
+    VmaAllocationCreateInfo aci{};
+    aci.usage = VMA_MEMORY_USAGE_AUTO;
+    // Preserve the caller's exact memory requirement (host-coherent, device-local, …); AUTO
+    // then picks a matching type. Host-visible buffers are kept persistently mapped — random
+    // host access so arbitrary-offset writes (e.g. the materials SSBO) stay cache-coherent.
+    aci.requiredFlags = static_cast<VkMemoryPropertyFlags>(props);
+    if (hostVisible)
     {
-        ai.pNext = &flagsInfo;
+        aci.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
     }
-    vk::raii::DeviceMemory mem(device_, ai);
-    buf.bindMemory(*mem, 0);
 
-    return {std::move(buf), std::move(mem)};
+    VkBuffer buffer = VK_NULL_HANDLE;
+    VmaAllocation allocation = nullptr;
+    VmaAllocationInfo info{};
+    if (vmaCreateBuffer(allocator_.get(), &cci, &aci, &buffer, &allocation, &info) != VK_SUCCESS)
+    {
+        throw std::runtime_error("failed to create buffer via VMA");
+    }
+    return UniqueVmaBuffer{allocator_.get(), buffer, allocation,
+                           hostVisible ? info.pMappedData : nullptr};
 }
 
 } // namespace fire_engine

@@ -9,6 +9,9 @@
 
 #include <vulkan/vulkan_raii.hpp>
 
+#include <fire_engine/render/generational_slot_pool.hpp>
+#include <fire_engine/render/vma.hpp>
+
 #include <fire_engine/graphics/gpu_handle.hpp>
 #include <fire_engine/graphics/sampler_settings.hpp>
 #include <fire_engine/graphics/texture.hpp>
@@ -165,6 +168,19 @@ public:
     // createOffscreenColourTarget / createShadowColourAttachment call.
     void releaseTexture(TextureHandle handle);
 
+    // True while `handle` still refers to a live texture — its slot's generation matches and
+    // the slot has not been released. A handle to a since-released or recycled slot returns
+    // false (CR-12/17), so stale handles are detectable rather than silently aliasing.
+    [[nodiscard]] bool validTexture(TextureHandle handle) const noexcept;
+
+    // Load-time upload batch (CR-16). Between begin/end, every texture upload records its
+    // copy + layout transitions into one shared command buffer (retaining its staging buffer)
+    // instead of submitting and blocking per texture; endUploadBatch submits once and waits on
+    // a single fence. Brackets the whole asset-load phase, which completes before the first
+    // frame. Uploads issued outside a batch fall back to an individual fenced submit.
+    void beginUploadBatch();
+    void endUploadBatch();
+
     [[nodiscard]] Descriptors& descriptors() noexcept
     {
         return descriptors_;
@@ -270,7 +286,7 @@ public:
     [[nodiscard]] vk::PipelineLayout vulkanPipelineLayout(PipelineHandle handle) const noexcept;
 
 private:
-    BufferHandle storeBuffer(vk::raii::Buffer buf, vk::raii::DeviceMemory mem);
+    BufferHandle storeBuffer(UniqueVmaBuffer buffer);
     [[nodiscard]] BufferHandle createHostVisibleBuffer(vk::DeviceSize size,
                                                        vk::BufferUsageFlags usage,
                                                        const void* initialData = nullptr);
@@ -299,15 +315,26 @@ private:
 
     struct BufferEntry
     {
-        vk::raii::Buffer buffer{nullptr};
-        vk::raii::DeviceMemory memory{nullptr};
+        // Owns the VkBuffer + its VMA sub-allocation as a unit (Approach A).
+        UniqueVmaBuffer buffer;
     };
     std::vector<BufferEntry> buffers_;
 
+    // Active load-time upload batch (CR-16); `active` is false outside a begin/endUploadBatch
+    // scope. `staging` retains each upload's staging buffer until the single batch fence signals.
+    struct UploadBatch
+    {
+        vk::raii::CommandBuffer cmd{nullptr};
+        std::vector<UniqueVmaBuffer> staging;
+        bool active{false};
+    };
+    UploadBatch uploadBatch_;
+
     struct TextureEntry
     {
-        vk::raii::Image image{nullptr};
-        vk::raii::DeviceMemory memory{nullptr};
+        // Owns the VkImage + its VMA sub-allocation as a unit (Approach A); views/samplers
+        // below stay stock vk::raii (their lifetime is independent of the allocation).
+        UniqueVmaImage image;
         vk::raii::ImageView view{nullptr};
         vk::raii::Sampler sampler{nullptr};
         vk::Format format{vk::Format::eUndefined};
@@ -351,6 +378,9 @@ private:
                              std::span<const vk::BufferImageCopy> regions);
     static void createCubemapFaceViews(const Device& device, TextureEntry& entry);
     std::vector<TextureEntry> textures_;
+    // Slot lifecycle for textures_ (index + generation). Kept in lockstep with textures_ by
+    // index; recycles released slots so the table stays bounded across resize churn (CR-17).
+    GenerationalSlotPool textureSlots_;
     std::array<TextureHandle, 5> fallbackTextures_{NullTexture, NullTexture, NullTexture,
                                                    NullTexture, NullTexture};
 

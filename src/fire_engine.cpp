@@ -49,6 +49,10 @@ void FireEngine::run(size_t width, size_t height, std::string_view appName,
     renderer_ =
         std::make_unique<Renderer>(*window_, std::string(options.skyboxPath), options.debug);
 
+    // Coalesce every texture upload issued while loading the scene + demos into a single
+    // batched submit (CR-16) instead of one blocking submit per texture. The batch closes
+    // before mainLoop, so all uploads have completed before the first frame renders.
+    renderer_->resources().beginUploadBatch();
     loadScene(options.scenePath);
     if (options.addFloor)
     {
@@ -70,6 +74,8 @@ void FireEngine::run(size_t width, size_t height, std::string_view appName,
     {
         addQueryProbeDemo();
     }
+    renderer_->resources().endUploadBatch();
+
     mainLoop();
 }
 
