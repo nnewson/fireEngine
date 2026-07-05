@@ -12,7 +12,7 @@ namespace fire_engine
 {
 
 class Animation;
-struct RenderContext;
+struct SceneDrawContext;
 
 class Animator
 {
@@ -34,7 +34,7 @@ public:
     void update(const InputState& input_state, const Transform& transform);
 
     [[nodiscard]]
-    Mat4 render(const RenderContext& ctx, const Mat4& world);
+    Mat4 render(const SceneDrawContext& ctx, const Mat4& world);
 
     [[nodiscard]]
     Mat4 render(const Mat4& world) const noexcept;

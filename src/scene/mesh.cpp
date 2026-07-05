@@ -3,7 +3,7 @@
 #include <fire_engine/animation/animation.hpp>
 #include <fire_engine/animation/animation_selection.hpp>
 #include <fire_engine/input/input_state.hpp>
-#include <fire_engine/render/render_context.hpp>
+#include <fire_engine/scene/scene_draw_context.hpp>
 #include <fire_engine/scene/transform.hpp>
 
 namespace fire_engine
@@ -117,9 +117,9 @@ bool Mesh::isSelectableVariantState(int state) const noexcept
     return object_.wouldChangeVariant(candidate);
 }
 
-Mat4 Mesh::render(const RenderContext& ctx, const Mat4& world, const Mat4& previousWorld)
+Mat4 Mesh::render(const SceneDrawContext& ctx, const Mat4& world, const Mat4& previousWorld)
 {
-    auto commands = object_.render(ctx.frameInfo(), world, previousWorld);
+    auto commands = object_.render(ctx.frame, world, previousWorld);
     if (ctx.drawCommands != nullptr)
     {
         ctx.drawCommands->insert(ctx.drawCommands->end(), commands.begin(), commands.end());

@@ -58,7 +58,7 @@ void Animator::update(const InputState& input_state, const Transform& /*transfor
     modelMatrix_ = animations_[activeIndex_].animation->sample(t);
 }
 
-Mat4 Animator::render(const RenderContext& /*ctx*/, const Mat4& world)
+Mat4 Animator::render(const SceneDrawContext& /*ctx*/, const Mat4& world)
 {
     return render(world);
 }

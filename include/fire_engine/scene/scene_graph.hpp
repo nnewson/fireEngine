@@ -5,24 +5,26 @@
 #include <unordered_set>
 #include <vector>
 
+#include <fire_engine/graphics/draw_command.hpp>
+#include <fire_engine/graphics/frame_info.hpp>
 #include <fire_engine/graphics/frustum.hpp>
 #include <fire_engine/graphics/lighting.hpp>
 #include <fire_engine/graphics/particle.hpp>
+#include <fire_engine/graphics/renderable_scene.hpp>
 #include <fire_engine/input/input_state.hpp>
 #include <fire_engine/math/mat4.hpp>
 #include <fire_engine/physics/physics_world.hpp>
-#include <fire_engine/render/render_context.hpp>
 #include <fire_engine/scene/node.hpp>
 #include <fire_engine/scene/scene_culler.hpp>
 
 namespace fire_engine
 {
 
-class SceneGraph
+class SceneGraph : public RenderableScene
 {
 public:
     SceneGraph() = default;
-    ~SceneGraph() = default;
+    ~SceneGraph() override = default;
 
     SceneGraph(const SceneGraph&) = delete;
     SceneGraph& operator=(const SceneGraph&) = delete;
@@ -52,31 +54,18 @@ public:
     // latest simulated pose (CR-20). `alpha = accumulator / fixedDt`; pass 1.0f to snap to the
     // last simulated state.
     void applyPhysics(const PhysicsWorld& physics, float alpha = 1.0f);
-    void render(const RenderContext& ctx);
 
-    // Refresh the scene culler and return the rigid renderable nodes outside every
-    // frustum (camera + shadow casters). The renderer hands the result back through
-    // RenderContext::culledNodes so render() can skip their draw-building. The returned
-    // reference is owned by the culler and valid until the next cull()/render().
-    [[nodiscard]] const std::unordered_set<const Node*>& cull(std::span<const Frustum> frustums);
+    // RenderableScene (the Vulkan-free render seam, CR-09). buildDrawCommands walks the tree
+    // emitting draws into `out`; it culls internally against `frustums` (camera + shadow-caster
+    // frustums) using the scene's own bounds, an empty span meaning "cull disabled, render all".
+    // The culled-node set stays entirely internal; only DrawCommands cross the boundary.
+    void gatherLights(std::vector<Lighting>& out) const override;
+    void gatherEmitters(std::vector<EmitterState>& out) const override;
+    [[nodiscard]] CullStats buildDrawCommands(const FrameInfo& frame,
+                                              std::span<const Frustum> frustums,
+                                              std::vector<DrawCommand>& out) override;
 
-    [[nodiscard]] const SceneCuller& culler() const noexcept
-    {
-        return culler_;
-    }
-
-    // Walk the scene tree and resolve every Light component into a world-space
-    // Lighting. Composed world matrices are taken from each Node's cached
-    // composedWorld_ (populated by the most recent update() call). Cheap —
-    // light counts are tiny compared to draw counts.
-    void gatherLights(std::vector<Lighting>& out) const;
     [[nodiscard]] std::vector<Lighting> gatherLights() const;
-
-    // Walk the scene tree and resolve every ParticleEmitter component into a
-    // world-space EmitterState (translation + node-rotated velocity from the
-    // cached composedWorld_). Mirrors gatherLights; the renderer's ParticleSystem
-    // consumes the result each frame.
-    void gatherEmitters(std::vector<EmitterState>& out) const;
     [[nodiscard]] std::vector<EmitterState> gatherEmitters() const;
 
     // True when at least one node in the tree carries a directional Light.

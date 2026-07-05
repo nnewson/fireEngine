@@ -352,7 +352,7 @@ void Object::writeForwardUniforms(const FrameInfo& frame, const Mat4& world,
                                   std::span<const Mat4> jointMatrices)
 {
     // Shared per-object UBO. view/proj are computed once per frame and carried
-    // on FrameInfo (see RenderContext::frameInfo), not recomputed here.
+    // on FrameInfo (built by the renderer), not recomputed here.
     UniformBufferObject ubo{};
     ubo.model = world;
     ubo.view = frame.view;

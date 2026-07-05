@@ -94,7 +94,6 @@ add_library(fireengine SHARED
     src/render/particle_system.cpp
     src/render/pipeline.cpp
     src/render/post_processing.cpp
-    src/render/render_context.cpp
     src/render/render_target.cpp
     src/render/renderer.cpp
     src/render/resources.cpp
@@ -353,19 +352,19 @@ add_test(NAME test_fire_engine COMMAND test_fire_engine "~[slow]")
 
 add_custom_target(tests-full
   COMMAND $<TARGET_FILE:test_fire_engine>
-  COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure -R graphics_layer_no_render_includes
+  COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure -R layering_guards
   DEPENDS test_fire_engine
   COMMENT "Running the full test suite, including [slow] tests"
 )
 
-# Layering guard: the Vulkan-free graphics layer must not include render/ from
-# its public headers. Runs as a CTest case so `ctest` catches regressions
+# Layering guards over the public headers: graphics/ and scene/ must not include render/, and
+# render/ must not include scene/ (CR-09). Runs as a CTest case so `ctest` catches regressions
 # without a GPU.
 add_test(
-  NAME graphics_layer_no_render_includes
+  NAME layering_guards
   COMMAND ${CMAKE_COMMAND}
-    -DGRAPHICS_INCLUDE_DIR=${PROJECT_SOURCE_DIR}/include/fire_engine/graphics
-    -P ${PROJECT_SOURCE_DIR}/cmake/check_graphics_layering.cmake
+    -DINCLUDE_DIR=${PROJECT_SOURCE_DIR}/include/fire_engine
+    -P ${PROJECT_SOURCE_DIR}/cmake/check_layering.cmake
 )
 
 find_program(CLANG_TIDY_EXE NAMES clang-tidy)

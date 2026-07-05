@@ -15,7 +15,7 @@ namespace fire_engine
 {
 
 class Animation;
-struct RenderContext;
+struct SceneDrawContext;
 class Skin;
 
 class Mesh
@@ -91,7 +91,7 @@ public:
     void update(const InputState& input_state, const Transform& transform);
 
     [[nodiscard]]
-    Mat4 render(const RenderContext& ctx, const Mat4& world, const Mat4& previousWorld);
+    Mat4 render(const SceneDrawContext& ctx, const Mat4& world, const Mat4& previousWorld);
 
     void variantNames(std::vector<std::string> names) noexcept
     {
