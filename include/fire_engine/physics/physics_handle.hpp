@@ -2,6 +2,8 @@
 
 #include <cstdint>
 
+#include <fire_engine/graphics/gpu_handle.hpp>
+
 namespace fire_engine
 {
 
@@ -36,6 +38,30 @@ public:
     constexpr bool valid() const noexcept
     {
         return value_ != 0U;
+    }
+
+    // Handles pack a slot index (low 24 bits) + a generation (high 8 bits), mirroring the GPU
+    // handle scheme (graphics/gpu_handle.hpp). The index directly addresses PhysicsWorld's slot
+    // storage; the generation is validated against the slot's live generation so a stale handle
+    // to a recycled slot is detectably invalid. Live handles always carry a nonzero (1-based)
+    // generation, so a live handle's value is never 0 — it stays distinct from the null handle.
+    [[nodiscard]]
+    constexpr std::uint32_t index() const noexcept
+    {
+        return value_ & kHandleIndexMask;
+    }
+
+    [[nodiscard]]
+    constexpr std::uint32_t generation() const noexcept
+    {
+        return (value_ >> kHandleIndexBits) & kHandleGenerationMask;
+    }
+
+    [[nodiscard]]
+    static constexpr PhysicsHandle make(std::uint32_t index, std::uint32_t generation) noexcept
+    {
+        return PhysicsHandle{((generation & kHandleGenerationMask) << kHandleIndexBits) |
+                             (index & kHandleIndexMask)};
     }
 
     [[nodiscard]]

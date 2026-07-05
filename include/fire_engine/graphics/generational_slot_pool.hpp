@@ -25,6 +25,10 @@ public:
         uint32_t generation;
     };
 
+    // Generations are 1-based; 0 is reserved as "never issued", so a packed (index, generation)
+    // handle is never all-zero — which keeps it distinct from a value-0 null handle.
+    static constexpr uint32_t kFirstGeneration = 1;
+
     // Recycle a freed slot if one is available, else grow by one. The returned generation is
     // the slot's current generation, to be baked into the handle via makeHandle().
     [[nodiscard]] Slot acquire();
@@ -41,6 +45,12 @@ public:
     [[nodiscard]] std::size_t slotCount() const noexcept
     {
         return generations_.size();
+    }
+
+    // Number of currently-live (acquired and not released) slots.
+    [[nodiscard]] std::size_t liveCount() const noexcept
+    {
+        return generations_.size() - free_.size();
     }
 
 private:

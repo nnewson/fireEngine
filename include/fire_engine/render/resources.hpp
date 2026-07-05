@@ -9,7 +9,7 @@
 
 #include <vulkan/vulkan_raii.hpp>
 
-#include <fire_engine/render/generational_slot_pool.hpp>
+#include <fire_engine/graphics/generational_slot_pool.hpp>
 #include <fire_engine/render/vma.hpp>
 
 #include <fire_engine/graphics/gpu_handle.hpp>

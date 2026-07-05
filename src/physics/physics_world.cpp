@@ -330,8 +330,8 @@ PhysicsWorld& PhysicsWorld::operator=(PhysicsWorld&&) noexcept = default;
 
 PhysicsBodyHandle PhysicsWorld::createBody(const PhysicsBodyDesc& desc)
 {
-    const PhysicsBodyHandle handle = nextBodyHandle_;
-    nextBodyHandle_ = PhysicsBodyHandle{nextBodyHandle_.value() + 1U};
+    const GenerationalSlotPool::Slot slot = bodySlots_.acquire();
+    const PhysicsBodyHandle handle = PhysicsBodyHandle::make(slot.index, slot.generation);
 
     PhysicsBody body;
     body.type(desc.type);
@@ -348,10 +348,19 @@ PhysicsBodyHandle PhysicsWorld::createBody(const PhysicsBodyDesc& desc)
     transform.scale(desc.scale);
     transform.update(Mat4::identity());
 
-    bodyIndexByHandle_.emplace(handle.value(), bodies_.size());
     // previousRenderTransform seeds to the initial pose so the first frames rendered before
-    // the body's first step() interpolate against itself (no snap from the origin).
-    bodies_.push_back({handle, body, transform, transform, desc.position, true, {}});
+    // the body's first step() interpolate against itself (no snap from the origin). The slot
+    // pool grows in lockstep with bodies_, so a grown slot's index equals the old table size;
+    // a recycled slot overwrites its (previously reset) entry.
+    BodyEntry entry{handle, body, transform, transform, desc.position, true, {}};
+    if (slot.index >= bodies_.size())
+    {
+        bodies_.push_back(std::move(entry));
+    }
+    else
+    {
+        bodies_[slot.index] = std::move(entry);
+    }
     return handle;
 }
 
@@ -484,8 +493,8 @@ PhysicsWorld::addColliderEntry(BodyEntry& owner, const ColliderShape& shape,
                                std::uint32_t collisionMask, const Vec3& localPosition,
                                const Quaternion& localRotation, bool isTrigger)
 {
-    const PhysicsColliderHandle handle = nextColliderHandle_;
-    nextColliderHandle_ = PhysicsColliderHandle{nextColliderHandle_.value() + 1U};
+    const GenerationalSlotPool::Slot slot = colliderSlots_.acquire();
+    const PhysicsColliderHandle handle = PhysicsColliderHandle::make(slot.index, slot.generation);
 
     Collider collider;
     // Local bounds include the child's offset within the body (identity for a single
@@ -497,13 +506,32 @@ PhysicsWorld::addColliderEntry(BodyEntry& owner, const ColliderShape& shape,
     collider.isTrigger(isTrigger);
     collider.resetFrame(owner.transform.world());
 
-    colliderIndexByHandle_.emplace(handle.value(), colliders_.size());
-    colliders_.push_back({handle, owner.handle, PhysicsArticulationHandle{}, -1,
-                          std::move(collider), shape, material, localPosition, localRotation, true,
-                          nullptr});
-    colliderIndexByPointer_.emplace(&colliders_.back().collider, colliders_.size() - 1);
+    // colliders_ is a deque (element addresses stay stable for the broadphase's Collider*).
+    // A grown slot appends; a recycled slot move-assigns over its reset entry — safe because
+    // deactivateCollider clears the freed collider's ColliderId, so the move-assign's "target
+    // must be id-less" invariant holds regardless of broadphase.
+    ColliderEntry entry{handle,
+                        owner.handle,
+                        PhysicsArticulationHandle{},
+                        -1,
+                        std::move(collider),
+                        shape,
+                        material,
+                        localPosition,
+                        localRotation,
+                        true,
+                        nullptr};
+    if (slot.index >= colliders_.size())
+    {
+        colliders_.push_back(std::move(entry));
+    }
+    else
+    {
+        colliders_[slot.index] = std::move(entry);
+    }
+    colliderIndexByPointer_.emplace(&colliders_[slot.index].collider, slot.index);
     owner.colliders.push_back(handle);
-    broadPhase_->addCollider(colliders_.back().collider);
+    broadPhase_->addCollider(colliders_[slot.index].collider);
     return handle;
 }
 
@@ -514,11 +542,13 @@ void PhysicsWorld::deactivateCollider(ColliderEntry& collider)
         return;
     }
 
+    // removeCollider leaves the collider id-less under both broadphases, so the freed slot's
+    // collider is safely move-assignable when the slot is later reused.
     [[maybe_unused]] const bool removed = broadPhase_->removeCollider(collider.collider);
-    colliderIndexByHandle_.erase(collider.handle.value());
     colliderIndexByPointer_.erase(&collider.collider);
     removeOverlapPairsForCollider(collider.handle);
     collider.active = false;
+    colliderSlots_.release(collider.handle.index());
 }
 
 void PhysicsWorld::deactivateJoint(std::size_t jointIndex)
@@ -529,8 +559,8 @@ void PhysicsWorld::deactivateJoint(std::size_t jointIndex)
         return;
     }
 
-    jointIndexByHandle_.erase(joint.handle.value());
     joint.active = false;
+    jointSlots_.release(static_cast<std::uint32_t>(jointIndex));
 }
 
 void PhysicsWorld::deactivateJointsForBody(PhysicsBodyHandle body)
@@ -563,8 +593,8 @@ bool PhysicsWorld::destroyBody(PhysicsBodyHandle handle)
         }
     }
 
-    bodyIndexByHandle_.erase(handle.value());
     bodyEntry->active = false;
+    bodySlots_.release(handle.index()); // recycle the slot; bumps generation → old handle stale
     return true;
 }
 
@@ -577,25 +607,33 @@ PhysicsConstraintHandle PhysicsWorld::createJoint(const JointDesc& desc)
         return {};
     }
 
-    const PhysicsConstraintHandle handle = nextJointHandle_;
-    nextJointHandle_ = PhysicsConstraintHandle{nextJointHandle_.value() + 1U};
+    const GenerationalSlotPool::Slot slot = jointSlots_.acquire();
+    const PhysicsConstraintHandle handle =
+        PhysicsConstraintHandle::make(slot.index, slot.generation);
 
     // Capture the rest relative orientation (B in A's frame) so limits read 0 here.
     const Quaternion restRelative = a->transform.rotation().conjugate() * b->transform.rotation();
 
-    jointIndexByHandle_.emplace(handle.value(), joints_.size());
-    joints_.push_back({handle, desc, restRelative, true});
+    const JointEntry entry{handle, desc, restRelative, true};
+    if (slot.index >= joints_.size())
+    {
+        joints_.push_back(entry);
+    }
+    else
+    {
+        joints_[slot.index] = entry;
+    }
     return handle;
 }
 
 bool PhysicsWorld::destroyJoint(PhysicsConstraintHandle handle)
 {
-    const auto it = jointIndexByHandle_.find(handle.value());
-    if (it == jointIndexByHandle_.end() || !joints_[it->second].active)
+    const std::uint32_t index = handle.index();
+    if (!jointSlots_.valid(index, handle.generation()) || !joints_[index].active)
     {
         return false;
     }
-    deactivateJoint(it->second);
+    deactivateJoint(index);
     return true;
 }
 
@@ -608,15 +646,11 @@ void PhysicsWorld::clear()
     articulations_.clear();
     articulationSleepTimers_.clear();
     articulationSleeping_.clear();
-    bodyIndexByHandle_.clear();
-    colliderIndexByHandle_.clear();
-    jointIndexByHandle_.clear();
     colliderIndexByPointer_.clear();
-    articulationIndexByHandle_.clear();
-    nextBodyHandle_ = PhysicsBodyHandle{1U};
-    nextColliderHandle_ = PhysicsColliderHandle{1U};
-    nextJointHandle_ = PhysicsConstraintHandle{1U};
-    nextArticulationHandle_ = PhysicsArticulationHandle{1U};
+    bodySlots_ = {};
+    colliderSlots_ = {};
+    jointSlots_ = {};
+    articulationSlots_ = {};
     triggerOverlaps_.clear();
     previousTriggerOverlaps_.clear();
     collisionOverlaps_.clear();
@@ -688,8 +722,8 @@ bool PhysicsWorld::valid(PhysicsColliderHandle handle) const noexcept
 
 bool PhysicsWorld::valid(PhysicsConstraintHandle handle) const noexcept
 {
-    const auto it = jointIndexByHandle_.find(handle.value());
-    return it != jointIndexByHandle_.end() && joints_[it->second].active;
+    const std::uint32_t index = handle.index();
+    return jointSlots_.valid(index, handle.generation()) && joints_[index].active;
 }
 
 std::size_t PhysicsWorld::bodyCount() const noexcept
@@ -829,46 +863,46 @@ bool PhysicsWorld::sleeping(PhysicsBodyHandle handle) const noexcept
 
 PhysicsWorld::BodyEntry* PhysicsWorld::findBody(PhysicsBodyHandle handle) noexcept
 {
-    const auto it = bodyIndexByHandle_.find(handle.value());
-    if (it == bodyIndexByHandle_.end())
+    const std::uint32_t index = handle.index();
+    if (!bodySlots_.valid(index, handle.generation()))
     {
         return nullptr;
     }
-    BodyEntry& entry = bodies_[it->second];
+    BodyEntry& entry = bodies_[index];
     return entry.active ? &entry : nullptr;
 }
 
 const PhysicsWorld::BodyEntry* PhysicsWorld::findBody(PhysicsBodyHandle handle) const noexcept
 {
-    const auto it = bodyIndexByHandle_.find(handle.value());
-    if (it == bodyIndexByHandle_.end())
+    const std::uint32_t index = handle.index();
+    if (!bodySlots_.valid(index, handle.generation()))
     {
         return nullptr;
     }
-    const BodyEntry& entry = bodies_[it->second];
+    const BodyEntry& entry = bodies_[index];
     return entry.active ? &entry : nullptr;
 }
 
 PhysicsWorld::ColliderEntry* PhysicsWorld::findCollider(PhysicsColliderHandle handle) noexcept
 {
-    const auto it = colliderIndexByHandle_.find(handle.value());
-    if (it == colliderIndexByHandle_.end())
+    const std::uint32_t index = handle.index();
+    if (!colliderSlots_.valid(index, handle.generation()))
     {
         return nullptr;
     }
-    ColliderEntry& entry = colliders_[it->second];
+    ColliderEntry& entry = colliders_[index];
     return entry.active ? &entry : nullptr;
 }
 
 const PhysicsWorld::ColliderEntry*
 PhysicsWorld::findCollider(PhysicsColliderHandle handle) const noexcept
 {
-    const auto it = colliderIndexByHandle_.find(handle.value());
-    if (it == colliderIndexByHandle_.end())
+    const std::uint32_t index = handle.index();
+    if (!colliderSlots_.valid(index, handle.generation()))
     {
         return nullptr;
     }
-    const ColliderEntry& entry = colliders_[it->second];
+    const ColliderEntry& entry = colliders_[index];
     return entry.active ? &entry : nullptr;
 }
 
@@ -1265,25 +1299,22 @@ std::vector<JointInput> PhysicsWorld::buildJointInputs() const
         {
             continue;
         }
-        const auto ia = bodyIndexByHandle_.find(entry.desc.bodyA.value());
-        const auto ib = bodyIndexByHandle_.find(entry.desc.bodyB.value());
-        if (ia == bodyIndexByHandle_.end() || ib == bodyIndexByHandle_.end())
+        const BodyEntry* aPtr = findBody(entry.desc.bodyA);
+        const BodyEntry* bPtr = findBody(entry.desc.bodyB);
+        if (aPtr == nullptr || bPtr == nullptr)
         {
             continue;
         }
-        const BodyEntry& a = bodies_[ia->second];
-        const BodyEntry& b = bodies_[ib->second];
-        if (!a.active || !b.active)
-        {
-            continue;
-        }
+        const BodyEntry& a = *aPtr;
+        const BodyEntry& b = *bPtr;
 
         const Mat3 ra = Mat3::fromQuaternion(a.transform.rotation());
         const Mat3 rb = Mat3::fromQuaternion(b.transform.rotation());
 
+        // Solver body indices are the slot indices (the solver-body array is 1:1 with bodies_).
         JointInput in;
-        in.bodyA = static_cast<int>(ia->second);
-        in.bodyB = static_cast<int>(ib->second);
+        in.bodyA = static_cast<int>(entry.desc.bodyA.index());
+        in.bodyB = static_cast<int>(entry.desc.bodyB.index());
         in.type = entry.desc.type;
         in.anchorA = a.transform.position() + ra * entry.desc.anchorA;
         in.anchorB = b.transform.position() + rb * entry.desc.anchorB;

@@ -1,3 +1,4 @@
+#include <fire_engine/physics/joint.hpp>
 #include <fire_engine/physics/physics_world.hpp>
 #include <fire_engine/scene/scene_graph.hpp>
 
@@ -21,6 +22,8 @@ using fire_engine::ClothColliderType;
 using fire_engine::ColliderDesc;
 using fire_engine::ConvexHullShape;
 using fire_engine::InputState;
+using fire_engine::JointDesc;
+using fire_engine::JointType;
 using fire_engine::Node;
 using fire_engine::PhysicsBodyDesc;
 using fire_engine::PhysicsBodyHandle;
@@ -151,12 +154,62 @@ TEST_CASE("PhysicsWorld.DestroyBodyInvalidatesBodyAndItsColliders", "[PhysicsWor
     CHECK(physics.colliderCount() == 1U);
     CHECK(physics.validateBroadPhase());
 
-    // A fresh body created after a destroy still resolves through the
-    // side-tables and gets a distinct handle.
+    // A fresh body recycles the destroyed slot (CR-11 free-list) with a bumped generation: it is
+    // a distinct handle, and the stale handle stays invalid even though its slot is live again
+    // (CR-12 — no ABA on reuse).
     const auto third = physics.createBody(desc);
     CHECK(physics.valid(third));
     CHECK(third != first);
+    CHECK(third.index() == first.index()); // slot recycled, not grown
+    CHECK_FALSE(physics.valid(first));     // old handle still invalid after its slot's reuse
     CHECK(physics.bodyCount() == 2U);
+}
+
+TEST_CASE("PhysicsWorld.RepeatedCreateDestroyKeepsSlotsBounded", "[PhysicsWorld]")
+{
+    // CR-11: churning bodies (each with a collider) must recycle slots, not leak them. With one
+    // live body at a time, every create reuses slot 0 instead of the table climbing unbounded.
+    PhysicsWorld physics;
+    std::uint32_t maxBodyIndex = 0;
+    std::uint32_t maxColliderIndex = 0;
+    for (int i = 0; i < 1000; ++i)
+    {
+        const auto body = createBox(physics, PhysicsBodyType::Dynamic, {});
+        const auto collider = physics.createCollider(body, unitCollider());
+        maxBodyIndex = std::max(maxBodyIndex, body.index());
+        maxColliderIndex = std::max(maxColliderIndex, collider.index());
+        REQUIRE(physics.destroyBody(body));
+    }
+    CHECK(physics.bodyCount() == 0U);
+    CHECK(physics.colliderCount() == 0U);
+    // createBox already adds one collider, so index 1 is the manually-added second collider;
+    // both stay at their first-cycle values rather than growing with the loop count.
+    CHECK(maxBodyIndex == 0U);
+    CHECK(maxColliderIndex == 1U);
+}
+
+TEST_CASE("PhysicsWorld.DestroyRecyclesJointSlotAndInvalidatesStaleHandle", "[PhysicsWorld]")
+{
+    PhysicsWorld physics;
+    const auto a = createBox(physics, PhysicsBodyType::Dynamic, {});
+    const auto b = createBox(physics, PhysicsBodyType::Dynamic, {2.0f, 0.0f, 0.0f});
+
+    JointDesc desc;
+    desc.type = JointType::BallSocket;
+    desc.bodyA = a;
+    desc.bodyB = b;
+    const auto joint = physics.createJoint(desc);
+    REQUIRE(physics.valid(joint));
+    const std::uint32_t slot = joint.index();
+
+    REQUIRE(physics.destroyJoint(joint));
+    CHECK_FALSE(physics.valid(joint)); // CR-11: destroyed joint handle invalid
+
+    const auto reused = physics.createJoint(desc);
+    CHECK(reused.index() == slot); // slot recycled
+    CHECK(reused != joint);        // bumped generation
+    CHECK(physics.valid(reused));
+    CHECK_FALSE(physics.valid(joint)); // CR-12: stale handle still invalid after reuse
 }
 
 TEST_CASE("PhysicsWorld.DestroyBodyRejectsUnknownAndAlreadyDestroyedHandles", "[PhysicsWorld]")

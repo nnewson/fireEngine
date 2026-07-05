@@ -42,7 +42,12 @@ bool DynamicAabbTreeBroadPhase::removeCollider(ColliderId colliderId)
 
 bool DynamicAabbTreeBroadPhase::removeCollider(Collider& collider)
 {
-    return removeCollider(collider.colliderId());
+    const bool removed = removeCollider(collider.colliderId());
+    // Clear the collider's id so it is left in the same id-less state a removed collider has
+    // under SweepAndPruneBroadPhase — a removed collider is registered with no broadphase, and
+    // this keeps it move-assignable (its move ops require an id-less source/target).
+    collider.colliderId(ColliderId{});
+    return removed;
 }
 
 void DynamicAabbTreeBroadPhase::clear()

@@ -78,25 +78,59 @@ void zeroArticulationVelocity(Articulation& art) noexcept
 
 PhysicsArticulationHandle PhysicsWorld::createArticulation()
 {
-    const PhysicsArticulationHandle handle = nextArticulationHandle_;
-    nextArticulationHandle_ = PhysicsArticulationHandle{nextArticulationHandle_.value() + 1U};
-    articulationIndexByHandle_.emplace(handle.value(), articulations_.size());
-    articulations_.emplace_back();
-    articulationSleepTimers_.push_back(0.0f);
-    articulationSleeping_.push_back(0U);
+    const GenerationalSlotPool::Slot slot = articulationSlots_.acquire();
+    const PhysicsArticulationHandle handle =
+        PhysicsArticulationHandle::make(slot.index, slot.generation);
+    // The sleep arrays are 1:1 with articulations_ by slot. Grow all three in lockstep, or reset
+    // the recycled slot's payload (a fresh 0-link articulation) + sleep state.
+    if (slot.index >= articulations_.size())
+    {
+        articulations_.emplace_back();
+        articulationSleepTimers_.push_back(0.0f);
+        articulationSleeping_.push_back(0U);
+    }
+    else
+    {
+        articulations_[slot.index] = Articulation{};
+        articulationSleepTimers_[slot.index] = 0.0f;
+        articulationSleeping_[slot.index] = 0U;
+    }
     return handle;
+}
+
+bool PhysicsWorld::destroyArticulation(PhysicsArticulationHandle handle)
+{
+    if (findArticulation(handle) == nullptr)
+    {
+        return false;
+    }
+    // Destroy every collider owned by this articulation's links (removes them from the broadphase
+    // and recycles their collider slots). Marking active=false leaves the deque entry in place.
+    for (ColliderEntry& entry : colliders_)
+    {
+        if (entry.active && entry.articulation == handle)
+        {
+            deactivateCollider(entry);
+        }
+    }
+    const std::uint32_t index = handle.index();
+    articulations_[index] = Articulation{}; // release links; a 0-link articulation is inert
+    articulationSleepTimers_[index] = 0.0f;
+    articulationSleeping_[index] = 0U;
+    articulationSlots_.release(index); // bumps generation → stale handles detectably invalid
+    return true;
 }
 
 Articulation* PhysicsWorld::findArticulation(PhysicsArticulationHandle handle) noexcept
 {
-    const auto it = articulationIndexByHandle_.find(handle.value());
-    return it != articulationIndexByHandle_.end() ? &articulations_[it->second] : nullptr;
+    const std::uint32_t index = handle.index();
+    return articulationSlots_.valid(index, handle.generation()) ? &articulations_[index] : nullptr;
 }
 
 const Articulation* PhysicsWorld::findArticulation(PhysicsArticulationHandle handle) const noexcept
 {
-    const auto it = articulationIndexByHandle_.find(handle.value());
-    return it != articulationIndexByHandle_.end() ? &articulations_[it->second] : nullptr;
+    const std::uint32_t index = handle.index();
+    return articulationSlots_.valid(index, handle.generation()) ? &articulations_[index] : nullptr;
 }
 
 Articulation* PhysicsWorld::articulation(PhysicsArticulationHandle handle) noexcept
@@ -111,7 +145,7 @@ const Articulation* PhysicsWorld::articulation(PhysicsArticulationHandle handle)
 
 std::size_t PhysicsWorld::articulationCount() const noexcept
 {
-    return articulations_.size();
+    return articulationSlots_.liveCount();
 }
 
 PhysicsColliderHandle PhysicsWorld::attachLinkCollider(PhysicsArticulationHandle handle, int link,
@@ -131,8 +165,8 @@ PhysicsColliderHandle PhysicsWorld::addLinkColliderEntry(
     const PhysicsMaterial& material, std::uint32_t collisionLayer, std::uint32_t collisionMask,
     const Vec3& localPosition, const Quaternion& localRotation, bool isTrigger)
 {
-    const PhysicsColliderHandle handle = nextColliderHandle_;
-    nextColliderHandle_ = PhysicsColliderHandle{nextColliderHandle_.value() + 1U};
+    const GenerationalSlotPool::Slot slot = colliderSlots_.acquire();
+    const PhysicsColliderHandle handle = PhysicsColliderHandle::make(slot.index, slot.generation);
 
     Collider collider;
     const Mat4 childMat = Mat4::translate(localPosition) * localRotation.toMat4();
@@ -141,12 +175,27 @@ PhysicsColliderHandle PhysicsWorld::addLinkColliderEntry(
     collider.collisionMask(collisionMask);
     collider.isTrigger(isTrigger);
 
-    colliderIndexByHandle_.emplace(handle.value(), colliders_.size());
-    colliders_.push_back({handle, PhysicsBodyHandle{}, articulationHandle, link,
-                          std::move(collider), shape, material, localPosition, localRotation, true,
-                          nullptr});
-    ColliderEntry& entry = colliders_.back();
-    colliderIndexByPointer_.emplace(&entry.collider, colliders_.size() - 1);
+    ColliderEntry newEntry{handle,
+                           PhysicsBodyHandle{},
+                           articulationHandle,
+                           link,
+                           std::move(collider),
+                           shape,
+                           material,
+                           localPosition,
+                           localRotation,
+                           true,
+                           nullptr};
+    if (slot.index >= colliders_.size())
+    {
+        colliders_.push_back(std::move(newEntry));
+    }
+    else
+    {
+        colliders_[slot.index] = std::move(newEntry);
+    }
+    ColliderEntry& entry = colliders_[slot.index];
+    colliderIndexByPointer_.emplace(&entry.collider, slot.index);
     // Seed the swept bound from the link's current forward-kinematics pose.
     const OwnerPose owner = colliderOwnerPose(entry);
     entry.collider.resetFrame(owner.world);
@@ -191,12 +240,12 @@ void PhysicsWorld::stepArticulations(float dt)
             {
                 continue; // different articulations (cross-ragdoll collision) — deferred
             }
-            const auto ai = articulationIndexByHandle_.find(first->articulation.value());
-            if (ai == articulationIndexByHandle_.end())
+            Articulation* artPtr = findArticulation(first->articulation);
+            if (artPtr == nullptr)
             {
                 continue;
             }
-            Articulation& art = articulations_[ai->second];
+            Articulation& art = *artPtr;
             const auto a = static_cast<std::size_t>(first->link);
             const auto b = static_cast<std::size_t>(second->link);
             if (a >= art.linkCount() || b >= art.linkCount())
@@ -223,7 +272,7 @@ void PhysicsWorld::stepArticulations(float dt)
                 const Vec3 wp = manifold->points[static_cast<std::size_t>(p)].position;
                 const float pen = manifold->points[static_cast<std::size_t>(p)].penetration;
                 // normal points B(second) -> A(first); offset = pen so prepare-time sep = -pen.
-                perArticulationLink[ai->second].push_back(
+                perArticulationLink[first->articulation.index()].push_back(
                     ArticulationLinkContact{a, b, invA.transformPoint(wp), invB.transformPoint(wp),
                                             manifold->normal, pen, friction});
             }
@@ -253,12 +302,12 @@ void PhysicsWorld::stepArticulations(float dt)
             continue; // link-vs-static only for now
         }
 
-        const auto it = articulationIndexByHandle_.find(link->articulation.value());
-        if (it == articulationIndexByHandle_.end())
+        Articulation* artPtr = findArticulation(link->articulation);
+        if (artPtr == nullptr)
         {
             continue;
         }
-        Articulation& art = articulations_[it->second];
+        Articulation& art = *artPtr;
         const auto linkIndex = static_cast<std::size_t>(link->link);
         if (link->link < 0 || linkIndex >= art.linkCount())
         {
@@ -283,7 +332,7 @@ void PhysicsWorld::stepArticulations(float dt)
             const float penetration = manifold->points[static_cast<std::size_t>(p)].penetration;
             // Plane through the contact point with the manifold normal; offset chosen so the
             // prepare-time separation is −penetration (dot(n, wp) − offset = −penetration).
-            perArticulation[it->second].push_back(ArticulationPlaneContact{
+            perArticulation[link->articulation.index()].push_back(ArticulationPlaneContact{
                 linkIndex, linkInv.transformPoint(worldPoint), manifold->normal,
                 Vec3::dotProduct(manifold->normal, worldPoint) + penetration, friction});
         }

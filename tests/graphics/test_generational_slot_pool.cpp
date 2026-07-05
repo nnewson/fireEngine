@@ -3,8 +3,8 @@
 #include <cstdint>
 #include <vector>
 
+#include <fire_engine/graphics/generational_slot_pool.hpp>
 #include <fire_engine/graphics/gpu_handle.hpp>
-#include <fire_engine/render/generational_slot_pool.hpp>
 
 using namespace fire_engine;
 
@@ -18,7 +18,7 @@ TEST_CASE("GenerationalSlotPool.AcquireGrowsSequentiallyFromZero", "[Generationa
     CHECK(a.index == 0u);
     CHECK(b.index == 1u);
     CHECK(c.index == 2u);
-    CHECK(a.generation == 0u);
+    CHECK(a.generation == GenerationalSlotPool::kFirstGeneration); // 1-based; 0 reserved
     CHECK(pool.slotCount() == 3u);
     CHECK(pool.valid(a.index, a.generation));
     CHECK(pool.valid(b.index, b.generation));
@@ -84,18 +84,21 @@ TEST_CASE("GenerationalSlotPool.RepeatedReleaseAcquireKeepsCountBounded", "[Gene
     CHECK(pool.slotCount() == kTargets);
 }
 
-TEST_CASE("GenerationalSlotPool.GenerationWrapsWithinEightBits", "[GenerationalSlotPool]")
+TEST_CASE("GenerationalSlotPool.GenerationWrapsWithinEightBitsSkippingZero",
+          "[GenerationalSlotPool]")
 {
-    // Generation is masked to 8 bits; after 256 release/acquire cycles it wraps to 0. (A wrap
-    // can only alias a handle that survived 256 recycles of the same slot unused — acceptable.)
+    // Generation is 1-based and masked to 8 bits, so it cycles through 1..255 and wraps back to
+    // 1 (never 0). Over many recycles it stays a valid nonzero generation; a wrap can only alias
+    // a handle that survived 255 recycles of the same slot unused — acceptable.
     GenerationalSlotPool pool;
     auto slot = pool.acquire();
-    for (int i = 0; i < 256; ++i)
+    for (int i = 0; i < 255; ++i) // one full period back to the first generation
     {
+        CHECK(slot.generation != 0u);
         pool.release(slot.index);
         slot = pool.acquire();
     }
     CHECK(slot.index == 0u);
-    CHECK(slot.generation == 0u);
+    CHECK(slot.generation == GenerationalSlotPool::kFirstGeneration);
     CHECK(pool.slotCount() == 1u);
 }

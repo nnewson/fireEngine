@@ -42,6 +42,34 @@ TEST_CASE("PhysicsHandle.ComparisonsAreConstexpr", "[PhysicsHandle]")
     static_assert(handle.value() == 1U);
 }
 
+TEST_CASE("PhysicsHandle.PacksIndexAndGeneration", "[PhysicsHandle]")
+{
+    constexpr auto handle = PhysicsBodyHandle::make(1234U, 7U);
+    CHECK(handle.index() == 1234U);
+    CHECK(handle.generation() == 7U);
+    static_assert(PhysicsBodyHandle::make(9U, 2U).index() == 9U);
+    static_assert(PhysicsBodyHandle::make(9U, 2U).generation() == 2U);
+}
+
+TEST_CASE("PhysicsHandle.LiveHandleIsNeverTheNullValue", "[PhysicsHandle]")
+{
+    // Slot 0 with a 1-based generation still packs to a nonzero value, so a live handle is
+    // always distinguishable from the default/null (value 0) handle.
+    constexpr auto handle = PhysicsBodyHandle::make(0U, 1U);
+    CHECK(handle.value() != 0U);
+    CHECK(handle.valid());
+    CHECK(handle.index() == 0U);
+    CHECK(handle.generation() == 1U);
+}
+
+TEST_CASE("PhysicsHandle.SameSlotDifferentGenerationsDiffer", "[PhysicsHandle]")
+{
+    constexpr auto oldHandle = PhysicsColliderHandle::make(5U, 3U);
+    constexpr auto newHandle = PhysicsColliderHandle::make(5U, 4U);
+    CHECK(oldHandle != newHandle);
+    CHECK(oldHandle.index() == newHandle.index());
+}
+
 TEST_CASE("ColliderId.DefaultedComparisonOrdersByValue", "[ColliderId]")
 {
     constexpr ColliderId first{3U};

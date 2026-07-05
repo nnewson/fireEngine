@@ -328,6 +328,44 @@ TEST_CASE("PhysicsWorld.LinkColliderTracksForwardKinematicsInBroadphase", "[Arti
     CHECK(world.overlapSphere(Vec3{2.0f, 5.0f, 0.0f}, 0.2f).empty());
 }
 
+TEST_CASE("PhysicsWorld.DestroyArticulationRecyclesSlotAndDestroysLinkColliders", "[Articulation]")
+{
+    PhysicsWorld world;
+    const PhysicsArticulationHandle arm = world.createArticulation();
+    Articulation* art = world.articulation(arm);
+    REQUIRE(art != nullptr);
+    art->addRootLink(ArticulationLinkDesc{});
+    ArticulationLinkDesc link;
+    link.parent = 0;
+    link.joint = ArticulationJointType::Revolute;
+    art->addLink(link);
+
+    ColliderDesc box;
+    box.shape = BoxShape{Vec3{0.4f, 0.4f, 0.4f}};
+    const PhysicsColliderHandle collider = world.attachLinkCollider(arm, 1, box);
+    REQUIRE(collider.valid());
+    REQUIRE(world.articulationCount() == 1);
+    REQUIRE(world.colliderCount() == 1);
+
+    // Destroy takes the articulation and its link colliders with it (CR-11).
+    REQUIRE(world.destroyArticulation(arm));
+    CHECK(world.articulation(arm) == nullptr); // stale handle invalid
+    CHECK(world.articulationCount() == 0);
+    CHECK_FALSE(world.valid(collider)); // link collider destroyed alongside
+    CHECK(world.colliderCount() == 0);
+    CHECK(world.validateBroadPhase());
+    CHECK_FALSE(world.destroyArticulation(arm)); // already destroyed
+
+    // A fresh articulation recycles the slot with a bumped generation; the old handle stays
+    // invalid even though its slot is live again (CR-12 — no ABA).
+    const PhysicsArticulationHandle reused = world.createArticulation();
+    CHECK(reused.index() == arm.index()); // slot recycled, not grown
+    CHECK(reused != arm);
+    CHECK(world.articulation(reused) != nullptr);
+    CHECK(world.articulation(arm) == nullptr);
+    CHECK(world.articulationCount() == 1);
+}
+
 TEST_CASE("Spatial.CrossProducts", "[Articulation]")
 {
     // crossMotion is the familiar 3-D cross in the angular block, with the mixed
