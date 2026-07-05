@@ -400,3 +400,5 @@ Also requires:
 All glTF models are from the Khronos glTF Sample Models [repository](https://github.com/KhronosGroup/glTF-Sample-Models/tree/main): AlphaBlendModeTest, AnimatedCube, AnimatedMorphCube, BoomBoxWithAxes, BoxAnimated, BrainStem, CesiumMan, DamagedHelmet, Fox, InterpolationTest, LightsPunctualLamp (exercises KHR_lights_punctual + KHR_materials_transmission), MetalRoughSpheres, MorphPrimitivesTest, OrientationTest, RecursiveSkeletons, RiggedSimple, TextureCoordinateTest, TextureLinearInterpolationTest, TextureSettingsTest, VertexColorTest.
 
 HDR equirectangular skyboxes (`skybox.hdr`, `nightbox.hdr`) drive the IBL precompute.
+
+For manual visual sign-off, [`acceptance-testing.md`](acceptance-testing.md) is a per-asset runbook: a copy-paste command for every sample scene, physics demo, and generated feature (particles/cloth/character/query), each paired with its upstream Khronos source and reference image — the checklist to walk before a branch lands.
