@@ -36,6 +36,11 @@ inline constexpr float kCameraFarPlane = 1000.0f;
 inline constexpr float kDirectionalLightIntensity = 1.35f;
 inline constexpr float kDiffuseIblStrength = 0.35f;
 inline constexpr float kSpecularIblStrength = 0.7f;
+// Default IBL strengths when no skybox is drawn (no environment arg given). Calmer than the
+// full-strength values above so the lighting sits between a bright skybox.hdr and a dark
+// nightbox.hdr rather than blazing off an undrawn environment. Live-tunable via the overlay.
+inline constexpr float kNoSkyboxDiffuseIblStrength = 0.2f;
+inline constexpr float kNoSkyboxSpecularIblStrength = 0.4f;
 inline constexpr float kSkyboxIntensity = 1.0f;
 // Keep image-based lighting independent from CSM visibility by default. Direct
 // light carries the shadow contrast; ambient light stays stable across assets.

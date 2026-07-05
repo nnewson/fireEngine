@@ -313,6 +313,10 @@ private:
     std::vector<EmitterState> emitterScratch_;
     std::unordered_map<uint32_t, int> selfShadowSlotsScratch_;
     std::string environmentPath_;
+    // Draw the environment cubemap as a background. False when no skybox was requested (empty
+    // environmentPath_): the scene is still lit by the default environment's IBL, but nothing is
+    // drawn behind the geometry — the scene target's neutral clear shows through.
+    bool drawSkybox_{true};
 };
 
 } // namespace fire_engine

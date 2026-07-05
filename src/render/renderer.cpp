@@ -179,6 +179,16 @@ Renderer::Renderer(const Window& window, std::string environmentPath, RendererDe
     tunables_.debugDrawColliders = debug.physicsDebug;
     tunables_.debugDrawContacts = debug.physicsDebug;
 
+    // No explicit skybox (empty path): still precompute IBL from the default environment, but
+    // don't draw the sky as a background and calm the IBL to a neutral mid level. An explicit
+    // skybox arg draws + lights at the full-strength constants.
+    drawSkybox_ = !environmentPath_.empty();
+    if (!drawSkybox_)
+    {
+        tunables_.diffuseIbl = kNoSkyboxDiffuseIblStrength;
+        tunables_.specularIbl = kNoSkyboxSpecularIblStrength;
+    }
+
     swapchain_.createDepthResources(device_);
     transmission_.recreate(postProcessing_.offscreenColourTarget(), taa_.velocityTarget());
     // Bind the now-created scene-depth image into the particle render set.
@@ -737,7 +747,10 @@ const Renderer::DrawBuckets& Renderer::collectDrawCommands(RenderableScene& scen
                                                            Vec3 cameraPosition, Vec3 cameraTarget)
 {
     drawCommandScratch_.clear();
-    recordSkybox(cameraPosition, cameraTarget, drawCommandScratch_);
+    if (drawSkybox_)
+    {
+        recordSkybox(cameraPosition, cameraTarget, drawCommandScratch_);
+    }
 
     const auto extent = swapchain_.extent();
     const AlphaPipelines pipelines{forwardOpaqueHandle_, forwardBlendHandle_};
