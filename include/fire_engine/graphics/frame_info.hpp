@@ -31,7 +31,7 @@ struct FrameInfo
     Vec3 cameraPosition;
     Vec3 cameraTarget;
     // Camera view and projection for the frame, computed once when the
-    // FrameInfo is built (see RenderContext::frameInfo) rather than per object.
+    // FrameInfo is built (by the renderer, per frame) rather than per object.
     // proj is the jittered projection (TAA) — used for rasterisation only.
     Mat4 view{Mat4::identity()};
     Mat4 proj{Mat4::identity()};

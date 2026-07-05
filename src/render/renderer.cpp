@@ -6,18 +6,18 @@
 #include <cstring>
 #include <span>
 
+#include <fire_engine/graphics/frame_info.hpp>
 #include <fire_engine/graphics/frustum.hpp>
 #include <fire_engine/graphics/image.hpp>
+#include <fire_engine/graphics/renderable_scene.hpp>
 #include <fire_engine/math/constants.hpp>
 #include <fire_engine/math/view_basis.hpp>
 #include <fire_engine/render/cubemap_basis.hpp>
 #include <fire_engine/render/environment_precompute.hpp>
-#include <fire_engine/render/render_context.hpp>
 #include <fire_engine/render/render_target.hpp>
 #include <fire_engine/render/swapchain.hpp>
 #include <fire_engine/render/ubo.hpp>
 #include <fire_engine/render/viewport.hpp>
-#include <fire_engine/scene/scene_graph.hpp>
 
 namespace fire_engine
 {
@@ -723,7 +723,7 @@ void Renderer::recordForwardPass(vk::CommandBuffer cmd, const DrawBuckets& bucke
     endForwardRendering(cmd);
 }
 
-void Renderer::updateFrameLighting(SceneGraph& scene, Vec3 cameraPosition, Vec3 cameraTarget)
+void Renderer::updateFrameLighting(RenderableScene& scene, Vec3 cameraPosition, Vec3 cameraTarget)
 {
     const auto extent = swapchain_.extent();
     const float aspect = static_cast<float>(extent.width) / static_cast<float>(extent.height);
@@ -732,35 +732,32 @@ void Renderer::updateFrameLighting(SceneGraph& scene, Vec3 cameraPosition, Vec3 
     updateLightData(cameraPosition, cameraTarget, aspect, lightScratch_);
 }
 
-const Renderer::DrawBuckets& Renderer::collectDrawCommands(vk::CommandBuffer cmd, SceneGraph& scene,
+const Renderer::DrawBuckets& Renderer::collectDrawCommands(RenderableScene& scene,
                                                            Vec3 cameraPosition, Vec3 cameraTarget)
 {
     drawCommandScratch_.clear();
     recordSkybox(cameraPosition, cameraTarget, drawCommandScratch_);
 
-    AlphaPipelines pipelines{forwardOpaqueHandle_, forwardBlendHandle_};
-    RenderContext ctx{device_,
-                      swapchain_,
-                      frame_,
-                      pipelineOpaque_,
-                      cmd,
-                      currentFrame_,
-                      cameraPosition,
-                      cameraTarget,
-                      view_,
-                      jitteredProj_,
-                      currentViewProj_,
-                      previousViewProj_,
-                      &drawCommandScratch_,
-                      pipelines,
-                      shadows_.pipelineHandle(),
-                      shadowViewProjs_};
+    const auto extent = swapchain_.extent();
+    const AlphaPipelines pipelines{forwardOpaqueHandle_, forwardBlendHandle_};
+    const FrameInfo frame{currentFrame_,
+                          extent.width,
+                          extent.height,
+                          cameraPosition,
+                          cameraTarget,
+                          view_,
+                          jitteredProj_,
+                          currentViewProj_,
+                          previousViewProj_,
+                          pipelines,
+                          shadows_.pipelineHandle(),
+                          shadowViewProjs_};
 
-    // Coarse pre-cull: skip draw-building for rigid nodes outside every frustum (camera
-    // plus all shadow casters). The union is a superset of what buildDrawBuckets /
-    // shadows_ keep per pass, so a node dropped here is never wanted downstream. Inactive
-    // shadow slots are identity matrices — harmless degenerate frustums that can only add
-    // visibility, never remove it. Disabled toggle leaves culledNodes null (render all).
+    // Coarse pre-cull frustums: the camera plus every shadow caster. The union is a superset of
+    // what buildDrawBuckets / shadows_ keep per pass, so a node dropped by all of them is never
+    // wanted downstream. Inactive shadow slots are identity matrices — harmless degenerate
+    // frustums that can only add visibility. When culling is disabled we pass an empty span, and
+    // the scene draws everything.
     frustumScratch_.clear();
     if (tunables_.cullingEnabled)
     {
@@ -770,17 +767,11 @@ const Renderer::DrawBuckets& Renderer::collectDrawCommands(vk::CommandBuffer cmd
         {
             frustumScratch_.push_back(Frustum::fromViewProj(shadowViewProj));
         }
-        ctx.culledNodes = &scene.cull(frustumScratch_);
-        stats_.trackedNodes = static_cast<int>(scene.culler().trackedCount());
-        stats_.culledNodes = static_cast<int>(scene.culler().culledCount());
-    }
-    else
-    {
-        stats_.trackedNodes = 0;
-        stats_.culledNodes = 0;
     }
 
-    scene.render(ctx);
+    const CullStats cull = scene.buildDrawCommands(frame, frustumScratch_, drawCommandScratch_);
+    stats_.trackedNodes = static_cast<int>(cull.tracked);
+    stats_.culledNodes = static_cast<int>(cull.culled);
 
     assignSelfShadowSlots(drawCommandScratch_);
     buildDrawBuckets(drawCommandScratch_, drawBucketsScratch_);
@@ -817,8 +808,8 @@ void Renderer::recordPostProcessing(vk::CommandBuffer cmd, uint32_t imageIndex)
     profiler_.end(cmd, currentFrame_, ProfilePass::Post);
 }
 
-void Renderer::drawFrame(Window& display, SceneGraph& scene, Vec3 cameraPosition, Vec3 cameraTarget,
-                         float dt)
+void Renderer::drawFrame(Window& display, RenderableScene& scene, Vec3 cameraPosition,
+                         Vec3 cameraTarget, float dt)
 {
     auto imageIndex = acquireNextImage(display);
     if (!imageIndex)
@@ -873,7 +864,7 @@ void Renderer::drawFrame(Window& display, SceneGraph& scene, Vec3 cameraPosition
     currentViewProj_ = unjitteredProj * view_;
 
     updateFrameLighting(scene, cameraPosition, cameraTarget);
-    const DrawBuckets& buckets = collectDrawCommands(cmd, scene, cameraPosition, cameraTarget);
+    const DrawBuckets& buckets = collectDrawCommands(scene, cameraPosition, cameraTarget);
 
     // Particles render un-jittered (after TAA); feed them the plain proj. The
     // overlay's emitter scales are applied to a local copy of the gather.

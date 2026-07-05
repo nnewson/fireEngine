@@ -11,9 +11,9 @@
 #include <fire_engine/input/input_state.hpp>
 #include <fire_engine/math/mat4.hpp>
 #include <fire_engine/physics/physics_handle.hpp>
-#include <fire_engine/render/render_context.hpp>
 #include <fire_engine/scene/components.hpp>
 #include <fire_engine/scene/controllable.hpp>
+#include <fire_engine/scene/scene_draw_context.hpp>
 #include <fire_engine/scene/transform.hpp>
 
 namespace fire_engine
@@ -194,7 +194,7 @@ public:
 
     void update(const InputState& input_state, const Mat4& parentComposedWorld);
     void resolve(const Mat4& parentComposedWorld);
-    void render(const RenderContext& ctx, const Mat4& parentWorld);
+    void render(const SceneDrawContext& ctx, const Mat4& parentWorld);
 
 private:
     // Store a freshly computed composed world, rolling the prior value into

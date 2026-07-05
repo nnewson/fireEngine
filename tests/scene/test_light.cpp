@@ -9,7 +9,6 @@
 #include <fire_engine/math/constants.hpp>
 #include <fire_engine/math/mat4.hpp>
 #include <fire_engine/math/vec3.hpp>
-#include <fire_engine/render/render_context.hpp>
 #include <fire_engine/scene/components.hpp>
 #include <fire_engine/scene/light.hpp>
 
@@ -19,7 +18,6 @@ using fire_engine::Components;
 using fire_engine::Light;
 using fire_engine::Lighting;
 using fire_engine::Mat4;
-using fire_engine::RenderContext;
 using fire_engine::Vec3;
 
 TEST_CASE("Light.DefaultsAreDirectionalWhiteUnit", "[Light]")

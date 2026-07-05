@@ -36,7 +36,7 @@
 namespace fire_engine
 {
 
-class SceneGraph;
+class RenderableScene;
 
 // DebugView lives in render_tunables.hpp (included below) so the overlay can
 // reference it without pulling in the renderer.
@@ -74,7 +74,7 @@ public:
     Renderer(Renderer&&) noexcept = delete;
     Renderer& operator=(Renderer&&) noexcept = delete;
 
-    void drawFrame(Window& display, SceneGraph& scene, Vec3 cameraPosition, Vec3 cameraTarget,
+    void drawFrame(Window& display, RenderableScene& scene, Vec3 cameraPosition, Vec3 cameraTarget,
                    float dt);
 
     void waitIdle() const
@@ -207,8 +207,8 @@ private:
 
     // drawFrame() phases, in per-frame execution order. Each records into the
     // supplied command buffer (already in the recording state).
-    void updateFrameLighting(SceneGraph& scene, Vec3 cameraPosition, Vec3 cameraTarget);
-    [[nodiscard]] const DrawBuckets& collectDrawCommands(vk::CommandBuffer cmd, SceneGraph& scene,
+    void updateFrameLighting(RenderableScene& scene, Vec3 cameraPosition, Vec3 cameraTarget);
+    [[nodiscard]] const DrawBuckets& collectDrawCommands(RenderableScene& scene,
                                                          Vec3 cameraPosition, Vec3 cameraTarget);
     void recordShadowPass(vk::CommandBuffer cmd, const DrawBuckets& buckets);
     // Depth-only prepass over the opaque bucket, before the forward pass, so the

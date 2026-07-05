@@ -1,5 +1,6 @@
 #include <fire_engine/scene/light.hpp>
 #include <fire_engine/scene/particle_emitter.hpp>
+#include <fire_engine/scene/scene_draw_context.hpp>
 #include <fire_engine/scene/scene_graph.hpp>
 
 namespace fire_engine
@@ -139,18 +140,27 @@ void SceneGraph::applyPhysics(const PhysicsWorld& physics, float alpha)
     resolve();
 }
 
-void SceneGraph::render(const RenderContext& ctx)
+CullStats SceneGraph::buildDrawCommands(const FrameInfo& frame, std::span<const Frustum> frustums,
+                                        std::vector<DrawCommand>& out)
 {
+    // Cull only when the renderer supplied frustums; an empty span means culling is disabled, so
+    // every renderable is drawn (culled == nullptr). The culled-node set never leaves the scene.
+    const std::unordered_set<const Node*>* culled = nullptr;
+    CullStats stats;
+    if (!frustums.empty())
+    {
+        culler_.sync(nodes_);
+        culled = &culler_.cull(frustums);
+        stats.tracked = culler_.trackedCount();
+        stats.culled = culler_.culledCount();
+    }
+
+    const SceneDrawContext ctx{frame, culled, &out};
     for (auto& node : nodes_)
     {
         node->render(ctx, rootTransform_);
     }
-}
-
-const std::unordered_set<const Node*>& SceneGraph::cull(std::span<const Frustum> frustums)
-{
-    culler_.sync(nodes_);
-    return culler_.cull(frustums);
+    return stats;
 }
 
 void SceneGraph::gatherLights(std::vector<Lighting>& out) const

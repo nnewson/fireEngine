@@ -89,7 +89,7 @@ void Node::setComposedWorld(const Mat4& newComposedWorld) noexcept
     }
 }
 
-void Node::render(const RenderContext& ctx, const Mat4& parentWorld)
+void Node::render(const SceneDrawContext& ctx, const Mat4& parentWorld)
 {
     Mat4 world = parentWorld * transform_.local();
 
