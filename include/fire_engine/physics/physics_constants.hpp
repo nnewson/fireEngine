@@ -107,6 +107,21 @@ inline constexpr float kArticulationDamping = 0.2f;
 inline constexpr float kBaseSettleSpeed = 0.3f;   // m/s — below this the base is "settling"
 inline constexpr float kBaseSettleDamping = 8.0f; // 1/s — strong linear decay when settling
 
+// The same settle assist for the joint velocities (Articulation::integrateVelocities). A landed
+// ragdoll's limbs otherwise crawl toward the articulation sleep threshold over seconds under the
+// modest passive kArticulationDamping, which reads as an arm curling unnaturally after the body has
+// come to rest. Any DOF already moving slowly (below kJointSettleSpeed) is decayed strongly so it
+// crosses into sleep quickly; fast, dramatic collapse motion (well above it) is left untouched.
+inline constexpr float kJointSettleSpeed = 0.5f;   // rad/s — below this a joint is "settling"
+inline constexpr float kJointSettleDamping = 8.0f; // 1/s — strong decay of residual joint velocity
+
+// Settle decay for the base's spin about the vertical (yaw) only, once the base is settling.
+// Contact friction doesn't resist rotation about the vertical, so a rested ragdoll keeps a slow
+// residual yaw — the last visible motion once the limbs stop. Damping the *full* base angular
+// destabilises a near-planar chain, so only the world-up component is decayed
+// (Articulation::integrateVelocities).
+inline constexpr float kBaseYawSettleDamping = 8.0f; // 1/s
+
 // Velocity-level cone-twist joint-limit push-out (solveJointLimits): close a fraction
 // kJointLimitErp of the angular over-limit per step, capped at kJointLimitMaxPush rad/s so a
 // deep violation can't fling the joint back. A projection, not a spring — stable at any inertia.

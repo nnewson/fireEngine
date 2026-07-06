@@ -923,18 +923,47 @@ void Articulation::integrateVelocities(float dt)
     {
         qDot_[static_cast<std::size_t>(i)] += qDDot_[static_cast<std::size_t>(i)] * dt;
     }
+    // Settle assist on the joint velocities: strongly damp only the DOFs already moving slowly (the
+    // residual tail after landing) so a resting ragdoll's limbs stop promptly instead of crawling
+    // to the sleep threshold over seconds. Fast, dramatic collapse motion is left untouched.
+    // Mirrors the base's linear settle assist below; gated on jointDamping_ > 0 so a free
+    // articulation is untouched.
+    if (jointDamping_ > 0.0f)
+    {
+        const float decay = 1.0f / (1.0f + kJointSettleDamping * dt);
+        for (int i = 0; i < dofCount_; ++i)
+        {
+            if (std::abs(qDot_[static_cast<std::size_t>(i)]) < kJointSettleSpeed)
+            {
+                qDot_[static_cast<std::size_t>(i)] *= decay;
+            }
+        }
+    }
     if (!baseFixed_)
     {
         baseVel_ = baseVel_ + baseAccel_ * dt;
         // Settle assist on the free base's *linear* velocity: strongly damp once it is slow so a
-        // resting ragdoll stops drifting, gently (or not) while fast so the fall is untouched. Base
-        // *angular* is deliberately never damped — that blows up a near-planar articulation. Gated
-        // on jointDamping_>0 so a genuinely free articulation still free-falls at g.
+        // resting ragdoll stops drifting, gently (or not) while fast so the fall is untouched.
+        // Gated on jointDamping_>0 so a genuinely free articulation still free-falls at g.
         if (jointDamping_ > 0.0f)
         {
             const float speed = baseVel_.linear.magnitude();
-            const float c = speed < kBaseSettleSpeed ? kBaseSettleDamping : jointDamping_;
+            const bool settling = speed < kBaseSettleSpeed;
+            const float c = settling ? kBaseSettleDamping : jointDamping_;
             baseVel_.linear = baseVel_.linear * (1.0f / (1.0f + c * dt));
+            // Once settling, damp ONLY the base's spin about the vertical (yaw). A rested ragdoll
+            // otherwise keeps slowly rotating about Y — contact friction doesn't resist rotation
+            // about the vertical, so it's the last visible motion after everything else stops.
+            // Damping the *full* base angular blows up a near-planar articulation, so project the
+            // body-frame angular velocity onto world-up and decay only that component; pitch/roll
+            // (the unstable axes for a flat-lying chain) are left untouched.
+            if (settling)
+            {
+                const Vec3 upBase = base_.rotation.conjugate().rotate(Vec3{0.0f, 1.0f, 0.0f});
+                const float yaw = Vec3::dotProduct(baseVel_.angular, upBase);
+                const float yawDecay = 1.0f / (1.0f + kBaseYawSettleDamping * dt);
+                baseVel_.angular = baseVel_.angular - upBase * (yaw * (1.0f - yawDecay));
+            }
         }
     }
 }
