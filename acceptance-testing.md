@@ -1,8 +1,9 @@
 # Fire Engine — Acceptance Testing
 
 Manual, visual sign-off for the renderer + physics. This is the runbook to walk before a branch
-lands, to catch feature regressions a headless smoke test can't see (e.g. the TransmissionTest
-regression that only shows on multi-material scenes).
+lands, to catch feature regressions a headless smoke test can't see — the kind that only show on
+specific multi-material scenes (e.g. the thin-walled TransmissionTest roughness regression this
+runbook surfaced, since fixed).
 
 ## How to run
 
@@ -224,10 +225,12 @@ Source repo: <https://github.com/KhronosGroup/glTF-Sample-Models/tree/main/2.0>
 
 ![TransmissionRoughnessTest](https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Models/refs/heads/main/2.0/TransmissionRoughnessTest/screenshot/screenshot-large.png)
 
-### TransmissionTest — KHR_materials_transmission ⚠️ *known regression — scrutinise*
-Multi-material transmission spheres. **Currently renders identically regardless of transmission
-variant / opacity / texture** — this is the pre-existing regression the runbook exists to catch.
-The spheres in the reference vary visibly across the grid; if ours all look the same, it's still broken.
+### TransmissionTest — KHR_materials_transmission
+Multi-material transmission grid. The **roughness column** should vary visibly frosted → clear, and
+the **rows** should vary by transmission factor / opacity / texture — match the reference grid.
+(This scene surfaced a regression where all thin-walled spheres rendered identically regardless of
+`roughnessFactor`; fixed 2026-07-06 by making thin-walled transmission sample the roughness-blurred
+scene per spec.)
 ```bash
 ./fireEngineApp TransmissionTest/TransmissionTest.gltf skybox.hdr
 ```
