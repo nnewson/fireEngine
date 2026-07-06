@@ -792,20 +792,25 @@ void main() {
         float lod = roughness * interfaceStrength * maxLod;
         vec3 sceneSample = textureLod(sceneColorMap, sampleUv, lod).rgb;
 
-        // Thin-walled vs volumetric transmission, keyed on KHR_materials_volume
-        // thickness. A thin-walled surface (no volume — the paper lamp shade,
-        // thickness 0) scatters: it reads as a uniform basecolor tint with a
-        // faint env contribution. That is view-independent, so it has no
-        // screen-space image to track the camera as a bright blob. A volumetric
-        // surface (thickness > 0 — the TransmissionRoughnessTest panels, 0.005)
-        // refracts the scene behind it, blurred by roughness. The threshold sits
-        // below the panels' 0.005 so they read as volumetric while the shade
-        // (exactly 0) reads as thin-walled.
+        // Screen-space refraction only carries a coherent image for clear/frosted glass. A
+        // thin-walled surface that is BOTH transmissive and emissive is a self-lit diffuser — a
+        // paper lamp shade (LightsPunctualLamp / StainedGlassLamp), not glass. It transmits
+        // diffusely (view-independent), so it must not sample the screen: otherwise the bright bulb
+        // behind it is beamed onto the shade as a camera-tracking, aliased blob. Route those to a
+        // view-independent irradiance tint instead. (Roughness can't be the discriminator — the
+        // shade's roughnessFactor is textured and overlaps TransmissionTest's frosted 0.32–0.9
+        // range; the emissive factor is a clean per-material constant: [1,1,1] shade vs 0 glass.)
+        // Clear/frosted glass (not emissive) still refracts the roughness-blurred scene; a maximally
+        // rough thin surface also goes diffuse; volumetric panels always refract.
         const float kEnvTint = 0.2;
-        vec3 envTint = texture(irradianceMap, refractDir).rgb * light.iblParams.y;
-        vec3 envSurface = vec3(1.0) + kEnvTint * envTint;
+        vec3 scatterTint =
+            vec3(1.0) + kEnvTint * texture(irradianceMap, refractDir).rgb * light.iblParams.y;
         float volumetric = smoothstep(0.0, 0.001, thickness);
-        vec3 surface = mix(envSurface, sceneSample, volumetric);
+        float emissiveLevel = max(material.emissiveRoughness.r,
+                                  max(material.emissiveRoughness.g, material.emissiveRoughness.b));
+        float diffuseScatter =
+            (1.0 - volumetric) * max(step(0.001, emissiveLevel), smoothstep(0.9, 1.0, roughness));
+        vec3 surface = mix(sceneSample, scatterTint, diffuseScatter);
 
         // Beer-Lambert absorption over the path through the volume.
         // attenuationColor at attenuationDistance is the colour the light
