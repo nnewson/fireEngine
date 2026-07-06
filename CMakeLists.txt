@@ -58,6 +58,7 @@ add_library(fireengine SHARED
     src/fire_engine.cpp
     src/graphics/cloth.cpp
     src/graphics/geometry.cpp
+    src/graphics/mesh_simplifier.cpp
     src/graphics/image.cpp
     src/graphics/ktx_image.cpp
     src/graphics/material_binding.cpp
@@ -304,6 +305,7 @@ add_executable(test_fire_engine
     tests/graphics/test_geometry.cpp
     tests/graphics/test_gpu_handle.cpp
     tests/graphics/test_mapped_buffer.cpp
+    tests/graphics/test_mesh_simplifier.cpp
     tests/graphics/test_bounds.cpp
     tests/graphics/test_draw_command.cpp
     tests/graphics/test_frame_info.cpp
