@@ -194,34 +194,32 @@ set(SHADER_SOURCES
     shaders/cloth_finalize.comp
 )
 
-# Prefer glslc (Shaderc); if absent, fall back to glslangValidator (glslang-tools).
-find_program(GLSLC_EXECUTABLE NAMES glslc)
-find_program(GLSLANG_VALIDATOR_EXECUTABLE NAMES glslangValidator)
-if(NOT GLSLC_EXECUTABLE AND NOT GLSLANG_VALIDATOR_EXECUTABLE)
-  message(FATAL_ERROR "Neither glslc nor glslangValidator was found; please install shader compiler tools (shaderc or glslang-tools).")
+# glslc from the vcpkg `shaderc` port (installed under <vcpkg-installed>/<triplet>/tools/shaderc via
+# vcpkg_copy_tools). Sourcing it from vcpkg — not a system glslc / Vulkan SDK on PATH — means every
+# platform compiles shaders with the same baseline-pinned compiler, so the emitted SPIR-V is
+# reproducible and CI needs no system shader-compiler package.
+find_program(GLSLC_EXECUTABLE
+  NAMES glslc
+  HINTS
+    "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/tools/shaderc"
+    "${_VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/tools/shaderc"
+  NO_DEFAULT_PATH
+)
+if(NOT GLSLC_EXECUTABLE)
+  message(FATAL_ERROR "glslc not found in the vcpkg tools dir — is 'shaderc' in vcpkg.json and installed?")
 endif()
 
 foreach(shader IN LISTS SHADER_SOURCES)
   get_filename_component(SHADER_NAME ${shader} NAME)
   set(SHADER_SPV ${CMAKE_CURRENT_BINARY_DIR}/${SHADER_NAME}.spv)
 
-  if(GLSLC_EXECUTABLE)
-    add_custom_command(
-      OUTPUT ${SHADER_SPV}
-      COMMAND ${GLSLC_EXECUTABLE} ${PROJECT_SOURCE_DIR}/${shader} -o ${SHADER_SPV}
-      DEPENDS ${PROJECT_SOURCE_DIR}/${shader}
-      COMMENT "Compiling ${SHADER_NAME} -> ${SHADER_NAME}.spv"
-      VERBATIM
-    )
-  else()
-    add_custom_command(
-      OUTPUT ${SHADER_SPV}
-      COMMAND ${GLSLANG_VALIDATOR_EXECUTABLE} -V -o ${SHADER_SPV} ${PROJECT_SOURCE_DIR}/${shader}
-      DEPENDS ${PROJECT_SOURCE_DIR}/${shader}
-      COMMENT "Compiling ${SHADER_NAME} -> ${SHADER_NAME}.spv"
-      VERBATIM
-    )
-  endif()
+  add_custom_command(
+    OUTPUT ${SHADER_SPV}
+    COMMAND ${GLSLC_EXECUTABLE} ${PROJECT_SOURCE_DIR}/${shader} -o ${SHADER_SPV}
+    DEPENDS ${PROJECT_SOURCE_DIR}/${shader}
+    COMMENT "Compiling ${SHADER_NAME} -> ${SHADER_NAME}.spv"
+    VERBATIM
+  )
 
   list(APPEND SHADER_SPVS ${SHADER_SPV})
 endforeach()

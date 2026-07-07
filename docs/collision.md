@@ -588,7 +588,7 @@ flags: **`-k`** (the kinematic `CharacterController` walking a step-pyramid cour
 (a query probe — a rotating raycast fan + overlap on a ring of bodies, drawn via `DebugDraw`).
 The full table with expected behaviours lives in [`README.md`](../README.md) § Physics Demos. The **ragdoll**
 (`extras.Ragdoll`) demo is deferred until the solver can settle a complex joint network (see
-[`roadmap.md`](../roadmap.md) P9).
+[`roadmap.md`](roadmap.md) P9).
 
 ---
 
@@ -730,7 +730,7 @@ The architecture keeps physics ownership behind `PhysicsWorld`, never back in `s
 ## Subsystem Detail
 
 How each major subsystem works, with its provenance (the `Pn` labels are the historical build
-order — see [`roadmap.md`](../roadmap.md) for the full physics-track history). All of this is **current**; genuinely
+order — see [`roadmap.md`](roadmap.md) for the full physics-track history). All of this is **current**; genuinely
 outstanding work is in [Future Directions](#future-directions) at the end. Everything below lives
 behind the `PhysicsWorld` boundary — physics state never goes back onto `scene::Node`.
 
@@ -874,7 +874,7 @@ spatial queries (no rigid-body simulation). `move(world, displacement) →
 
 It's a headless engine class (`tests/physics/test_character_controller.cpp`), driven from
 `FireEngine::mainLoop` rather than a scene component — see **Design reviews** in
-[`roadmap.md`](../roadmap.md) for the architectural reasoning. The `-k` CLI flag runs a step-pyramid patrol demo
+[`roadmap.md`](roadmap.md) for the architectural reasoning. The `-k` CLI flag runs a step-pyramid patrol demo
 (bounds-based turnaround at the flat ends; advanced at the real per-frame dt for smooth motion at
 any refresh rate).
 
@@ -965,6 +965,6 @@ Genuinely outstanding work, all to build behind the `PhysicsWorld` boundary (nev
   back from the simulated pose into animation isn't wired.
 - **Batched physics particles** — a particle-collision system (dense CPU/GPU arrays + emitter batches +
   query-based collision against `PhysicsWorld` shapes), *not* one `Node` / rigid body per particle.
-  The rendering-side GPU `ParticleSystem` already exists (see [`roadmap.md`](../roadmap.md) / [`onboarding.md`](onboarding.md)); this is
+  The rendering-side GPU `ParticleSystem` already exists (see [`roadmap.md`](roadmap.md) / [`onboarding.md`](onboarding.md)); this is
   the gameplay-collision counterpart.
 - **Threaded solver** — islands are the independent unit a parallel solve would split on.

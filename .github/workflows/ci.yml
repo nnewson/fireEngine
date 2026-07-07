@@ -7,6 +7,8 @@ on:
       - main
 
 jobs:
+  # -------- Platform-independent lint gates (run once) --------
+
   clang-format:
     name: clang-format
     runs-on: ubuntu-latest
@@ -26,8 +28,8 @@ jobs:
             -name '*.hpp' -o -name '*.cpp' -o -name '*.h' -o -name '*.cxx' \
           \) -print0 | xargs -0 clang-format-22 --dry-run -Werror
 
-  build-and-test:
-    name: build and test
+  clang-tidy:
+    name: clang-tidy
     runs-on: ubuntu-latest
     env:
       VCPKG_ROOT: ${{ github.workspace }}/vcpkg
@@ -37,7 +39,54 @@ jobs:
       - name: Install system packages
         run: |
           sudo apt-get update
-          sudo apt-get install -y ninja-build cmake clang-tidy glslang-tools libvulkan-dev \
+          sudo apt-get install -y ninja-build cmake clang-tidy libvulkan-dev \
+            xorg-dev libxinerama-dev libxcursor-dev libglu1-mesa-dev pkg-config
+
+      - name: Checkout vcpkg
+        uses: actions/checkout@v4
+        with:
+          repository: microsoft/vcpkg
+          path: vcpkg
+
+      - name: Bootstrap vcpkg
+        run: ./vcpkg/bootstrap-vcpkg.sh
+
+      - name: Cache vcpkg packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            build/vcpkg_installed
+            vcpkg/downloads
+            vcpkg/buildtrees
+            vcpkg/packages
+          key: ${{ runner.os }}-vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json') }}
+          restore-keys: |
+            ${{ runner.os }}-vcpkg-
+
+      - name: Configure
+        run: cmake --preset vcpkg -DFIRE_ENGINE_WARNINGS_AS_ERRORS=ON
+
+      # clang-tidy needs the build tree (generated sources) present.
+      - name: Build
+        run: cmake --build build
+
+      - name: clang-tidy
+        run: cmake --build build --target run-clang-tidy
+
+  # -------- Per-platform build + test (each validates its own determinism golden) --------
+
+  build-test-linux:
+    name: build and test (Linux)
+    runs-on: ubuntu-latest
+    env:
+      VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build cmake libvulkan-dev \
             xorg-dev libxinerama-dev libxcursor-dev libglu1-mesa-dev pkg-config
 
       - name: Checkout vcpkg
@@ -67,8 +116,49 @@ jobs:
       - name: Build
         run: cmake --build build
 
-      - name: clang-tidy
-        run: cmake --build build --target run-clang-tidy
+      - name: Test
+        run: cmake --build build --target tests-full
+
+  build-test-macos:
+    name: build and test (macOS)
+    runs-on: macos-latest # Apple Silicon (arm64) — matches local dev + the macOS/arm64 golden
+    env:
+      VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+    steps:
+      - uses: actions/checkout@v4
+
+      # Everything else — the Vulkan loader + headers, GLFW, VMA, and the glslc shader compiler
+      # (vcpkg `shaderc` port) — comes from vcpkg, exactly as on Linux. ninja is the only tool the
+      # macOS runner doesn't ship; MoltenVK isn't needed because tests-full is headless.
+      - name: Install ninja
+        run: brew install ninja
+
+      - name: Checkout vcpkg
+        uses: actions/checkout@v4
+        with:
+          repository: microsoft/vcpkg
+          path: vcpkg
+
+      - name: Bootstrap vcpkg
+        run: ./vcpkg/bootstrap-vcpkg.sh
+
+      - name: Cache vcpkg packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            build/vcpkg_installed
+            vcpkg/downloads
+            vcpkg/buildtrees
+            vcpkg/packages
+          key: ${{ runner.os }}-vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json') }}
+          restore-keys: |
+            ${{ runner.os }}-vcpkg-
+
+      - name: Configure
+        run: cmake --preset vcpkg -DFIRE_ENGINE_WARNINGS_AS_ERRORS=ON
+
+      - name: Build
+        run: cmake --build build
 
       - name: Test
         run: cmake --build build --target tests-full

@@ -20,7 +20,6 @@ RUN apt-get update \
         ninja-build \
         cmake \
         clang-tidy \
-        glslang-tools \
         libvulkan-dev \
         xorg-dev \
         libxinerama-dev \
@@ -34,6 +33,7 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends clang-format-22 \
     && rm -rf /var/lib/apt/lists/*
 
+COPY ci-stages.sh /usr/local/bin/ci-stages.sh
 COPY container-run.sh /usr/local/bin/fireengine-ci
 
 WORKDIR /work/fireEngine

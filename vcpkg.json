@@ -6,6 +6,7 @@
     "vulkan-headers",
     "vulkan-memory-allocator",
     "ktx",
+    "shaderc",
     {
       "name": "imgui",
       "features": ["glfw-binding", "vulkan-binding"]
