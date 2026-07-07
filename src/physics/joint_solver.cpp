@@ -30,7 +30,7 @@ constexpr float kInf = std::numeric_limits<float>::infinity();
 // as the contact solver's tangent basis — avoids a near-zero cross product).
 void perpendicularBasis(const Vec3& n, Vec3& t1, Vec3& t2) noexcept
 {
-    if (std::abs(n.x()) >= 0.57735f)
+    if (std::abs(n.x()) >= std::numbers::inv_sqrt3_v<float>)
     {
         t1 = Vec3::normalise(Vec3{n.y(), -n.x(), 0.0f});
     }

@@ -207,10 +207,10 @@ void GltfLoader::presizeAssets(const fastgltf::Asset& asset, Assets& assets)
 
     // Count (glTF animation, node) pairs for Animation slots
     std::size_t animSlotCount = 0;
-    for (std::size_t ai = 0; ai < asset.animations.size(); ++ai)
+    for (const auto& animation : asset.animations)
     {
         std::unordered_set<std::size_t> nodesInAnim;
-        for (const auto& channel : asset.animations[ai].channels)
+        for (const auto& channel : animation.channels)
         {
             if (channel.nodeIndex.has_value())
             {

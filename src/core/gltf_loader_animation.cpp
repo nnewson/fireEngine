@@ -162,10 +162,9 @@ void GltfLoader::loadRotationChannel(const fastgltf::Asset& asset,
             {
                 break;
             }
-            in.push_back(
-                Quaternion{quats[inIdx].x(), quats[inIdx].y(), quats[inIdx].z(), quats[inIdx].w()});
-            out.push_back(Quaternion{quats[outIdx].x(), quats[outIdx].y(), quats[outIdx].z(),
-                                     quats[outIdx].w()});
+            in.emplace_back(quats[inIdx].x(), quats[inIdx].y(), quats[inIdx].z(), quats[inIdx].w());
+            out.emplace_back(quats[outIdx].x(), quats[outIdx].y(), quats[outIdx].z(),
+                             quats[outIdx].w());
         }
         anim.rotationTangents(std::move(in), std::move(out));
     }
@@ -219,9 +218,8 @@ void GltfLoader::loadTranslationChannel(const fastgltf::Asset& asset,
             {
                 break;
             }
-            in.push_back(Vec3{positions[inIdx].x(), positions[inIdx].y(), positions[inIdx].z()});
-            out.push_back(
-                Vec3{positions[outIdx].x(), positions[outIdx].y(), positions[outIdx].z()});
+            in.emplace_back(positions[inIdx].x(), positions[inIdx].y(), positions[inIdx].z());
+            out.emplace_back(positions[outIdx].x(), positions[outIdx].y(), positions[outIdx].z());
         }
         anim.translationTangents(std::move(in), std::move(out));
     }
@@ -274,8 +272,8 @@ void GltfLoader::loadScaleChannel(const fastgltf::Asset& asset,
             {
                 break;
             }
-            in.push_back(Vec3{scales[inIdx].x(), scales[inIdx].y(), scales[inIdx].z()});
-            out.push_back(Vec3{scales[outIdx].x(), scales[outIdx].y(), scales[outIdx].z()});
+            in.emplace_back(scales[inIdx].x(), scales[inIdx].y(), scales[inIdx].z());
+            out.emplace_back(scales[outIdx].x(), scales[outIdx].y(), scales[outIdx].z());
         }
         anim.scaleTangents(std::move(in), std::move(out));
     }

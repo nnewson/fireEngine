@@ -76,7 +76,8 @@ void GpuProfiler::resolve(uint32_t frameIndex, FrameStats& out) const
     constexpr uint32_t kStrideWords = 2;
     auto [result, data] = pool_.getResults<uint64_t>(
         frameIndex * kQueriesPerFrame, kQueriesPerFrame,
-        kQueriesPerFrame * kStrideWords * sizeof(uint64_t), kStrideWords * sizeof(uint64_t),
+        static_cast<std::size_t>(kQueriesPerFrame) * kStrideWords * sizeof(uint64_t),
+        kStrideWords * sizeof(uint64_t),
         vk::QueryResultFlagBits::e64 | vk::QueryResultFlagBits::eWithAvailability);
     if (result != vk::Result::eSuccess)
     {
@@ -86,10 +87,10 @@ void GpuProfiler::resolve(uint32_t frameIndex, FrameStats& out) const
     bool anyValid = false;
     for (uint32_t p = 0; p < kProfilePassCount; ++p)
     {
-        const uint64_t beginVal = data[(p * 2 + 0) * kStrideWords];
-        const uint64_t beginAvail = data[(p * 2 + 0) * kStrideWords + 1];
-        const uint64_t endVal = data[(p * 2 + 1) * kStrideWords];
-        const uint64_t endAvail = data[(p * 2 + 1) * kStrideWords + 1];
+        const uint64_t beginVal = data[static_cast<std::size_t>(p * 2 + 0) * kStrideWords];
+        const uint64_t beginAvail = data[static_cast<std::size_t>(p * 2 + 0) * kStrideWords + 1];
+        const uint64_t endVal = data[static_cast<std::size_t>(p * 2 + 1) * kStrideWords];
+        const uint64_t endAvail = data[static_cast<std::size_t>(p * 2 + 1) * kStrideWords + 1];
         if (beginAvail == 0 || endAvail == 0 || endVal < beginVal)
         {
             continue; // pass skipped this cycle, or wrapped — report 0
