@@ -1,5 +1,6 @@
 #pragma once
 
+#include <fire_engine/graphics/lod.hpp>
 #include <fire_engine/render/constants.hpp>
 
 namespace fire_engine
@@ -20,6 +21,8 @@ enum class DebugView : int
     Velocity = 5,
     // Raw SSAO + contact term (grayscale), before it modulates ambient.
     Ssao = 6,
+    // Tints each mesh by its selected discrete LOD level (0 green → 1 yellow → 2 red → …).
+    Lod = 7,
 };
 
 // Live, runtime-editable render parameters surfaced by the debug overlay. Seeded
@@ -53,6 +56,11 @@ struct RenderTunables
     float diffuseIbl{kDiffuseIblStrength};
     float specularIbl{kSpecularIblStrength};
     float directionalIntensityScale{1.0f}; // multiplies the primary directional light
+
+    // Discrete mesh LOD: pick a coarser index set for distant/small static meshes within a
+    // screen-space pixel-error budget. The toggle doubles as the A/B regression escape hatch.
+    bool lodEnabled{true};
+    float lodPixelError{kLodPixelError};
 
     // SSAO + contact shadows (screen-space, from the depth prepass). When
     // ssaoEnabled is false the pass still runs but writes AO = 1 (no darkening).

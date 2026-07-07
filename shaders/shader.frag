@@ -78,6 +78,7 @@ struct MaterialData {
 layout(push_constant) uniform ForwardPushConstants {
     int selfShadowSlot;
     uint materialIndex; // index into the global materials[] SSBO for this draw
+    uint lodLevel;      // selected discrete LOD level (read only for the LOD debug tint)
 } pc;
 
 // Global materials SSBO (forward set 2, binding 1), indexed per-draw by the push
@@ -716,6 +717,15 @@ void main() {
     // Screen-space AO (R, sampled above) folds into the ambient occlusion term.
     if (light.environmentParams.z > 5.5 && light.environmentParams.z < 6.5) {
         outColor = vec4(vec3(ssaoSample.r), alpha);
+        return;
+    }
+    // LOD debug tint: colour each mesh by its selected discrete LOD level.
+    if (light.environmentParams.z > 6.5 && light.environmentParams.z < 7.5) {
+        vec3 tints[4] = vec3[4](vec3(0.2, 0.9, 0.2),  // LOD0 green
+                                vec3(0.95, 0.85, 0.1), // LOD1 yellow
+                                vec3(0.9, 0.2, 0.2),   // LOD2 red
+                                vec3(0.9, 0.2, 0.9));  // LOD3+ magenta
+        outColor = vec4(tints[min(pc.lodLevel, 3u)], alpha);
         return;
     }
     ao *= ssaoSample.r;

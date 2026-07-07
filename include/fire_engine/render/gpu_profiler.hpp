@@ -52,6 +52,9 @@ struct FrameStats
     // culling is disabled.
     int trackedNodes{0};
     int culledNodes{0};
+    // Triangles actually submitted in the forward opaque bucket this frame (post LOD + cull), so
+    // the overlay can show the LOD saving.
+    int trianglesDrawn{0};
 };
 
 class GpuProfiler

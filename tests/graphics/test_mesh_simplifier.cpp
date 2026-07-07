@@ -93,23 +93,21 @@ struct Mesh
     return m;
 }
 
-// A cube with per-face vertices (24 verts, 12 tris). Adjacent faces share no vertex index, so every
-// face is an isolated boundary-locked quad — it should not simplify at all.
-[[nodiscard]] Mesh makeSeamCube()
+// A flat grid where every triangle carries its own three vertices (positions duplicated at every
+// shared edge) — the way glTF splits vertices at UV/normal seams. Left un-welded this is all
+// boundary and cannot collapse; the simplifier must weld coincident positions to simplify it.
+[[nodiscard]] Mesh makeShatteredGrid(int n)
 {
+    const Mesh welded = makeFlatGrid(n);
     Mesh m;
-    const std::array<Vec3, 8> c{
-        {{0, 0, 0}, {1, 0, 0}, {1, 1, 0}, {0, 1, 0}, {0, 0, 1}, {1, 0, 1}, {1, 1, 1}, {0, 1, 1}}};
-    const std::array<std::array<int, 4>, 6> faces{
-        {{0, 1, 2, 3}, {5, 4, 7, 6}, {4, 5, 1, 0}, {1, 5, 6, 2}, {3, 2, 6, 7}, {4, 0, 3, 7}}};
-    for (const auto& f : faces)
+    for (std::size_t i = 0; i + 3 <= welded.indices.size(); i += 3)
     {
         const auto base = static_cast<uint32_t>(m.vertices.size());
-        for (const int idx : f)
+        for (int k = 0; k < 3; ++k)
         {
-            m.vertices.push_back(vtx(c[static_cast<std::size_t>(idx)]));
+            m.vertices.push_back(welded.vertices[welded.indices[i + k]]);
         }
-        m.indices.insert(m.indices.end(), {base, base + 1, base + 2, base, base + 2, base + 3});
+        m.indices.insert(m.indices.end(), {base, base + 1, base + 2});
     }
     return m;
 }
@@ -216,15 +214,47 @@ TEST_CASE("MeshSimplifier.UvSphereSimplifiesWithBoundedError", "[MeshSimplifier]
     }
 }
 
-TEST_CASE("MeshSimplifier.SeamCubeIsBoundaryLocked", "[MeshSimplifier]")
+TEST_CASE("MeshSimplifier.WeldsCoincidentSeamVertices", "[MeshSimplifier]")
 {
-    const Mesh cube = makeSeamCube(); // 12 triangles, per-face verts
+    const Mesh shattered = makeShatteredGrid(8); // 128 tris, every vertex duplicated
+    const std::size_t original = triCount(shattered.indices);
     const QuadricSimplifier simp;
 
-    const SimplifiedMesh out = simp.simplify(cube.vertices, cube.indices, 0.1f);
+    const SimplifiedMesh out = simp.simplify(shattered.vertices, shattered.indices, 0.05f);
 
-    // Every edge is a boundary of an isolated quad, so nothing can collapse without folding.
-    CHECK(triCount(out.indices) == 12);
+    // Without position welding this all-boundary mesh couldn't collapse at all; with it, the flat
+    // grid coarsens just like its welded form.
+    CHECK(original == 128);
+    CHECK(triCount(out.indices) < 20);
+    CHECK(out.error < 1e-3f);
+    CHECK(noDegenerateOrOutOfRange(out.indices, shattered.vertices.size()));
+}
+
+TEST_CASE("MeshSimplifier.PreservesPerCornerUvAcrossSeam", "[MeshSimplifier]")
+{
+    // Two triangles meet at the position edge p0-p1 but carry different UVs on each side — a UV
+    // seam. Position welding collapses p0's two wedges to one canonical for connectivity, but the
+    // emit must give each triangle back its own UV rather than smearing one across the seam.
+    auto v = [](Vec3 p, Vec2 uv) { return Vertex{p, Colour3{}, Vec3{}, uv}; };
+    Mesh m;
+    m.vertices = {
+        v({0.0f, 0.0f, 0.0f}, {0.0f, 0.0f}),  // 0: p0, triangle A
+        v({1.0f, 0.0f, 0.0f}, {1.0f, 0.0f}),  // 1: p1, triangle A
+        v({0.5f, 1.0f, 0.0f}, {0.5f, 1.0f}),  // 2
+        v({0.0f, 0.0f, 0.0f}, {0.0f, 1.0f}),  // 3: p0, triangle B (same position as 0, other UV)
+        v({1.0f, 0.0f, 0.0f}, {1.0f, 1.0f}),  // 4: p1, triangle B
+        v({0.5f, -1.0f, 0.0f}, {0.5f, 0.0f}), // 5
+    };
+    m.indices = {0, 1, 2, 3, 4, 5};
+    const QuadricSimplifier simp;
+
+    const SimplifiedMesh out =
+        simp.simplify(m.vertices, m.indices, 1.0f); // no collapse; test the emit
+    REQUIRE(out.indices.size() == 6);
+
+    // Triangle A's p0 corner keeps UV.t = 0; triangle B's keeps UV.t = 1 — the seam is not merged.
+    CHECK(m.vertices[out.indices[0]].texCoord().t() == 0.0f);
+    CHECK(m.vertices[out.indices[3]].texCoord().t() == 1.0f);
 }
 
 TEST_CASE("MeshSimplifier.IsDeterministic", "[MeshSimplifier]")

@@ -5,6 +5,7 @@
 
 #include <fire_engine/graphics/draw_command.hpp>
 #include <fire_engine/graphics/gpu_handle.hpp>
+#include <fire_engine/graphics/lod.hpp>
 #include <fire_engine/graphics/vertex.hpp>
 
 namespace fire_engine
@@ -82,6 +83,13 @@ public:
         return DrawIndexType::UInt32;
     }
 
+    // Discrete levels of detail, built at load() time from the base mesh (LOD0 = the full mesh;
+    // empty for deformable or small meshes). All levels index the same, unchanged vertex buffer.
+    [[nodiscard]] const std::vector<GeometryLod>& lods() const noexcept
+    {
+        return lods_;
+    }
+
     [[nodiscard]] bool castsShadow() const noexcept
     {
         return castsShadow_;
@@ -147,6 +155,7 @@ private:
 
     BufferHandle vertexBuffer_{NullBuffer};
     BufferHandle indexBuffer_{NullBuffer};
+    std::vector<GeometryLod> lods_;
     bool castsShadow_{true};
     bool storageVertices_{false};
 };

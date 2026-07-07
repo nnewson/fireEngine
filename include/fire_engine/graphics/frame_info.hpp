@@ -39,6 +39,11 @@ struct FrameInfo
     Mat4 currentViewProj{Mat4::identity()};
     Mat4 previousViewProj{Mat4::identity()};
     AlphaPipelines pipelines{};
+    // Discrete mesh LOD (set by the renderer from RenderTunables). When enabled, the object
+    // draw-build picks a coarser index set for distant/small static meshes within this pixel
+    // budget.
+    bool lodEnabled{false};
+    float lodPixelError{2.0f};
     PipelineHandle shadowPipeline{NullPipeline};
     // Light-space view-projection matrices for every shadow caster — cascades,
     // spot lights, and the six faces of each point light. Layout matches

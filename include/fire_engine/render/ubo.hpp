@@ -227,7 +227,8 @@ struct ForwardPushConstants
     alignas(4) int selfShadowSlot{-1};
     // Index into the global materials[] SSBO (bindless) for this draw.
     uint32_t materialIndex{0};
-    int _pad1{0};
+    // Selected discrete LOD level (0 = full mesh); read by the shader only for the LOD debug tint.
+    uint32_t lodLevel{0};
     int _pad2{0};
 };
 
