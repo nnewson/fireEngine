@@ -43,7 +43,7 @@ I've no doubt these are all solved problems nowadays with the Unreal engine et a
 - **GPU memory** is sub-allocated through the [Vulkan Memory Allocator](https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator) rather than one `vkAllocateMemory` per resource — buffers and images are owned as a resource + sub-allocation unit behind small `vk::raii`-style RAII wrappers, resource handles carry a generation so recycled slots are detectable, and load-time texture uploads coalesce into a single batched submit
 - **Texture mapping** via [stb_image](https://github.com/nothings/stb), including HDR equirectangular loading for the skybox; uploaded to GPU through staging buffers
 - **First-person camera** with keyboard (WASD + E/F for vertical) and mouse controls
-- **GLSL shaders** compiled to SPIR-V at build time via `glslc` or `glslangValidator`
+- **GLSL shaders** compiled to SPIR-V at build time via `glslc` (from the vcpkg `shaderc` port)
 
 ## How It Works
 
@@ -327,20 +327,31 @@ cmake --build build --target run-clang-tidy   # if clang-tidy is installed
 `cmake --build build --target run-clang-tidy --parallel <jobs>` or
 `CMAKE_BUILD_PARALLEL_LEVEL` to cap local CPU/memory use.
 
-CI builds with `FIRE_ENGINE_WARNINGS_AS_ERRORS=ON`, runs `run-clang-tidy`, runs
-`tests-full`, and checks `clang-format --dry-run -Werror`.
+CI (GitHub Actions, all `FIRE_ENGINE_WARNINGS_AS_ERRORS=ON`) runs four parallel jobs:
 
-To reproduce the Linux CI toolchain locally through Docker:
+- **`clang-format`** and **`clang-tidy`** — platform-independent lint gates, run once (Ubuntu).
+- **`build-test-linux`** — build + `tests-full` on Ubuntu (validates the **Linux/x86_64**
+  determinism golden).
+- **`build-test-macos`** — build + `tests-full` on macOS/arm64 (validates the **macOS/arm64**
+  golden). Like Linux, it gets Vulkan + GLFW + `glslc` from vcpkg — the runner only adds `ninja`.
+
+Each platform's `Determinism.GoldenHash` golden is now enforced by its own job — see
+[`docs/collision.md`](docs/collision.md) and CLAUDE.md § Testing.
+
+To reproduce the CI checks locally:
 
 ```bash
-tools/ci/run-local-ci.sh all
+tools/ci/run-local-ci.sh all      # Linux, in Docker (Ubuntu 24.04)
+tools/ci/run-local-macos.sh all   # macOS, native (no container)
 ```
 
-The runner copies the current working tree into an Ubuntu 24.04 container, keeps
-Linux build/vcpkg state in Docker volumes, and accepts `format`, `configure`,
-`build`, `tidy`, `test`, `all`, or `shell` to isolate a CI stage. It defaults to
-`linux/amd64` to match GitHub Actions; set `DOCKER_PLATFORM=linux/arm64` for a
-faster native Apple Silicon check.
+The **Docker** runner copies the working tree into an Ubuntu 24.04 container, keeps Linux
+build/vcpkg state in Docker volumes, and accepts `format`, `configure`, `build`, `tidy`, `test`,
+`all`, or `shell` to isolate a stage. It defaults to `linux/amd64` to match GitHub Actions; set
+`DOCKER_PLATFORM=linux/arm64` for a faster native Apple Silicon check. The **native macOS** runner
+takes the same stages and runs them directly on your host toolchain (it installs nothing — Vulkan,
+GLFW, and `glslc` all come from vcpkg, so it just needs your existing vcpkg + compiler + `ninja`).
+Both share their stage bodies via `tools/ci/ci-stages.sh`.
 
 Run the application:
 
@@ -376,7 +387,11 @@ Current categories are `app`, `general`, `gltf`, `physics`, `ragdoll`, and `rend
 
 Managed via the vcpkg manifest (`vcpkg.json`):
 
-- `vulkan-headers` — Vulkan API headers
+- `vulkan-headers` — Vulkan API headers (the Vulkan **loader** + `glfw3` arrive transitively, so
+  both come from vcpkg — no system Vulkan SDK / GLFW needed to build)
+- `vulkan-memory-allocator` — VMA GPU sub-allocator
+- `shaderc` — provides the `glslc` GLSL→SPIR-V compiler as a vcpkg tool, so every platform compiles
+  shaders with the same baseline-pinned compiler (no system `glslang-tools` / Vulkan-SDK glslc)
 - `fastgltf` — glTF 2.0 parser
 - `stb` — image loading (stb_image, incl. HDR)
 - `ktx` — KTX2 / Basis Universal textures
@@ -392,9 +407,9 @@ formerly used Homebrew g++-15, which can't parse the Apple SDK framework headers
 broke the vcpkg builds of gtest/glfw3/imgui and forced classic-mode global installs plus
 a vendored imgui backend; the Clang switch removed all of that.
 
-Also requires:
-
-- Vulkan SDK or `glslang-tools` (for the SPIR-V shader compiler)
+Also requires a C++23 toolchain, CMake, and Ninja. Building and the headless test suite need no
+system Vulkan — the loader, headers, GLFW, and `glslc` all come from vcpkg. To actually *run* the
+app you additionally need a Vulkan ICD at runtime: **MoltenVK** on macOS, a GPU driver on Linux.
 
 ## Assets
 
