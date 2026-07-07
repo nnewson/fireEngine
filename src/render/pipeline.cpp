@@ -598,12 +598,12 @@ void Pipeline::createGraphicsPipeline(const PipelineConfig& config)
     };
 
     vk::PipelineRasterizationStateCreateInfo raster{
-        .depthClampEnable = false,
-        .rasterizerDiscardEnable = false,
+        .depthClampEnable = vk::False,
+        .rasterizerDiscardEnable = vk::False,
         .polygonMode = vk::PolygonMode::eFill,
         .cullMode = config.cullMode,
         .frontFace = vk::FrontFace::eCounterClockwise,
-        .depthBiasEnable = config.depthBiasEnable,
+        .depthBiasEnable = static_cast<vk::Bool32>(config.depthBiasEnable),
         .depthBiasConstantFactor = config.depthBiasConstant,
         .depthBiasClamp = 0.0f,
         .depthBiasSlopeFactor = config.depthBiasSlope,
@@ -615,8 +615,8 @@ void Pipeline::createGraphicsPipeline(const PipelineConfig& config)
     };
 
     vk::PipelineDepthStencilStateCreateInfo depthStencil{
-        .depthTestEnable = config.depthTestEnable,
-        .depthWriteEnable = config.depthWrite,
+        .depthTestEnable = static_cast<vk::Bool32>(config.depthTestEnable),
+        .depthWriteEnable = static_cast<vk::Bool32>(config.depthWrite),
         .depthCompareOp = config.depthCompare,
     };
 
@@ -637,7 +637,7 @@ void Pipeline::createGraphicsPipeline(const PipelineConfig& config)
         if (i == 0)
         {
             blendAtts.push_back(vk::PipelineColorBlendAttachmentState{
-                .blendEnable = config.blendEnable,
+                .blendEnable = static_cast<vk::Bool32>(config.blendEnable),
                 .srcColorBlendFactor = config.srcColourBlend,
                 .dstColorBlendFactor = config.dstColourBlend,
                 .colorBlendOp = vk::BlendOp::eAdd,
@@ -659,7 +659,7 @@ void Pipeline::createGraphicsPipeline(const PipelineConfig& config)
     // Depth-only pipelines (no colour formats, e.g. shadow passes) carry no
     // blend attachment — the count must match colorAttachmentCount = 0.
     vk::PipelineColorBlendStateCreateInfo colourBlend{
-        .logicOpEnable = false,
+        .logicOpEnable = vk::False,
         .attachmentCount = static_cast<uint32_t>(blendAtts.size()),
         .pAttachments = blendAtts.empty() ? nullptr : blendAtts.data(),
     };
