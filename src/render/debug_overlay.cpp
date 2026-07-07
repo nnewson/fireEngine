@@ -137,10 +137,20 @@ void DebugOverlay::buildUi(const FrameStats& stats, RenderTunables& tunables)
         ImGui::EndDisabled();
     }
 
+    if (ImGui::CollapsingHeader("Mesh LOD", ImGuiTreeNodeFlags_DefaultOpen))
+    {
+        ImGui::Checkbox("Discrete LOD", &tunables.lodEnabled);
+        ImGui::BeginDisabled(!tunables.lodEnabled);
+        ImGui::SliderFloat("Pixel error", &tunables.lodPixelError, 0.25f, 16.0f, "%.2f");
+        ImGui::EndDisabled();
+        ImGui::Text("Triangles drawn: %d", stats.trianglesDrawn);
+        ImGui::TextDisabled("View > 'LOD tint' colours by level (green/yellow/red)");
+    }
+
     if (ImGui::CollapsingHeader("Debug view", ImGuiTreeNodeFlags_DefaultOpen))
     {
-        static constexpr const char* kViews[] = {"None",         "Normals",  "N·L", "Shadow",
-                                                 "Shadow depth", "Velocity", "SSAO"};
+        static constexpr const char* kViews[] = {"None",         "Normals",  "N·L",  "Shadow",
+                                                 "Shadow depth", "Velocity", "SSAO", "LOD tint"};
         int view = static_cast<int>(tunables.debugView);
         if (ImGui::Combo("View", &view, kViews, IM_ARRAYSIZE(kViews)))
         {

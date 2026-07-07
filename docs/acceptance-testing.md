@@ -12,7 +12,7 @@ runbook surfaced, since fixed).
 - The app opens a window. Compare it against the reference image, then **close the window** (or
   `Ctrl-C` the terminal) to move on.
 - **Validation layers are on** in the default (non-`NDEBUG`) build, so a clean render is also a
-  **0-VUID** render. For a headless pass/fail, background the app and grep stderr (see `CLAUDE.md`).
+  **0-VUID** render. For a headless pass/fail, background the app and grep stderr (see [`CLAUDE.md`](../CLAUDE.md)).
 - **Both CLI args are optional.** With **no scene**, only programmatically-added content renders
   (the `-p`/`-c`/`-k`/`-q` demos) — there is no fallback asset. With **no skybox**, the scene is lit
   by the default environment's IBL but **no sky is drawn** (neutral background), at a calmer IBL

@@ -1,6 +1,7 @@
 #include <fire_engine/graphics/mapped_buffer.hpp>
 #include <fire_engine/graphics/object.hpp>
 
+#include <cmath>
 #include <cstring>
 
 #include <fire_engine/graphics/geometry.hpp>
@@ -450,6 +451,18 @@ std::vector<DrawCommand> Object::buildDrawCommands(const FrameInfo& frame, const
         cmd.indexBuffer = binding.geometry->indexBuffer();
         cmd.indexCount = binding.geometry->indexCount();
         cmd.indexType = binding.geometry->indexType();
+        // Discrete LOD: swap in a coarser index set (same vertex buffer) for distant/small static
+        // meshes, chosen so the level's geometric error stays within the pixel budget.
+        if (frame.lodEnabled && binding.geometry->lods().size() > 1)
+        {
+            const float distance = (centroid - frame.cameraPosition).magnitude();
+            const std::size_t level =
+                selectLod(binding.geometry->lods(), distance, std::abs(frame.proj[1, 1]),
+                          static_cast<float>(frame.viewportHeight), frame.lodPixelError);
+            cmd.indexBuffer = binding.geometry->lods()[level].indexBuffer;
+            cmd.indexCount = binding.geometry->lods()[level].indexCount;
+            cmd.lodLevel = static_cast<uint32_t>(level);
+        }
         // Forward set 0 is pushed inline at draw time, not bound — carry the
         // buffer handles instead of a descriptor set.
         cmd.frameUbo = uniformBufs_[frame.currentFrame];
@@ -483,6 +496,16 @@ std::vector<DrawCommand> Object::buildDrawCommands(const FrameInfo& frame, const
             shadowCmd.indexBuffer = shadowGeometry->indexBuffer();
             shadowCmd.indexCount = shadowGeometry->indexCount();
             shadowCmd.indexType = shadowGeometry->indexType();
+            // Shadows tolerate a coarser LOD than the main view (silhouette detail matters less).
+            if (frame.lodEnabled && shadowGeometry->lods().size() > 1)
+            {
+                const float distance = (centroid - frame.cameraPosition).magnitude();
+                const std::size_t level = selectLod(
+                    shadowGeometry->lods(), distance, std::abs(frame.proj[1, 1]),
+                    static_cast<float>(frame.viewportHeight), frame.lodPixelError * kShadowLodBias);
+                shadowCmd.indexBuffer = shadowGeometry->lods()[level].indexBuffer;
+                shadowCmd.indexCount = shadowGeometry->lods()[level].indexCount;
+            }
             shadowCmd.pipeline = frame.shadowPipeline;
             // Shadow set 0 is pushed inline per draw: the ShadowUBO here plus the
             // skin/morph/morphSsbo handles copied from the forward cmd above.

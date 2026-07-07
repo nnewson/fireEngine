@@ -642,6 +642,7 @@ void Renderer::recordDrawBucket(vk::CommandBuffer cmd, std::span<const DrawComma
             ForwardPushConstants pc{};
             pc.selfShadowSlot = dc.selfShadowSlot;
             pc.materialIndex = dc.materialIndex;
+            pc.lodLevel = dc.lodLevel;
             cmd.pushConstants<ForwardPushConstants>(resources_.vulkanPipelineLayout(dc.pipeline),
                                                     vk::ShaderStageFlagBits::eFragment, 0, pc);
         }
@@ -754,18 +755,20 @@ const Renderer::DrawBuckets& Renderer::collectDrawCommands(RenderableScene& scen
 
     const auto extent = swapchain_.extent();
     const AlphaPipelines pipelines{forwardOpaqueHandle_, forwardBlendHandle_};
-    const FrameInfo frame{currentFrame_,
-                          extent.width,
-                          extent.height,
-                          cameraPosition,
-                          cameraTarget,
-                          view_,
-                          jitteredProj_,
-                          currentViewProj_,
-                          previousViewProj_,
-                          pipelines,
-                          shadows_.pipelineHandle(),
-                          shadowViewProjs_};
+    const FrameInfo frame{.currentFrame = currentFrame_,
+                          .viewportWidth = extent.width,
+                          .viewportHeight = extent.height,
+                          .cameraPosition = cameraPosition,
+                          .cameraTarget = cameraTarget,
+                          .view = view_,
+                          .proj = jitteredProj_,
+                          .currentViewProj = currentViewProj_,
+                          .previousViewProj = previousViewProj_,
+                          .pipelines = pipelines,
+                          .lodEnabled = tunables_.lodEnabled,
+                          .lodPixelError = tunables_.lodPixelError,
+                          .shadowPipeline = shadows_.pipelineHandle(),
+                          .shadowViewProjs = shadowViewProjs_};
 
     // Coarse pre-cull frustums: the camera plus every shadow caster. The union is a superset of
     // what buildDrawBuckets / shadows_ keep per pass, so a node dropped by all of them is never
@@ -789,6 +792,18 @@ const Renderer::DrawBuckets& Renderer::collectDrawCommands(RenderableScene& scen
 
     assignSelfShadowSlots(drawCommandScratch_);
     buildDrawBuckets(drawCommandScratch_, drawBucketsScratch_);
+
+    int triangles = 0;
+    for (const std::vector<DrawCommand>* bucket :
+         {&drawBucketsScratch_.opaque, &drawBucketsScratch_.blend,
+          &drawBucketsScratch_.transmissive})
+    {
+        for (const DrawCommand& dc : *bucket)
+        {
+            triangles += static_cast<int>(dc.indexCount / 3);
+        }
+    }
+    stats_.trianglesDrawn = triangles;
     return drawBucketsScratch_;
 }
 
