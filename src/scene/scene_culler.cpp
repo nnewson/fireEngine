@@ -23,26 +23,16 @@ namespace
 // World-space AABB of `local` transformed by `m` (tight bound of the eight corners).
 [[nodiscard]] AABB transformBounds(const Mat4& m, const Bounds3& local)
 {
-    Vec3 lo;
-    Vec3 hi;
-    for (int i = 0; i < 8; ++i)
+    const auto corners = local.corners();
+    Vec3 lo = transformPoint(m, corners.front());
+    Vec3 hi = lo;
+    for (std::size_t i = 1; i < corners.size(); ++i)
     {
-        const Vec3 corner{(i & 1) ? local.max.x() : local.min.x(),
-                          (i & 2) ? local.max.y() : local.min.y(),
-                          (i & 4) ? local.max.z() : local.min.z()};
-        const Vec3 world = transformPoint(m, corner);
-        if (i == 0)
-        {
-            lo = world;
-            hi = world;
-        }
-        else
-        {
-            lo = {std::min(lo.x(), world.x()), std::min(lo.y(), world.y()),
-                  std::min(lo.z(), world.z())};
-            hi = {std::max(hi.x(), world.x()), std::max(hi.y(), world.y()),
-                  std::max(hi.z(), world.z())};
-        }
+        const Vec3 world = transformPoint(m, corners[i]);
+        lo = {std::min(lo.x(), world.x()), std::min(lo.y(), world.y()),
+              std::min(lo.z(), world.z())};
+        hi = {std::max(hi.x(), world.x()), std::max(hi.y(), world.y()),
+              std::max(hi.z(), world.z())};
     }
     return AABB{lo, hi};
 }

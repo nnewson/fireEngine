@@ -125,9 +125,15 @@ Suggested execution order — not binding, adjust freely.
    heavier scenes.
 6. **TAA skinned-deformation velocity** — exact previous-joint-matrix velocity to replace the v1
    camera-motion-only fallback (skinned meshes currently reproject on camera motion only).
+7. **`Mat4::transformPoint` helper** *(flagged during the clang-tidy cleanup)* — the free
+   `transformPoint(const Mat4&, Vec3)` (`m * {p, 1}` → `Vec3`) is copy-pasted in `physics_world.cpp`,
+   `physics_world_shapes.cpp`, and `scene_culler.cpp`. Its natural home is a `Mat4::transformPoint(Vec3)`
+   method (`RigidTransform` already has one; `Mat4` doesn't). Lift it onto `Mat4`, replace the three
+   copies + their call sites. Small + mechanical; kept out of `tidy-aabb-corners` to hold the impact
+   radius (see `clang-tidy.md`).
 
 **Cosmetic / on demand (maybe)**
-7. **Ragdoll plausibility polish** *(branch `ragdoll-joint-settle`)* — ✅ **post-settle arm drift** +
+8. **Ragdoll plausibility polish** *(branch `ragdoll-joint-settle`)* — ✅ **post-settle arm drift** +
    ✅ **residual settle-yaw** both fixed, via settle assists in `Articulation::integrateVelocities`
    that mirror the base's existing linear one: (a) a per-DOF joint settle assist strongly decays only
    joints already moving slowly (`kJointSettle{Speed,Damping}`), so limbs stop within ~0.5 s instead
@@ -139,14 +145,14 @@ Suggested execution order — not binding, adjust freely.
    cones).
 
 **Parked with data — revisit only on a concrete need (maybe)**
-8. **P9.6 Stage 2** — per-substep re-detection for >20 rad/s spinners resting on floors (boundary
+9. **P9.6 Stage 2** — per-substep re-detection for >20 rad/s spinners resting on floors (boundary
    quantified + gated by `Demos.RotationalTunnellingBoundedTo20RadPerSec`).
-9. **Mesh-contact mid-step refresh.**
-10. **Link-vs-dynamic-rigid articulation contacts** (link colliders are link-vs-static only today).
-11. **Joint split-position pass** (P9 item 4).
+10. **Mesh-contact mid-step refresh.**
+11. **Link-vs-dynamic-rigid articulation contacts** (link colliders are link-vs-static only today).
+12. **Joint split-position pass** (P9 item 4).
 
 **Design-review revisits — trigger-based (maybe)**
-12. **Character-controller as a scene component** — when a 2nd consumer appears (authored character
+13. **Character-controller as a scene component** — when a 2nd consumer appears (authored character
     nodes / NPCs), via a `SceneUpdateContext { const InputState&; PhysicsWorld*; }` threaded into
     component updates (not a per-component back-pointer). See "Design reviews" at the end.
 

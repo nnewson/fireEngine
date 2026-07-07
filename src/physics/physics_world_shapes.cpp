@@ -20,31 +20,6 @@ namespace
     return {r.x(), r.y(), r.z()};
 }
 
-// AABB enclosing `a` after transforming its 8 corners by `m` (used to place a
-// compound child's local bounds within the body frame).
-[[nodiscard]] AABB transformAabb(const Mat4& m, const AABB& a)
-{
-    Vec3 lo;
-    Vec3 hi;
-    for (int i = 0; i < 8; ++i)
-    {
-        const Vec3 corner{(i & 1) ? a.max.x() : a.min.x(), (i & 2) ? a.max.y() : a.min.y(),
-                          (i & 4) ? a.max.z() : a.min.z()};
-        const Vec3 p = transformPoint(m, corner);
-        if (i == 0)
-        {
-            lo = p;
-            hi = p;
-        }
-        else
-        {
-            lo = {std::min(lo.x(), p.x()), std::min(lo.y(), p.y()), std::min(lo.z(), p.z())};
-            hi = {std::max(hi.x(), p.x()), std::max(hi.y(), p.y()), std::max(hi.z(), p.z())};
-        }
-    }
-    return {lo, hi};
-}
-
 [[nodiscard]] Vec3 matrixScale(const Mat4& m)
 {
     return {Vec3{m[0, 0], m[1, 0], m[2, 0]}.magnitude(),
@@ -255,7 +230,7 @@ void PhysicsWorld::updateCollider(ColliderEntry& collider, float dt)
     }
 
     const Mat4 childMat = Mat4::translate(collider.localPosition) * collider.localRotation.toMat4();
-    collider.collider.localBounds(transformAabb(childMat, localBounds(collider.shape)));
+    collider.collider.localBounds(localBounds(collider.shape).transformedBy(childMat));
     collider.collider.update(owner.world, motion);
 }
 
@@ -268,7 +243,7 @@ void PhysicsWorld::resetCollider(ColliderEntry& collider)
     }
 
     const Mat4 childMat = Mat4::translate(collider.localPosition) * collider.localRotation.toMat4();
-    collider.collider.localBounds(transformAabb(childMat, localBounds(collider.shape)));
+    collider.collider.localBounds(localBounds(collider.shape).transformedBy(childMat));
     collider.collider.resetFrame(owner.world);
 }
 

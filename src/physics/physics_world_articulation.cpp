@@ -17,35 +17,6 @@ namespace fire_engine
 namespace
 {
 
-[[nodiscard]] Vec3 transformPoint(const Mat4& m, Vec3 p)
-{
-    const Vec4 r = m * Vec4{p.x(), p.y(), p.z(), 1.0f};
-    return {r.x(), r.y(), r.z()};
-}
-
-[[nodiscard]] AABB transformAabb(const Mat4& m, const AABB& a)
-{
-    Vec3 lo;
-    Vec3 hi;
-    for (int i = 0; i < 8; ++i)
-    {
-        const Vec3 corner{(i & 1) ? a.max.x() : a.min.x(), (i & 2) ? a.max.y() : a.min.y(),
-                          (i & 4) ? a.max.z() : a.min.z()};
-        const Vec3 p = transformPoint(m, corner);
-        if (i == 0)
-        {
-            lo = p;
-            hi = p;
-        }
-        else
-        {
-            lo = {std::min(lo.x(), p.x()), std::min(lo.y(), p.y()), std::min(lo.z(), p.z())};
-            hi = {std::max(hi.x(), p.x()), std::max(hi.y(), p.y()), std::max(hi.z(), p.z())};
-        }
-    }
-    return {lo, hi};
-}
-
 [[nodiscard]] float maxJointRate(const Articulation& art) noexcept
 {
     float maxRate = 0.0f;
@@ -170,7 +141,7 @@ PhysicsColliderHandle PhysicsWorld::addLinkColliderEntry(
 
     Collider collider;
     const Mat4 childMat = Mat4::translate(localPosition) * localRotation.toMat4();
-    collider.localBounds(transformAabb(childMat, localBounds(shape)));
+    collider.localBounds(localBounds(shape).transformedBy(childMat));
     collider.collisionLayer(collisionLayer);
     collider.collisionMask(collisionMask);
     collider.isTrigger(isTrigger);

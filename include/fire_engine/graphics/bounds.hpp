@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <limits>
 
 #include <fire_engine/math/vec3.hpp>
@@ -38,6 +39,15 @@ struct Bounds3
     [[nodiscard]] Vec3 extent() const noexcept
     {
         return max - min;
+    }
+
+    // The eight corners, taking min/max per bit of the index (bit 0 -> x, 1 -> y, 2 -> z).
+    [[nodiscard]] std::array<Vec3, 8> corners() const noexcept
+    {
+        return {Vec3{min.x(), min.y(), min.z()}, Vec3{max.x(), min.y(), min.z()},
+                Vec3{min.x(), max.y(), min.z()}, Vec3{max.x(), max.y(), min.z()},
+                Vec3{min.x(), min.y(), max.z()}, Vec3{max.x(), min.y(), max.z()},
+                Vec3{min.x(), max.y(), max.z()}, Vec3{max.x(), max.y(), max.z()}};
     }
 };
 

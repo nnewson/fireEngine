@@ -216,31 +216,6 @@ namespace
     return {r.x(), r.y(), r.z()};
 }
 
-// AABB enclosing `a` after transforming its 8 corners by `m` (used to place a
-// compound child's local bounds within the body frame).
-[[nodiscard]] AABB transformAabb(const Mat4& m, const AABB& a)
-{
-    Vec3 lo;
-    Vec3 hi;
-    for (int i = 0; i < 8; ++i)
-    {
-        const Vec3 corner{(i & 1) ? a.max.x() : a.min.x(), (i & 2) ? a.max.y() : a.min.y(),
-                          (i & 4) ? a.max.z() : a.min.z()};
-        const Vec3 p = transformPoint(m, corner);
-        if (i == 0)
-        {
-            lo = p;
-            hi = p;
-        }
-        else
-        {
-            lo = {std::min(lo.x(), p.x()), std::min(lo.y(), p.y()), std::min(lo.z(), p.z())};
-            hi = {std::max(hi.x(), p.x()), std::max(hi.y(), p.y()), std::max(hi.z(), p.z())};
-        }
-    }
-    return {lo, hi};
-}
-
 struct CompoundMassProperties
 {
     Vec3 com;
@@ -500,7 +475,7 @@ PhysicsWorld::addColliderEntry(BodyEntry& owner, const ColliderShape& shape,
     // Local bounds include the child's offset within the body (identity for a single
     // collider), so the broadphase covers the right region.
     const Mat4 childMat = Mat4::translate(localPosition) * localRotation.toMat4();
-    collider.localBounds(transformAabb(childMat, localBounds(shape)));
+    collider.localBounds(localBounds(shape).transformedBy(childMat));
     collider.collisionLayer(collisionLayer);
     collider.collisionMask(collisionMask);
     collider.isTrigger(isTrigger);
