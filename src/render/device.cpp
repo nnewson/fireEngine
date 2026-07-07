@@ -208,7 +208,7 @@ Device::findQueueFamilies(const vk::raii::PhysicalDevice& d)
         {
             gf = i;
         }
-        if (d.getSurfaceSupportKHR(i, *surface_))
+        if (d.getSurfaceSupportKHR(i, *surface_) != vk::False)
         {
             pf = i;
         }
@@ -240,7 +240,7 @@ void Device::createLogicalDevice()
     }
 
     auto supported = physDevice_.getFeatures();
-    if (!supported.imageCubeArray)
+    if (supported.imageCubeArray == vk::False)
     {
         throw std::runtime_error(
             "GPU does not support imageCubeArray (required for point shadow maps)");
@@ -252,11 +252,11 @@ void Device::createLogicalDevice()
     auto supported13 =
         physDevice_.getFeatures2<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan13Features>()
             .get<vk::PhysicalDeviceVulkan13Features>();
-    if (!supported13.synchronization2)
+    if (supported13.synchronization2 == vk::False)
     {
         throw std::runtime_error("GPU does not support synchronization2");
     }
-    if (!supported13.dynamicRendering)
+    if (supported13.dynamicRendering == vk::False)
     {
         throw std::runtime_error("GPU does not support dynamicRendering");
     }
