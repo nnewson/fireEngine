@@ -32,7 +32,7 @@ A strong **rendering** codebase with a now-**mature physics** core (the P0–P9 
   and **static triangle meshes** authored via `extras.Physics` `Shape: "Mesh"`/`"Compound"`
   (P6 ✅); queries + a character controller (P7 ✅); and **P9 solver robustness** (soft joints,
   TGS soft-step, 2D friction, reduced-coordinate articulations, mid-step manifold refresh). The
-  physics track is complete end to end — see [`collision.md`](docs/collision.md).
+  physics track is complete end to end — see [`collision.md`](collision.md).
 
 **Structural gaps this roadmap set out to close — now closed:** the compute-shader path (#1),
 GPU instancing (#1 particles), frustum culling + spatial structure (`SceneCuller`), dynamic
@@ -52,7 +52,7 @@ bindless materials, TAA, SSAO, frustum culling, overlay), and the **26-item staf
 review** (formerly `codereview.md` — now cleared, all of CR-01…CR-26 done). The one remaining
 *major* planned arc is **rendering spine #3 — view-dependent progressive meshes**; everything else
 outstanding is smaller could/maybe work (listed below). Detailed design for each done item lives in
-the narrative sections further down and in [`collision.md`](docs/collision.md) (physics).
+the narrative sections further down and in [`collision.md`](collision.md) (physics).
 
 ## ✅ Done — at a glance
 
@@ -68,7 +68,7 @@ the narrative sections further down and in [`collision.md`](docs/collision.md) (
 - **Frustum culling + persistent scene BVH** (`SceneCuller`) + overlay counts.
 - **ImGui debug/profiling overlay** — per-pass GPU timestamps, CPU frame plot, `RenderTunables`.
 
-**Physics & collision (P0–P9)** — full detail in [`collision.md`](docs/collision.md).
+**Physics & collision (P0–P9)** — full detail in [`collision.md`](collision.md).
 - debug-draw + determinism harness → shape narrowphase (`ContactManifold`) → sequential-impulse
   solver → speculative CCD → full rotational dynamics → GJK/EPA convex → constraints/joints/
   ragdolls → islands/sleeping/AABB-tree broadphase → static mesh + compound → queries + character
@@ -85,7 +85,7 @@ gpu); physics free-lists (CR-11/12); render↔scene layering (CR-09); Assets poi
 Suggested execution order — not binding, adjust freely.
 
 **Now / near-term (small, in-flight)**
-1. ✅ **Acceptance-testing runbook** ([`acceptance-testing.md`](docs/acceptance-testing.md), landed) — copy-pasteable command +
+1. ✅ **Acceptance-testing runbook** ([`acceptance-testing.md`](acceptance-testing.md), landed) — copy-pasteable command +
    Khronos source + reference image per sample scene, physics demo, and generated feature. Referenced
    from the README. Full image-link verification is a manual pass (in progress).
 2. ✅ **TransmissionTest regression** *(fixed, branch `transmission-thinwalled-roughness`)* — the grid
@@ -437,7 +437,7 @@ and a foundation for the GPU-driven direction (#3).
 ## Physics & collision — adding weight
 
 The rendering spine above is deep; the physics core is now a real rigid-body solver
-([`collision.md`](docs/collision.md) documents it in full). The narrowphase produces a **shape-specific
+([`collision.md`](collision.md) documents it in full). The narrowphase produces a **shape-specific
 `ContactManifold`** (P1 ✅) and a **sequential-impulse solver** resolves it (P2 ✅) —
 warm-started friction + restitution impulses with split-impulse positional correction,
 so `PhysicsMaterial::friction` and `mass` are live and resting stacks settle.
@@ -840,7 +840,7 @@ the reference for how to author physics content.
 regenerated at build) — FallRest, Restitution, FrictionRamp, Stack, Topple, ConvexHull, Sleep,
 StaticMesh, Compound — plus 2 main-loop/flag demos (`-k` character, `-q` query probe). Each has a
 headless behaviour test in `tests/physics/test_demos.cpp` (`[Demos]`), loads at 0 `VUID`, and is
-indexed in [`README.md`](README.md) / [`collision.md`](docs/collision.md) / [`onboarding.md`](docs/onboarding.md). **Along the way the demos surfaced real
+indexed in [`README.md`](../README.md) / [`collision.md`](collision.md) / [`onboarding.md`](onboarding.md). **Along the way the demos surfaced real
 solver limits** — tall-stack chaotic instability and ragdoll joint-pumping — now driving **P9**
 (the Stack demo was capped at 3 boxes — **now 5, re-enabled once P9.2's TGS solver quiesced tall
 stacks**; the **ragdoll demo is deferred to P9**, authoring code preserved
@@ -858,7 +858,7 @@ in `generate.py`). A small renderer add landed too: the asleep-collider debug co
   **query/character** playground — ray/overlap probes drawn via the debug overlay and the
   controller walking slopes/steps (P7).
 - Verification is the point: each loads clean (0 `VUID`), behaves as labelled, and is
-  listed in [`collision.md`](docs/collision.md) as the authoring reference. A short README/onboarding "physics
+  listed in [`collision.md`](collision.md) as the authoring reference. A short README/onboarding "physics
   demos" section indexes them with the command to run each.
 
 ### P9. Solver robustness & modernization — in progress (P9.1 soft joints ✅, P9.2 TGS soft-step ✅, P9.3 friction patches ✅, reduced-coordinate articulations ✅, P9.6 mid-step manifold refresh ✅ — settle snap 10.5°→0.5°)
@@ -1364,7 +1364,7 @@ a standalone rendering refactor off the spine — material textures + scalars ar
 a global set-2 array + SSBO indexed in-shader; **`bufferDeviceAddress`** is adopted
 with #2 (the cloth solver is descriptor-free). Both underpin the GPU-driven direction.
 
-Separate **physics & collision** track ([`collision.md`](docs/collision.md) for the current system): its
+Separate **physics & collision** track ([`collision.md`](collision.md) for the current system): its
 own spine — **debug-draw ✅ → contact manifold ✅ → impulse solver ✅ → CCD ✅ → rotation ✅ →
 convex narrowphase ✅ → joints ✅ → scale ✅ → mesh/compound ✅ → queries ✅ → GJK hardening ✅ → showcase ✅ → solver robustness (P9)**, front-loading the
 manifold + solver (both ✅) the way the rendering spine front-loads compute +

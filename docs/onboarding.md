@@ -330,7 +330,7 @@ Runtime physics:
 - `CharacterController` (P7, `physics/character_controller.hpp`): a kinematic-capsule
   collide-and-slide controller over the queries (slope limit, step up/down, grounded snap). A
   headless engine class driven from `FireEngine::mainLoop` (`-k` demo), **not** a scene component —
-  see [`roadmap.md`](../roadmap.md) § Design reviews for why.
+  see [`roadmap.md`](roadmap.md) § Design reviews for why.
 
 Authority rules:
 
@@ -790,7 +790,7 @@ the same change — most have a test or guard that will catch you, but not all.
   (a self-lit paper lamp shade) instead scatters to a view-independent irradiance tint, so a bright
   bulb behind it doesn't beam a camera-tracking screen-space blob. The discriminator is the
   **emissive factor**, not thickness (a thickness-based split used to wrongly flatten the
-  TransmissionTest grid — see [`roadmap.md`](../roadmap.md)).
+  TransmissionTest grid — see [`roadmap.md`](roadmap.md)).
 
 ## Where To Look First
 
@@ -881,7 +881,7 @@ A pure header-only addition needs no CMake change, but its test still does.
   move you didn't intend is a determinism regression, not something to rebaseline (see CLAUDE.md
   § Testing).
 - Sweep [`README.md`](../README.md), `onboarding.md`, [`review-order.md`](review-order.md), and the relevant subsystem doc
-  ([`collision.md`](collision.md) / [`lod.md`](lod.md) / [`roadmap.md`](../roadmap.md)) for references your change made stale — the constant you
+  ([`collision.md`](collision.md) / [`lod.md`](lod.md) / [`roadmap.md`](roadmap.md)) for references your change made stale — the constant you
   moved, the binding you renamed, the file you split. Treat the docs as part of the change, not an
   afterthought (see CLAUDE.md § Documentation).
 

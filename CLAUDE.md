@@ -16,8 +16,8 @@ or ship a half-fix to move on — if the right fix is a bigger piece of work, do
 
 ## Documentation
 
-The repo carries several Markdown docs. The maintainer docs live in **`docs/`**; `README.md`,
-`roadmap.md`, and this file stay at the repo root. Each has a distinct audience; **when you touch
+The repo carries several Markdown docs. The maintainer docs live in **`docs/`**; `README.md` and
+this file stay at the repo root. Each has a distinct audience; **when you touch
 code, update the docs that describe it in the same change**:
 
 - **[`README.md`](README.md)** (root) — outward-facing: feature list, how to build/run, the local Docker CI, dependencies, assets, the [`docs/acceptance-testing.md`](docs/acceptance-testing.md) pointer. Update when a user-visible capability, CLI flag, dependency, or build step changes.
@@ -25,7 +25,7 @@ code, update the docs that describe it in the same change**:
 - **[`docs/review-order.md`](docs/review-order.md)** — the exhaustive, **tiered file-by-file reading order** (headers before `.cpp`) with per-file attention points. Update when you add/rename/split a source file or change a file's responsibility.
 - **[`docs/collision.md`](docs/collision.md)** — the **physics & collision** track: runtime model, glTF authoring (`extras.*`), per-system detail. The authority for physics behaviour + authoring.
 - **[`docs/lod.md`](docs/lod.md)** — the **mesh level-of-detail / simplifier** system: how it works and the design decisions, for a maintainer. The authority for LOD behaviour + tuning.
-- **[`roadmap.md`](roadmap.md)** (root) — the **rendering-spine roadmap**: what's done, an ordered to-do (could/should/maybe), and per-item design notes. Update status when an item lands. (The physics track's detail lives in [`docs/collision.md`](docs/collision.md).)
+- **[`docs/roadmap.md`](docs/roadmap.md)** — the **rendering-spine roadmap**: what's done, an ordered to-do (could/should/maybe), and per-item design notes. Update status when an item lands. (The physics track's detail lives in [`docs/collision.md`](docs/collision.md).)
 - **[`docs/acceptance-testing.md`](docs/acceptance-testing.md)** — the **manual visual sign-off runbook** (per-asset commands + reference images). Update when assets, scenes, or flags change.
 - **[`CLAUDE.md`](CLAUDE.md)** / **[`AGENTS.md`](AGENTS.md)** (root) — agent instructions (this file; `AGENTS.md` is a symlink). Update when a convention, invariant, or workflow rule changes.
 
