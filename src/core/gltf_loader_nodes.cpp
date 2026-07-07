@@ -404,7 +404,7 @@ void GltfLoader::GltfSceneBuilder::configureAnimatedNode(std::size_t nodeIndex, 
         loadAnimation(ai, nodeIndex, la, numMorphTargets);
         applyRestTRS(gltfNode, la);
         la.name(std::string(asset.animations[ai].name));
-        nodeAnimations.push_back({ai, &la});
+        nodeAnimations.emplace_back(ai, &la);
     }
 
     if (hasTransformAnim)

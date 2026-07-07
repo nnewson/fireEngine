@@ -160,7 +160,7 @@ void gatherMeshGeometry(const fastgltf::Asset& asset, const fastgltf::Mesh& mesh
         const auto& posAccessor = asset.accessors[posAttr->accessorIndex];
         fastgltf::iterateAccessorWithIndex<fastgltf::math::fvec3>(
             asset, posAccessor, [&](fastgltf::math::fvec3 p, std::size_t)
-            { positions.push_back({p.x(), p.y(), p.z()}); });
+            { positions.emplace_back(p.x(), p.y(), p.z()); });
 
         if (primitive.indicesAccessor.has_value())
         {

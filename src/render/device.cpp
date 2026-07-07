@@ -228,6 +228,7 @@ void Device::createLogicalDevice()
 
     std::set<uint32_t> uniqueFamilies = {graphicsFamily_, presentFamily_};
     std::vector<vk::DeviceQueueCreateInfo> qcis;
+    qcis.reserve(uniqueFamilies.size());
     float prio = 1.0f;
     for (uint32_t fam : uniqueFamilies)
     {

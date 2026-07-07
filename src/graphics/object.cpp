@@ -146,9 +146,9 @@ void Object::createForwardBindings(Resources& resources)
 
         // Skin buffers
         SkinUBO skinUbo{};
-        for (std::size_t j = 0; j < kMaxJoints; ++j)
+        for (auto& joint : skinUbo.joints)
         {
-            skinUbo.joints[j] = Mat4::identity();
+            joint = Mat4::identity();
         }
         auto skinSet = resources.createMappedUniformBuffers(sizeof(SkinUBO));
         for (int i = 0; i < kMaxFramesInFlight; ++i)

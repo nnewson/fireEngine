@@ -21,7 +21,7 @@ namespace
 // Picks the more stable seed axis to avoid a near-zero cross product.
 void buildTangents(const Vec3& n, Vec3& t1, Vec3& t2) noexcept
 {
-    if (std::abs(n.x()) >= 0.57735f)
+    if (std::abs(n.x()) >= std::numbers::inv_sqrt3_v<float>)
     {
         t1 = Vec3::normalise(Vec3{n.y(), -n.x(), 0.0f});
     }

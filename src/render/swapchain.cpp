@@ -103,9 +103,9 @@ void Swapchain::createImageViews()
 {
     views_.clear();
     views_.reserve(images_.size());
-    for (size_t i = 0; i < images_.size(); ++i)
+    for (const auto& image : images_)
     {
-        views_.push_back(createImageView(images_[i], format_, vk::ImageAspectFlagBits::eColor));
+        views_.push_back(createImageView(image, format_, vk::ImageAspectFlagBits::eColor));
     }
 }
 

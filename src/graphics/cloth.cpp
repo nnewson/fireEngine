@@ -205,7 +205,7 @@ ClothMesh makeGridCloth(const ClothGridParams& params)
     }
 
     // Two triangles per grid cell (CCW from +Y).
-    mesh.indices.reserve((nx - 1) * (nz - 1) * 6);
+    mesh.indices.reserve(static_cast<std::size_t>(nx - 1) * (nz - 1) * 6);
     for (uint32_t j = 0; j + 1 < nz; ++j)
     {
         for (uint32_t i = 0; i + 1 < nx; ++i)
