@@ -124,7 +124,10 @@ struct Mesh
                                                           const std::vector<MeshCollapse>& seq)
 {
     std::vector<uint32_t> remap(vertexCount);
-    std::ranges::iota(remap, 0u);
+    // std::iota (C++11), not std::ranges::iota — the ranges variant (C++23) is missing from some
+    // Apple Clang libc++ versions on GitHub's macos-latest runners, so it fails intermittently
+    // there.
+    std::iota(remap.begin(), remap.end(), 0u);
     auto resolve = [&](uint32_t v)
     {
         while (remap[v] != v)
