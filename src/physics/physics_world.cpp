@@ -978,19 +978,28 @@ PhysicsWorld::contactCandidateForPair(const CollisionPair& pair)
         targetCollider = selectedTargetCollider;
     };
 
-    if (firstBody->body.type() == PhysicsBodyType::Dynamic)
+    // The moving collider is the higher-mobility body (Dynamic > Kinematic > Static); the first
+    // body tie-breaks. If neither is movable the pair stays unselected. (A rank rather than a
+    // four-branch ladder whose Dynamic/Kinematic arms would otherwise be identical clones.)
+    auto mobilityRank = [](PhysicsBodyType type)
+    {
+        if (type == PhysicsBodyType::Dynamic)
+        {
+            return 2;
+        }
+        if (type == PhysicsBodyType::Kinematic)
+        {
+            return 1;
+        }
+        return 0;
+    };
+    const int firstRank = mobilityRank(firstBody->body.type());
+    const int secondRank = mobilityRank(secondBody->body.type());
+    if (firstRank > 0 && firstRank >= secondRank)
     {
         select(firstBody, secondBody, firstCollider, secondCollider);
     }
-    else if (secondBody->body.type() == PhysicsBodyType::Dynamic)
-    {
-        select(secondBody, firstBody, secondCollider, firstCollider);
-    }
-    else if (firstBody->body.type() == PhysicsBodyType::Kinematic)
-    {
-        select(firstBody, secondBody, firstCollider, secondCollider);
-    }
-    else if (secondBody->body.type() == PhysicsBodyType::Kinematic)
+    else if (secondRank > 0)
     {
         select(secondBody, firstBody, secondCollider, firstCollider);
     }

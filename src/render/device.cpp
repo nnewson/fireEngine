@@ -384,6 +384,9 @@ void Device::savePipelineCache() const noexcept
     }
     catch (...)
     {
+        // Saving the pipeline cache is a best-effort optimisation; a failure just means the next
+        // run recompiles. Swallow it (this runs from ~Device(), so nothing may escape) but note it.
+        log::debug(log::category::render, "failed to save the pipeline cache (non-fatal)");
     }
 }
 

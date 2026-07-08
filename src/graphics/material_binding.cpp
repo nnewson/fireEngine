@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <cstring>
+#include <type_traits>
 
 #include <fire_engine/graphics/material.hpp>
 #include <fire_engine/graphics/texture.hpp>
@@ -129,6 +130,13 @@ bool materialsEquivalent(const Material& lhs, const Material& rhs)
 {
     const MaterialUBO lhsUbo = toMaterialUBO(lhs);
     const MaterialUBO rhsUbo = toMaterialUBO(rhs);
+    // Deliberate byte-image compare: two materials are equivalent iff they serialize to identical
+    // GPU UBO bytes. toMaterialUBO value-initialises (`{}`) so padding is deterministically zero;
+    // the float bit-compare (not value-compare) is intended — a ±0.0/NaN difference correctly
+    // counts as a distinct material. The static_assert keeps memcmp well-defined if the UBO
+    // changes.
+    static_assert(std::is_trivially_copyable_v<MaterialUBO>);
+    // NOLINTNEXTLINE(bugprone-suspicious-memory-comparison): deliberate byte-image compare (above).
     if (std::memcmp(&lhsUbo, &rhsUbo, sizeof(MaterialUBO)) != 0)
     {
         return false;
