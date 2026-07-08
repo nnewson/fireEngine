@@ -12,7 +12,7 @@ or ship a half-fix to move on — if the right fix is a bigger piece of work, do
 
 ## Workflow
 
-**Every new plan or piece of work gets its own git branch, created off `main` before any code is written** — one branch per roadmap item / feature / fix, so each can be reviewed and committed independently. Don't work on `main` directly, and don't commit or push unless explicitly asked; just leave the work on its branch. Keep the docs (§ Documentation) in sync **in the same branch** — treat them as part of the change, not an afterthought.
+**Every new plan or piece of work gets its own git branch, created off `main` before any code is written** — one branch per roadmap item / feature / fix, so each can be reviewed and committed independently. **Branch off *local* `main`** (`git switch -c <name> main`), **not off `origin/main`**: branching from the remote-tracking ref sets the branch's upstream to `origin/main`, which suppresses `push.autoSetupRemote` and makes `git push` fail with an "upstream branch name doesn't match" error. Off local `main` the branch starts with no upstream, so the first push auto-creates a correctly-named remote branch. Don't work on `main` directly, and don't commit or push unless explicitly asked; just leave the work on its branch. Keep the docs (§ Documentation) in sync **in the same branch** — treat them as part of the change, not an afterthought.
 
 ## Documentation
 
