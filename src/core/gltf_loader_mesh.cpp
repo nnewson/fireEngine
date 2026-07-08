@@ -340,10 +340,14 @@ ResolvedMaterialTextures resolveMaterialTextures(std::optional<std::size_t> mate
         result.occlusion =
             resolveTexture(material.occlusionTexture->textureIndex, TextureEncoding::Linear);
     }
-    if (material.transmission != nullptr && material.transmission->transmissionTexture.has_value())
+    if (material.transmission != nullptr)
     {
-        result.transmission = resolveTexture(
-            material.transmission->transmissionTexture->textureIndex, TextureEncoding::Linear);
+        const auto& transmission = *material.transmission;
+        if (transmission.transmissionTexture.has_value())
+        {
+            result.transmission = resolveTexture(transmission.transmissionTexture->textureIndex,
+                                                 TextureEncoding::Linear);
+        }
     }
     if (material.clearcoat != nullptr)
     {
@@ -364,10 +368,14 @@ ResolvedMaterialTextures resolveMaterialTextures(std::optional<std::size_t> mate
                                                     TextureEncoding::Linear);
         }
     }
-    if (material.volume != nullptr && material.volume->thicknessTexture.has_value())
+    if (material.volume != nullptr)
     {
-        result.thickness = resolveTexture(material.volume->thicknessTexture->textureIndex,
-                                          TextureEncoding::Linear);
+        const auto& volume = *material.volume;
+        if (volume.thicknessTexture.has_value())
+        {
+            result.thickness =
+                resolveTexture(volume.thicknessTexture->textureIndex, TextureEncoding::Linear);
+        }
     }
     return result;
 }

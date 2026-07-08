@@ -244,9 +244,9 @@ void GltfLoader::GltfSceneBuilder::applyPhysicsConfig(std::size_t nodeIndex,
     colliderDesc.collisionMask = it->second.mask;
     colliderDesc.isTrigger = it->second.isTrigger;
     colliderDesc.material = bodyDesc.material;
-    if (it->second.shape.has_value())
+    if (const auto& shape = it->second.shape; shape.has_value())
     {
-        colliderDesc.shape = it->second.shape.value();
+        colliderDesc.shape = *shape;
     }
     else if (it->second.convexHullFromMesh)
     {

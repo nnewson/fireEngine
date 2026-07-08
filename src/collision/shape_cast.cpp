@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <limits>
+#include <type_traits>
 #include <variant>
 
 #include <fire_engine/collision/gjk_epa.hpp>
@@ -89,6 +90,10 @@ constexpr float kClosingEpsilon = 1e-8f;
 
 } // namespace
 
+// shapeCast's only throwing path is translated()'s std::visit over WorldShape, which throws
+// bad_variant_access only on a valueless variant; the assert guarantees that never happens.
+static_assert(std::is_nothrow_move_constructible_v<WorldShape>);
+// NOLINTNEXTLINE(bugprone-exception-escape): WorldShape is never valueless (asserted above).
 std::optional<ToiHit> shapeCast(const WorldShape& moving, const Vec3& direction, float maxDistance,
                                 const WorldShape& target) noexcept
 {

@@ -223,8 +223,12 @@ Device::findQueueFamilies(const vk::raii::PhysicalDevice& d)
 void Device::createLogicalDevice()
 {
     auto [gf, pf] = findQueueFamilies(physDevice_);
-    graphicsFamily_ = gf.value();
-    presentFamily_ = pf.value();
+    if (!gf.has_value() || !pf.has_value())
+    {
+        throw std::runtime_error("GPU lacks a required graphics and/or present queue family");
+    }
+    graphicsFamily_ = *gf;
+    presentFamily_ = *pf;
 
     std::set<uint32_t> uniqueFamilies = {graphicsFamily_, presentFamily_};
     std::vector<vk::DeviceQueueCreateInfo> qcis;
