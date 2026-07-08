@@ -91,9 +91,15 @@ assets/               glTF samples + HDR skyboxes
 
 `.clang-format` enforces: Allman braces, 4-space indent, 100-col, left-aligned pointers, no single-line functions, ctor initializers each on own line.
 
-`.clang-tidy` enables the first-pass bugprone/performance/modernize/readability checks for
-engine `src/` and `include/fire_engine/`. If `clang-tidy` is installed, run
-`cmake --build build --target run-clang-tidy`.
+`.clang-tidy` enables an allowlist of bugprone/performance/modernize/readability checks for engine
+`src/` and `include/fire_engine/`, run **warnings-as-errors** (`WarningsAsErrors: '*'`) — any finding
+fails `run-clang-tidy` and the CI clang-tidy job, so the checked set stays clean. Run it with
+`cmake --build build --target run-clang-tidy`; note local Apple-Clang can't be parsed by a Homebrew
+clang-tidy (libc++ mismatch), so the **Ubuntu CI job is the source of truth** (§ Testing).
+**Prefer fixing a finding over suppressing it.** Use `// NOLINT(check): reason` only when the check is a
+provable false-positive that can't be cleanly restructured, and — where the invariant is
+compile-time-expressible — back the reason with a `static_assert` so it can never silently go stale
+(as the `std::visit`/never-valueless and `MaterialUBO`-memcmp guards do).
 
 - C++23
 - `constexpr` where possible (math types especially)

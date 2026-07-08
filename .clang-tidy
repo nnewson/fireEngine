@@ -29,7 +29,7 @@ Checks: >
   google-explicit-constructor,
   readability-implicit-bool-conversion,
   cppcoreguidelines-special-member-functions
-WarningsAsErrors: ''
+WarningsAsErrors: '*'
 HeaderFilterRegex: '^(include/fire_engine|src)/.*'
 FormatStyle: file
 CheckOptions:
