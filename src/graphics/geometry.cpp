@@ -5,6 +5,7 @@
 
 #include <fire_engine/core/log.hpp>
 #include <fire_engine/graphics/mesh_simplifier.hpp>
+#include <fire_engine/graphics/vipm.hpp>
 #include <fire_engine/render/resources.hpp>
 
 namespace fire_engine
@@ -46,6 +47,22 @@ void Geometry::load(Resources& resources)
             }
             log::debug(log::category::render, "LOD built {} levels from {} tris:{}", lods_.size(),
                        indices_.size() / 3, levels);
+
+            // VIPM (Continuous LOD): reshape the same collapse stream into per-vertex geomorph
+            // data, banded by the discrete level errors, and upload it as a parallel storage
+            // buffer. It is bound only on the Continuous draw path; the discrete draw ignores it.
+            const std::vector<MeshCollapse> collapses =
+                simplifier.collapseSequence(vertices_, indices_);
+            std::vector<float> levelErrors;
+            levelErrors.reserve(lods_.size());
+            for (const GeometryLod& lod : lods_)
+            {
+                levelErrors.push_back(lod.error);
+            }
+            const std::vector<MorphVertex> morph =
+                buildVipmMorphData(vertices_, collapses, levelErrors);
+            morphBuffer_ =
+                resources.createStorageBuffer(morph.size() * sizeof(MorphVertex), morph.data());
         }
     }
 }

@@ -90,6 +90,19 @@ public:
         return lods_;
     }
 
+    // VIPM (Continuous LOD): per-vertex geomorph data, parallel to the vertex buffer and indexed by
+    // vertex index in the shader. Built alongside the discrete LODs; NullBuffer when the mesh has
+    // no coarser levels (small/deformable meshes), in which case only the discrete path is
+    // available.
+    [[nodiscard]] BufferHandle morphBuffer() const noexcept
+    {
+        return morphBuffer_;
+    }
+    [[nodiscard]] bool hasVipmData() const noexcept
+    {
+        return morphBuffer_ != NullBuffer;
+    }
+
     [[nodiscard]] bool castsShadow() const noexcept
     {
         return castsShadow_;
@@ -156,6 +169,7 @@ private:
     BufferHandle vertexBuffer_{NullBuffer};
     BufferHandle indexBuffer_{NullBuffer};
     std::vector<GeometryLod> lods_;
+    BufferHandle morphBuffer_{NullBuffer};
     bool castsShadow_{true};
     bool storageVertices_{false};
 };
