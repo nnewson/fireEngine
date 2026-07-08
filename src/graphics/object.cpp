@@ -295,7 +295,7 @@ const Bounds3& Object::localBounds() const noexcept
         }
         localBounds_ = bounds;
     }
-    return localBounds_.value();
+    return *localBounds_;
 }
 
 Bounds3 Object::computeShadowBounds(std::span<const Mat4> jointMatrices, bool hasSkin,
@@ -481,7 +481,8 @@ std::vector<DrawCommand> Object::buildDrawCommands(const FrameInfo& frame, const
         // KHR_materials_transmission F3: defer this draw to the second forward
         // sub-pass so its fragment shader can sample the post-opaque HDR
         // target via screen-space refraction.
-        const bool hasTransmissionFactor = mat.transmission() && mat.transmission()->factor > 0.0f;
+        const auto& transmission = mat.transmission();
+        const bool hasTransmissionFactor = transmission.has_value() && transmission->factor > 0.0f;
         cmd.transmissive =
             hasTransmissionFactor || mat.texture(MaterialTextureSlot::Transmission).has();
         commands.push_back(cmd);

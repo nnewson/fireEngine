@@ -230,7 +230,12 @@ void PhysicsWorld::stepArticulations(float dt)
             }
             const auto manifold = narrowPhase_->collide(worldShape(*first), worldShape(*second),
                                                         kSpeculativeDistance);
-            if (!manifold.has_value() || manifold->count == 0)
+            if (!manifold.has_value())
+            {
+                continue;
+            }
+            const auto& m = *manifold;
+            if (m.count == 0)
             {
                 continue;
             }
@@ -238,14 +243,14 @@ void PhysicsWorld::stepArticulations(float dt)
             const RigidTransform invB = art.linkWorld(b).inverse();
             const float friction = std::sqrt(std::max(first->material.friction, 0.0f) *
                                              std::max(second->material.friction, 0.0f));
-            for (int p = 0; p < manifold->count; ++p)
+            for (int p = 0; p < m.count; ++p)
             {
-                const Vec3 wp = manifold->points[static_cast<std::size_t>(p)].position;
-                const float pen = manifold->points[static_cast<std::size_t>(p)].penetration;
+                const Vec3 wp = m.points[static_cast<std::size_t>(p)].position;
+                const float pen = m.points[static_cast<std::size_t>(p)].penetration;
                 // normal points B(second) -> A(first); offset = pen so prepare-time sep = -pen.
                 perArticulationLink[first->articulation.index()].push_back(
                     ArticulationLinkContact{a, b, invA.transformPoint(wp), invB.transformPoint(wp),
-                                            manifold->normal, pen, friction});
+                                            m.normal, pen, friction});
             }
             continue;
         }
@@ -289,7 +294,12 @@ void PhysicsWorld::stepArticulations(float dt)
         // out of the static surface).
         const auto manifold =
             narrowPhase_->collide(worldShape(*link), worldShape(*other), kSpeculativeDistance);
-        if (!manifold.has_value() || manifold->count == 0)
+        if (!manifold.has_value())
+        {
+            continue;
+        }
+        const auto& m = *manifold;
+        if (m.count == 0)
         {
             continue;
         }
@@ -297,15 +307,15 @@ void PhysicsWorld::stepArticulations(float dt)
         const RigidTransform linkInv = art.linkWorld(linkIndex).inverse();
         const float friction = std::sqrt(std::max(link->material.friction, 0.0f) *
                                          std::max(other->material.friction, 0.0f));
-        for (int p = 0; p < manifold->count; ++p)
+        for (int p = 0; p < m.count; ++p)
         {
-            const Vec3 worldPoint = manifold->points[static_cast<std::size_t>(p)].position;
-            const float penetration = manifold->points[static_cast<std::size_t>(p)].penetration;
+            const Vec3 worldPoint = m.points[static_cast<std::size_t>(p)].position;
+            const float penetration = m.points[static_cast<std::size_t>(p)].penetration;
             // Plane through the contact point with the manifold normal; offset chosen so the
             // prepare-time separation is −penetration (dot(n, wp) − offset = −penetration).
             perArticulation[link->articulation.index()].push_back(ArticulationPlaneContact{
-                linkIndex, linkInv.transformPoint(worldPoint), manifold->normal,
-                Vec3::dotProduct(manifold->normal, worldPoint) + penetration, friction});
+                linkIndex, linkInv.transformPoint(worldPoint), m.normal,
+                Vec3::dotProduct(m.normal, worldPoint) + penetration, friction});
         }
     }
 

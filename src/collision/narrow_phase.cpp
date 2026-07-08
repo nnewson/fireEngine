@@ -813,6 +813,10 @@ struct PolytopeClosest
 
 } // namespace
 
+// std::visit throws bad_variant_access only on a valueless-by-exception variant; the assert
+// guarantees WorldShape is never valueless, so the noexcept below is honest.
+static_assert(std::is_nothrow_move_constructible_v<WorldShape>);
+// NOLINTNEXTLINE(bugprone-exception-escape): WorldShape is never valueless (asserted above).
 std::optional<ContactManifold> NarrowPhase::collide(const WorldShape& a, const WorldShape& b,
                                                     float speculativeMargin) const noexcept
 {

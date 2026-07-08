@@ -101,10 +101,12 @@ void applyTransmission(Material& material, const fastgltf::Material& gltfMat)
         }
         material.transmission(transmission);
     }
-    if (gltfMat.transmission != nullptr && gltfMat.transmission->transmissionTexture.has_value())
+    if (gltfMat.transmission != nullptr)
     {
-        applyTextureSlotUv(material, MaterialTextureSlot::Transmission,
-                           gltfMat.transmission->transmissionTexture.value());
+        if (const auto& tex = gltfMat.transmission->transmissionTexture; tex.has_value())
+        {
+            applyTextureSlotUv(material, MaterialTextureSlot::Transmission, *tex);
+        }
     }
 }
 

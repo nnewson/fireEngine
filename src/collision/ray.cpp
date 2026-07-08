@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <type_traits>
 
 namespace fire_engine
 {
@@ -266,6 +267,10 @@ std::optional<RayHit> rayIntersect(const Ray& ray, const WorldConvex& convex) no
     return RayHit{tEnter, ray.origin + ray.direction * tEnter, enterNormal};
 }
 
+// std::visit throws bad_variant_access only on a valueless-by-exception variant; the assert
+// guarantees WorldShape is never valueless, so the noexcept below is honest.
+static_assert(std::is_nothrow_move_constructible_v<WorldShape>);
+// NOLINTNEXTLINE(bugprone-exception-escape): WorldShape is never valueless (asserted above).
 std::optional<RayHit> rayIntersect(const Ray& ray, const WorldShape& shape) noexcept
 {
     return std::visit([&ray](const auto& s) { return rayIntersect(ray, s); }, shape);

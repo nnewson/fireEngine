@@ -37,9 +37,10 @@ void Animator::update(const InputState& input_state, const Transform& /*transfor
     }
 
     const auto& animState = input_state.animationState();
-    if (animState.hasActiveAnimation())
+    const auto activeAnim = animState.activeAnimation();
+    if (activeAnim.has_value())
     {
-        auto id = *animState.activeAnimation();
+        auto id = *activeAnim;
         const auto index = findAnimationIndex(id);
         if (index && *index != activeIndex_)
         {

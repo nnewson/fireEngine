@@ -45,9 +45,10 @@ void Mesh::update(const InputState& input_state, const Transform& /*transform*/)
     }
 
     const auto& animState = input_state.animationState();
-    if (animState.hasActiveAnimation())
+    const auto activeAnim = animState.activeAnimation();
+    if (activeAnim.has_value())
     {
-        auto id = *animState.activeAnimation();
+        auto id = *activeAnim;
         const auto index = findMorphAnimationIndex(id);
         if (index && *index != activeMorphIndex_)
         {

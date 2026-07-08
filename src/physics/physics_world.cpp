@@ -1372,20 +1372,21 @@ bool PhysicsWorld::refreshIslandContacts(const Island& island,
             worldShapeAt(*source.targetCollider, ownerPoseAt(source.target)), closingReach);
 
         SolverContactInput& in = islandContacts[k];
-        if (!manifold.has_value() || manifold->count == 0)
+        if (manifold.has_value() && manifold->count > 0)
         {
-            in.pointCount = 0; // mid-step separation: the rows drop
+            const auto& m = *manifold;
+            in.normal = m.normal;
+            in.pointCount = m.count;
+            for (int p = 0; p < m.count; ++p)
+            {
+                const auto pi = static_cast<std::size_t>(p);
+                in.points[pi] = m.points[pi].position;
+                in.penetration[pi] = m.points[pi].penetration;
+            }
         }
         else
         {
-            in.normal = manifold->normal;
-            in.pointCount = manifold->count;
-            for (int p = 0; p < manifold->count; ++p)
-            {
-                const auto pi = static_cast<std::size_t>(p);
-                in.points[pi] = manifold->points[pi].position;
-                in.penetration[pi] = manifold->points[pi].penetration;
-            }
+            in.pointCount = 0; // mid-step separation: the rows drop
         }
         flags[k] = 1;
         any = true;

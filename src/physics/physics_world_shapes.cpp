@@ -69,6 +69,10 @@ WorldShape PhysicsWorld::composeWorldShape(const ColliderShape& shape, const Mat
                     Vec3{he.x() * scale.x(), he.y() * scale.y(), he.z() * scale.z()}, rot};
 }
 
+// std::visit throws bad_variant_access only on a valueless-by-exception variant; the assert
+// guarantees WorldShape is never valueless, so the noexcept below is honest.
+static_assert(std::is_nothrow_move_constructible_v<WorldShape>);
+// NOLINTNEXTLINE(bugprone-exception-escape): WorldShape is never valueless (asserted above).
 AABB PhysicsWorld::aabbOfWorldShape(const WorldShape& shape) noexcept
 {
     return std::visit(
@@ -165,6 +169,10 @@ WorldShape PhysicsWorld::worldShape(const ColliderEntry& entry) const
     return worldShapeAt(entry, colliderOwnerPose(entry));
 }
 
+// std::visit throws bad_variant_access only on a valueless-by-exception variant; the assert
+// guarantees ColliderShape is never valueless, so the noexcept below is honest.
+static_assert(std::is_nothrow_move_constructible_v<ColliderShape>);
+// NOLINTNEXTLINE(bugprone-exception-escape): ColliderShape is never valueless (asserted above).
 AABB PhysicsWorld::localBounds(const ColliderShape& shape) const noexcept
 {
     return std::visit(
