@@ -18,9 +18,9 @@ TEST_CASE("PipelineConfig.ForwardConfigBindingsSplitBetweenSets", "[PipelineConf
     auto config = Pipeline::forwardConfig();
 
     // Set 0 — per-object vertex-stage UBOs/SSBO only now: frame, skin, morph UBO +
-    // morph-targets SSBO (4 total). Material data (textures + scalars) is fully
-    // bindless (set 2).
-    CHECK(config.bindings.size() == 4u);
+    // morph-targets SSBO + VIPM geomorph SSBO (5 total). Material data (textures +
+    // scalars) is fully bindless (set 2).
+    CHECK(config.bindings.size() == 5u);
     // Set 1 — forward globals: light UBO + 5 shadow maps + debug image + 2
     // standalone samplers + 3 IBL textures + sceneColor + ssao.
     CHECK(config.globalBindings.size() == 14u);
@@ -44,6 +44,7 @@ TEST_CASE("PipelineConfig.ForwardConfigBindingsSplitBetweenSets", "[PipelineConf
     CHECK(hasObjectBinding(ForwardBinding::Skin));
     CHECK(hasObjectBinding(ForwardBinding::Morph));
     CHECK(hasObjectBinding(ForwardBinding::MorphTargets));
+    CHECK(hasObjectBinding(ForwardBinding::VipmMorph));
     CHECK_FALSE(hasObjectBinding(ForwardBinding::Material));
     CHECK_FALSE(hasObjectBinding(ForwardBinding::BaseColourTexture));
     CHECK_FALSE(hasObjectBinding(ForwardBinding::ThicknessTexture));

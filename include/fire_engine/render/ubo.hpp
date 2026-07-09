@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstddef>
+
 #include <fire_engine/graphics/gpu_limits.hpp>
 #include <fire_engine/math/mat4.hpp>
 #include <fire_engine/render/constants.hpp>
@@ -102,7 +104,18 @@ struct MorphUBO
     alignas(4) int vertexCount{0};
     int _pad0{0};
     float weights[kMaxMorphTargets]{};
+    // VIPM geomorph (Continuous LOD): the vertex shader slides each drawn vertex whose
+    // collapseError
+    // <= nextLevelError toward its target by morphFactor. Both 0 in Discrete mode / for non-VIPM
+    // meshes (a no-op mix). Trailing pad keeps the struct a 16-byte multiple to match std140.
+    alignas(4) float morphFactor{0.0f};
+    alignas(4) float nextLevelError{0.0f};
+    float _pad1{0.0f};
+    float _pad2{0.0f};
 };
+static_assert(sizeof(MorphUBO) == 64, "MorphUBO must match its std140 block size");
+static_assert(offsetof(MorphUBO, morphFactor) == 48);
+static_assert(offsetof(MorphUBO, nextLevelError) == 52);
 
 struct SkyboxUBO
 {

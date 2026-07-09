@@ -8,6 +8,7 @@
 #include <fire_engine/graphics/lod.hpp>
 #include <fire_engine/graphics/mesh_simplifier.hpp>
 #include <fire_engine/graphics/vertex.hpp>
+#include <fire_engine/math/vec2.hpp>
 #include <fire_engine/math/vec3.hpp>
 
 namespace fire_engine
@@ -22,20 +23,25 @@ namespace fire_engine
 // discrete-LOD and skinned/cloth paths never bind it, so the shared Vertex layout is untouched).
 struct MorphVertex
 {
-    // The position this vertex geomorphs toward as it collapses: the *resolved* surviving vertex at
-    // the coarser side of its collapse band (chains A->B->C followed through), so at morphFactor 1
-    // it is coincident with a vertex that's present after the swap. Own position for non-collapsing
-    // vertices.
+    // ALL the attributes this vertex geomorphs toward as it collapses: those of the *resolved*
+    // surviving vertex at the coarser side of its collapse band (chains A->B->C followed through).
+    // The shader morphs position, normal AND texcoord together so that at morphFactor 1 the vertex is
+    // *fully* coincident with a vertex present after the swap — position-only morphing warps the
+    // texture (UVs stay put while the geometry moves) and the swap snaps the UVs back, a visible pop.
+    // Own attributes for non-collapsing vertices (they never morph).
     Vec3 targetPosition{};
-    // The LOD error at which this vertex is removed; a large sentinel for vertices that never
-    // collapse within the built levels (they never morph).
-    float collapseError{0.0f};
+    float collapseError{0.0f}; // the LOD error at which this vertex is removed (sentinel = never)
+    Vec3 targetNormal{};
+    float _pad0{0.0f};
+    Vec2 targetTexCoord{};
+    float _pad1{0.0f};
+    float _pad2{0.0f};
 };
 
-// std430-compatible: { vec3; float } packs to 16 bytes with the error in the vec3's 4th slot, so
-// the array uploads straight into a storage buffer the vertex shader indexes by vertex index.
+// std430-compatible: three tightly-packed vec4s (posError | normal,_ | uv,_,_), uploaded straight
+// into a storage buffer the vertex shader indexes by vertex index.
 static_assert(sizeof(Vec3) == 12, "MorphVertex's std430 layout assumes a tightly packed Vec3");
-static_assert(sizeof(MorphVertex) == 16, "MorphVertex must match its std430 shader layout");
+static_assert(sizeof(MorphVertex) == 48, "MorphVertex must match its std430 shader layout");
 
 // Sentinel collapse error for a vertex that never collapses within the built LOD levels.
 inline constexpr float kVipmNeverCollapses = 1.0e30f;

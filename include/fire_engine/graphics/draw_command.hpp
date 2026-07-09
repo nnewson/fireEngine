@@ -45,6 +45,9 @@ struct DrawCommand
     BufferHandle skinUbo{NullBuffer};
     BufferHandle morphUbo{NullBuffer};
     BufferHandle morphSsbo{NullBuffer};
+    // VIPM per-vertex geomorph SSBO (Continuous LOD). The geometry's morph buffer for VIPM meshes,
+    // else a dummy; the vertex shader only reads it when MorphUBO::morphFactor > 0.
+    BufferHandle vipmBuffer{NullBuffer};
     // Shadow set-0 push buffer (binding 0): per-object ShadowUBO. Shadow draws
     // reuse skin/morph/morphSsbo above; the shared self-shadow image+sampler
     // (bindings 4/5) are global, pushed from Resources by the shadow pass.

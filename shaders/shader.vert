@@ -25,12 +25,25 @@ layout(binding = 4) uniform MorphUBO {
     int vertexCount;
     int _pad0;
     vec4 weights[2];
+    float morphFactor;    // VIPM geomorph amount (0 = discrete / no morph)
+    float nextLevelError; // vertices with collapseError <= this morph in the current transition
 } morph;
 
 // Morph target deltas: [pos0..posN, norm0..normN] packed as vec4 (w unused)
 layout(std430, binding = 5) readonly buffer MorphTargets {
     vec4 data[];
 } morphTargets;
+
+// VIPM per-vertex geomorph data (Continuous LOD): full-attribute target (position, normal,
+// texcoord) so the morph doesn't warp the texture. Three vec4s per vertex.
+struct VipmVert {
+    vec4 posError;  // xyz = target position, w = collapse error
+    vec4 normalPad; // xyz = target normal
+    vec4 uvPad;     // xy  = target texcoord
+};
+layout(std430, binding = 28) readonly buffer VipmMorph {
+    VipmVert v[];
+} vipm;
 
 layout(location = 0) in vec3 inPos;
 layout(location = 1) in vec3 inColor;
@@ -67,6 +80,7 @@ void main() {
     vec3 pos = inPos;
     vec3 normal = inNormal;
     vec3 tangent = inTangent.xyz;
+    vec2 uv = inTexCoord;
 
     // Apply morph targets. SSBO layout (per Object::load):
     //   [pos_0..N-1, norm_0..N-1, tang_0..N-1] each as vec4(xyz, 0).
@@ -84,6 +98,18 @@ void main() {
             normal += w * morphTargets.data[normOffset].xyz;
             tangent += w * morphTargets.data[tangOffset].xyz;
         }
+    }
+
+    // VIPM geomorph (Continuous LOD): morph a collapsing vertex's position, normal AND texcoord
+    // toward its target as the mesh coarsens, so the discrete index swap at the next level is
+    // invisible (morphing position alone warps the texture and pops the UVs at the swap). morphFactor
+    // is 0 in Discrete mode / for non-VIPM meshes, so the && short-circuits and the (dummy) buffer is
+    // never read.
+    if (morph.morphFactor > 0.0 && vipm.v[gl_VertexIndex].posError.w <= morph.nextLevelError) {
+        float f = morph.morphFactor;
+        pos = mix(pos, vipm.v[gl_VertexIndex].posError.xyz, f);
+        normal = mix(normal, vipm.v[gl_VertexIndex].normalPad.xyz, f);
+        uv = mix(uv, vipm.v[gl_VertexIndex].uvPad.xy, f);
     }
 
     mat4 transform;
@@ -119,7 +145,7 @@ void main() {
 
     fragNormal = normalize(normalTransform * normal);
     fragWorldPos = worldPos.xyz;
-    fragTexCoord = inTexCoord;
+    fragTexCoord = uv;
 
     // TBN matrix for normal mapping. Use the morph-blended tangent so facial
     // expression rigs get correct normal-mapped lighting per blend.

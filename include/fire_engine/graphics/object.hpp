@@ -91,6 +91,8 @@ private:
         std::array<BufferHandle, kMaxFramesInFlight> skinBufs{NullBuffer, NullBuffer};
         std::array<BufferHandle, kMaxFramesInFlight> morphUboBufs{NullBuffer, NullBuffer};
         BufferHandle morphSsbo{NullBuffer};
+        // VIPM geomorph buffer (Continuous LOD): the geometry's per-vertex morph data, or a dummy.
+        BufferHandle vipmBuffer{NullBuffer};
         // Per-object ShadowUBO buffer handles (shadow set-0 binding 0, pushed
         // inline per draw — no descriptor set). skin/morph/morphSsbo above are
         // reused for the shadow draw.

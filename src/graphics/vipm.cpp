@@ -11,12 +11,19 @@ std::vector<MorphVertex> buildVipmMorphData(std::span<const Vertex> vertices,
 {
     const std::size_t n = vertices.size();
 
-    // Default: never collapses — target is the vertex's own position, sentinel error (never
-    // morphs).
+    // A vertex geomorphs toward ALL the attributes of its resolved survivor — position, normal AND
+    // texcoord — so the texture doesn't warp during the morph (see MorphVertex).
+    auto morphToward = [&vertices](uint32_t target, float error)
+    {
+        const Vertex& t = vertices[target];
+        return MorphVertex{t.position(), error, t.normal(), 0.0f, t.texCoord(), 0.0f, 0.0f};
+    };
+
+    // Default: never collapses — target is the vertex itself, sentinel error (never morphs).
     std::vector<MorphVertex> morph(n);
     for (std::size_t i = 0; i < n; ++i)
     {
-        morph[i] = MorphVertex{vertices[i].position(), kVipmNeverCollapses};
+        morph[i] = morphToward(static_cast<uint32_t>(i), kVipmNeverCollapses);
     }
 
     // Union-find over the vertices. Subset placement means a collapse merges `removed` into `kept`
@@ -61,7 +68,7 @@ std::vector<MorphVertex> buildVipmMorphData(std::span<const Vertex> vertices,
         for (std::size_t i = bandStart; i < collapseIdx; ++i)
         {
             const MeshCollapse& c = collapses[i];
-            morph[c.removed] = MorphVertex{vertices[find(c.removed)].position(), c.error};
+            morph[c.removed] = morphToward(find(c.removed), c.error);
         }
     }
 

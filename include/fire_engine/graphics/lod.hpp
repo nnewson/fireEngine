@@ -10,6 +10,16 @@
 namespace fire_engine
 {
 
+// LOD strategy, selectable at runtime so the modes coexist rather than supersede. Discrete = Phase
+// 1 hard index-buffer swap. Continuous = VIPM geomorph (Phase 2): the level transitions are
+// dissolved by sliding collapsing vertices onto their targets. (ViewDependent / VDPM is the planned
+// Phase 3.)
+enum class LodMode : uint8_t
+{
+    Discrete = 0,
+    Continuous = 1,
+};
+
 // One discrete level of detail: an index buffer into the geometry's (shared, unchanged) vertex
 // buffer, plus the world-space geometric deviation the simplifier introduced to reach it. LOD0 is
 // the full mesh (error 0); coarser levels follow with increasing error.

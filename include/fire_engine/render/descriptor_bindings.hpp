@@ -40,6 +40,9 @@ enum class ForwardBinding : std::uint32_t
     ShadowDebugImage = 25,
     WorldShadowMap = 26,
     SelfShadowMap = 27,
+    // VIPM per-vertex geomorph SSBO (Continuous LOD), forward set 0. A tail binding: set 0
+    // otherwise uses only 0/3/4/5, and the mid-range enum values name legacy/other-set slots.
+    VipmMorph = 28,
 };
 
 // Forward-pipeline globals live on descriptor set 1 — bound once per frame,

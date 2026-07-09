@@ -38,7 +38,7 @@ cmake --preset=vcpkg -DCMAKE_EXPORT_COMPILE_COMMANDS=1
 cmake --build build
 ctest --preset fast
 cmake --build --preset full                 # includes [slow] settle/soak tests
-./build/fireEngineApp [scene.gltf] [skybox.hdr]
+cd build && ./fireEngineApp [scene.gltf] [skybox.hdr]   # MUST run from build/ (see Runtime layout)
 ```
 
 The `vcpkg` preset selects the `Dev` build type (`-O2 -g`, no `NDEBUG`) and exports

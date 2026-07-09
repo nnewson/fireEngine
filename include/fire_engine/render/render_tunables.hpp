@@ -61,6 +61,9 @@ struct RenderTunables
     // screen-space pixel-error budget. The toggle doubles as the A/B regression escape hatch.
     bool lodEnabled{true};
     float lodPixelError{kLodPixelError};
+    // Discrete = hard LOD swaps (Phase 1); Continuous = VIPM geomorph (Phase 2). Coexist —
+    // selectable.
+    LodMode lodMode{LodMode::Discrete};
 
     // SSAO + contact shadows (screen-space, from the depth prepass). When
     // ssaoEnabled is false the pass still runs but writes AO = 1 (no darkening).

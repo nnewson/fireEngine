@@ -5,6 +5,7 @@
 
 #include <fire_engine/graphics/gpu_handle.hpp>
 #include <fire_engine/graphics/gpu_limits.hpp>
+#include <fire_engine/graphics/lod.hpp>
 #include <fire_engine/math/mat4.hpp>
 #include <fire_engine/math/vec3.hpp>
 
@@ -44,6 +45,8 @@ struct FrameInfo
     // budget.
     bool lodEnabled{false};
     float lodPixelError{2.0f};
+    // LOD strategy (from RenderTunables). Continuous enables the VIPM geomorph on the forward pass.
+    LodMode lodMode{LodMode::Discrete};
     PipelineHandle shadowPipeline{NullPipeline};
     // Light-space view-projection matrices for every shadow caster — cascades,
     // spot lights, and the six faces of each point light. Layout matches

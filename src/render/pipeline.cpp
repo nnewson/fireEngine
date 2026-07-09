@@ -95,6 +95,8 @@ std::vector<vk::DescriptorSetLayoutBinding> perObjectSet0Bindings()
         uniform(ForwardBinding::Morph, vk::ShaderStageFlagBits::eVertex),
         {bindingIndex(ForwardBinding::MorphTargets), vk::DescriptorType::eStorageBuffer, 1,
          vk::ShaderStageFlagBits::eVertex},
+        {bindingIndex(ForwardBinding::VipmMorph), vk::DescriptorType::eStorageBuffer, 1,
+         vk::ShaderStageFlagBits::eVertex},
     };
 }
 
