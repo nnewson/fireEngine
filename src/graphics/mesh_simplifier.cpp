@@ -159,6 +159,16 @@ struct Quadric
     return len > 1e-12f ? n * (1.0f / len) : Vec3{};
 }
 
+[[nodiscard]] float wedgeDistance(const Vertex& a, const Vertex& b) noexcept
+{
+    const Vec2 uv0 = a.texCoord() - b.texCoord();
+    const Vec2 uv1 = a.texCoord1() - b.texCoord1();
+    const Vec3 normal = a.normal() - b.normal();
+    const Vec4 tangent = a.tangent() - b.tangent();
+    return Vec2::dotProduct(uv0, uv0) + Vec2::dotProduct(uv1, uv1) +
+           0.25f * Vec3::dotProduct(normal, normal) + 0.25f * Vec4::dotProduct(tangent, tangent);
+}
+
 [[nodiscard]] std::uint64_t edgeKey(std::uint32_t a, std::uint32_t b) noexcept
 {
     const std::uint64_t lo = a < b ? a : b;
@@ -223,6 +233,7 @@ class QemRun
 {
 public:
     QemRun(std::span<const Vertex> vertices, std::span<const uint32_t> indices)
+        : vertices_(vertices)
     {
         const std::size_t vertexCount = vertices.size();
         pos_.resize(vertexCount);
@@ -341,28 +352,27 @@ public:
             {
                 continue;
             }
-            // Emit each corner's own UV: at the surviving position, pick the native wedge whose UV
-            // is nearest this corner's original UV. On a preserved seam (a position with wedges
-            // from two charts) each side keeps its chart's UV; the collapse geometry is shared, the
-            // texture is not smeared across the seam.
-            out.push_back(nearestWedge(a, uv_[origTris_[t][0]]));
-            out.push_back(nearestWedge(b, uv_[origTris_[t][1]]));
-            out.push_back(nearestWedge(c, uv_[origTris_[t][2]]));
+            // Emit each corner's own render wedge: at the surviving position, pick the native
+            // wedge whose UVs / normal / tangent are nearest this corner's original attributes. On
+            // a preserved seam (a position with wedges from two charts or normals) each side keeps
+            // the closest chart/shading identity; the collapse geometry is shared, the attributes
+            // are not smeared across the seam.
+            out.push_back(nearestWedge(a, origTris_[t][0]));
+            out.push_back(nearestWedge(b, origTris_[t][1]));
+            out.push_back(nearestWedge(c, origTris_[t][2]));
         }
         return out;
     }
 
-    // The native wedge at surviving position `canonical` whose UV is closest to `targetUv` (an
-    // original vertex index at that position — full detail keeps its own UV; coarser levels get the
-    // best-matching one).
-    [[nodiscard]] std::uint32_t nearestWedge(std::uint32_t canonical, const Vec2& targetUv) const
+    // The native wedge at surviving position `canonical` whose render attributes are closest to
+    // original vertex `source`.
+    [[nodiscard]] std::uint32_t nearestWedge(std::uint32_t canonical, std::uint32_t source) const
     {
         std::uint32_t best = canonical;
         float bestDist = std::numeric_limits<float>::max();
         for (const std::uint32_t w : canonicalWedges_[canonical])
         {
-            const Vec2 d = uv_[w] - targetUv;
-            const float dist = Vec2::dotProduct(d, d);
+            const float dist = wedgeDistance(vertices_[w], vertices_[source]);
             if (dist < bestDist)
             {
                 bestDist = dist;
@@ -380,6 +390,11 @@ public:
     [[nodiscard]] float maxError() const noexcept
     {
         return maxError_;
+    }
+
+    [[nodiscard]] std::size_t collapseCount() const noexcept
+    {
+        return sequence_.size();
     }
 
 private:
@@ -615,6 +630,7 @@ private:
     // aggressively (fewer UV-distorting collapses) at some cost to triangle reduction.
     static constexpr double kUvWeightFactor = 0.1;
 
+    std::span<const Vertex> vertices_;
     std::vector<Vec3> pos_;
     std::vector<Vec2> uv_;            // per original vertex, for the wedge-preserving emit
     std::vector<std::uint32_t> weld_; // original vertex -> canonical position vertex
@@ -658,6 +674,42 @@ QuadricSimplifier::collapseSequence(std::span<const Vertex> vertices,
     QemRun run(vertices, indices);
     run.run(1); // collapse as far as the mesh allows
     return run.sequence();
+}
+
+ProgressiveMesh QuadricSimplifier::buildProgressive(std::span<const Vertex> vertices,
+                                                    std::span<const uint32_t> indices,
+                                                    std::span<const float> ratios) const
+{
+    const std::size_t triCount = indices.size() / 3;
+    ProgressiveMesh out;
+    out.lods.push_back(
+        ProgressiveLod{std::vector<uint32_t>{indices.begin(), indices.end()}, 0.0f, 0});
+    if (triCount == 0)
+    {
+        return out;
+    }
+
+    QemRun run(vertices, indices);
+    std::size_t previousIndexCount = indices.size();
+    for (const float requestedRatio : ratios)
+    {
+        const float ratio = std::clamp(requestedRatio, 0.0f, 1.0f);
+        const std::size_t targetTris = std::max<std::size_t>(
+            1, static_cast<std::size_t>(static_cast<float>(triCount) * ratio));
+        run.run(targetTris);
+        std::vector<uint32_t> lodIndices = run.emitIndices();
+        if (lodIndices.empty() || lodIndices.size() >= previousIndexCount)
+        {
+            continue;
+        }
+        previousIndexCount = lodIndices.size();
+        out.lods.push_back(
+            ProgressiveLod{std::move(lodIndices), run.maxError(), run.collapseCount()});
+    }
+
+    run.run(1); // keep the full stream available for future/debug consumers.
+    out.collapses = run.sequence();
+    return out;
 }
 
 } // namespace fire_engine

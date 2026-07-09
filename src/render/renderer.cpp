@@ -766,7 +766,7 @@ const Renderer::DrawBuckets& Renderer::collectDrawCommands(RenderableScene& scen
                           .previousViewProj = previousViewProj_,
                           .pipelines = pipelines,
                           .lodEnabled = tunables_.lodEnabled,
-                          .lodPixelError = tunables_.lodPixelError,
+                          .lodPixelErrorBudget = tunables_.lodPixelErrorBudget,
                           .lodMode = tunables_.lodMode,
                           .shadowPipeline = shadows_.pipelineHandle(),
                           .shadowViewProjs = shadowViewProjs_};

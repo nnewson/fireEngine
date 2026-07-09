@@ -148,7 +148,8 @@ void DebugOverlay::buildUi(const FrameStats& stats, RenderTunables& tunables)
         {
             tunables.lodMode = static_cast<LodMode>(lodMode);
         }
-        ImGui::SliderFloat("Pixel error", &tunables.lodPixelError, 0.25f, 16.0f, "%.2f");
+        ImGui::SliderFloat("Pixel error budget", &tunables.lodPixelErrorBudget, 0.25f, 16.0f,
+                           "%.2f");
         ImGui::EndDisabled();
         ImGui::Text("Triangles drawn: %d", stats.trianglesDrawn);
         ImGui::TextDisabled("View > 'LOD tint' colours by level (green/yellow/red)");

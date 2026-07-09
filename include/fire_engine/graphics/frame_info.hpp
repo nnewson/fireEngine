@@ -44,7 +44,7 @@ struct FrameInfo
     // draw-build picks a coarser index set for distant/small static meshes within this pixel
     // budget.
     bool lodEnabled{false};
-    float lodPixelError{2.0f};
+    float lodPixelErrorBudget{2.0f};
     // LOD strategy (from RenderTunables). Continuous enables the VIPM geomorph on the forward pass.
     LodMode lodMode{LodMode::Discrete};
     PipelineHandle shadowPipeline{NullPipeline};

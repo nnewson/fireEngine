@@ -427,9 +427,9 @@ void Object::writeForwardUniforms(const FrameInfo& frame, const Mat4& world,
             const float distance = (centroid - frame.cameraPosition).magnitude();
             const VipmSelection sel =
                 selectVipm(binding.geometry->lods(), distance, std::abs(frame.proj[1, 1]),
-                           static_cast<float>(frame.viewportHeight), frame.lodPixelError);
+                           static_cast<float>(frame.viewportHeight), frame.lodPixelErrorBudget);
             morphUbo.morphFactor = sel.morphFactor;
-            morphUbo.nextLevelError = sel.nextLevelError;
+            morphUbo.vipmTargetLevel = static_cast<int>(sel.targetLevel);
         }
         writeMapped(binding.morphUboMapped[frame.currentFrame], morphUbo);
     }
@@ -488,7 +488,7 @@ std::vector<DrawCommand> Object::buildDrawCommands(const FrameInfo& frame, const
             const float distance = (centroid - frame.cameraPosition).magnitude();
             const std::size_t level =
                 selectLod(binding.geometry->lods(), distance, std::abs(frame.proj[1, 1]),
-                          static_cast<float>(frame.viewportHeight), frame.lodPixelError);
+                          static_cast<float>(frame.viewportHeight), frame.lodPixelErrorBudget);
             cmd.indexBuffer = binding.geometry->lods()[level].indexBuffer;
             cmd.indexCount = binding.geometry->lods()[level].indexCount;
             cmd.lodLevel = static_cast<uint32_t>(level);
@@ -532,9 +532,10 @@ std::vector<DrawCommand> Object::buildDrawCommands(const FrameInfo& frame, const
             if (frame.lodEnabled && shadowGeometry->lods().size() > 1)
             {
                 const float distance = (centroid - frame.cameraPosition).magnitude();
-                const std::size_t level = selectLod(
-                    shadowGeometry->lods(), distance, std::abs(frame.proj[1, 1]),
-                    static_cast<float>(frame.viewportHeight), frame.lodPixelError * kShadowLodBias);
+                const std::size_t level =
+                    selectLod(shadowGeometry->lods(), distance, std::abs(frame.proj[1, 1]),
+                              static_cast<float>(frame.viewportHeight),
+                              frame.lodPixelErrorBudget * kShadowLodBias);
                 shadowCmd.indexBuffer = shadowGeometry->lods()[level].indexBuffer;
                 shadowCmd.indexCount = shadowGeometry->lods()[level].indexCount;
             }

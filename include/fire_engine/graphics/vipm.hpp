@@ -10,6 +10,7 @@
 #include <fire_engine/graphics/vertex.hpp>
 #include <fire_engine/math/vec2.hpp>
 #include <fire_engine/math/vec3.hpp>
+#include <fire_engine/math/vec4.hpp>
 
 namespace fire_engine
 {
@@ -25,55 +26,57 @@ struct MorphVertex
 {
     // ALL the attributes this vertex geomorphs toward as it collapses: those of the *resolved*
     // surviving vertex at the coarser side of its collapse band (chains A->B->C followed through).
-    // The shader morphs position, normal AND texcoord together so that at morphFactor 1 the vertex is
-    // *fully* coincident with a vertex present after the swap — position-only morphing warps the
-    // texture (UVs stay put while the geometry moves) and the swap snaps the UVs back, a visible pop.
-    // Own attributes for non-collapsing vertices (they never morph).
+    // The shader morphs position, normal, tangent, and both texcoord sets together so that at
+    // morphFactor 1 the vertex is *fully* coincident with a vertex present after the swap.
+    // Position-only morphing warps the texture and snaps the attributes at the swap. Own attributes
+    // for non-collapsing vertices (they never morph).
     Vec3 targetPosition{};
-    float collapseError{0.0f}; // the LOD error at which this vertex is removed (sentinel = never)
+    // The 1-based LOD level this original vertex first disappears into. The shader compares this
+    // with MorphUBO::vipmTargetLevel, so non-monotonic collapse errors cannot trigger an early
+    // morph. Sentinel = never removed by the built LOD cuts.
+    float collapseLevel{0.0f};
     Vec3 targetNormal{};
     float _pad0{0.0f};
+    Vec4 targetTangent{};
     Vec2 targetTexCoord{};
-    float _pad1{0.0f};
-    float _pad2{0.0f};
+    Vec2 targetTexCoord1{};
 };
 
-// std430-compatible: three tightly-packed vec4s (posError | normal,_ | uv,_,_), uploaded straight
-// into a storage buffer the vertex shader indexes by vertex index.
+// std430-compatible: four tightly-packed vec4s (posLevel | normal,_ | tangent | uv0,uv1), uploaded
+// straight into a storage buffer the vertex shader indexes by vertex index.
 static_assert(sizeof(Vec3) == 12, "MorphVertex's std430 layout assumes a tightly packed Vec3");
-static_assert(sizeof(MorphVertex) == 48, "MorphVertex must match its std430 shader layout");
+static_assert(sizeof(MorphVertex) == 64, "MorphVertex must match its std430 shader layout");
 
-// Sentinel collapse error for a vertex that never collapses within the built LOD levels.
+// Sentinel collapse level for a vertex that never collapses within the built LOD levels.
 inline constexpr float kVipmNeverCollapses = 1.0e30f;
 
-// Build per-original-vertex morph data from the recorded collapse stream and the discrete LOD
-// errors
-// (`levelErrors[0]` is LOD0 == 0.0, the rest are the coarser levels in increasing order). For a
-// vertex removed in band (levelErrors[L-1], levelErrors[L]], its target is the position of the
-// vertex it resolves to after replaying every collapse up to levelErrors[L] — a vertex present at
-// level L. Vulkan-free + deterministic (headless-tested).
+// Build per-original-vertex morph data from the recorded collapse stream and exact discrete LOD
+// cuts. For a vertex first removed by LOD level L, its target is the full render-attribute wedge it
+// resolves to after replaying exactly `lods[L].collapseCount` collapses. Vulkan-free +
+// deterministic (headless-tested).
 [[nodiscard]] std::vector<MorphVertex> buildVipmMorphData(std::span<const Vertex> vertices,
                                                           std::span<const MeshCollapse> collapses,
-                                                          std::span<const float> levelErrors);
+                                                          std::span<const ProgressiveLod> lods);
 
 // Continuous LOD selection for VIPM: which discrete topology level to draw, plus how far (0..1) the
-// geomorph toward the next coarser level has progressed and that next level's error. The shader
-// morphs each drawn vertex whose `collapseError <= nextLevelError` by `morphFactor`. `level`
-// matches what discrete `selectLod` would pick at the same distance, so the two modes agree on
-// topology and the swap lands exactly when `morphFactor` reaches 1.
+// geomorph toward the next coarser level has progressed and that next level's exact ordinal. The
+// shader morphs each drawn vertex whose removal level equals `targetLevel` by `morphFactor`.
+// `level` matches what discrete `selectLod` would pick at the same distance, so the two modes agree
+// on topology and the swap lands exactly when `morphFactor` reaches 1.
 struct VipmSelection
 {
     std::size_t level{0};
     float morphFactor{0.0f};
-    float nextLevelError{0.0f};
+    std::size_t targetLevel{0};
 };
 
 [[nodiscard]] inline VipmSelection selectVipm(std::span<const GeometryLod> lods, float distance,
                                               float projScaleY, float viewportHeight,
-                                              float pixelError) noexcept
+                                              float pixelErrorBudget) noexcept
 {
-    const std::size_t level = selectLod(lods, distance, projScaleY, viewportHeight, pixelError);
-    VipmSelection sel{level, 0.0f, 0.0f};
+    const std::size_t level =
+        selectLod(lods, distance, projScaleY, viewportHeight, pixelErrorBudget);
+    VipmSelection sel{level, 0.0f, 0};
     if (level + 1 >= lods.size())
     {
         return sel; // coarsest level — nothing to morph toward
@@ -82,10 +85,10 @@ struct VipmSelection
     // World-space error the current view tolerates (invert selectLod's projection), then how far it
     // has advanced from this level's error toward the next level's.
     const float d = distance > 1e-3f ? distance : 1e-3f;
-    const float tolerated = pixelError * 2.0f * d / (projScaleY * viewportHeight);
+    const float tolerated = pixelErrorBudget * 2.0f * d / (projScaleY * viewportHeight);
     const float lo = lods[level].error;
     const float hi = lods[level + 1].error;
-    sel.nextLevelError = hi;
+    sel.targetLevel = level + 1;
     sel.morphFactor = hi > lo ? std::clamp((tolerated - lo) / (hi - lo), 0.0f, 1.0f) : 0.0f;
     return sel;
 }

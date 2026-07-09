@@ -632,24 +632,31 @@ the pre-cull is never wanted by any pass. Overlay shows tracked/visible/culled c
 
 ### Mesh LOD
 
-Discrete level-of-detail (rendering spine #3, Phase 1), gated by `RenderTunables::lodEnabled`
-(overlay toggle + pixel-error slider; a per-LOD **"LOD tint"** debug view colours each mesh green/
-yellow/red by its selected level).
+Mesh level-of-detail (rendering spine #3, Phase 2 VIPM), gated by `RenderTunables::lodEnabled`
+(overlay toggle + pixel error budget slider; a per-LOD **"LOD tint"** debug view colours each mesh green/
+yellow/red by its selected level). `RenderTunables::lodMode` switches between hard discrete swaps
+and Continuous VIPM geomorphs.
 
 - **Build (load time, `Geometry::load`):** a from-scratch **Garland–Heckbert QEM** simplifier
-  (`graphics/mesh_simplifier`) builds coarser index sets per static mesh > `kMinLodTriangles`
-  (skipped for deformable/`storageVertices` meshes). The error quadric lives in **R⁵ (position +
-  weighted UV)** so collapses that stretch the texture are ordered *last*; **position welding** keeps
-  glTF's seam-split verts connected, a **wedge-preserving emit** keeps each corner's own UV, and
-  **subset (endpoint) placement** means every level indexes the base vertex buffer. It also records
-  the ordered collapse stream — the raw material for the continuous Phase 2/3.
+  (`graphics/mesh_simplifier`) builds one `ProgressiveMesh` per static mesh >
+  `kMinLodTriangles` (skipped for deformable/`storageVertices` meshes). The artifact contains the
+  ordered collapse stream, exact collapse-count cuts for each LOD, and the coarser index sets. The
+  error quadric lives in **R⁵ (position + weighted UV)** so collapses that stretch the texture are
+  ordered *last*; **position welding** keeps glTF's seam-split verts connected, a
+  **wedge-preserving emit** keeps each corner's closest UV/normal/tangent identity, and **subset
+  (endpoint) placement** means every level indexes the base vertex buffer.
 - **Select (per draw, `object.cpp`):** `selectLod` picks the coarsest level whose world error (an RMS
-  deviation) projects within `lodPixelError` pixels, from camera distance + `frame.proj`/viewport;
+  deviation) projects within `lodPixelErrorBudget` pixels, from camera distance + `frame.proj`/viewport;
   shadow draws bias coarser. It sets `cmd.indexBuffer`/`indexCount`/`lodLevel`.
+- **Morph (per draw, `object.cpp` + `shader.vert`):** Continuous mode uses `selectVipm` to compute
+  a `morphFactor` toward the next exact LOD level. The VIPM SSBO stores, per original vertex, the
+  1-based level where that vertex first disappears plus its target position/normal/tangent/UV0/UV1.
+  The shader morphs only vertices whose removal level equals `MorphUBO::vipmTargetLevel`.
 - **Two dials** live in `mesh_simplifier.cpp`: `kUvWeightFactor` (UV fidelity vs simplification) and
   `kErrorCeilingFactor` (must only refuse *geometrically* un-simplifiable shapes — the cube via its
-  boundary weight — not UV-costly seams). `kLodRatios` / `kLodPixelError` are in `graphics/lod.hpp`.
-- **Known residual:** discrete popping at the transition — the job of Phase 2 (geomorphing).
+  boundary weight — not UV-costly seams). `kLodRatios` / `kLodPixelErrorBudget` are in `graphics/lod.hpp`.
+- **Known residual:** shadow LOD is still discrete and biased coarser, so shadow silhouettes can step
+  independently of the forward/depth VIPM morph.
 
 ### Add A Material Field
 
@@ -749,6 +756,12 @@ the same change — most have a test or guard that will catch you, but not all.
 - **GPU array sizes ↔ shader array sizes.** `graphics/gpu_limits.hpp` (`kMaxLights`, `kMaxJoints`,
   `kMaxMorphTargets`, shadow caster caps, `kShadowTotalMatrixCount`) must equal the array sizes
   declared in the shaders that consume those UBOs.
+- **Progressive LOD cuts ↔ VIPM morph targets.** `Geometry::load()` must build runtime LOD index
+  buffers and VIPM morph data from the same `ProgressiveMesh`. `ProgressiveLod::collapseCount` is
+  topology identity; `GeometryLod::error` is only a screen-space selection metric. Do not reconstruct
+  a LOD's collapse set from error thresholds. The shader-side `MorphVertex` layout in
+  `graphics/vipm.hpp` must match `shader.vert`'s `VipmVert`, and `MorphUBO::vipmTargetLevel` in
+  `render/ubo.hpp` must match the shader block.
 - **Where a constant lives.** Scalar render tunables (biases, strengths, extents, FOV) go in
   `render/constants.hpp`; GPU data-layout limits the Vulkan-free graphics layer also needs go in
   `graphics/gpu_limits.hpp`. `constants.hpp` includes the latter, so render-side code still sees

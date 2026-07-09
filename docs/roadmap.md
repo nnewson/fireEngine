@@ -107,13 +107,15 @@ Suggested execution order — not binding, adjust freely.
    nearest-wedge matching), and an **attribute-aware R⁵ quadric** (position + weighted UV) so the
    ordering collapses UV seams *last* — texture holds through LOD1, only the coarsest level shifts.
    `Geometry` builds discrete LODs at load; selection is screen-space error at the draw-build (forward
-   + coarser for shadows); overlay toggle + pixel-error slider + triangles-drawn + a per-LOD debug
+   + coarser for shadows); overlay toggle + pixel error budget slider + triangles-drawn + a per-LOD debug
    tint. Verified: helmet 15452→7725→1931 with a real 3-level band, correct UVs, 0 VUID. Headless
    `[MeshSimplifier]` correctness tests (target count, error bound, boundary lock, determinism,
    collapse-replay, seam-UV). Known residual = **discrete popping** at the transition → Phase 2's job.
-   - **Phase 2 — view-independent continuous (VIPM)** *(next)*: turn the collapse stream into a
-     vertex hierarchy, pick one global refinement level + **geomorph** between steps (kills the pop)
-     via the per-frame dynamic vertex buffer (#2 cloth path).
+   - ✅ **Phase 2 — view-independent continuous (VIPM)** *(branch `progressive-meshes-phase2`)*:
+     runtime LODs now come from one `ProgressiveMesh` artifact with exact collapse-count cuts, and
+     Continuous mode geomorphs position/normal/tangent/UV0/UV1 into the exact next-level wedge before
+     the index swap. The shader gates by target LOD level, not collapse error, so non-monotonic
+     collapse costs cannot morph a vertex during the wrong transition. Shadow LOD remains discrete.
    - **Phase 3 — view-dependent (VDPM)**: promote the linear stream to a vertex forest + per-region
      active front (silhouette / near-edge refinement). Full design under "### 3" below.
 
@@ -337,9 +339,10 @@ Also available if a future need arises: `maintenance5`'s `vkCmdBindIndexBuffer2`
   for the full write-up): from-scratch attribute-aware (R⁵ position+UV) QEM simplifier that records
   the collapse stream, position-welded connectivity + wedge-preserving UV emit, load-time discrete
   LODs, screen-space selection, overlay + debug tint. Residual = discrete popping.
-- Then the progressive-mesh hierarchy and runtime view-dependent refinement,
-  reusing dynamic mesh buffers (from #2) and compute (from #1):
-  - **Phase 2 (VIPM)** — vertex hierarchy from the collapse stream + geomorph (dissolves the pop).
+- **Phase 2 — VIPM ✅ done** (branch `progressive-meshes-phase2`): exact progressive LOD cuts feed
+  both the discrete index buffers and the per-vertex geomorph SSBO; Continuous mode morphs full render
+  attributes into the next LOD's emitted wedge.
+- Then runtime view-dependent refinement, reusing compute (from #1):
   - **Phase 3 (VDPM)** — vertex forest + per-region active front (silhouette / near-edge).
 - Done last so the engine is mature enough to support it — with real scenes to
   test against.

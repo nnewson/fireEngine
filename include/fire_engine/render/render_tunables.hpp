@@ -58,9 +58,9 @@ struct RenderTunables
     float directionalIntensityScale{1.0f}; // multiplies the primary directional light
 
     // Discrete mesh LOD: pick a coarser index set for distant/small static meshes within a
-    // screen-space pixel-error budget. The toggle doubles as the A/B regression escape hatch.
+    // screen-space pixel error budget. The toggle doubles as the A/B regression escape hatch.
     bool lodEnabled{true};
-    float lodPixelError{kLodPixelError};
+    float lodPixelErrorBudget{kLodPixelErrorBudget};
     // Discrete = hard LOD swaps (Phase 1); Continuous = VIPM geomorph (Phase 2). Coexist —
     // selectable.
     LodMode lodMode{LodMode::Discrete};
