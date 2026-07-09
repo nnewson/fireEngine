@@ -153,10 +153,12 @@ void pushForwardObjectDescriptors(vk::CommandBuffer cmd, const Resources& resour
         .buffer = resources.vulkanBuffer(dc.morphUbo), .offset = 0, .range = vk::WholeSize};
     const vk::DescriptorBufferInfo morphSsboInfo{
         .buffer = resources.vulkanBuffer(dc.morphSsbo), .offset = 0, .range = vk::WholeSize};
+    const vk::DescriptorBufferInfo vipmInfo{
+        .buffer = resources.vulkanBuffer(dc.vipmBuffer), .offset = 0, .range = vk::WholeSize};
 
     constexpr auto kUbo = vk::DescriptorType::eUniformBuffer;
     constexpr auto kSsbo = vk::DescriptorType::eStorageBuffer;
-    const std::array<vk::WriteDescriptorSet, 4> writes{{
+    const std::array<vk::WriteDescriptorSet, 5> writes{{
         {.dstBinding = bindingIndex(ForwardBinding::Frame),
          .descriptorCount = 1,
          .descriptorType = kUbo,
@@ -173,6 +175,10 @@ void pushForwardObjectDescriptors(vk::CommandBuffer cmd, const Resources& resour
          .descriptorCount = 1,
          .descriptorType = kSsbo,
          .pBufferInfo = &morphSsboInfo},
+        {.dstBinding = bindingIndex(ForwardBinding::VipmMorph),
+         .descriptorCount = 1,
+         .descriptorType = kSsbo,
+         .pBufferInfo = &vipmInfo},
     }};
     // Core 1.4 entry point (vkCmdPushDescriptorSet) — the vcpkg loader exports
     // this, not the KHR-suffixed alias. Validity comes from the enabled

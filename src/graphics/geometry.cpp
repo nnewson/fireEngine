@@ -5,6 +5,7 @@
 
 #include <fire_engine/core/log.hpp>
 #include <fire_engine/graphics/mesh_simplifier.hpp>
+#include <fire_engine/graphics/vipm.hpp>
 #include <fire_engine/render/resources.hpp>
 
 namespace fire_engine
@@ -24,9 +25,11 @@ void Geometry::load(Resources& resources)
     if (!storageVertices_ && indices_.size() / 3 >= kMinLodTriangles)
     {
         const QuadricSimplifier simplifier;
-        for (const float ratio : kLodRatios)
+        const ProgressiveMesh progressive =
+            simplifier.buildProgressive(vertices_, indices_, kLodRatios);
+        for (std::size_t i = 1; i < progressive.lods.size(); ++i)
         {
-            const SimplifiedMesh simplified = simplifier.simplify(vertices_, indices_, ratio);
+            const ProgressiveLod& simplified = progressive.lods[i];
             // Skip a level the mesh couldn't actually coarsen (boundary-locked / already minimal).
             if (simplified.indices.empty() || simplified.indices.size() >= indices_.size())
             {
@@ -46,6 +49,14 @@ void Geometry::load(Resources& resources)
             }
             log::debug(log::category::render, "LOD built {} levels from {} tris:{}", lods_.size(),
                        indices_.size() / 3, levels);
+
+            // VIPM (Continuous LOD): reshape the same collapse stream into per-vertex geomorph
+            // data, banded by exact discrete LOD cuts, and upload it as a parallel storage buffer.
+            // It is bound only on the Continuous draw path; the discrete draw ignores it.
+            const std::vector<MorphVertex> morph =
+                buildVipmMorphData(vertices_, progressive.collapses, progressive.lods);
+            morphBuffer_ =
+                resources.createStorageBuffer(morph.size() * sizeof(MorphVertex), morph.data());
         }
     }
 }

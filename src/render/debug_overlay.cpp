@@ -139,9 +139,17 @@ void DebugOverlay::buildUi(const FrameStats& stats, RenderTunables& tunables)
 
     if (ImGui::CollapsingHeader("Mesh LOD", ImGuiTreeNodeFlags_DefaultOpen))
     {
-        ImGui::Checkbox("Discrete LOD", &tunables.lodEnabled);
+        ImGui::Checkbox("Enabled", &tunables.lodEnabled);
         ImGui::BeginDisabled(!tunables.lodEnabled);
-        ImGui::SliderFloat("Pixel error", &tunables.lodPixelError, 0.25f, 16.0f, "%.2f");
+        static constexpr const char* kLodModes[] = {"Discrete (hard swap)",
+                                                    "Continuous (VIPM geomorph)"};
+        int lodMode = static_cast<int>(tunables.lodMode);
+        if (ImGui::Combo("Mode", &lodMode, kLodModes, IM_ARRAYSIZE(kLodModes)))
+        {
+            tunables.lodMode = static_cast<LodMode>(lodMode);
+        }
+        ImGui::SliderFloat("Pixel error budget", &tunables.lodPixelErrorBudget, 0.25f, 16.0f,
+                           "%.2f");
         ImGui::EndDisabled();
         ImGui::Text("Triangles drawn: %d", stats.trianglesDrawn);
         ImGui::TextDisabled("View > 'LOD tint' colours by level (green/yellow/red)");

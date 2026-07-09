@@ -25,12 +25,26 @@ layout(binding = 4) uniform MorphUBO {
     int vertexCount;
     int _pad0;
     vec4 weights[2];
+    float morphFactor;    // VIPM geomorph amount (0 = discrete / no morph)
+    int vipmTargetLevel;  // vertices removed by this 1-based LOD level morph in this transition
 } morph;
 
 // Morph target deltas: [pos0..posN, norm0..normN] packed as vec4 (w unused)
 layout(std430, binding = 5) readonly buffer MorphTargets {
     vec4 data[];
 } morphTargets;
+
+// VIPM per-vertex geomorph data (Continuous LOD): full render-attribute target so the morph
+// doesn't warp the texture or TBN basis. Four vec4s per vertex.
+struct VipmVert {
+    vec4 posLevel;  // xyz = target position, w = 1-based LOD level where this vertex disappears
+    vec4 normalPad; // xyz = target normal
+    vec4 tangent;   // xyzw = target tangent + handedness
+    vec4 uvPad;     // xy = target TEXCOORD_0, zw = target TEXCOORD_1
+};
+layout(std430, binding = 28) readonly buffer VipmMorph {
+    VipmVert v[];
+} vipm;
 
 layout(location = 0) in vec3 inPos;
 layout(location = 1) in vec3 inColor;
@@ -67,6 +81,9 @@ void main() {
     vec3 pos = inPos;
     vec3 normal = inNormal;
     vec3 tangent = inTangent.xyz;
+    float tangentSign = inTangent.w;
+    vec2 uv = inTexCoord;
+    vec2 uv1 = inTexCoord1;
 
     // Apply morph targets. SSBO layout (per Object::load):
     //   [pos_0..N-1, norm_0..N-1, tang_0..N-1] each as vec4(xyz, 0).
@@ -84,6 +101,20 @@ void main() {
             normal += w * morphTargets.data[normOffset].xyz;
             tangent += w * morphTargets.data[tangOffset].xyz;
         }
+    }
+
+    // VIPM geomorph (Continuous LOD): morph a collapsing vertex's complete render attributes
+    // toward the exact wedge drawn by the next LOD. morphFactor is 0 in Discrete mode / for non-VIPM
+    // meshes, so the && short-circuits and the (dummy) buffer is never read.
+    if (morph.morphFactor > 0.0 &&
+        int(vipm.v[gl_VertexIndex].posLevel.w + 0.5) == morph.vipmTargetLevel) {
+        float f = morph.morphFactor;
+        pos = mix(pos, vipm.v[gl_VertexIndex].posLevel.xyz, f);
+        normal = mix(normal, vipm.v[gl_VertexIndex].normalPad.xyz, f);
+        tangent = mix(tangent, vipm.v[gl_VertexIndex].tangent.xyz, f);
+        tangentSign = mix(inTangent.w, vipm.v[gl_VertexIndex].tangent.w, f) >= 0.0 ? 1.0 : -1.0;
+        uv = mix(uv, vipm.v[gl_VertexIndex].uvPad.xy, f);
+        uv1 = mix(uv1, vipm.v[gl_VertexIndex].uvPad.zw, f);
     }
 
     mat4 transform;
@@ -115,17 +146,17 @@ void main() {
 
     fragColor = inColor;
     fragViewDepth = -(ubo.view * worldPos).z;
-    fragTexCoord1 = inTexCoord1;
+    fragTexCoord1 = uv1;
 
     fragNormal = normalize(normalTransform * normal);
     fragWorldPos = worldPos.xyz;
-    fragTexCoord = inTexCoord;
+    fragTexCoord = uv;
 
     // TBN matrix for normal mapping. Use the morph-blended tangent so facial
     // expression rigs get correct normal-mapped lighting per blend.
     vec3 N = normalize(fragNormal);
     vec3 T = normalTransform * tangent;
     T = normalize(T - N * dot(N, T));
-    vec3 B = normalize(cross(N, T)) * inTangent.w;
+    vec3 B = normalize(cross(N, T)) * tangentSign;
     fragTBN = mat3(T, B, N);
 }

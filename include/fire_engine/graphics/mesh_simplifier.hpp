@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <span>
 #include <vector>
@@ -29,6 +30,25 @@ struct SimplifiedMesh
 {
     std::vector<uint32_t> indices;
     float error{0.0f};
+};
+
+// One exact cut through a progressive collapse stream. `collapseCount` is the number of recorded
+// collapses already replayed to produce `indices`; it is the topology identity for VIPM. `error`
+// remains only the screen-space selection metric.
+struct ProgressiveLod
+{
+    std::vector<uint32_t> indices;
+    float error{0.0f};
+    std::size_t collapseCount{0};
+};
+
+// A single replay artifact for discrete LOD + VIPM. Every LOD index buffer and every geomorph
+// target must be derived from this same collapse stream and these exact cuts; error values are not
+// used to infer topology.
+struct ProgressiveMesh
+{
+    std::vector<ProgressiveLod> lods;
+    std::vector<MeshCollapse> collapses;
 };
 
 // Backend-swappable triangle-mesh simplifier. Our quadric-error-metric implementation is the first
@@ -67,6 +87,13 @@ public:
     // of this stream that reaches the target triangle count.
     [[nodiscard]] std::vector<MeshCollapse>
     collapseSequence(std::span<const Vertex> vertices, std::span<const uint32_t> indices) const;
+
+    // Build LOD0 plus one exact progressive cut per requested ratio in a single replay. This is the
+    // authoritative path for runtime LODs: discrete index buffers, cut ordinals, and VIPM morph
+    // data all consume the returned artifact.
+    [[nodiscard]] ProgressiveMesh buildProgressive(std::span<const Vertex> vertices,
+                                                   std::span<const uint32_t> indices,
+                                                   std::span<const float> ratios) const;
 };
 
 } // namespace fire_engine

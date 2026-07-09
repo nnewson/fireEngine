@@ -294,3 +294,23 @@ TEST_CASE("MeshSimplifier.CollapseSequenceReplayMatchesSimplify", "[MeshSimplifi
     CHECK(replayed == direct);
     CHECK_FALSE(seq.empty());
 }
+
+TEST_CASE("MeshSimplifier.ProgressiveLodsCarryExactCollapseCuts", "[MeshSimplifier]")
+{
+    const Mesh sphere = makeUvSphere(10, 12);
+    const QuadricSimplifier simp;
+    const std::array<float, 2> ratios{0.5f, 0.25f};
+
+    const ProgressiveMesh progressive =
+        simp.buildProgressive(sphere.vertices, sphere.indices, ratios);
+
+    REQUIRE(progressive.lods.size() >= 2);
+    CHECK(progressive.lods[0].collapseCount == 0);
+    for (std::size_t i = 1; i < progressive.lods.size(); ++i)
+    {
+        CHECK(progressive.lods[i].collapseCount > progressive.lods[i - 1].collapseCount);
+        CHECK(progressive.lods[i].collapseCount <= progressive.collapses.size());
+        CHECK(progressive.lods[i].indices.size() < progressive.lods[i - 1].indices.size());
+        CHECK(noDegenerateOrOutOfRange(progressive.lods[i].indices, sphere.vertices.size()));
+    }
+}

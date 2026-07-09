@@ -10,6 +10,16 @@
 namespace fire_engine
 {
 
+// LOD strategy, selectable at runtime so the modes coexist rather than supersede. Discrete = Phase
+// 1 hard index-buffer swap. Continuous = VIPM geomorph (Phase 2): the level transitions are
+// dissolved by sliding collapsing vertices onto their targets. (ViewDependent / VDPM is the planned
+// Phase 3.)
+enum class LodMode : uint8_t
+{
+    Discrete = 0,
+    Continuous = 1,
+};
+
 // One discrete level of detail: an index buffer into the geometry's (shared, unchanged) vertex
 // buffer, plus the world-space geometric deviation the simplifier introduced to reach it. LOD0 is
 // the full mesh (error 0); coarser levels follow with increasing error.
@@ -28,7 +38,7 @@ inline constexpr std::array<float, 2> kLodRatios{0.5f, 0.125f};
 inline constexpr std::size_t kMinLodTriangles = 512;
 
 // Default screen-space error budget (pixels) a coarser LOD may introduce before it's rejected.
-inline constexpr float kLodPixelError = 2.0f;
+inline constexpr float kLodPixelErrorBudget = 2.0f;
 
 // Shadow passes tolerate a coarser LOD than the main view (silhouette detail matters less in a
 // shadow), so their pixel budget is scaled up by this factor.
@@ -41,14 +51,14 @@ inline constexpr float kShadowLodBias = 3.0f;
 // overflows the budget ends the search.
 [[nodiscard]] inline std::size_t selectLod(std::span<const GeometryLod> lods, float distance,
                                            float projScaleY, float viewportHeight,
-                                           float pixelError) noexcept
+                                           float pixelErrorBudget) noexcept
 {
     std::size_t chosen = 0;
     const float d = distance > 1e-3f ? distance : 1e-3f;
     for (std::size_t i = 1; i < lods.size(); ++i)
     {
         const float projected = lods[i].error * projScaleY * viewportHeight / (2.0f * d);
-        if (projected <= pixelError)
+        if (projected <= pixelErrorBudget)
         {
             chosen = i;
         }

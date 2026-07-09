@@ -8,6 +8,7 @@
 #include <fire_engine/graphics/material.hpp>
 #include <fire_engine/graphics/material_binding.hpp>
 #include <fire_engine/graphics/skin.hpp>
+#include <fire_engine/graphics/vipm.hpp>
 #include <fire_engine/math/constants.hpp>
 #include <fire_engine/math/vec4.hpp>
 #include <fire_engine/math/view_basis.hpp>
@@ -185,6 +186,20 @@ void Object::createForwardBindings(Resources& resources)
             const std::size_t ssboSize = ssboData.size() * sizeof(float);
             auto ssboSet = resources.createMappedStorageBuffer(ssboSize, ssboData.data());
             binding.morphSsbo = ssboSet.buffers[0];
+        }
+
+        // VIPM geomorph buffer (Continuous LOD): the geometry's per-vertex morph data when it has
+        // coarser levels; otherwise a minimal dummy keeps the push-descriptor binding valid (such
+        // meshes get morphFactor 0, so the vertex shader never reads it).
+        if (binding.geometry->hasVipmData())
+        {
+            binding.vipmBuffer = binding.geometry->morphBuffer();
+        }
+        else
+        {
+            float vipmZeros[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+            auto vipmSet = resources.createMappedStorageBuffer(sizeof(vipmZeros), vipmZeros);
+            binding.vipmBuffer = vipmSet.buffers[0];
         }
     }
 }
@@ -401,6 +416,21 @@ void Object::writeForwardUniforms(const FrameInfo& frame, const Mat4& world,
                 morphUbo.weights[w] = morphWeights_[w];
             }
         }
+
+        // VIPM geomorph scalars (Continuous LOD, forward pass only — shadow keeps discrete). Same
+        // distance/level basis as the discrete selectLod in buildDrawCommands, so topology + morph
+        // agree and the swap lands as morphFactor reaches 1.
+        if (frame.lodMode == LodMode::Continuous && frame.lodEnabled &&
+            binding.geometry->hasVipmData() && binding.geometry->lods().size() > 1)
+        {
+            const Vec3 centroid{world[0, 3], world[1, 3], world[2, 3]};
+            const float distance = (centroid - frame.cameraPosition).magnitude();
+            const VipmSelection sel =
+                selectVipm(binding.geometry->lods(), distance, std::abs(frame.proj[1, 1]),
+                           static_cast<float>(frame.viewportHeight), frame.lodPixelErrorBudget);
+            morphUbo.morphFactor = sel.morphFactor;
+            morphUbo.vipmTargetLevel = static_cast<int>(sel.targetLevel);
+        }
         writeMapped(binding.morphUboMapped[frame.currentFrame], morphUbo);
     }
 }
@@ -458,7 +488,7 @@ std::vector<DrawCommand> Object::buildDrawCommands(const FrameInfo& frame, const
             const float distance = (centroid - frame.cameraPosition).magnitude();
             const std::size_t level =
                 selectLod(binding.geometry->lods(), distance, std::abs(frame.proj[1, 1]),
-                          static_cast<float>(frame.viewportHeight), frame.lodPixelError);
+                          static_cast<float>(frame.viewportHeight), frame.lodPixelErrorBudget);
             cmd.indexBuffer = binding.geometry->lods()[level].indexBuffer;
             cmd.indexCount = binding.geometry->lods()[level].indexCount;
             cmd.lodLevel = static_cast<uint32_t>(level);
@@ -469,6 +499,7 @@ std::vector<DrawCommand> Object::buildDrawCommands(const FrameInfo& frame, const
         cmd.skinUbo = binding.skinBufs[frame.currentFrame];
         cmd.morphUbo = binding.morphUboBufs[frame.currentFrame];
         cmd.morphSsbo = binding.morphSsbo;
+        cmd.vipmBuffer = binding.vipmBuffer;
         cmd.pipeline = pipe;
         cmd.doubleSided = mat.doubleSided();
         cmd.sortDepth = depth;
@@ -501,9 +532,10 @@ std::vector<DrawCommand> Object::buildDrawCommands(const FrameInfo& frame, const
             if (frame.lodEnabled && shadowGeometry->lods().size() > 1)
             {
                 const float distance = (centroid - frame.cameraPosition).magnitude();
-                const std::size_t level = selectLod(
-                    shadowGeometry->lods(), distance, std::abs(frame.proj[1, 1]),
-                    static_cast<float>(frame.viewportHeight), frame.lodPixelError * kShadowLodBias);
+                const std::size_t level =
+                    selectLod(shadowGeometry->lods(), distance, std::abs(frame.proj[1, 1]),
+                              static_cast<float>(frame.viewportHeight),
+                              frame.lodPixelErrorBudget * kShadowLodBias);
                 shadowCmd.indexBuffer = shadowGeometry->lods()[level].indexBuffer;
                 shadowCmd.indexCount = shadowGeometry->lods()[level].indexCount;
             }
