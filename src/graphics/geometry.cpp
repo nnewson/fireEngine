@@ -57,6 +57,10 @@ void Geometry::load(Resources& resources)
                 buildVipmMorphData(vertices_, progressive.collapses, progressive.lods);
             morphBuffer_ =
                 resources.createStorageBuffer(morph.size() * sizeof(MorphVertex), morph.data());
+
+            // VDPM (View-dependent LOD): keep the collapse stream so an ActiveFront can be built
+            // per instance and refined per frame into a dynamic index buffer.
+            collapses_ = progressive.collapses;
         }
     }
 }

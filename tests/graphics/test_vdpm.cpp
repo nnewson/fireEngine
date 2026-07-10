@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <vector>
 
@@ -70,6 +71,20 @@ FaceSet facesOf(const std::vector<uint32_t>& idx)
     return f;
 }
 
+// A grid displaced into a bumpy surface, so collapses carry real geometric error (a flat grid is
+// coplanar -> ~0 error -> nothing distance-dependent to refine).
+Mesh makeBumpyGrid(int n)
+{
+    Mesh m = makeGrid(n);
+    for (Vertex& v : m.verts)
+    {
+        const Vec3 p = v.position();
+        const float z = 0.5f * std::sin(p.x() * 0.9f) * std::sin(p.y() * 0.9f);
+        v.position(Vec3{p.x(), p.y(), z});
+    }
+    return m;
+}
+
 std::vector<MeshCollapse> collapsesOf(const Mesh& m)
 {
     const QuadricSimplifier simp;
@@ -88,6 +103,39 @@ TEST_CASE("ActiveFront: fully refined reproduces the finest index buffer", "[vdp
     front.refineAll();
     // Grid has no seams, so canonical faces == the input triangles.
     CHECK(normalize(front.emitActiveCanonical()) == normalize(facesOf(m.indices)));
+}
+
+TEST_CASE("ActiveFront: fully refined emitActiveIndices restores the original render wedges",
+          "[vdpm]")
+{
+    const Mesh grid = makeGrid(9);
+    ActiveFront f1 = ActiveFront::build(grid.verts, grid.indices, collapsesOf(grid));
+    f1.refineAll();
+    // No-seam grid: fully-refined emit is the identity index buffer.
+    CHECK(normalize(facesOf(f1.emitActiveIndices(grid.verts, grid.indices))) ==
+          normalize(facesOf(grid.indices)));
+}
+
+TEST_CASE("ActiveFront: emitActiveIndices restores per-corner wedges across a UV seam", "[vdpm]")
+{
+    // A quad split into two triangles sharing an edge that is a UV seam: the two shared-position
+    // vertices are duplicated with *different* UVs. Emit must return each corner to its own UV
+    // wedge (nearest by attribute), not snap both sides to a single canonical vertex.
+    Mesh m;
+    m.verts = {
+        Vertex{Vec3{0, 0, 0}, Colour3{}, Vec3{0, 0, 1}, Vec2{0.0f, 0.0f}},
+        Vertex{Vec3{1, 0, 0}, Colour3{}, Vec3{0, 0, 1}, Vec2{1.0f, 0.0f}}, // pos(1,0) uvA
+        Vertex{Vec3{0, 1, 0}, Colour3{}, Vec3{0, 0, 1}, Vec2{0.0f, 1.0f}}, // pos(0,1) uvA
+        Vertex{Vec3{1, 0, 0}, Colour3{}, Vec3{0, 0, 1}, Vec2{0.0f, 0.5f}}, // pos(1,0) uvB (seam)
+        Vertex{Vec3{0, 1, 0}, Colour3{}, Vec3{0, 0, 1}, Vec2{0.5f, 0.0f}}, // pos(0,1) uvB (seam)
+        Vertex{Vec3{1, 1, 0}, Colour3{}, Vec3{0, 0, 1}, Vec2{1.0f, 1.0f}},
+    };
+    m.indices = {0, 1, 2, 3, 5, 4};
+
+    ActiveFront front = ActiveFront::build(m.verts, m.indices, collapsesOf(m));
+    // Each corner's own wedge is nearest to itself, so emit reproduces the input exactly.
+    CHECK(normalize(facesOf(front.emitActiveIndices(m.verts, m.indices))) ==
+          normalize(facesOf(m.indices)));
 }
 
 TEST_CASE("ActiveFront: refineAll then coarsenAll round-trips to the coarsest front", "[vdpm]")
@@ -171,6 +219,28 @@ TEST_CASE("ActiveFront: illegal ops are rejected without mutating the front", "[
     // An out-of-range split index is rejected, not a crash.
     CHECK_FALSE(front.refine(static_cast<uint32_t>(front.forest().splits.size())));
     CHECK_FALSE(front.coarsen(static_cast<uint32_t>(front.forest().splits.size())));
+}
+
+TEST_CASE("ActiveFront: refineForView refines nearer views more than distant ones", "[vdpm]")
+{
+    const Mesh m = makeBumpyGrid(17);
+    ActiveFront front = ActiveFront::build(m.verts, m.indices, collapsesOf(m));
+    const Mat4 world = Mat4::identity();
+    const float projScaleY = 1.0f;
+    const float viewportHeight = 1000.0f;
+    const float budget = 2.0f;
+    const float noSilhouette = 0.0f;
+
+    front.refineForView(m.verts, world, Vec3{8.0f, 8.0f, 6.0f}, projScaleY, viewportHeight, budget,
+                        noSilhouette);
+    const std::size_t nearCount = front.emitActiveCanonical().size();
+
+    front.refineForView(m.verts, world, Vec3{8.0f, 8.0f, 400.0f}, projScaleY, viewportHeight,
+                        budget, noSilhouette);
+    const std::size_t farCount = front.emitActiveCanonical().size();
+
+    CHECK(nearCount > farCount); // closer view resolves more triangles
+    CHECK(farCount >= 2);        // never below the coarsest
 }
 
 TEST_CASE("ActiveFront: boundary splits are recorded with an invalid vr", "[vdpm]")

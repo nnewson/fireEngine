@@ -8,6 +8,8 @@
 
 #include <fire_engine/graphics/mesh_simplifier.hpp>
 #include <fire_engine/graphics/vertex.hpp>
+#include <fire_engine/math/mat4.hpp>
+#include <fire_engine/math/vec3.hpp>
 
 namespace fire_engine
 {
@@ -99,6 +101,17 @@ public:
     void refineAll();
     void coarsenAll();
 
+    // Selectively refine the front for a camera view (the per-frame VDPM driver): reset to
+    // coarsest, then refine every split (coarse-first, so dependencies stay satisfied) whose
+    // world-space error projects beyond `pixelBudget` screen pixels. Silhouette regions — where the
+    // vertex's world normal is near edge-on to the view — are held to a tighter budget via
+    // `silhouetteBoost` (0 disables it), so contours stay dense. `world` places the mesh;
+    // `projScaleY = proj[1][1]`. The per-region result is the view-dependent LOD. Vulkan-free +
+    // headless-testable.
+    void refineForView(std::span<const Vertex> vertices, const Mat4& world, const Vec3& cameraPos,
+                       float projScaleY, float viewportHeight, float pixelBudget,
+                       float silhouetteBoost);
+
     [[nodiscard]] bool active(uint32_t canonicalVertex) const
     {
         return active_[canonicalVertex];
@@ -118,14 +131,23 @@ public:
     // (3a.3).
     [[nodiscard]] std::vector<std::array<uint32_t, 3>> emitActiveCanonical() const;
 
+    // The current active triangle set as RENDER indices into the original vertex array: each active
+    // face's corners restored to the nearest render wedge at their active-ancestor position (the
+    // same seam-preserving pattern the simplifier's index emit uses), so UV/normal seams keep their
+    // identity. This is the index buffer a draw would use.
+    [[nodiscard]] std::vector<uint32_t> emitActiveIndices(std::span<const Vertex> vertices,
+                                                          std::span<const uint32_t> indices) const;
+
 private:
     [[nodiscard]] uint32_t activeAncestor(uint32_t canonicalVertex) const;
 
     VertexForest forest_;
-    std::vector<bool> active_;                         // per canonical vertex
-    std::vector<bool> refined_;                        // per split
-    std::vector<uint32_t> dependents_;                 // per vertex: refined splits requiring it
-    std::vector<std::array<uint32_t, 3>> finestFaces_; // canonical, welded, deduped
+    std::vector<bool> active_;                           // per canonical vertex
+    std::vector<bool> refined_;                          // per split
+    std::vector<uint32_t> dependents_;                   // per vertex: refined splits requiring it
+    std::vector<std::array<uint32_t, 3>> finestFaces_;   // canonical, welded, deduped
+    std::vector<uint32_t> weld_;                         // original vertex -> canonical
+    std::vector<std::vector<uint32_t>> canonicalWedges_; // canonical -> original render wedges
 };
 
 } // namespace fire_engine

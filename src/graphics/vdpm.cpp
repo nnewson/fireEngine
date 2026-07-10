@@ -1,10 +1,15 @@
 #include <fire_engine/graphics/vdpm.hpp>
 
+#include <algorithm>
 #include <array>
 #include <bit>
+#include <cmath>
 #include <cstdint>
+#include <limits>
 #include <unordered_map>
 #include <vector>
+
+#include <fire_engine/math/vec4.hpp>
 
 namespace fire_engine
 {
@@ -74,6 +79,37 @@ canonicalFaces(std::span<const std::uint32_t> weld, std::span<const std::uint32_
         faces.push_back(f);
     }
     return faces;
+}
+
+// Render-attribute distance between two wedges (UV0, UV1, normal, tangent) — the seam-preserving
+// tie-break used to restore a corner to its own chart/shading identity, matching the simplifier.
+[[nodiscard]] float wedgeDistance(const Vertex& a, const Vertex& b) noexcept
+{
+    const Vec2 uv0 = a.texCoord() - b.texCoord();
+    const Vec2 uv1 = a.texCoord1() - b.texCoord1();
+    const Vec3 nrm = a.normal() - b.normal();
+    const Vec4 tan = a.tangent() - b.tangent();
+    return Vec2::dotProduct(uv0, uv0) + Vec2::dotProduct(uv1, uv1) +
+           0.25f * Vec3::dotProduct(nrm, nrm) + 0.25f * Vec4::dotProduct(tan, tan);
+}
+
+// The wedge at a surviving position whose render attributes are nearest `source`.
+[[nodiscard]] std::uint32_t nearestWedge(std::span<const Vertex> vertices,
+                                         std::span<const std::uint32_t> wedges,
+                                         const Vertex& source) noexcept
+{
+    std::uint32_t best = wedges.empty() ? 0u : wedges.front();
+    float bestDist = std::numeric_limits<float>::max();
+    for (const std::uint32_t w : wedges)
+    {
+        const float dist = wedgeDistance(vertices[w], source);
+        if (dist < bestDist)
+        {
+            bestDist = dist;
+            best = w;
+        }
+    }
+    return best;
 }
 
 } // namespace
@@ -196,9 +232,17 @@ ActiveFront ActiveFront::build(std::span<const Vertex> vertices, std::span<const
 {
     ActiveFront front;
     front.forest_ = buildVertexForest(vertices, indices, collapses);
-    front.finestFaces_ = canonicalFaces(weldVertices(vertices), indices);
+    front.weld_ = weldVertices(vertices);
+    front.finestFaces_ = canonicalFaces(front.weld_, indices);
 
     const std::size_t n = vertices.size();
+    // Render wedges per canonical position (for seam-preserving emit).
+    front.canonicalWedges_.assign(n, {});
+    for (std::uint32_t v = 0; v < n; ++v)
+    {
+        front.canonicalWedges_[front.weld_[v]].push_back(v);
+    }
+
     // Coarsest state: only never-removed (root) canonical vertices are active; no split refined.
     front.active_.assign(n, false);
     for (std::uint32_t v = 0; v < n; ++v)
@@ -296,6 +340,51 @@ void ActiveFront::coarsenAll()
     }
 }
 
+void ActiveFront::refineForView(std::span<const Vertex> vertices, const Mat4& world,
+                                const Vec3& cameraPos, float projScaleY, float viewportHeight,
+                                float pixelBudget, float silhouetteBoost)
+{
+    coarsenAll();
+    const float halfViewport = viewportHeight * 0.5f;
+
+    // Coarsest split first (reverse stream order): a split's parent/vl/vr are removed only by later
+    // collapses, so refining coarse-first keeps every legal refine's dependencies already active.
+    for (std::uint32_t i = static_cast<std::uint32_t>(forest_.splits.size()); i-- > 0;)
+    {
+        const VertexSplit& s = forest_.splits[i];
+
+        const Vec3 local = vertices[s.child].position();
+        const Vec4 wp4 = world * Vec4{local.x(), local.y(), local.z(), 1.0f};
+        const Vec3 worldPos{wp4.x(), wp4.y(), wp4.z()};
+        const float distance = std::max(1e-3f, (worldPos - cameraPos).magnitude());
+
+        // Silhouette: a world normal near edge-on to the view direction gets a tighter budget.
+        float boost = 1.0f;
+        if (silhouetteBoost > 0.0f)
+        {
+            const Vec3 ln = vertices[s.child].normal();
+            const Vec4 wn4 = world * Vec4{ln.x(), ln.y(), ln.z(), 0.0f};
+            const Vec3 worldNormal{wn4.x(), wn4.y(), wn4.z()};
+            const float nLen = worldNormal.magnitude();
+            if (nLen > 1e-6f)
+            {
+                const Vec3 viewDir = (cameraPos - worldPos) * (1.0f / distance);
+                const float facing =
+                    std::abs(Vec3::dotProduct(worldNormal * (1.0f / nLen), viewDir));
+                boost = 1.0f + silhouetteBoost * (1.0f - facing);
+            }
+        }
+
+        // Same projection as selectLod: a world deviation e projects to e·projScaleY·(vh/2)/d
+        // pixels.
+        const float screenError = s.error * boost * projScaleY * halfViewport / distance;
+        if (screenError > pixelBudget)
+        {
+            refine(i);
+        }
+    }
+}
+
 std::vector<std::array<std::uint32_t, 3>> ActiveFront::emitActiveCanonical() const
 {
     std::vector<std::array<std::uint32_t, 3>> out;
@@ -309,6 +398,31 @@ std::vector<std::array<std::uint32_t, 3>> ActiveFront::emitActiveCanonical() con
             continue; // the face collapsed to a degenerate at the current front
         }
         out.push_back(a);
+    }
+    return out;
+}
+
+std::vector<std::uint32_t> ActiveFront::emitActiveIndices(std::span<const Vertex> vertices,
+                                                          std::span<const uint32_t> indices) const
+{
+    std::vector<std::uint32_t> out;
+    out.reserve(indices.size());
+    for (std::size_t i = 0; i + 2 < indices.size(); i += 3)
+    {
+        const std::array<std::uint32_t, 3> oc{indices[i], indices[i + 1], indices[i + 2]};
+        const std::array<std::uint32_t, 3> anc{activeAncestor(weld_[oc[0]]),
+                                               activeAncestor(weld_[oc[1]]),
+                                               activeAncestor(weld_[oc[2]])};
+        if (anc[0] == anc[1] || anc[1] == anc[2] || anc[0] == anc[2])
+        {
+            continue; // collapsed to a degenerate at the current front
+        }
+        // Restore each corner to the nearest render wedge at its active-ancestor position, so a
+        // seam corner keeps its own chart/shading identity instead of snapping to one canonical.
+        for (std::size_t k = 0; k < 3; ++k)
+        {
+            out.push_back(nearestWedge(vertices, canonicalWedges_[anc[k]], vertices[oc[k]]));
+        }
     }
     return out;
 }

@@ -12,12 +12,14 @@ namespace fire_engine
 
 // LOD strategy, selectable at runtime so the modes coexist rather than supersede. Discrete = Phase
 // 1 hard index-buffer swap. Continuous = VIPM geomorph (Phase 2): the level transitions are
-// dissolved by sliding collapsing vertices onto their targets. (ViewDependent / VDPM is the planned
-// Phase 3.)
+// dissolved by sliding collapsing vertices onto their targets. ViewDependent = VDPM (Phase 3): a
+// per-region active front refines different parts of one mesh to different detail into a per-frame
+// index buffer.
 enum class LodMode : uint8_t
 {
     Discrete = 0,
     Continuous = 1,
+    ViewDependent = 2,
 };
 
 // One discrete level of detail: an index buffer into the geometry's (shared, unchanged) vertex
