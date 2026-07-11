@@ -177,15 +177,13 @@ void Object::createForwardBindings(Resources& resources)
         if (numTargets == 0 || numVerts == 0)
         {
             float zeros[4] = {0.0f, 0.0f, 0.0f, 0.0f};
-            auto ssboSet = resources.createMappedStorageBuffer(sizeof(zeros), zeros);
-            binding.morphSsbo = ssboSet.buffers[0];
+            binding.morphSsbo = resources.createSharedStorageBuffer(sizeof(zeros), zeros);
         }
         else
         {
             std::vector<float> ssboData = packMorphTargetDeltas(*binding.geometry);
             const std::size_t ssboSize = ssboData.size() * sizeof(float);
-            auto ssboSet = resources.createMappedStorageBuffer(ssboSize, ssboData.data());
-            binding.morphSsbo = ssboSet.buffers[0];
+            binding.morphSsbo = resources.createSharedStorageBuffer(ssboSize, ssboData.data());
         }
 
         // VIPM geomorph buffer (Continuous LOD): the geometry's per-vertex morph data when it has
@@ -198,8 +196,7 @@ void Object::createForwardBindings(Resources& resources)
         else
         {
             float vipmZeros[4] = {0.0f, 0.0f, 0.0f, 0.0f};
-            auto vipmSet = resources.createMappedStorageBuffer(sizeof(vipmZeros), vipmZeros);
-            binding.vipmBuffer = vipmSet.buffers[0];
+            binding.vipmBuffer = resources.createSharedStorageBuffer(sizeof(vipmZeros), vipmZeros);
         }
 
         // VDPM (View-dependent LOD): build the per-instance active front + its per-frame dynamic

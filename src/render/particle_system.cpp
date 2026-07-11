@@ -78,9 +78,9 @@ ParticleSystem::ParticleSystem(const Device& device, const Swapchain& swapchain,
     // Zero-init the pool so every slot starts dead (lifetime 0 -> respawn).
     std::vector<std::byte> zeros(static_cast<std::size_t>(poolBytes_), std::byte{0});
     particlePool_ =
-        resources_->createMappedStorageBuffer(static_cast<std::size_t>(poolBytes_), zeros.data());
+        resources_->createSharedStorageBuffer(static_cast<std::size_t>(poolBytes_), zeros.data());
     spawnClaim_ =
-        resources_->createMappedStorageBuffer(static_cast<std::size_t>(claimBytes_), nullptr);
+        resources_->createSharedStorageBuffer(static_cast<std::size_t>(claimBytes_), nullptr);
     frameUbo_ = resources_->createMappedUniformBuffers(sizeof(ParticleFrameUBO));
 
     depthSampler_ =
@@ -131,10 +131,10 @@ void ParticleSystem::createDescriptors()
 
     for (uint32_t i = 0; i < kMaxFramesInFlight; ++i)
     {
-        const vk::DescriptorBufferInfo poolInfo{resources_->vulkanBuffer(particlePool_.buffers[i]),
-                                                0, poolBytes_};
-        const vk::DescriptorBufferInfo claimInfo{resources_->vulkanBuffer(spawnClaim_.buffers[i]),
-                                                 0, claimBytes_};
+        const vk::DescriptorBufferInfo poolInfo{resources_->vulkanBuffer(particlePool_), 0,
+                                                poolBytes_};
+        const vk::DescriptorBufferInfo claimInfo{resources_->vulkanBuffer(spawnClaim_), 0,
+                                                 claimBytes_};
         const vk::DescriptorBufferInfo frameInfo{resources_->vulkanBuffer(frameUbo_.buffers[i]), 0,
                                                  sizeof(ParticleFrameUBO)};
 
@@ -243,8 +243,8 @@ void ParticleSystem::update(std::span<const EmitterState> emitters, const Mat4& 
 
 void ParticleSystem::recordSimulate(vk::CommandBuffer cmd, uint32_t frameIndex) const
 {
-    const vk::Buffer claim = resources_->vulkanBuffer(spawnClaim_.buffers[frameIndex]);
-    const vk::Buffer pool = resources_->vulkanBuffer(particlePool_.buffers[frameIndex]);
+    const vk::Buffer claim = resources_->vulkanBuffer(spawnClaim_);
+    const vk::Buffer pool = resources_->vulkanBuffer(particlePool_);
 
     // Reset the per-emitter spawn-claim counters to 0 on the GPU.
     cmd.fillBuffer(claim, 0, claimBytes_, 0u);

@@ -2,6 +2,7 @@
 #include <cstdint>
 #include <cstring>
 #include <fstream>
+#include <optional>
 #include <set>
 #include <span>
 #include <stdexcept>
@@ -9,6 +10,7 @@
 #include <vector>
 
 #include <fire_engine/core/log.hpp>
+#include <fire_engine/graphics/gpu_limits.hpp>
 #include <fire_engine/render/device.hpp>
 
 namespace fire_engine
@@ -81,6 +83,91 @@ constexpr std::array deviceExtensions{
     // enabled as an extension here. MoltenVK advertises it (pushDescriptor=true).
     VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME,
 };
+
+namespace
+{
+
+// Every device feature + descriptor-indexing limit that createLogicalDevice goes on to
+// enable/assume. Verified during device selection so an unsupported GPU is rejected up front with a
+// precise reason, instead of passing suitability and then failing an opaque Vulkan call inside
+// device or pipeline creation. Returns nullopt when the device satisfies everything, or a
+// comma-joined list of the missing capabilities. Keep this in lockstep with the enable-chain in
+// createLogicalDevice.
+[[nodiscard]] std::optional<std::string>
+missingDeviceCapabilities(const vk::raii::PhysicalDevice& d)
+{
+    const auto features =
+        d.getFeatures2<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan12Features,
+                       vk::PhysicalDeviceVulkan13Features,
+                       vk::PhysicalDevicePortabilitySubsetFeaturesKHR>();
+    const vk::PhysicalDeviceFeatures& f10 = features.get<vk::PhysicalDeviceFeatures2>().features;
+    const auto& f12 = features.get<vk::PhysicalDeviceVulkan12Features>();
+    const auto& f13 = features.get<vk::PhysicalDeviceVulkan13Features>();
+    const auto& fp = features.get<vk::PhysicalDevicePortabilitySubsetFeaturesKHR>();
+
+    std::vector<std::string> missing;
+    auto require = [&missing](vk::Bool32 supported, const char* name)
+    {
+        if (supported == vk::False)
+        {
+            missing.emplace_back(name);
+        }
+    };
+    require(f10.samplerAnisotropy, "samplerAnisotropy");
+    require(f10.imageCubeArray, "imageCubeArray");     // point-shadow cubemap arrays
+    require(f10.independentBlend, "independentBlend"); // per-attachment blend (colour vs velocity)
+    require(f13.synchronization2, "synchronization2");
+    require(f13.dynamicRendering, "dynamicRendering");
+    require(f12.bufferDeviceAddress, "bufferDeviceAddress"); // soft-body compute buffer pointers
+    require(f12.descriptorIndexing, "descriptorIndexing");   // bindless materials
+    require(f12.timelineSemaphore, "timelineSemaphore");     // frame pacing
+    require(f12.runtimeDescriptorArray, "runtimeDescriptorArray");
+    require(f12.shaderSampledImageArrayNonUniformIndexing,
+            "shaderSampledImageArrayNonUniformIndexing");
+    require(f12.descriptorBindingSampledImageUpdateAfterBind,
+            "descriptorBindingSampledImageUpdateAfterBind");
+    require(f12.descriptorBindingPartiallyBound, "descriptorBindingPartiallyBound");
+    require(fp.mutableComparisonSamplers, "mutableComparisonSamplers (portability subset)");
+
+    // The global bindless texture array (forward set 2) is kMaxBindlessTextures update-after-bind
+    // combined-image-samplers; each counts against both the sampler and the sampled-image
+    // update-after-bind limits, per stage and per set (set 1 adds a few more samplers on top).
+    // Reject a device that can't hold the array rather than overflow the descriptor set at bind
+    // time.
+    const auto props = d.getProperties2<vk::PhysicalDeviceProperties2,
+                                        vk::PhysicalDeviceDescriptorIndexingProperties>();
+    const auto& di = props.get<vk::PhysicalDeviceDescriptorIndexingProperties>();
+    auto requireLimit = [&missing](uint32_t have, uint32_t want, const char* name)
+    {
+        if (have < want)
+        {
+            missing.push_back(std::string(name) + " (" + std::to_string(have) + " < " +
+                              std::to_string(want) + " required)");
+        }
+    };
+    requireLimit(di.maxPerStageDescriptorUpdateAfterBindSamplers, kMaxBindlessTextures,
+                 "maxPerStageDescriptorUpdateAfterBindSamplers");
+    requireLimit(di.maxPerStageDescriptorUpdateAfterBindSampledImages, kMaxBindlessTextures,
+                 "maxPerStageDescriptorUpdateAfterBindSampledImages");
+    requireLimit(di.maxDescriptorSetUpdateAfterBindSamplers, kMaxBindlessTextures,
+                 "maxDescriptorSetUpdateAfterBindSamplers");
+    requireLimit(di.maxDescriptorSetUpdateAfterBindSampledImages, kMaxBindlessTextures,
+                 "maxDescriptorSetUpdateAfterBindSampledImages");
+
+    if (missing.empty())
+    {
+        return std::nullopt;
+    }
+    std::string reason = missing.front();
+    for (std::size_t i = 1; i < missing.size(); ++i)
+    {
+        reason += ", ";
+        reason += missing[i];
+    }
+    return reason;
+}
+
+} // namespace
 
 Device::Device(const Window& window)
 {
@@ -194,7 +281,21 @@ bool Device::isDeviceSuitable(const vk::raii::PhysicalDevice& d)
 
     auto fmts = d.getSurfaceFormatsKHR(*surface_);
     auto modes = d.getSurfacePresentModesKHR(*surface_);
-    return !fmts.empty() && !modes.empty();
+    if (fmts.empty() || modes.empty())
+    {
+        return false;
+    }
+
+    // Verify every feature/limit createLogicalDevice enables is actually advertised, so a device
+    // that clears queues+extensions+swapchain but lacks (say) update-after-bind is rejected here
+    // with a named reason rather than crashing an opaque call during device/pipeline creation.
+    if (auto reason = missingDeviceCapabilities(d))
+    {
+        log::warn(log::category::render, "GPU '{}' unsuitable: missing {}",
+                  d.getProperties().deviceName.data(), *reason);
+        return false;
+    }
+    return true;
 }
 
 std::pair<std::optional<uint32_t>, std::optional<uint32_t>>
@@ -243,28 +344,10 @@ void Device::createLogicalDevice()
         });
     }
 
-    auto supported = physDevice_.getFeatures();
-    if (supported.imageCubeArray == vk::False)
-    {
-        throw std::runtime_error(
-            "GPU does not support imageCubeArray (required for point shadow maps)");
-    }
-
-    // synchronization2 and dynamicRendering are core in Vulkan 1.3 and mandatory
-    // in 1.4, but must still be enabled explicitly before the matching APIs are
-    // legal to use. Verify the driver advertises them before requesting them.
-    auto supported13 =
-        physDevice_.getFeatures2<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan13Features>()
-            .get<vk::PhysicalDeviceVulkan13Features>();
-    if (supported13.synchronization2 == vk::False)
-    {
-        throw std::runtime_error("GPU does not support synchronization2");
-    }
-    if (supported13.dynamicRendering == vk::False)
-    {
-        throw std::runtime_error("GPU does not support dynamicRendering");
-    }
-
+    // Every feature enabled below was already verified present by missingDeviceCapabilities during
+    // device selection (isDeviceSuitable), so this device is known to support the whole set — no
+    // per-feature re-query/throw here. synchronization2 and dynamicRendering are core in Vulkan 1.3
+    // (mandatory in 1.4) but must still be enabled explicitly before the matching APIs are legal.
     vk::PhysicalDeviceFeatures features{};
     features.samplerAnisotropy = vk::True;
     // Point light shadow maps use samplerCubeArrayShadow over a cubemap-array
@@ -302,7 +385,9 @@ void Device::createLogicalDevice()
     features12.shaderSampledImageArrayNonUniformIndexing = vk::True;
     features12.descriptorBindingSampledImageUpdateAfterBind = vk::True;
     features12.descriptorBindingPartiallyBound = vk::True;
-    features12.descriptorBindingVariableDescriptorCount = vk::True;
+    // (No descriptorBindingVariableDescriptorCount: the bindless array is a fixed
+    // kMaxBindlessTextures slots with partiallyBound, not an eVariableDescriptorCount binding, so
+    // it is not needed.)
     features13.pNext = &features12;
 
     // Shadow mapping uses sampler2DShadow (hardware PCF), which requires
