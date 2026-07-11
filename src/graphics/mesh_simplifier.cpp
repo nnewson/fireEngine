@@ -174,10 +174,9 @@ struct Quadric
 }
 
 // Distance from point p to triangle abc, closest point clamped to the triangle (Ericson, Real-Time
-// Collision Detection §5.1.5). Used only to *select* the covering / nearest one-ring face for the
-// deviation channels — it reads 0 for the face p sits in even on a flat region where every plane
-// distance is 0, so the barycentric UV interpolation stays inside that face and doesn't
-// extrapolate.
+// Collision Detection §5.1.5). Used only to *select* the nearest one-ring face for the deviation
+// channels — it reads 0 for a face p sits in even on a flat region where every plane distance is 0,
+// so the nearest face is the one whose plane the attribute interpolation should extrapolate on.
 [[nodiscard]] float pointTriangleDistance(const Vec3& p, const Vec3& a, const Vec3& b,
                                           const Vec3& c) noexcept
 {
@@ -396,6 +395,69 @@ public:
         triAlive_.assign(tris_.size(), 1);
         liveTris_ = tris_.size();
 
+        // Render-chart identity for the VIPM cross-chart collapse veto. A chart is a maximal patch
+        // of faces joined across edges that are NOT render-attribute seams; a UV/normal/tangent
+        // seam (the two incident faces carry different-attribute wedges for the shared corners)
+        // divides charts. Union-find over ORIGINAL vertices (wedges): union the three corners of
+        // each face (intra-face), then union the shared corners across every edge whose two
+        // incident faces AGREE on attributes. This is attribute-aware — a benign index duplicate
+        // with identical attributes (e.g. a fully-shattered mesh) unions back into one chart and
+        // still simplifies, while a real seam stays a chart boundary. canonicalCharts_[c] is the
+        // sorted set of charts meeting at canonical position c; the collapse loop vetoes any
+        // collapse whose survivor lacks a chart the removed vertex carries, since a VIPM geomorph
+        // across that missing chart would shear/pop the texture.
+        chartRoot_.resize(vertexCount);
+        for (std::uint32_t v = 0; v < vertexCount; ++v)
+        {
+            chartRoot_[v] = v;
+        }
+        for (const std::array<std::uint32_t, 3>& ot : origTris_)
+        {
+            chartUnion(ot[0], ot[1]);
+            chartUnion(ot[1], ot[2]);
+        }
+        constexpr float kChartSeamEps = 1.0e-8f; // squared attr distance: identical vs a real split
+        std::unordered_map<std::uint64_t, std::array<std::uint32_t, 2>> firstWedge;
+        firstWedge.reserve(tris_.size() * 3);
+        for (const std::array<std::uint32_t, 3>& ot : origTris_)
+        {
+            for (int e = 0; e < 3; ++e)
+            {
+                std::uint32_t wa = ot[e];
+                std::uint32_t wb = ot[(e + 1) % 3];
+                const std::uint32_t v0 = weld_[wa];
+                const std::uint32_t v1 = weld_[wb];
+                if (v0 == v1)
+                {
+                    continue;
+                }
+                if (v1 <
+                    v0) // orient (wa, wb) to (min, max) endpoints so faces compare like-for-like
+                {
+                    std::swap(wa, wb);
+                }
+                const std::uint64_t key = edgeKey(v0, v1);
+                auto [it, inserted] = firstWedge.try_emplace(key, std::array{wa, wb});
+                if (!inserted &&
+                    wedgeDistance(vertices_[it->second[0]], vertices_[wa]) <= kChartSeamEps &&
+                    wedgeDistance(vertices_[it->second[1]], vertices_[wb]) <= kChartSeamEps)
+                {
+                    chartUnion(it->second[0], wa); // non-seam edge: the two faces share a chart
+                    chartUnion(it->second[1], wb);
+                }
+            }
+        }
+        canonicalCharts_.resize(vertexCount);
+        for (std::uint32_t v = 0; v < vertexCount; ++v)
+        {
+            canonicalCharts_[weld_[v]].push_back(chartFind(v));
+        }
+        for (std::vector<std::uint32_t>& charts : canonicalCharts_)
+        {
+            std::sort(charts.begin(), charts.end());
+            charts.erase(std::unique(charts.begin(), charts.end()), charts.end());
+        }
+
         Vec3 lo = pos_.empty() ? Vec3{} : pos_[0];
         Vec3 hi = lo;
         for (const Vec3& p : pos_)
@@ -438,13 +500,27 @@ public:
             const Quadric sum = combined(ra, rb);
             const double errA = sum.eval(vec5(ra));
             const double errB = sum.eval(vec5(rb));
-            const std::uint32_t kept = errA <= errB ? ra : rb;
-            const std::uint32_t removed = kept == ra ? rb : ra;
-            const double err = errA <= errB ? errA : errB;
+            std::uint32_t kept = errA <= errB ? ra : rb;
+            std::uint32_t removed = kept == ra ? rb : ra;
+            double err = errA <= errB ? errA : errB;
 
             if (err > ceiling)
             {
                 break; // min-heap: nothing cheaper remains
+            }
+            // Chart veto (VIPM seam preservation): a collapse must not drop a render chart, or the
+            // geomorph shears/pops the texture across it. Prefer the error-chosen direction; if it
+            // loses a chart, try the reverse (e.g. force an interior vertex INTO its seam rather
+            // than the seam into the interior); if both lose a chart (an edge between two different
+            // seams), skip the edge entirely.
+            if (crossesChart(removed, kept))
+            {
+                std::swap(kept, removed);
+                err = errA <= errB ? errB : errA;
+                if (crossesChart(removed, kept))
+                {
+                    continue;
+                }
             }
             if (wouldFlip(removed, kept))
             {
@@ -568,7 +644,10 @@ private:
 
         // Boundary preservation: an edge in exactly one triangle is a border. Add a heavy
         // (position- only) plane perpendicular to that triangle through the edge, so its endpoints
-        // resist leaving the border.
+        // resist leaving the border. (Render-attribute seams are NOT preserved here — a quadric
+        // can't separate a legal along-seam collapse from an illegal cross-chart one at any single
+        // weight; the cross-chart case is vetoed topologically in the collapse loop instead. See
+        // crossesChart / chartOf.)
         for (const std::array<std::uint32_t, 3>& t : tris_)
         {
             const Vec3 n = triangleNormal(pos_[t[0]], pos_[t[1]], pos_[t[2]]);
@@ -677,6 +756,44 @@ private:
         return false;
     }
 
+    // Union-find over original vertices (wedges) for render-chart identity — see the init.
+    [[nodiscard]] std::uint32_t chartFind(std::uint32_t v) noexcept
+    {
+        while (chartRoot_[v] != v)
+        {
+            chartRoot_[v] = chartRoot_[chartRoot_[v]]; // path halving
+            v = chartRoot_[v];
+        }
+        return v;
+    }
+
+    void chartUnion(std::uint32_t a, std::uint32_t b) noexcept
+    {
+        const std::uint32_t ra = chartFind(a);
+        const std::uint32_t rb = chartFind(b);
+        if (ra != rb)
+        {
+            chartRoot_[std::max(ra, rb)] = std::min(ra, rb); // deterministic root
+        }
+    }
+
+    // VIPM seam veto: does collapsing `removed` into `kept` drop a render chart? True when
+    // `removed` touches a chart the survivor `kept` does not, so a wedge in that chart would have
+    // no same-chart survivor to geomorph toward and the texture would shear/pop. Both sets are tiny
+    // (1–3 charts).
+    [[nodiscard]] bool crossesChart(std::uint32_t removed, std::uint32_t kept) const noexcept
+    {
+        for (const std::uint32_t chart : canonicalCharts_[removed])
+        {
+            const std::vector<std::uint32_t>& keptCharts = canonicalCharts_[kept];
+            if (std::find(keptCharts.begin(), keptCharts.end(), chart) == keptCharts.end())
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
     void collapse(std::uint32_t kept, std::uint32_t removed, double quadricCost)
     {
         // The quadric cost drives collapse *ordering*, but it's a SUM of squared distances over
@@ -718,14 +835,13 @@ private:
         // VDPM error channels, both conservative screen-space estimates (not Hausdorff bounds):
         // compose the endpoint subtrees' radii with this step's local movement, measured against
         // kept's nearest new one-ring face. Geometric dev = point-to-plane distance (~0 on flats,
-        // accumulating on curves). UV dev = the removed vertex's UV vs the UV that face's
-        // *unclamped* barycentric interpolation assigns at removed's position — 0 for an affine-UV
-        // region even across the collapse's in-plane gap, non-zero where the parameterisation
-        // stretches, so VDPM can refine texture-costly-but-flat regions the geometric channel can't
-        // see. MeshCollapse:: error (R⁵ RMS) stays as-is for discrete/VIPM. Seam caveat, bluntly:
-        // canonical (representative) UV is used, so this catches chart stretch *within* the chosen
-        // chart, not worst-case per-wedge seam drift — a per-corner max is the future upgrade if
-        // seams under-refine.
+        // accumulating on curves). UV dev = max(smooth stretch, seam spread): the smooth term is
+        // the removed vertex's UV vs a containing face's unclamped barycentric interpolation (0 for
+        // an affine chart, non-zero where the parameterisation stretches); the seam term is the
+        // spread between the removed position's welded atlas wedges (0 off a seam, up to a chart's
+        // width on one — what makes a seam-crossing collapse read its true cost so VDPM refines it
+        // under magnification instead of warping the texture). MeshCollapse::error (R⁵ RMS) stays
+        // as-is for discrete/VIPM.
         float dev = 0.0f;
         float uvStep = 0.0f;
         float normalStep = 0.0f;
@@ -758,12 +874,14 @@ private:
             // accumulates.
             nearestPlane = std::min(nearestPlane,
                                     pointPlaneDistance(pos_[removed], pos_[a], pos_[b], pos_[c]));
-            // UV: interpolate on the nearest face that actually *contains* removed (barycentric in
-            // [0,1]). Restricting to a containing face keeps the interpolation interior and
-            // well-conditioned — an affine parameterisation then reads exactly 0 (no sliver
-            // extrapolation blowing coordinates up), while a stretched one reads the real
-            // deviation. A gap collapse (removed covered by no face) contributes 0, like the
-            // geometry channel.
+            // Smooth-stretch UV term: interpolate on the nearest face that actually *contains*
+            // removed (barycentric in [0,1]), unclamped on its plane so an affine parameterisation
+            // reads exactly 0. We require containment rather than extrapolating on the nearest
+            // face: a one-ring often has thin sliver faces, and unclamped barycentric FAR outside a
+            // sliver overshoots wildly (measured: a helmet collapse read a UV step of ~70 in a 0..1
+            // space). The seam/gap error a containment requirement would miss is recovered by the
+            // bounded wedge-spread term after the loop, so we lose nothing and stay
+            // well-conditioned.
             const float triDist = pointTriangleDistance(pos_[removed], pos_[a], pos_[b], pos_[c]);
             if (triDist >= nearestCoverTri)
             {
@@ -773,7 +891,7 @@ private:
             constexpr float kInsideEps = 0.01f;
             if (bc.x() < -kInsideEps || bc.y() < -kInsideEps || bc.z() < -kInsideEps)
             {
-                continue; // removed is outside this face — don't interpolate here
+                continue; // removed is outside this face — don't extrapolate here
             }
             nearestCoverTri = triDist;
             const float ui = (uv_[a].s() * bc.x()) + (uv_[b].s() * bc.y()) + (uv_[c].s() * bc.z());
@@ -792,12 +910,38 @@ private:
             normalStep = angularInterpDeviation(nrm_, removed, a, b, c, bc);
             tangentStep = angularInterpDeviation(tan_, removed, a, b, c, bc);
         }
+        // Seam/wedge UV term (bounded, interpolation-free): the render restores each corner to its
+        // own wedge at emit, so collapsing a position welded from several UV-seam wedges loses up
+        // to the spread between those wedges — invisible to the single-representative smooth term
+        // above, and the DOMINANT VDPM under-refinement on atlased meshes (a seam-crossing collapse
+        // reads "cheap" and warps the texture over a few triangles at full magnification). The max
+        // pairwise wedge-UV distance is exactly that lost spread, capped at the atlas's own scale
+        // (no extrapolation), so a seam collapse reports its true cost and VDPM refines it once it
+        // projects large; a non-seam vertex has one wedge and contributes nothing.
+        const std::vector<std::uint32_t>& wedges = canonicalWedges_[removed];
+        for (std::size_t i = 0; i < wedges.size(); ++i)
+        {
+            for (std::size_t j = i + 1; j < wedges.size(); ++j)
+            {
+                const float du = uv_[wedges[i]].s() - uv_[wedges[j]].s();
+                const float dv = uv_[wedges[i]].t() - uv_[wedges[j]].t();
+                uvStep = std::max(uvStep, std::sqrt((du * du) + (dv * dv)));
+            }
+        }
         if (nearestPlane != std::numeric_limits<float>::max())
         {
             dev = nearestPlane;
         }
         deviation_[kept] = std::max(deviation_[kept], deviation_[removed]) + dev;
-        uvDeviation_[kept] = std::max(uvDeviation_[kept], uvDeviation_[removed]) + uvStep;
+        // UV accumulates by MAX, not max+add: unlike the geometric deviation (a spatial envelope
+        // that genuinely compounds up the tree, so the conservative bound is the running sum), a UV
+        // error is a screen-space texture discontinuity — what the eye sees is the single WORST
+        // jump in the region, not the sum of every collapse's stretch. Summing per-wedge seam steps
+        // (~1.0 each on an atlas) would blow the radius to 100+ in a 0..1 UV space and swamp the
+        // budget; the max keeps it in UV's natural range, cleanly separates a seam (~1) from smooth
+        // stretch (~0.01), and stays monotone (kept >= removed) for the VDPM front. So a seam
+        // region stays refined until its jump is sub-pixel while flat charts coarsen freely.
+        uvDeviation_[kept] = std::max({uvDeviation_[kept], uvDeviation_[removed], uvStep});
         normalDeviation_[kept] =
             std::max(normalDeviation_[kept], normalDeviation_[removed]) + normalStep;
         tangentDeviation_[kept] =
@@ -851,6 +995,8 @@ private:
     std::vector<std::uint32_t> weld_; // original vertex -> canonical position vertex
     std::vector<std::array<std::uint32_t, 3>> origTris_; // original (pre-weld) corners, for UV emit
     std::vector<std::vector<std::uint32_t>> canonicalWedges_; // canonical -> its native wedges
+    std::vector<std::uint32_t> chartRoot_;                    // union-find over wedges -> chart id
+    std::vector<std::vector<std::uint32_t>> canonicalCharts_; // canonical -> sorted chart ids on it
     std::vector<Quadric> quad_;
     std::vector<std::array<std::uint32_t, 3>> tris_;
     std::vector<std::uint8_t> triAlive_;

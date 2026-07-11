@@ -27,9 +27,13 @@ struct MeshCollapse
     // accumulated up the collapse tree so a coarse collapse over a curved region carries the whole
     // region's deviation. `error` (RMS) is left untouched for discrete/VIPM selection.
     float deviationRadius{0.0f};
-    // Cumulative UV deviation radius: the same accumulation in texture space, so VDPM can refine
-    // regions whose parameterisation stretches even where the geometry is flat (the geometric
-    // radius alone can't see that). Uses the canonical/representative UV — see the collapse() note.
+    // UV deviation radius: the worst-case texture-space error the region will show, so VDPM can
+    // refine regions whose parameterisation stretches — or whose welded seam wedges span charts —
+    // even where the geometry is flat (the geometric radius alone can't see that). Per collapse it
+    // is max(smooth stretch on a containing face, spread between the removed position's atlas
+    // wedges); accumulated by MAX (not the geometric channel's running sum) because a UV error is a
+    // screen-space discontinuity — the eye sees the single worst jump in the region, not a
+    // compounding envelope. See the collapse() note.
     float uvDeviationRadius{0.0f};
     // Cumulative shading-normal deviation, in radians: the angle between the removed vertex's
     // normal and the normal the covering face interpolates to at its spot, accumulated up the

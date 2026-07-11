@@ -382,6 +382,26 @@ void ActiveFront::refineForView(std::span<const Vertex> vertices, const Mat4& wo
     coarsenAll();
     const float halfViewport = viewportHeight * 0.5f;
 
+    // Signed facing of one canonical vertex's world normal vs its own view direction: +1 toward the
+    // camera, 0 edge-on, -1 away. Each vertex uses its own world position for the view direction. A
+    // missing normal returns +1 (front-facing) so it never contributes to a back-face suppression.
+    auto facingOf = [&](std::uint32_t v) -> float
+    {
+        const Vec3 lp = vertices[v].position();
+        const Vec4 wp = world * Vec4{lp.x(), lp.y(), lp.z(), 1.0f};
+        const Vec3 wpos{wp.x(), wp.y(), wp.z()};
+        const float d = std::max(1e-3f, (wpos - cameraPos).magnitude());
+        const Vec3 ln = vertices[v].normal();
+        const Vec4 wn = world * Vec4{ln.x(), ln.y(), ln.z(), 0.0f};
+        const Vec3 wnrm{wn.x(), wn.y(), wn.z()};
+        const float nlen = wnrm.magnitude();
+        if (nlen <= 1e-6f)
+        {
+            return 1.0f;
+        }
+        return Vec3::dotProduct(wnrm * (1.0f / nlen), (cameraPos - wpos) * (1.0f / d));
+    };
+
     // Coarsest split first (reverse stream order): a split's parent/vl/vr are removed only by later
     // collapses, so refining coarse-first keeps every legal refine's dependencies already active.
     for (std::uint32_t i = static_cast<std::uint32_t>(forest_.splits.size()); i-- > 0;)
@@ -393,27 +413,34 @@ void ActiveFront::refineForView(std::span<const Vertex> vertices, const Mat4& wo
         const Vec3 worldPos{wp4.x(), wp4.y(), wp4.z()};
         const float distance = std::max(1e-3f, (worldPos - cameraPos).magnitude());
 
-        // Signed facing of the rep's world normal vs the view direction: +1 toward the camera, 0
-        // edge-on (silhouette), -1 away (back). One dot drives both the back-face gate and the
-        // silhouette boost.
-        float signedFacing = 1.0f;
-        const Vec3 ln = vertices[s.child].normal();
-        const Vec4 wn4 = world * Vec4{ln.x(), ln.y(), ln.z(), 0.0f};
-        const Vec3 worldNormal{wn4.x(), wn4.y(), wn4.z()};
-        const float nLen = worldNormal.magnitude();
-        if (nLen > 1e-6f)
-        {
-            const Vec3 viewDir = (cameraPos - worldPos) * (1.0f / distance);
-            signedFacing = Vec3::dotProduct(worldNormal * (1.0f / nLen), viewDir);
-        }
+        // Signed facing of the child rep's world normal vs the view direction: +1 toward the
+        // camera, 0 edge-on (silhouette), -1 away (back). Drives the silhouette boost below.
+        const float signedFacing = facingOf(s.child);
 
-        // Back-face gate: skip *budget-driven* refinement of clearly back-facing reps — they are
-        // back-face-culled, so refining them is vertex work for no visible pixels. This suppresses
-        // only discretionary refinement; forceRefine can still pull a back-facing split in as the
-        // dependency of a visible/silhouette split. A threshold (not plain < 0) because a
-        // per-vertex normal stands in for a region, and near-edge-on reps must stay
-        // silhouette-refined.
-        if (signedFacing < -backfaceThreshold)
+        // Back-face gate: skip *budget-driven* refinement of a split whose whole support region is
+        // clearly back-facing — it is raster back-face-culled, so refining it is vertex work for no
+        // visible pixels. This suppresses only discretionary refinement; forceRefine can still pull
+        // a back-facing split in as the dependency of a visible/silhouette split.
+        //
+        // CONSERVATIVE multi-witness: a single smooth vertex normal is a poor stand-in for raster
+        // back-face culling (which uses the geometric triangle winding), so one back-pointing child
+        // normal must NOT suppress a split whose triangles are actually front-facing — that punched
+        // a visible triangle out to the skybox. Test the child AND its dependency vertices (parent,
+        // vl, vr — the split's support neighbourhood) and suppress only if EVERY witness is clearly
+        // back-facing; if any faces the camera the split may protect a visible triangle, so keep it
+        // eligible. (The exact test is a per-split facing cone; this 4-witness bound is the cheap
+        // conservative version, and the threshold keeps near-edge-on reps silhouette-refined.)
+        float maxFacing = signedFacing;
+        maxFacing = std::max(maxFacing, facingOf(s.parent));
+        if (s.vl != kInvalidVertex)
+        {
+            maxFacing = std::max(maxFacing, facingOf(s.vl));
+        }
+        if (s.vr != kInvalidVertex)
+        {
+            maxFacing = std::max(maxFacing, facingOf(s.vr));
+        }
+        if (maxFacing < -backfaceThreshold)
         {
             continue;
         }
@@ -436,6 +463,189 @@ void ActiveFront::refineForView(std::span<const Vertex> vertices, const Mat4& wo
             normalScreenError > pixelBudget || tangentScreenError > pixelBudget)
         {
             forceRefine(i);
+        }
+    }
+
+    repairFoldovers(vertices);
+}
+
+void ActiveFront::repairFoldovers(std::span<const Vertex> vertices)
+{
+    // Sweep the finest faces; where the active-ancestor replacement is wound against the original
+    // face, force-refine the collapsed corners back in. Each repair only activates vertices (never
+    // coarsens), so it strictly progresses toward the original geometry and terminates; refining
+    // one face can re-fold a neighbour, so repeat until a full sweep finds nothing (bounded by the
+    // forest depth — at worst the whole neighbourhood reaches full detail, which is flip-free).
+    bool changed = true;
+    while (changed)
+    {
+        changed = false;
+        for (const std::array<std::uint32_t, 3>& fc : finestFaces_)
+        {
+            const std::uint32_t a0 = activeAncestor(fc[0]);
+            const std::uint32_t a1 = activeAncestor(fc[1]);
+            const std::uint32_t a2 = activeAncestor(fc[2]);
+            if (a0 == a1 || a1 == a2 || a0 == a2)
+            {
+                continue; // legitimately collapsed to a degenerate — a neighbour covers it
+            }
+            const Vec3 p0 = vertices[fc[0]].position();
+            const Vec3 orig = Vec3::crossProduct(vertices[fc[1]].position() - p0,
+                                                 vertices[fc[2]].position() - p0);
+            const Vec3 repl = Vec3::crossProduct(vertices[a1].position() - vertices[a0].position(),
+                                                 vertices[a2].position() - vertices[a0].position());
+            if (Vec3::dotProduct(orig, repl) >= 0.0f)
+            {
+                continue; // replacement keeps the original winding — not a foldover
+            }
+            // Foldover: pull each collapsed corner back toward its finest position.
+            for (const std::uint32_t c : fc)
+            {
+                if (!active_[c] && forceRefine(forest_.removingSplit[c]))
+                {
+                    changed = true;
+                }
+            }
+        }
+    }
+}
+
+void ActiveFront::repairCoverage(std::span<const Vertex> vertices, const Mat4& world,
+                                 const Vec3& cameraPos, const Mat4& viewProj)
+{
+    auto worldPos = [&](std::uint32_t v)
+    {
+        const Vec3 l = vertices[v].position();
+        const Vec4 w = world * Vec4{l.x(), l.y(), l.z(), 1.0f};
+        return Vec3{w.x(), w.y(), w.z()};
+    };
+    // NDC xy of a world point; false if behind the camera (w <= 0).
+    auto toNdc = [&](const Vec3& wp, Vec2& out)
+    {
+        const Vec4 c = viewProj * Vec4{wp.x(), wp.y(), wp.z(), 1.0f};
+        if (c.w() <= 1e-6f)
+        {
+            return false;
+        }
+        out = Vec2{c.x() / c.w(), c.y() / c.w()};
+        return true;
+    };
+    // Is p inside triangle (a,b,c)? (same-sign edge functions; on-edge counts as inside).
+    auto edge = [](const Vec2& a, const Vec2& b, const Vec2& p)
+    { return ((p.s() - a.s()) * (b.t() - a.t())) - ((p.t() - a.t()) * (b.s() - a.s())); };
+    auto inside = [&](const Vec2& p, const Vec2& a, const Vec2& b, const Vec2& cc)
+    {
+        const float d0 = edge(a, b, p);
+        const float d1 = edge(b, cc, p);
+        const float d2 = edge(cc, a, p);
+        return !((d0 < 0.0f || d1 < 0.0f || d2 < 0.0f) && (d0 > 0.0f || d1 > 0.0f || d2 > 0.0f));
+    };
+
+    // Force-refine every inactive corner of a face (un-collapse it back toward the finest). Returns
+    // whether anything changed.
+    auto refineCorners = [&](const std::array<std::uint32_t, 3>& fc)
+    {
+        bool did = false;
+        for (const std::uint32_t c : fc)
+        {
+            if (!active_[c] && forceRefine(forest_.removingSplit[c]))
+            {
+                did = true;
+            }
+        }
+        return did;
+    };
+
+    // A face below this projected NDC area is at most a pixel or two — not worth refining, and
+    // gating on it keeps a sub-pixel silhouette sliver from thrashing the front frame to frame.
+    // (NDC spans [-1,1], so total screen area is 4; ~1e-5 is a couple of px² at 1000px height.)
+    constexpr float kMinNdcArea = 1.0e-5f;
+
+    bool changed = true;
+    while (changed)
+    {
+        changed = false;
+        for (const std::array<std::uint32_t, 3>& fc : finestFaces_)
+        {
+            const Vec3 w0 = worldPos(fc[0]);
+            const Vec3 w1 = worldPos(fc[1]);
+            const Vec3 w2 = worldPos(fc[2]);
+            const Vec3 centroid = (w0 + w1 + w2) * (1.0f / 3.0f);
+            const Vec3 gn = Vec3::crossProduct(w1 - w0, w2 - w0);
+            if (Vec3::dotProduct(gn, cameraPos - centroid) <= 0.0f)
+            {
+                continue; // back-facing original: never a visible-coverage hole
+            }
+            // The ORIGINAL triangle's projected area gates whether a coverage miss is worth fixing.
+            Vec2 s0;
+            Vec2 s1;
+            Vec2 s2;
+            if (!toNdc(w0, s0) || !toNdc(w1, s1) || !toNdc(w2, s2))
+            {
+                continue;
+            }
+            if (std::abs(edge(s0, s1, s2)) * 0.5f < kMinNdcArea)
+            {
+                continue; // sub-pixel: not a visible hole
+            }
+            const std::uint32_t a0 = activeAncestor(fc[0]);
+            const std::uint32_t a1 = activeAncestor(fc[1]);
+            const std::uint32_t a2 = activeAncestor(fc[2]);
+            if (a0 == a1 || a1 == a2 || a0 == a2)
+            {
+                // DEGENERATE replacement: the face collapsed to a sliver and was dropped from the
+                // emit. At a silhouette / high-curvature contour no neighbour covers its footprint,
+                // so a front-facing non-trivial-area face here is a real hole — refine it back
+                // (the earlier "a neighbour covers it" assumption is exactly wrong on a contour).
+                if (refineCorners(fc))
+                {
+                    changed = true;
+                }
+                continue;
+            }
+            Vec2 sc;
+            Vec2 sa0;
+            Vec2 sa1;
+            Vec2 sa2;
+            if (!toNdc(centroid, sc) || !toNdc(worldPos(a0), sa0) || !toNdc(worldPos(a1), sa1) ||
+                !toNdc(worldPos(a2), sa2))
+            {
+                continue;
+            }
+            if (inside(sc, sa0, sa1, sa2))
+            {
+                continue; // the replacement still covers this face's centroid
+            }
+            // Coverage hole: refine the collapsed corner whose active ancestor is displaced
+            // furthest on screen from its finest position — that is the corner whose recession
+            // opened the gap.
+            std::uint32_t worst = kInvalidVertex;
+            float worstDisp = -1.0f;
+            const std::array<std::uint32_t, 3> anc{a0, a1, a2};
+            for (int k = 0; k < 3; ++k)
+            {
+                if (active_[fc[k]])
+                {
+                    continue; // this corner is already at finest — cannot displace
+                }
+                Vec2 sFine;
+                Vec2 sAnc;
+                if (!toNdc(worldPos(fc[k]), sFine) || !toNdc(worldPos(anc[k]), sAnc))
+                {
+                    continue;
+                }
+                const Vec2 d = sFine - sAnc;
+                const float disp = Vec2::dotProduct(d, d);
+                if (disp > worstDisp)
+                {
+                    worstDisp = disp;
+                    worst = fc[k];
+                }
+            }
+            if (worst != kInvalidVertex && forceRefine(forest_.removingSplit[worst]))
+            {
+                changed = true;
+            }
         }
     }
 }

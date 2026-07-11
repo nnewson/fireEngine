@@ -2,12 +2,15 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cmath>
 #include <cstdint>
+#include <unordered_map>
 #include <vector>
 
 #include <fire_engine/graphics/mesh_simplifier.hpp>
 #include <fire_engine/graphics/vdpm.hpp>
+#include <fire_engine/math/vec4.hpp>
 
 using namespace fire_engine;
 
@@ -166,6 +169,137 @@ std::vector<MeshCollapse> collapsesOf(const Mesh& m)
 {
     const QuadricSimplifier simp;
     return simp.collapseSequence(m.verts, m.indices);
+}
+
+// Count emitted triangles whose active-ancestor replacement winds AGAINST the original triangle — a
+// foldover the rasteriser back-face-culls (a hole to the background). Replicates activeAncestor via
+// the front's public forest()/active(), so it needs no internals. A selective front is a non-prefix
+// cut, so the simplifier's linear wouldFlip() does not cover it; the front's own repair pass must.
+std::size_t foldoverCount(const ActiveFront& front, const Mesh& m)
+{
+    const VertexForest& f = front.forest();
+    std::unordered_map<uint64_t, uint32_t> firstAtPos;
+    std::vector<uint32_t> weld(m.verts.size());
+    for (uint32_t v = 0; v < m.verts.size(); ++v)
+    {
+        const Vec3 p = m.verts[v].position();
+        const uint64_t k = (static_cast<uint64_t>(std::bit_cast<uint32_t>(p.x())) * 73856093u) ^
+                           (static_cast<uint64_t>(std::bit_cast<uint32_t>(p.y())) * 19349663u) ^
+                           (static_cast<uint64_t>(std::bit_cast<uint32_t>(p.z())) * 83492791u);
+        weld[v] = firstAtPos.try_emplace(k, v).first->second;
+    }
+    auto ancestor = [&](uint32_t v)
+    {
+        while (!front.active(v))
+        {
+            v = f.splits[f.removingSplit[v]].parent;
+        }
+        return v;
+    };
+    std::size_t folds = 0;
+    for (std::size_t i = 0; i + 2 < m.indices.size(); i += 3)
+    {
+        const uint32_t o0 = m.indices[i], o1 = m.indices[i + 1], o2 = m.indices[i + 2];
+        const uint32_t a0 = ancestor(weld[o0]), a1 = ancestor(weld[o1]), a2 = ancestor(weld[o2]);
+        if (a0 == a1 || a1 == a2 || a0 == a2)
+        {
+            continue; // legitimately collapsed away
+        }
+        const Vec3 og = Vec3::crossProduct(m.verts[o1].position() - m.verts[o0].position(),
+                                           m.verts[o2].position() - m.verts[o0].position());
+        const Vec3 rg = Vec3::crossProduct(m.verts[a1].position() - m.verts[a0].position(),
+                                           m.verts[a2].position() - m.verts[a0].position());
+        if (Vec3::dotProduct(og, rg) < 0.0f)
+        {
+            ++folds;
+        }
+    }
+    return folds;
+}
+
+// Count front-facing original triangles whose projected centroid is NOT covered by their active-
+// ancestor replacement in NDC — a silhouette coverage hole (closed + non-folded, yet leaks the
+// background). Same screen-space test repairCoverage uses.
+std::size_t coverageFailures(const ActiveFront& front, const Mesh& m, const Mat4& viewProj,
+                             const Vec3& cameraPos)
+{
+    const VertexForest& f = front.forest();
+    std::unordered_map<uint64_t, uint32_t> firstAtPos;
+    std::vector<uint32_t> weld(m.verts.size());
+    for (uint32_t v = 0; v < m.verts.size(); ++v)
+    {
+        const Vec3 p = m.verts[v].position();
+        const uint64_t k = (static_cast<uint64_t>(std::bit_cast<uint32_t>(p.x())) * 73856093u) ^
+                           (static_cast<uint64_t>(std::bit_cast<uint32_t>(p.y())) * 19349663u) ^
+                           (static_cast<uint64_t>(std::bit_cast<uint32_t>(p.z())) * 83492791u);
+        weld[v] = firstAtPos.try_emplace(k, v).first->second;
+    }
+    auto ancestor = [&](uint32_t v)
+    {
+        while (!front.active(v))
+        {
+            v = f.splits[f.removingSplit[v]].parent;
+        }
+        return v;
+    };
+    auto ndc = [&](const Vec3& p, Vec2& out)
+    {
+        const Vec4 c = viewProj * Vec4{p.x(), p.y(), p.z(), 1.0f};
+        if (c.w() <= 1e-6f)
+        {
+            return false;
+        }
+        out = Vec2{c.x() / c.w(), c.y() / c.w()};
+        return true;
+    };
+    auto edge = [](const Vec2& a, const Vec2& b, const Vec2& p)
+    { return ((p.s() - a.s()) * (b.t() - a.t())) - ((p.t() - a.t()) * (b.s() - a.s())); };
+    auto inside = [&](const Vec2& p, const Vec2& a, const Vec2& b, const Vec2& c)
+    {
+        const float d0 = edge(a, b, p), d1 = edge(b, c, p), d2 = edge(c, a, p);
+        return !((d0 < 0 || d1 < 0 || d2 < 0) && (d0 > 0 || d1 > 0 || d2 > 0));
+    };
+    std::size_t fails = 0;
+    for (std::size_t i = 0; i + 2 < m.indices.size(); i += 3)
+    {
+        const Vec3 p0 = m.verts[m.indices[i]].position();
+        const Vec3 p1 = m.verts[m.indices[i + 1]].position();
+        const Vec3 p2 = m.verts[m.indices[i + 2]].position();
+        const Vec3 ctr = (p0 + p1 + p2) * (1.0f / 3.0f);
+        if (Vec3::dotProduct(Vec3::crossProduct(p1 - p0, p2 - p0), cameraPos - ctr) <= 0.0f)
+        {
+            continue;
+        }
+        // Gate on projected area so sub-pixel slivers don't count (matches repairCoverage).
+        Vec2 s0, s1, s2;
+        if (!ndc(p0, s0) || !ndc(p1, s1) || !ndc(p2, s2))
+        {
+            continue;
+        }
+        constexpr float kMinNdcArea = 1.0e-5f;
+        if (std::abs(edge(s0, s1, s2)) * 0.5f < kMinNdcArea)
+        {
+            continue;
+        }
+        const uint32_t a0 = ancestor(weld[m.indices[i]]), a1 = ancestor(weld[m.indices[i + 1]]),
+                       a2 = ancestor(weld[m.indices[i + 2]]);
+        if (a0 == a1 || a1 == a2 || a0 == a2)
+        {
+            ++fails; // degenerate replacement of a non-trivial front-facing face — a dropped hole
+            continue;
+        }
+        Vec2 sc, sa0, sa1, sa2;
+        if (!ndc(ctr, sc) || !ndc(m.verts[a0].position(), sa0) ||
+            !ndc(m.verts[a1].position(), sa1) || !ndc(m.verts[a2].position(), sa2))
+        {
+            continue;
+        }
+        if (!inside(sc, sa0, sa1, sa2))
+        {
+            ++fails;
+        }
+    }
+    return fails;
 }
 
 } // namespace
@@ -350,6 +484,50 @@ TEST_CASE("refineForView: back-face suppression coarsens the hidden hemisphere",
                         noSilhouette, 0.5f, 0.0f, 0.0f, 0.0f);
     const std::size_t farCount = front.emitActiveCanonical().size();
     CHECK(nearCount > farCount);
+}
+
+TEST_CASE("refineForView repairs foldovers: no emitted triangle winds against the original",
+          "[vdpm]")
+{
+    // A selective front is a non-prefix cut of the collapse stream, so it can wind a replacement
+    // triangle backwards even though every collapse was flip-free in linear order (the simplifier's
+    // wouldFlip only certifies the prefix). A curved sphere and a bumpy grid, refined from a front
+    // camera at a spread of budgets, exercise mixed near/far refinement — the foldover-prone case.
+    // refineForView's repair pass must leave ZERO foldovers, or the rasteriser back-face-culls the
+    // flipped triangles and punches holes to the background.
+    const Mat4 world = Mat4::identity();
+    for (const Mesh& m : {makeUvSphere(24, 32), makeBumpyGrid(17)})
+    {
+        ActiveFront front = ActiveFront::build(m.verts, m.indices, collapsesOf(m));
+        for (const float budget : {0.5f, 1.0f, 2.0f, 4.0f, 8.0f})
+        {
+            front.refineForView(m.verts, world, Vec3{0.0f, 0.0f, 4.0f}, 1.7f, 1000.0f, budget, 2.0f,
+                                0.5f, 1.0f, 0.5f, 0.5f);
+            CHECK(foldoverCount(front, m) == 0);
+        }
+    }
+}
+
+TEST_CASE("repairCoverage: every front-facing triangle stays covered by its replacement", "[vdpm]")
+{
+    // A closed, non-folded selective front can still leak the background: at a silhouette a coarse
+    // replacement recedes inside a fine front-facing triangle's projected footprint. repairCoverage
+    // (called after refineForView with the frame's proj*view) must drive that screen-space coverage
+    // failure to zero. A UV sphere has strong silhouettes — the coverage-prone case.
+    const Mesh m = makeUvSphere(24, 32);
+    const Mat4 world = Mat4::identity();
+    const Vec3 cam{0.0f, 0.0f, 4.0f};
+    const Mat4 viewProj =
+        Mat4::perspective(1.0f, 1.0f, 0.1f, 100.0f) * Mat4::lookAt(cam, {0, 0, 0}, {0, 1, 0});
+    const float projScaleY = Mat4::perspective(1.0f, 1.0f, 0.1f, 100.0f)[1, 1];
+    ActiveFront front = ActiveFront::build(m.verts, m.indices, collapsesOf(m));
+    for (const float budget : {1.0f, 2.0f, 4.0f})
+    {
+        front.refineForView(m.verts, world, cam, std::abs(projScaleY), 1000.0f, budget, 2.0f, 0.5f,
+                            1.0f, 0.5f, 0.5f);
+        front.repairCoverage(m.verts, world, cam, viewProj);
+        CHECK(coverageFailures(front, m, viewProj, cam) == 0);
+    }
 }
 
 TEST_CASE("Deviation radius is ~0 on a flat mesh and accumulates on a curved one", "[vdpm]")

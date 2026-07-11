@@ -120,7 +120,9 @@ void DebugOverlay::buildUi(const FrameStats& stats, RenderTunables& tunables)
     ImGui::Separator();
     if (ImGui::CollapsingHeader("TAA", ImGuiTreeNodeFlags_DefaultOpen))
     {
-        ImGui::Checkbox("Enabled", &tunables.taaEnabled);
+        // `##taa` keeps the visible label "Enabled" but gives a unique ImGui id (a CollapsingHeader
+        // opens no id scope, so this would otherwise clash with the Mesh LOD "Enabled" checkbox).
+        ImGui::Checkbox("Enabled##taa", &tunables.taaEnabled);
         ImGui::BeginDisabled(!tunables.taaEnabled);
         ImGui::SliderFloat("History blend", &tunables.taaHistoryBlend, 0.0f, 0.98f);
         ImGui::SliderFloat("Sharpen", &tunables.taaSharpen, 0.0f, 1.0f);
@@ -139,7 +141,7 @@ void DebugOverlay::buildUi(const FrameStats& stats, RenderTunables& tunables)
 
     if (ImGui::CollapsingHeader("Mesh LOD", ImGuiTreeNodeFlags_DefaultOpen))
     {
-        ImGui::Checkbox("Enabled", &tunables.lodEnabled);
+        ImGui::Checkbox("Enabled##lod", &tunables.lodEnabled);
         ImGui::BeginDisabled(!tunables.lodEnabled);
         static constexpr const char* kLodModes[] = {
             "Discrete (hard swap)", "Continuous (VIPM geomorph)", "View-dependent (VDPM)"};

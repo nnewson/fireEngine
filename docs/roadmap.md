@@ -36,23 +36,24 @@ A strong **rendering** codebase with a now-**mature physics** core (the P0–P9 
 
 **Structural gaps this roadmap set out to close — now closed:** the compute-shader path (#1),
 GPU instancing (#1 particles), frustum culling + spatial structure (`SceneCuller`), dynamic
-per-frame mesh-buffer updates (#2 cloth), and anti-aliasing (TAA) have all landed. What remains
-of the original insight below: the **progressive-mesh LOD** feature (#3) and the GPU-driven
-indirect-draw direction it opens up.
+per-frame mesh-buffer updates (#2 cloth), and anti-aliasing (TAA) have all landed. The
+**progressive-mesh LOD** feature (#3) is now **complete** end-to-end (discrete → VIPM → VDPM); what
+remains of the original insight is the optional **GPU-driven** indirect-draw direction it opens up.
 
 Key insight (historical, now realised): the three target features all secretly depended on the
 same infrastructure, so the ordering front-loaded that infrastructure via the lowest-risk feature
-(#1 → #2 → #3). #1 and #2 are done; #3 is the remaining arc.
+(#1 → #2 → #3). **All three are done.**
 
 ## Status (July 2026)
 
 Three large bodies of work are **complete**: the **physics & collision track** (P0–P9, end to
 end), the **rendering foundations** (particles, soft-body/cloth, Vulkan 1.3/1.4 modernization,
 bindless materials, TAA, SSAO, frustum culling, overlay), and the **26-item staff-engineer code
-review** (formerly `codereview.md` — now cleared, all of CR-01…CR-26 done). The one remaining
-*major* planned arc is **rendering spine #3 — view-dependent progressive meshes**; everything else
-outstanding is smaller could/maybe work (listed below). Detailed design for each done item lives in
-the narrative sections further down and in [`collision.md`](collision.md) (physics).
+review** (formerly `codereview.md` — now cleared, all of CR-01…CR-26 done). The last *major* planned
+arc — **rendering spine #3, view-dependent progressive meshes** — is now also **complete** (discrete →
+VIPM → VDPM; see [`lod.md`](lod.md)). Everything else outstanding is smaller could/maybe work (listed
+below), plus the optional GPU-driven-refinement follow-on. Detailed design for each done item lives in
+the narrative sections further down and in [`collision.md`](collision.md) (physics) / [`lod.md`](lod.md) (LOD).
 
 ## ✅ Done — at a glance
 
@@ -99,7 +100,7 @@ Suggested execution order — not binding, adjust freely.
    StainedGlassLamp / LightsPunctualLamp.
 3. **Cleanup pass** — the tidy-up flagged as the review wrapped.
 
-**The remaining major arc (should) — Rendering spine #3, laddered discrete → VIPM → VDPM**
+**Rendering spine #3 — laddered discrete → VIPM → VDPM ✅ COMPLETE**
 4. ✅ **Phase 1 — mesh simplifier + discrete LOD** *(branch `progressive-meshes-phase1`)*: a from-
    scratch **Garland–Heckbert QEM** simplifier (`graphics/mesh_simplifier`) that records the ordered
    collapse stream (the raw material for Phase 2/3). Position-welded connectivity (so glTF's seam-
@@ -116,8 +117,17 @@ Suggested execution order — not binding, adjust freely.
      Continuous mode geomorphs position/normal/tangent/UV0/UV1 into the exact next-level wedge before
      the index swap. The shader gates by target LOD level, not collapse error, so non-monotonic
      collapse costs cannot morph a vertex during the wrong transition. Shadow LOD remains discrete.
-   - **Phase 3 — view-dependent (VDPM)**: promote the linear stream to a vertex forest + per-region
-     active front (silhouette / near-edge refinement). Full design under "### 3" below.
+   - ✅ **Phase 3 — view-dependent (VDPM)** *(branch `progressive-meshes-phase3`)*: the linear stream
+     is promoted to a per-instance **vertex forest + active front** that refines different regions of
+     one mesh to different detail each frame. `refineForView` gates on **four screen-space channels**
+     (geometry δ, UV-seam, shading-normal, tangent) + silhouette boost + a conservative multi-witness
+     back-face gate; a **chart veto** in the simplifier keeps UV seams from shearing under the VIPM
+     morph; and two monotone **repair passes** (`repairFoldovers`, `repairCoverage` — the latter on the
+     jitter-free view-projection) eliminate the foldover and silhouette-coverage holes a *selective*
+     (non-prefix) front introduces that `wouldFlip` and the deviation metrics can't see. Result:
+     matches the discrete mesh's silhouette + shading at a fraction of the triangles, 0 VUID, headless
+     `[vdpm]` tests. Full design in [`lod.md`](lod.md). Remaining = optional GPU-driven front + per-split
+     cones to retire the per-frame repair sweeps.
 
 **Opportunistic / supporting (could)**
 5. **Rendering optimisations** *(flagged during CR-09)* — skip redundant per-object UBO re-uploads
@@ -342,10 +352,14 @@ Also available if a future need arises: `maintenance5`'s `vkCmdBindIndexBuffer2`
 - **Phase 2 — VIPM ✅ done** (branch `progressive-meshes-phase2`): exact progressive LOD cuts feed
   both the discrete index buffers and the per-vertex geomorph SSBO; Continuous mode morphs full render
   attributes into the next LOD's emitted wedge.
-- Then runtime view-dependent refinement, reusing compute (from #1):
-  - **Phase 3 (VDPM)** — vertex forest + per-region active front (silhouette / near-edge).
-- Done last so the engine is mature enough to support it — with real scenes to
-  test against.
+- **Phase 3 — VDPM ✅ done** (branch `progressive-meshes-phase3`): per-instance vertex forest + active
+  front; `refineForView` refines by four screen-space channels (geometry / UV-seam / shading-normal /
+  tangent) + silhouette boost + multi-witness back-face gate; a simplifier-side **chart veto** keeps
+  the VIPM morph from shearing UV seams; two monotone repair passes (`repairFoldovers`,
+  `repairCoverage`) close the foldover and silhouette-coverage holes a selective front introduces.
+  Matches discrete quality at a fraction of the triangles. Full write-up: [`lod.md`](lod.md).
+- Optional follow-on: **GPU-driven front** (the forest + errors are already just buffers) and per-split
+  **cones** to retire the per-frame repair sweeps. Not required for the feature to be complete.
 
 ### Bindless materials (descriptor indexing) — ✅ done
 

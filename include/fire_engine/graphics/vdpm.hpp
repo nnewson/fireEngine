@@ -38,8 +38,9 @@ namespace fire_engine
 // refined descendants); the ActiveFront tracks that. `error` is the simplifier's **cumulative
 // geometric deviation radius** (MeshCollapse::deviationRadius) — a conservative estimate of how far
 // the region this collapse subsumes sits from the original surface, accumulated up the collapse
-// tree, which refineForView projects to screen pixels. `uvError` is the parallel cumulative UV
-// deviation radius (MeshCollapse::uvDeviationRadius) — an independent texture-stretch channel
+// tree, which refineForView projects to screen pixels. `uvError` is the parallel UV deviation
+// radius (MeshCollapse::uvDeviationRadius, MAX-accumulated per-wedge — the worst texture jump in
+// the region, not a compounding envelope) — an independent texture-stretch/seam channel
 // refineForView projects on its own, so a texture-costly-but-geometrically-flat region still
 // refines. `normalError` is the parallel cumulative shading-normal deviation
 // (MeshCollapse::normalDeviationRadius, radians) — a third channel for lighting error a
@@ -132,6 +133,18 @@ public:
                        float silhouetteBoost, float backfaceThreshold, float uvScale,
                        float normalScale, float tangentScale);
 
+    // Post-refinement COVERAGE repair (call after refineForView with the frame's proj*view). A
+    // closed, non-folded front can still leak the background: at a silhouette the coarse replacement
+    // recedes inside a fine FRONT-FACING triangle's projected footprint, so the rasterised surface no
+    // longer covers it. Deviation/foldover criteria are blind to this — it is purely a screen-space
+    // coverage property. For each front-facing finest face whose projected centroid falls OUTSIDE its
+    // active-ancestor replacement in NDC, force-refine the collapsed corner with the largest
+    // screen-space displacement; repeat to a fixed point. Monotone (only force-refines), so it
+    // converges — at worst to full detail, which covers exactly. `viewProj` is proj*view (world is
+    // applied separately, matching refineForView).
+    void repairCoverage(std::span<const Vertex> vertices, const Mat4& world, const Vec3& cameraPos,
+                        const Mat4& viewProj);
+
     [[nodiscard]] bool active(uint32_t canonicalVertex) const
     {
         return active_[canonicalVertex];
@@ -164,6 +177,14 @@ private:
     // errors are not monotone (see the [vdpm] probe), so a legal coarse-first refine can require a
     // lower-error neighbour split the budget alone wouldn't bring in.
     bool forceRefine(uint32_t splitIndex);
+    // Post-refinement repair: force-refine any finest face whose active-ancestor replacement winds
+    // AGAINST its original winding (a foldover). refineForView's per-vertex screen-space budget is
+    // a linear-collapse criterion; a *selective* front is a non-prefix cut, so it can flip a
+    // triangle the simplifier's linear wouldFlip() never saw — the rasteriser back-face-culls the
+    // flipped replacement and punches a hole to the background. This drives such faces back toward
+    // the original geometry (monotone: only force-refines, so it converges, at worst to full
+    // detail).
+    void repairFoldovers(std::span<const Vertex> vertices);
 
     VertexForest forest_;
     std::vector<bool> active_;                           // per canonical vertex

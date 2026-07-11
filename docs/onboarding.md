@@ -632,10 +632,11 @@ the pre-cull is never wanted by any pass. Overlay shows tracked/visible/culled c
 
 ### Mesh LOD
 
-Mesh level-of-detail (rendering spine #3, Phase 2 VIPM), gated by `RenderTunables::lodEnabled`
-(overlay toggle + pixel error budget slider; a per-LOD **"LOD tint"** debug view colours each mesh green/
-yellow/red by its selected level). `RenderTunables::lodMode` switches between hard discrete swaps
-and Continuous VIPM geomorphs.
+Mesh level-of-detail (rendering spine #3 — the full **discrete → VIPM → VDPM** ladder is done), gated
+by `RenderTunables::lodEnabled` (overlay toggle + pixel error budget slider; a per-LOD **"LOD tint"**
+debug view colours each mesh green/yellow/red by its selected level). `RenderTunables::lodMode`
+switches between hard **Discrete** swaps, Continuous **VIPM** geomorphs, and **View-dependent (VDPM)**
+per-region refinement. One recorded collapse stream feeds all three. The authority is [`lod.md`](lod.md).
 
 - **Build (load time, `Geometry::load`):** a from-scratch **Garland–Heckbert QEM** simplifier
   (`graphics/mesh_simplifier`) builds one `ProgressiveMesh` per static mesh >
@@ -652,11 +653,23 @@ and Continuous VIPM geomorphs.
   a `morphFactor` toward the next exact LOD level. The VIPM SSBO stores, per original vertex, the
   1-based level where that vertex first disappears plus its target position/normal/tangent/UV0/UV1.
   The shader morphs only vertices whose removal level equals `MorphUBO::vipmTargetLevel`.
+- **Refine (per draw, `object.cpp` + `graphics/vdpm`):** View-dependent mode builds a per-instance
+  `ActiveFront` over a `VertexForest` (the collapse stream promoted to Hoppe vertex-splits with
+  dependencies) at load. Each frame `refineForView` resets to coarsest and refines by **four
+  screen-space channels** (geometry δ / UV-seam / shading-normal / tangent, each with a `kVdpm*Scale`
+  dial) + silhouette boost + a conservative multi-witness back-face gate; then two **monotone repair
+  passes** — `repairFoldovers` (backward-wound faces) and `repairCoverage` (silhouette/degenerate
+  coverage holes, on the **jitter-free** `currentViewProj`) — close the holes a selective (non-prefix)
+  front introduces that `wouldFlip` and the deviation metrics can't see. `emitActiveIndices` restores
+  render wedges into a per-frame dynamic index buffer.
 - **Two dials** live in `mesh_simplifier.cpp`: `kUvWeightFactor` (UV fidelity vs simplification) and
   `kErrorCeilingFactor` (must only refuse *geometrically* un-simplifiable shapes — the cube via its
-  boundary weight — not UV-costly seams). `kLodRatios` / `kLodPixelErrorBudget` are in `graphics/lod.hpp`.
+  boundary weight — not UV-costly seams). `kLodRatios` / `kLodPixelErrorBudget` / the `kVdpm*` dials
+  are in `graphics/lod.hpp`. A simplifier-side **chart veto** (`canonicalCharts_`) forbids a collapse
+  from crossing a UV/normal seam, so the VIPM morph never shears the texture across charts.
 - **Known residual:** shadow LOD is still discrete and biased coarser, so shadow silhouettes can step
-  independently of the forward/depth VIPM morph.
+  independently of the forward/depth VIPM/VDPM detail; the VDPM repair passes run on the CPU per frame
+  (a per-split cone or GPU-driven front would retire that cost).
 
 ### Add A Material Field
 
@@ -762,6 +775,15 @@ the same change — most have a test or guard that will catch you, but not all.
   a LOD's collapse set from error thresholds. The shader-side `MorphVertex` layout in
   `graphics/vipm.hpp` must match `shader.vert`'s `VipmVert`, and `MorphUBO::vipmTargetLevel` in
   `render/ubo.hpp` must match the shader block.
+- **VDPM shares the simplifier's canonical topology, and refines on screen space not topology.** The
+  `VertexForest` / `ActiveFront` (`graphics/vdpm`) weld positions with the *same* key as the simplifier
+  (glTF seam duplicates fuse to one canonical vertex) — if the welds diverge, the recorded collapses'
+  canonical indices stop lining up with the forest's adjacency. `refineForView`/`repairCoverage` are
+  screen-space: `repairCoverage` **must** be fed the **jitter-free** `FrameInfo::currentViewProj`, not
+  the TAA-jittered `FrameInfo::proj` (the sub-pixel jitter would thrash the front frame-to-frame). The
+  two repair passes exist because a *selective* front is a non-prefix cut of the stream, so the
+  simplifier's linear `wouldFlip` and the deviation metrics don't cover its foldover / coverage holes —
+  do not delete them assuming a "closed, non-folded" emit is hole-free.
 - **Where a constant lives.** Scalar render tunables (biases, strengths, extents, FOV) go in
   `render/constants.hpp`; GPU data-layout limits the Vulkan-free graphics layer also needs go in
   `graphics/gpu_limits.hpp`. `constants.hpp` includes the latter, so render-side code still sees

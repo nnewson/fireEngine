@@ -4,22 +4,29 @@ How the mesh LOD system works, and the design decisions behind it, for an engine
 **maintain and improve it**. This is the physics track's [`collision.md`](collision.md) equivalent for the rendering
 spine's LOD arc (roadmap "#3 — view-dependent progressive meshes").
 
-The current system is **Phase 2: view-independent progressive mesh (VIPM)**. Phase 1's discrete LOD
-index buffers still exist, but continuous mode now geomorphs vertices into the exact next LOD before
-the index-buffer swap. The remaining future step is view-dependent progressive meshes — see
-[Future Directions](#future-directions).
+The full ladder is **done**: **discrete** LOD (Phase 1), **view-independent continuous** geomorphing
+(VIPM, Phase 2), and **view-dependent** progressive meshes (VDPM, Phase 3). All three are selected in
+the overlay's "Mesh LOD" panel and all three consume the *same* recorded collapse stream from one
+simplifier. Discrete swaps index buffers with a pop; VIPM dissolves the pop by geomorphing into the
+exact next level; VDPM refines *different regions of one mesh to different detail* per frame from a
+per-region active front, so at a matched error budget it matches the discrete mesh's silhouette and
+shading with a fraction of the triangles. VDPM is documented in its own section
+([View-dependent progressive meshes](#view-dependent-progressive-meshes-vdpm)).
 
 ---
 
 ## What it does
 
 At load time, each static mesh above a triangle threshold gets a small progressive artifact: an
-ordered collapse stream, exact LOD cuts through that stream, progressively simpler index buffers,
-and a per-original-vertex geomorph buffer. At draw time, each mesh picks the coarsest LOD whose
-on-screen error stays within a pixel budget, so distant/small meshes submit far fewer triangles. In
-continuous mode the current LOD's collapsing vertices slide onto the exact render-attribute wedges
-drawn by the next LOD before the topology switches. On the DamagedHelmet (~15.5k triangles) the
-levels are ~15452 → 7725 → 1931.
+ordered collapse stream, exact LOD cuts through that stream, progressively simpler index buffers, a
+per-original-vertex geomorph buffer (VIPM), and a per-instance vertex forest + active front (VDPM).
+At draw time the discrete/continuous paths pick the coarsest whole-mesh LOD whose on-screen error
+stays within a pixel budget; the view-dependent path instead refines a per-instance active front for
+the camera and uploads a per-frame index buffer, so different regions of one mesh sit at different
+detail. On the DamagedHelmet (~15.5k triangles) the discrete/VIPM levels are ~15452 → 7725 → 2776
+(the coarsest is held above the naive ~1900 target by the chart veto, which preserves the UV-seam
+skeleton — see [simplifier decision 8](#the-simplifier-graphicsmesh_simplifier)); VDPM lands between
+LOD0 and the budget, tracking the visible silhouette.
 
 Two properties are load-bearing and shape everything below:
 
@@ -54,6 +61,14 @@ Object::buildDrawCommands()              [per draw, per frame]
 Object::writeForwardUniforms()            [per draw, per frame]
   selectVipm(...) in Continuous mode
   → MorphUBO { morphFactor, vipmTargetLevel }
+
+  ViewDependent mode (per instance):
+    ActiveFront::refineForView(...)         reset to coarsest, refine by screen-space error
+                                            (geometry / UV-seam / normal / tangent), silhouette
+                                            boost, multi-witness back-face gate
+      → repairFoldovers(...)                (inside refineForView) un-flip any backward-wound face
+    ActiveFront::repairCoverage(...)        un-recede any front-facing face that leaks the background
+    ActiveFront::emitActiveIndices(...)     → a per-frame dynamic index buffer (wedge-restored)
 ```
 
 - **Build** — `Geometry::load()` (`src/graphics/geometry.cpp`) builds LODs when
@@ -68,6 +83,11 @@ Object::writeForwardUniforms()            [per draw, per frame]
 - **Morph** — `selectVipm` (`include/fire_engine/graphics/vipm.hpp`) uses the same screen-space
   selection curve as `selectLod`, but returns the next exact LOD level and a 0→1 factor. The vertex
   shader morphs only vertices whose `collapseLevel` equals that target level.
+- **Refine (VDPM)** — for a mesh with a collapse stream, `Geometry::load` also stores the raw
+  collapses; `Object` builds a per-instance `ActiveFront` (over a `VertexForest`) at load, and in
+  `writeForwardUniforms` runs `refineForView` + `repairCoverage` per frame, emitting a fresh index
+  buffer into a per-`currentFrame` dynamic buffer. `buildDrawCommands` points the draw at it, taking
+  precedence over discrete/VIPM. Vulkan-free + headless-testable; see the VDPM section.
 
 ---
 
@@ -136,6 +156,26 @@ Public surface:
 7. **Normal-flip veto.** A collapse that would invert an incident triangle's normal is rejected — a
    validity guard, not part of the cost.
 
+8. **Chart veto — don't collapse across a render seam.** Position welding (decision 1) fuses UV /
+   normal / tangent charts that authoring kept separate, which lets the collapse stream merge a vertex
+   into a *different* chart. Discrete and VDPM tolerate that (VDPM's UV channel just refines the seam
+   back), but **VIPM cannot**: its geomorph slides a vertex's whole render identity toward its
+   collapse survivor, so a cross-chart collapse has to *shear or pop the texture* during the
+   transition — there is no runtime metric that refines a morph out of a bad target. So a cross-chart
+   collapse is vetoed topologically. Each original wedge gets a **chart id** (union-find over wedges,
+   joined across every edge whose two incident faces *agree* on attributes — attribute-aware, so a
+   benign position duplicate with identical attributes still merges and simplifies), and
+   `canonicalCharts_[v]` is the set of charts meeting at position `v`. A collapse is rejected if the
+   survivor lacks a chart the removed vertex carries; the error-chosen direction is tried first, then
+   the reverse (so an interior vertex is forced *into* its seam rather than the seam into the
+   interior), and only an edge between two *different* seams is skipped outright. *Decision:* a veto,
+   not a seam-boundary quadric — a single quadric weight can't separate a legal *along*-seam collapse
+   from an illegal *cross*-seam one (measured: any weight that stops crossing also locks curved seams
+   so the mesh can't reach its target). This also makes `nearestWedge` correct *by construction*: the
+   survivor is guaranteed to carry a same-chart wedge, so the attribute-distance pick lands in-chart.
+   Cost: the coarsest LODs keep the seam skeleton (DamagedHelmet's L2 lands ~2800 tris vs a ~1900
+   target), which is the price of a shear-free morph.
+
 ### The two tuning dials
 
 Both live in `src/graphics/mesh_simplifier.cpp` (`QemRun`):
@@ -183,10 +223,113 @@ the next LOD index buffer will draw. This is the load-bearing no-pop invariant.
 
 ---
 
+## View-dependent progressive meshes (VDPM)
+
+VIPM picks one detail level for the whole mesh. VDPM (`graphics/vdpm`) refines **different regions of
+one mesh to different detail** each frame, from a per-region **active front** — so the near/edge-on
+parts stay dense while the far/flat parts coarsen, and at a matched budget the result matches the
+discrete mesh's silhouette and shading with far fewer triangles. Vulkan-free + headless-testable; a
+GPU-driven front is the eventual follow-on. Everything indexes the **canonical (position-welded)**
+vertex set, exactly like the simplifier, and render wedges are restored only at emit.
+
+### The vertex forest (`buildVertexForest`)
+
+Replaying the recorded collapse stream backwards is a sequence of **vertex splits** (the inverse of a
+collapse). `buildVertexForest` records, per collapse, a `VertexSplit{parent, child, vl, vr, error,
+uvError, normalError, tangentError}` — Hoppe's fixed-size vsplit encoding: splitting `parent`
+reintroduces `child` between the two faces of the collapsed edge, whose far apexes are `vl`/`vr`
+(`vr == kInvalidVertex` on a boundary edge). A split is *legal* iff `parent` and `vl` (and `vr` if
+present) are active, so no variable-length dependency list is needed — that dependency neighbourhood
+is what keeps adjacent regions at different detail crack-free (no T-junctions). The four `*Error`
+fields are the per-collapse deviations the runtime projects to screen (below). **Caveat:** the forest
+is built by replaying the stream over an evolving adjacency view; a collapse whose edge no longer has
+1 or 2 live faces there (the stream diverged, or non-manifold) is skipped — the DamagedHelmet skips 7
+of ~6800, after which the forest is slightly unfaithful to the stream. The repair passes below cover
+the visible symptoms; a cleaner structural fix would truncate at the first skip.
+
+### The active front (`ActiveFront`)
+
+Holds per-canonical-vertex `active_` and per-split `refined_` state, plus `dependents_[v]` = the count
+of refined splits requiring `v` as parent/vl/vr (so `dependents_[child] == 0` is exactly "leaf",
+the coarsen precondition). `refine`/`coarsen` enforce Hoppe legality; `refineAll`/`coarsenAll` drive
+the extremes; `activeAncestor(v)` walks `removingSplit[·].parent` until it hits an active vertex.
+`emitActiveIndices` maps each finest render triangle's corners to their active ancestors, drops the
+ones that collapse to a degenerate, and restores each surviving corner to its nearest render wedge —
+the same seam-preserving pattern the simplifier's emit uses, so UV/normal seams keep their identity.
+
+### `refineForView` — the four-channel screen-space metric
+
+Per frame: `coarsenAll()`, then walk splits coarsest-first (so a legal refine's dependencies are
+already active) and refine any whose projected error exceeds the pixel budget. A world deviation `e`
+at distance `d` projects to `e · projScaleY · viewportHeight / (2d)` px, exactly like `selectLod`.
+**Four independent channels**, any one over budget triggers a refine — each with its own `kVdpm*Scale`
+dial in `graphics/lod.hpp`:
+
+| Channel | `VertexSplit` field | Source (`MeshCollapse`) | What it catches |
+|---|---|---|---|
+| Geometry δ | `error` | `deviationRadius` (point-to-**plane**, additive) | off-surface curvature; ~0 on a flat region |
+| UV seam/stretch | `uvError` | `uvDeviationRadius` (**max**-accumulated, per-wedge) | texture stretch, and atlas seams the geometry can't see |
+| Shading normal | `normalError` | `normalDeviationRadius` (angular, rad) | lighting flattening a smooth-shaded curve carries even when near-coplanar |
+| Tangent frame | `tangentError` | `tangentDeviationRadius` (angular, rad) | normal-map frame drift, independent of the shading normal (0 without tangents) |
+
+Point-to-**plane** (not point-to-triangle) keeps the geometry channel ~0 across the small in-plane gap
+a collapse leaves, so flats stay flat. The UV channel accumulates by **max**, not the geometric
+channel's running sum: a UV error is a screen-space *discontinuity* (the eye sees the worst jump in a
+region, not a compounding envelope), and its per-collapse value is `max(smooth stretch on a containing
+face, spread between the removed position's atlas wedges)` — the wedge-spread term is what makes an
+atlas seam-crossing collapse read its true cost. Two view modifiers on top:
+
+- **Silhouette boost** — near edge-on reps (`|dot(worldNormal, viewDir)| ≈ 0`) get a tighter budget
+  (`1 + silhouetteBoost·(1−|facing|)`), so contours stay dense.
+- **Back-face gate (conservative, multi-witness)** — a split whose *whole support neighbourhood*
+  (child + parent + vl + vr) is clearly back-facing skips *discretionary* refinement (it's
+  back-face-culled — wasted detail); `forceRefine` can still pull it in as a visible split's
+  dependency. It's a **multi-witness** test because a single smooth vertex normal is a poor proxy for
+  the rasteriser's geometric back-face cull — one back-pointing normal must not suppress a split whose
+  triangles are front-facing.
+
+### The two repair passes — why a correct emit still needs them
+
+A selective front is a **non-prefix** cut of the collapse stream. The simplifier's `wouldFlip` only
+certifies the *linear prefix* is flip-free, and the deviation channels are all *topological* — never
+projected to screen. So two failure classes survive an otherwise-correct front, and each is fixed by a
+**monotone** repair (force-refine only → converges, at worst to full detail):
+
+1. **Foldovers** (`repairFoldovers`, run at the end of `refineForView`). A finest face whose
+   active-ancestor replacement winds *against* the original is back-face-culled by the rasteriser → a
+   hole. Sweep the finest faces; where replacement winding opposes original winding, force-refine the
+   collapsed corners.
+2. **Coverage / silhouette holes** (`repairCoverage`, called from `object.cpp` after `refineForView`
+   with the **jitter-free** `currentViewProj`). A *closed, non-folded* front can still leak the
+   background: at a silhouette a coarse replacement recedes inside a fine front-facing triangle's
+   *projected footprint*. This is purely a screen-space property — boundary/foldover/manifold checks
+   are all blind to it. For each front-facing finest face above a small projected-area gate: if its
+   replacement is **degenerate** (the face collapsed to a sliver and was dropped — *not* safe to skip
+   at a contour, only at an interior), force-refine its corners; else if its projected centroid falls
+   outside the replacement in NDC, force-refine the corner with the largest screen displacement.
+   **It must use the jitter-free view-projection** — feeding it the TAA-jittered `frame.proj` shifts
+   the coverage test ±½px each frame and thrashes the front (a borderline hole flickering with the
+   camera still).
+
+These repairs are the pragmatic version of the exact criterion — a per-split **facing / foldover cone**
+precomputed in the forest build, which would avoid the per-frame sweep. CPU-first accepts the sweep
+cost for now.
+
+### Dials (`graphics/lod.hpp`)
+
+`kVdpmSilhouetteBoost` (2.0), `kVdpmBackfaceThreshold` (0.5), and the four channel scales
+`kVdpmUvScale` / `kVdpmNormalScale` / `kVdpmTangentScale` (1.0 / 0.5 / 0.5 — the geometry channel is
+unscaled). Raising a scale refines that channel sooner (more fidelity, more triangles). The coverage
+repair's screen-area gate (`kMinNdcArea` in `repairCoverage`) trades residual sub-pixel holes against
+extra triangles; lower it to catch smaller holes.
+
+---
+
 ## Overlay & debug
 
-`RenderTunables` (`lodEnabled`, `lodPixelErrorBudget`) drives a **"Mesh LOD"** overlay panel (toggle +
-pixel error budget slider + a live "Triangles drawn" readout from `FrameStats::trianglesDrawn`). The
+`RenderTunables` (`lodEnabled`, `lodMode`, `lodPixelErrorBudget`) drives a **"Mesh LOD"** overlay panel
+(toggle + a **mode selector** — Discrete / Continuous (VIPM) / View-dependent (VDPM) — + pixel error
+budget slider + a live "Triangles drawn" readout from `FrameStats::trianglesDrawn`). The
 **"LOD tint"** debug view (`DebugView::Lod`, view index 7) colours each mesh by its selected level —
 green LOD0 / yellow LOD1 / red LOD2 / magenta 3+ — via the per-draw `lodLevel` threaded through
 `ForwardPushConstants` into `shader.frag`. Toggling LOD off (all green, full mesh) is the A/B.
@@ -216,31 +359,48 @@ green → yellow → red and the triangle count should drop.
   receives morph data.
 - **Selection parity** — `selectVipm` chooses the same topology level as `selectLod`.
 
+`tests/graphics/test_vdpm.cpp` (`[vdpm]`), headless:
+- **Forest + front invariants** — legal refine/coarsen, `refineAll` reproduces the finest index
+  buffer, coarse-first refine keeps dependencies satisfied, seam-wedge emit.
+- **Per-channel deviation** — geometry δ ~0 on a flat mesh / accumulates on a curved one; the UV,
+  shading-normal, and tangent channels each fire on a mesh only *that* channel can see (flat grid with
+  skewed UVs / fanned normals / fanned tangents).
+- **Back-face suppression** — the hidden hemisphere of a sphere coarsens; near view resolves more than
+  far.
+- **Foldover repair** — no emitted triangle winds against the original (verified against a version
+  with the repair disabled, so it's non-vacuous).
+- **Coverage repair** — every front-facing triangle stays covered by its replacement, *including* the
+  degenerate-replacement case (again verified non-vacuous).
+
 `selectLod` is header-only and directly unit-testable. Beyond the headless tests, the render smoke
-(validation on) must stay 0-VUID with LODs active across static / skinned / cloth meshes.
+(validation on) must stay 0-VUID with LODs active across static / skinned / cloth meshes and all three
+LOD modes.
 
 ---
 
 ## Known limits & future directions
 
-Phase 2 removes the main forward-pass geometry/attribute pop for static meshes. Two residuals shape
-what comes next:
+The discrete → VIPM → VDPM ladder is complete; VDPM matches the discrete mesh's silhouette and shading
+at a fraction of the triangles. The remaining residuals and follow-ons, in rough priority:
 
-- **Coarsest-level seam shift.** A position-welded seam vertex carries one representative UV, so at the
-  *coarsest* level seams still shift slightly when they finally collapse. Eliminating this entirely
-  needs full **per-wedge** attribute quadrics (each chart's quadric kept separate) — real machinery,
-  diminishing returns. We stopped here deliberately.
-- **Shadow LOD remains discrete.** Continuous morphing is currently applied to the forward/depth
-  vertex shader path. Shadow draws still choose their biased discrete LOD, so a shadow silhouette can
-  still step independently of the main-view morph.
-
-The ladder, all on this one simplifier's recorded collapse stream:
-
-- **Phase 2 — view-independent continuous (VIPM):** done for static forward/depth draws. It uses a
-  per-vertex SSBO, not a rewritten dynamic vertex buffer, so the base vertex upload stays immutable.
-- **Phase 3 — view-dependent (VDPM):** promote the linear stream to a vertex forest with dependencies +
-  a per-region **active front** (silhouette / near-edge refinement), so different parts of one mesh sit
-  at different detail. Optionally GPU-driven.
+- **VDPM repair passes vs. cones.** Foldover and coverage are fixed each frame by monotone repair
+  sweeps over the finest faces. The exact criterion is a per-split **facing / foldover cone**
+  precomputed in the forest build — it would replace the per-frame sweeps and their CPU cost. The
+  right next step if VDPM ever moves off the CPU.
+- **GPU-driven active front.** `refineForView` + the repairs are CPU today (the module is Vulkan-free
+  by design). Driving the front on the GPU (the forest + errors are already just buffers) is the
+  scalability follow-on for heavy scenes.
+- **7 forest skips.** `buildVertexForest` skips collapses whose edge diverged from its adjacency
+  replay (7 of ~6800 on the helmet); past the first skip the forest is slightly unfaithful. The repairs
+  cover the visible symptoms; truncating the stream at the first skip would be the clean structural fix.
+- **Coarsest-level seam shift.** A position-welded seam vertex carries one representative UV, so when a
+  seam vertex finally collapses *along* its seam, its representative UV shifts slightly. The chart veto
+  (decision 8) already removes the worse failure — a seam vertex collapsing *across* into another chart,
+  which sheared the texture. Eliminating the residual drift too needs full **per-wedge** attribute
+  quadrics (each chart's quadric kept separate) — real machinery, diminishing returns.
+- **Shadow LOD remains discrete.** Continuous/view-dependent refinement is applied to the forward/depth
+  vertex path. Shadow draws still choose their biased discrete LOD, so a shadow silhouette can step
+  independently of the main-view detail.
 
 ---
 
@@ -251,9 +411,10 @@ The ladder, all on this one simplifier's recorded collapse stream:
 | `include/fire_engine/graphics/lod.hpp` | `GeometryLod`, ratios/thresholds, `selectLod` (header-only) |
 | `include/fire_engine/graphics/mesh_simplifier.hpp` | `MeshSimplifier` interface, `QuadricSimplifier`, `MeshCollapse`, `SimplifiedMesh`, `ProgressiveMesh` |
 | `include/fire_engine/graphics/vipm.hpp`, `src/graphics/vipm.cpp` | VIPM morph payload, exact-cut morph-data build, `selectVipm` |
-| `src/graphics/mesh_simplifier.cpp` | The QEM engine (`QemRun`): R⁵ quadric, welding, wedge emit, the two dials |
-| `src/graphics/geometry.cpp` | `Geometry::load()` builds `lods_` + VIPM morph buffers from one progressive artifact |
-| `src/graphics/object.cpp` | Per-draw `selectLod` (forward + shadow) and Continuous-mode `selectVipm` uniforms |
-| `graphics/frame_info.hpp`, `render/render_tunables.hpp`, `render/renderer.cpp` | `lodEnabled`/`lodPixelErrorBudget` plumbing + triangles-drawn stat |
-| `graphics/draw_command.hpp`, `render/ubo.hpp`, `shaders/shader.vert`, `shaders/shader.frag`, `render/debug_overlay.cpp` | VIPM morph binding/uniforms + per-draw `lodLevel` → push constant → LOD-tint debug view + overlay panel |
-| `tests/graphics/test_mesh_simplifier.cpp`, `tests/graphics/test_vipm.cpp` | Headless correctness tests |
+| `include/fire_engine/graphics/vdpm.hpp`, `src/graphics/vdpm.cpp` | VDPM: `VertexForest`/`buildVertexForest`, `ActiveFront` (`refineForView`, `repairFoldovers`, `repairCoverage`, `emitActiveIndices`) |
+| `src/graphics/mesh_simplifier.cpp` | The QEM engine (`QemRun`): R⁵ quadric, welding, wedge emit, chart veto, the four VDPM deviation channels, the two dials |
+| `src/graphics/geometry.cpp` | `Geometry::load()` builds `lods_` + VIPM morph buffers + stores the VDPM collapse stream from one progressive artifact |
+| `src/graphics/object.cpp` | Per-draw `selectLod` (forward + shadow), Continuous `selectVipm` uniforms, and per-instance VDPM `refineForView`/`repairCoverage` → dynamic index buffer |
+| `graphics/frame_info.hpp`, `render/render_tunables.hpp`, `render/renderer.cpp` | `lodEnabled`/`lodMode`/`lodPixelErrorBudget` plumbing + jitter-free `currentViewProj` + triangles-drawn stat |
+| `graphics/draw_command.hpp`, `render/ubo.hpp`, `shaders/shader.vert`, `shaders/shader.frag`, `render/debug_overlay.cpp` | VIPM morph binding/uniforms + per-draw `lodLevel` → push constant → LOD-tint debug view + overlay panel (3-mode selector) |
+| `tests/graphics/test_mesh_simplifier.cpp`, `tests/graphics/test_vipm.cpp`, `tests/graphics/test_vdpm.cpp` | Headless correctness tests |
