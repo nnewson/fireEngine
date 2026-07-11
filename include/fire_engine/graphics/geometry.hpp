@@ -6,6 +6,7 @@
 #include <fire_engine/graphics/draw_command.hpp>
 #include <fire_engine/graphics/gpu_handle.hpp>
 #include <fire_engine/graphics/lod.hpp>
+#include <fire_engine/graphics/mesh_simplifier.hpp>
 #include <fire_engine/graphics/vertex.hpp>
 
 namespace fire_engine
@@ -103,6 +104,17 @@ public:
         return morphBuffer_ != NullBuffer;
     }
 
+    // VDPM (View-dependent LOD): the recorded collapse stream, kept so an ActiveFront can be built
+    // per instance and refined per frame. Empty for meshes with no progressive LODs.
+    [[nodiscard]] const std::vector<MeshCollapse>& collapses() const noexcept
+    {
+        return collapses_;
+    }
+    [[nodiscard]] bool hasVdpmData() const noexcept
+    {
+        return !collapses_.empty();
+    }
+
     [[nodiscard]] bool castsShadow() const noexcept
     {
         return castsShadow_;
@@ -170,6 +182,7 @@ private:
     BufferHandle indexBuffer_{NullBuffer};
     std::vector<GeometryLod> lods_;
     BufferHandle morphBuffer_{NullBuffer};
+    std::vector<MeshCollapse> collapses_;
     bool castsShadow_{true};
     bool storageVertices_{false};
 };

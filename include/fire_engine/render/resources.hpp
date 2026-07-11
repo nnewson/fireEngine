@@ -89,6 +89,9 @@ public:
     // Per-frame, persistently-mapped host-visible vertex buffers for dynamic
     // CPU-built geometry (e.g. the physics debug-line endpoints).
     [[nodiscard]] MappedBufferSet createMappedVertexBuffers(std::size_t size);
+    // Per-frame, persistently-mapped host-visible index buffers for VDPM's dynamic, view-dependent
+    // index set (rebuilt each frame from the active front).
+    [[nodiscard]] MappedBufferSet createMappedIndexBuffers(std::size_t size);
     [[nodiscard]] MappedBufferSet createMappedStorageBuffer(std::size_t size,
                                                             const void* initialData);
     // Single persistent host-visible storage buffer with initial contents. Used

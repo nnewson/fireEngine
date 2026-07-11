@@ -411,3 +411,24 @@ them. Flags are position-independent. Images are `placeholder.jpg` for now.
 ./fireEngineApp -f -p
 ```
 ![Floor](placeholder.jpg)
+
+---
+
+## Feature checks (overlay-driven)
+
+### Mesh LOD — discrete / VIPM / VDPM
+```bash
+./fireEngineApp DamagedHelmet/DamagedHelmet.gltf skybox.hdr --overlay
+```
+In the **"Mesh LOD"** overlay panel, with the helmet filling most of the screen and the pixel-error
+budget near default:
+- **Discrete** — backing the camera off (or raising the budget) should **step** the mesh coarser; the
+  "LOD tint" debug view (View dropdown → LOD tint) colours by level (green → yellow → red) and you
+  should see a hard swap at each step.
+- **Continuous (VIPM)** — the same transitions should now **dissolve** instead of popping; the texture
+  must not shear at the mirrored front seam as a level changes.
+- **View-dependent (VDPM)** — at a matched budget the mesh should look **the same as Discrete's finest
+  visible detail but with far fewer triangles** (watch "Triangles drawn"). Flipping between VDPM and
+  Discrete/VIPM should show **no background leaking through** (no missing front-facing triangles), no
+  silhouette holes, and no flicker with the camera still. This is the case the VDPM foldover +
+  coverage repair passes exist to guarantee — see [`lod.md`](lod.md).

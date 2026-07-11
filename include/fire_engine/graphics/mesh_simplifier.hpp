@@ -22,6 +22,32 @@ struct MeshCollapse
     uint32_t removed{0};
     Vec3 position{};
     float error{0.0f};
+    // Cumulative geometric deviation radius for VDPM: a conservative screen-space estimate (not a
+    // rigorous bound) of how far the surface subsumed by this collapse sits from the original,
+    // accumulated up the collapse tree so a coarse collapse over a curved region carries the whole
+    // region's deviation. `error` (RMS) is left untouched for discrete/VIPM selection.
+    float deviationRadius{0.0f};
+    // UV deviation radius: the worst-case texture-space error the region will show, so VDPM can
+    // refine regions whose parameterisation stretches — or whose welded seam wedges span charts —
+    // even where the geometry is flat (the geometric radius alone can't see that). Per collapse it
+    // is max(smooth stretch on a containing face, spread between the removed position's atlas
+    // wedges); accumulated by MAX (not the geometric channel's running sum) because a UV error is a
+    // screen-space discontinuity — the eye sees the single worst jump in the region, not a
+    // compounding envelope. See the collapse() note.
+    float uvDeviationRadius{0.0f};
+    // Cumulative shading-normal deviation, in radians: the angle between the removed vertex's
+    // normal and the normal the covering face interpolates to at its spot, accumulated up the
+    // collapse tree the same way. Catches shading error the geometry and UV channels miss — a
+    // smooth-shaded curved region whose vertices sit near-coplanar (small geometric δ) but whose
+    // normals fan, so a coarse collapse there flattens the lighting. Projected on its own channel
+    // in VDPM's refineForView.
+    float normalDeviationRadius{0.0f};
+    // Cumulative tangent deviation, in radians: the same accumulation for the tangent direction
+    // (the tangent Vec4's xyz). A tangent-space normal map is sampled in the interpolated tangent
+    // frame, so a coarse collapse that swings the tangent tilts the mapped normals even where the
+    // vertex normal and geometry barely move — a distinct error source from the shading-normal
+    // channel. Its own VDPM channel with its own scale.
+    float tangentDeviationRadius{0.0f};
 };
 
 // Result of a simplification: an index buffer into the ORIGINAL vertex array (no vertex data

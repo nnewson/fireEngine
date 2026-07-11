@@ -12,12 +12,14 @@ namespace fire_engine
 
 // LOD strategy, selectable at runtime so the modes coexist rather than supersede. Discrete = Phase
 // 1 hard index-buffer swap. Continuous = VIPM geomorph (Phase 2): the level transitions are
-// dissolved by sliding collapsing vertices onto their targets. (ViewDependent / VDPM is the planned
-// Phase 3.)
+// dissolved by sliding collapsing vertices onto their targets. ViewDependent = VDPM (Phase 3): a
+// per-region active front refines different parts of one mesh to different detail into a per-frame
+// index buffer.
 enum class LodMode : uint8_t
 {
     Discrete = 0,
     Continuous = 1,
+    ViewDependent = 2,
 };
 
 // One discrete level of detail: an index buffer into the geometry's (shared, unchanged) vertex
@@ -43,6 +45,36 @@ inline constexpr float kLodPixelErrorBudget = 2.0f;
 // Shadow passes tolerate a coarser LOD than the main view (silhouette detail matters less in a
 // shadow), so their pixel budget is scaled up by this factor.
 inline constexpr float kShadowLodBias = 3.0f;
+
+// VDPM silhouette boost: how much tighter the pixel budget is where a vertex's world normal is
+// edge-on to the view (0 = uniform screen-space error). Keeps contours dense.
+inline constexpr float kVdpmSilhouetteBoost = 2.0f;
+
+// VDPM back-face gate: reps whose signed facing (world normal · view direction) is below -this are
+// treated as clearly back-facing and skip discretionary refinement (they're back-face-culled, so
+// the detail is wasted). Conservative (not plain 0) since a per-vertex normal stands in for a
+// region; near edge-on stays silhouette-refined.
+inline constexpr float kVdpmBackfaceThreshold = 0.5f;
+
+// VDPM UV channel scale: turns a collapse's cumulative UV-deviation radius into pixel-equivalent
+// screen error against the same pixel budget (a texel-density stand-in — per-material texture
+// resolution would refine it). The primary dial for texture fidelity vs triangle count; kept
+// separate from the simplifier's kUvWeightFactor, which only orders collapses.
+inline constexpr float kVdpmUvScale = 1.0f;
+
+// VDPM shading channel scale: turns a collapse's cumulative shading-normal deviation (radians) into
+// pixel-equivalent screen error against the same pixel budget, so a smooth-shaded curve that stays
+// near-coplanar (invisible to the geometry channel) but whose normals fan still refines under
+// magnification. The primary dial for shading fidelity vs triangle count; kept separate from the
+// simplifier's collapse ordering. Radians are perceptually potent, so this rides below the UV/geom
+// unit scale — tune it up if lighting still flattens at close range, down if the mesh over-refines.
+inline constexpr float kVdpmNormalScale = 0.5f;
+
+// VDPM tangent channel scale: as kVdpmNormalScale, but for the tangent-frame deviation (radians)
+// that steers tangent-space normal-map sampling. Separate from the shading-normal dial so a
+// normal-mapped asset's frame drift can be tuned independently of its interpolated-normal drift;
+// reads 0 on meshes without tangents, so it costs nothing there.
+inline constexpr float kVdpmTangentScale = 0.5f;
 
 // Pick the coarsest LOD whose projected geometric error fits the pixel budget. `projScaleY` is the
 // projection matrix's [1][1] term (= 1/tan(fovY/2)); a world deviation `e` at view distance `d`

@@ -10,6 +10,7 @@
 #include <fire_engine/graphics/frame_info.hpp>
 #include <fire_engine/graphics/gpu_handle.hpp>
 #include <fire_engine/graphics/gpu_limits.hpp>
+#include <fire_engine/graphics/vdpm.hpp>
 #include <fire_engine/math/mat4.hpp>
 
 namespace fire_engine
@@ -93,6 +94,14 @@ private:
         BufferHandle morphSsbo{NullBuffer};
         // VIPM geomorph buffer (Continuous LOD): the geometry's per-vertex morph data, or a dummy.
         BufferHandle vipmBuffer{NullBuffer};
+        // VDPM (View-dependent LOD): the per-instance active front + its per-frame dynamic index
+        // buffers, rebuilt each frame from the camera when LodMode::ViewDependent. The front is
+        // absent for non-VDPM meshes (small/deformable/no collapse stream). vdpmIndexCount is the
+        // current frame's emitted index count.
+        std::optional<ActiveFront> vdpmFront;
+        std::array<BufferHandle, kMaxFramesInFlight> vdpmIndexBufs{NullBuffer, NullBuffer};
+        std::array<std::span<std::byte>, kMaxFramesInFlight> vdpmIndexMapped{};
+        uint32_t vdpmIndexCount{0};
         // Per-object ShadowUBO buffer handles (shadow set-0 binding 0, pushed
         // inline per draw — no descriptor set). skin/morph/morphSsbo above are
         // reused for the shadow draw.

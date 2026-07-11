@@ -201,6 +201,23 @@ void Object::createForwardBindings(Resources& resources)
             auto vipmSet = resources.createMappedStorageBuffer(sizeof(vipmZeros), vipmZeros);
             binding.vipmBuffer = vipmSet.buffers[0];
         }
+
+        // VDPM (View-dependent LOD): build the per-instance active front + its per-frame dynamic
+        // index buffers (sized to the finest index buffer, the max the front can emit) for static
+        // meshes carrying a collapse stream.
+        if (binding.geometry->hasVdpmData())
+        {
+            binding.vdpmFront =
+                ActiveFront::build(binding.geometry->vertices(), binding.geometry->indices(),
+                                   binding.geometry->collapses());
+            const std::size_t maxBytes = binding.geometry->indices().size() * sizeof(uint32_t);
+            auto indexSet = resources.createMappedIndexBuffers(maxBytes);
+            for (int i = 0; i < kMaxFramesInFlight; ++i)
+            {
+                binding.vdpmIndexBufs[i] = indexSet.buffers[i];
+                binding.vdpmIndexMapped[i] = indexSet.mapped[i];
+            }
+        }
     }
 }
 
@@ -431,6 +448,30 @@ void Object::writeForwardUniforms(const FrameInfo& frame, const Mat4& world,
             morphUbo.morphFactor = sel.morphFactor;
             morphUbo.vipmTargetLevel = static_cast<int>(sel.targetLevel);
         }
+
+        // VDPM (View-dependent LOD, forward pass — shadow keeps discrete): refine this instance's
+        // active front for the camera and rebuild its dynamic index buffer. buildDrawCommands then
+        // points the draw at the freshly-uploaded index set.
+        if (frame.lodMode == LodMode::ViewDependent && frame.lodEnabled && binding.vdpmFront)
+        {
+            binding.vdpmFront->refineForView(
+                binding.geometry->vertices(), world, frame.cameraPosition,
+                std::abs(frame.proj[1, 1]), static_cast<float>(frame.viewportHeight),
+                frame.lodPixelErrorBudget, kVdpmSilhouetteBoost, kVdpmBackfaceThreshold,
+                kVdpmUvScale, kVdpmNormalScale, kVdpmTangentScale);
+            // Screen-space coverage repair: refine any front-facing face whose coarse replacement
+            // recedes inside its projected footprint (a silhouette hole to the background that the
+            // deviation/foldover criteria can't see). Uses the JITTER-FREE currentViewProj, not the
+            // TAA-jittered frame.proj — the sub-pixel jitter would shift the coverage test ±0.5px
+            // each frame and thrash the front (a borderline hole flickering with no camera motion).
+            binding.vdpmFront->repairCoverage(binding.geometry->vertices(), world,
+                                              frame.cameraPosition, frame.currentViewProj);
+            const std::vector<uint32_t> idx = binding.vdpmFront->emitActiveIndices(
+                binding.geometry->vertices(), binding.geometry->indices());
+            binding.vdpmIndexCount = static_cast<uint32_t>(idx.size());
+            writeMapped(binding.vdpmIndexMapped[frame.currentFrame], idx.data(),
+                        idx.size() * sizeof(uint32_t));
+        }
         writeMapped(binding.morphUboMapped[frame.currentFrame], morphUbo);
     }
 }
@@ -481,9 +522,16 @@ std::vector<DrawCommand> Object::buildDrawCommands(const FrameInfo& frame, const
         cmd.indexBuffer = binding.geometry->indexBuffer();
         cmd.indexCount = binding.geometry->indexCount();
         cmd.indexType = binding.geometry->indexType();
+        // View-dependent LOD: draw the per-instance active front's dynamic index set (refined +
+        // uploaded in writeForwardUniforms this frame). Takes precedence over discrete/VIPM.
+        if (frame.lodMode == LodMode::ViewDependent && frame.lodEnabled && binding.vdpmFront)
+        {
+            cmd.indexBuffer = binding.vdpmIndexBufs[frame.currentFrame];
+            cmd.indexCount = binding.vdpmIndexCount;
+        }
         // Discrete LOD: swap in a coarser index set (same vertex buffer) for distant/small static
         // meshes, chosen so the level's geometric error stays within the pixel budget.
-        if (frame.lodEnabled && binding.geometry->lods().size() > 1)
+        else if (frame.lodEnabled && binding.geometry->lods().size() > 1)
         {
             const float distance = (centroid - frame.cameraPosition).magnitude();
             const std::size_t level =

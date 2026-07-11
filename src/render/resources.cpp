@@ -1190,6 +1190,13 @@ Resources::MappedBufferSet Resources::createMappedVertexBuffers(std::size_t size
     return createMappedHostVisibleBuffers(size, vk::BufferUsageFlagBits::eVertexBuffer);
 }
 
+Resources::MappedBufferSet Resources::createMappedIndexBuffers(std::size_t size)
+{
+    // Per-frame, persistently-mapped host-visible index buffers for VDPM's dynamic, view-dependent
+    // index set (rebuilt each frame from the active front).
+    return createMappedHostVisibleBuffers(size, vk::BufferUsageFlagBits::eIndexBuffer);
+}
+
 Resources::MappedBufferSet Resources::createMappedStorageBuffer(std::size_t size,
                                                                 const void* initialData)
 {
