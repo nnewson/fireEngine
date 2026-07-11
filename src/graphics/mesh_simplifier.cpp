@@ -521,6 +521,16 @@ public:
                 {
                     continue;
                 }
+                // The reversed direction carries the OTHER (larger) endpoint error, which the
+                // ceiling check above never saw. Re-check it: a chart-legal-but-over-budget
+                // reversal must not sneak past the quality bound (and must not inflate maxError /
+                // LOD selection). `continue`, not `break` — the heap is ordered by each edge's
+                // *minimum* endpoint cost, so this reversed cost says nothing about the edges still
+                // queued.
+                if (err > ceiling)
+                {
+                    continue;
+                }
             }
             if (wouldFlip(removed, kept))
             {
@@ -579,9 +589,13 @@ public:
         return best;
     }
 
-    [[nodiscard]] std::vector<MeshCollapse> sequence() const noexcept
+    // Consuming accessor: moves the recorded stream out of a finished run. `&&`-qualified so it can
+    // only be called on an rvalue (the callers are done with `run`); this keeps `noexcept` honest —
+    // a vector move never allocates, whereas the old by-value *copy* could throw on allocation and
+    // so would have terminated under `noexcept`.
+    [[nodiscard]] std::vector<MeshCollapse> sequence() && noexcept
     {
-        return sequence_;
+        return std::move(sequence_);
     }
 
     [[nodiscard]] float maxError() const noexcept
@@ -1038,7 +1052,7 @@ QuadricSimplifier::collapseSequence(std::span<const Vertex> vertices,
 {
     QemRun run(vertices, indices);
     run.run(1); // collapse as far as the mesh allows
-    return run.sequence();
+    return std::move(run).sequence();
 }
 
 ProgressiveMesh QuadricSimplifier::buildProgressive(std::span<const Vertex> vertices,
@@ -1073,7 +1087,7 @@ ProgressiveMesh QuadricSimplifier::buildProgressive(std::span<const Vertex> vert
     }
 
     run.run(1); // keep the full stream available for future/debug consumers.
-    out.collapses = run.sequence();
+    out.collapses = std::move(run).sequence();
     return out;
 }
 

@@ -141,17 +141,19 @@ public:
     // centroid falls OUTSIDE its active-ancestor replacement in NDC, force-refine the collapsed
     // corner with the largest screen-space displacement; repeat to a fixed point. Monotone (only
     // force-refines), so it converges — at worst to full detail, which covers exactly. `viewProj`
-    // is proj*view (world is applied separately, matching refineForView).
+    // is proj*view (world is applied separately, matching refineForView). `viewportWidth/Height`
+    // turn the area gate into pixels (resolution-independent). A face straddling the near plane
+    // can't be projected, so it is refined conservatively (see the .cpp).
     void repairCoverage(std::span<const Vertex> vertices, const Mat4& world, const Vec3& cameraPos,
-                        const Mat4& viewProj);
+                        const Mat4& viewProj, float viewportWidth, float viewportHeight);
 
     [[nodiscard]] bool active(uint32_t canonicalVertex) const
     {
-        return active_[canonicalVertex];
+        return active_[canonicalVertex] != 0;
     }
     [[nodiscard]] bool refined(uint32_t splitIndex) const
     {
-        return refined_[splitIndex];
+        return refined_[splitIndex] != 0;
     }
     [[nodiscard]] const VertexForest& forest() const noexcept
     {
@@ -184,11 +186,13 @@ private:
     // flipped replacement and punches a hole to the background. This drives such faces back toward
     // the original geometry (monotone: only force-refines, so it converges, at worst to full
     // detail).
-    void repairFoldovers(std::span<const Vertex> vertices);
+    void repairFoldovers(std::span<const Vertex> vertices, const Mat4& world);
 
     VertexForest forest_;
-    std::vector<bool> active_;                           // per canonical vertex
-    std::vector<bool> refined_;                          // per split
+    // uint8_t, not vector<bool>: this is per-frame mutation-heavy state, and the bit-proxy is
+    // awkward to debug and no memory win at this scale. 0 = inactive/unrefined, 1 = active/refined.
+    std::vector<std::uint8_t> active_;                   // per canonical vertex
+    std::vector<std::uint8_t> refined_;                  // per split
     std::vector<uint32_t> dependents_;                   // per vertex: refined splits requiring it
     std::vector<std::array<uint32_t, 3>> finestFaces_;   // canonical, welded, deduped
     std::vector<uint32_t> weld_;                         // original vertex -> canonical

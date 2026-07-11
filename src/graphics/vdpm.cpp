@@ -9,6 +9,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include <fire_engine/math/mat3.hpp>
 #include <fire_engine/math/vec4.hpp>
 
 namespace fire_engine
@@ -249,15 +250,15 @@ ActiveFront ActiveFront::build(std::span<const Vertex> vertices, std::span<const
     }
 
     // Coarsest state: only never-removed (root) canonical vertices are active; no split refined.
-    front.active_.assign(n, false);
+    front.active_.assign(n, 0);
     for (std::uint32_t v = 0; v < n; ++v)
     {
         if (front.forest_.removingSplit[v] == kNoSplit)
         {
-            front.active_[v] = true;
+            front.active_[v] = 1;
         }
     }
-    front.refined_.assign(front.forest_.splits.size(), false);
+    front.refined_.assign(front.forest_.splits.size(), 0);
     front.dependents_.assign(n, 0);
     return front;
 }
@@ -267,7 +268,7 @@ std::uint32_t ActiveFront::activeAncestor(std::uint32_t canonicalVertex) const
     // A root is always active and has removingSplit == kNoSplit, so an inactive vertex always has a
     // valid removing split whose parent is one step nearer an active ancestor.
     std::uint32_t v = canonicalVertex;
-    while (!active_[v])
+    while (active_[v] == 0)
     {
         v = forest_.splits[forest_.removingSplit[v]].parent;
     }
@@ -276,17 +277,18 @@ std::uint32_t ActiveFront::activeAncestor(std::uint32_t canonicalVertex) const
 
 bool ActiveFront::refine(std::uint32_t splitIndex)
 {
-    if (splitIndex >= forest_.splits.size() || refined_[splitIndex])
+    if (splitIndex >= forest_.splits.size() || refined_[splitIndex] != 0)
     {
         return false;
     }
     const VertexSplit& s = forest_.splits[splitIndex];
-    if (!active_[s.parent] || !active_[s.vl] || (s.vr != kInvalidVertex && !active_[s.vr]))
+    if (active_[s.parent] == 0 || active_[s.vl] == 0 ||
+        (s.vr != kInvalidVertex && active_[s.vr] == 0))
     {
         return false;
     }
-    refined_[splitIndex] = true;
-    active_[s.child] = true;
+    refined_[splitIndex] = 1;
+    active_[s.child] = 1;
     ++dependents_[s.parent];
     ++dependents_[s.vl];
     if (s.vr != kInvalidVertex)
@@ -298,7 +300,7 @@ bool ActiveFront::refine(std::uint32_t splitIndex)
 
 bool ActiveFront::coarsen(std::uint32_t splitIndex)
 {
-    if (splitIndex >= forest_.splits.size() || !refined_[splitIndex])
+    if (splitIndex >= forest_.splits.size() || refined_[splitIndex] == 0)
     {
         return false;
     }
@@ -307,8 +309,8 @@ bool ActiveFront::coarsen(std::uint32_t splitIndex)
     {
         return false; // the child props up a refined split — not a leaf
     }
-    refined_[splitIndex] = false;
-    active_[s.child] = false;
+    refined_[splitIndex] = 0;
+    active_[s.child] = 0;
     --dependents_[s.parent];
     --dependents_[s.vl];
     if (s.vr != kInvalidVertex)
@@ -337,7 +339,7 @@ void ActiveFront::coarsenAll()
         changed = false;
         for (std::uint32_t i = 0; i < forest_.splits.size(); ++i)
         {
-            if (refined_[i] && coarsen(i))
+            if (refined_[i] != 0 && coarsen(i))
             {
                 changed = true;
             }
@@ -351,7 +353,7 @@ bool ActiveFront::forceRefine(std::uint32_t splitIndex)
     {
         return false;
     }
-    if (refined_[splitIndex])
+    if (refined_[splitIndex] != 0)
     {
         return true;
     }
@@ -361,7 +363,7 @@ bool ActiveFront::forceRefine(std::uint32_t splitIndex)
     const std::array<std::uint32_t, 3> deps{s.parent, s.vl, s.vr};
     for (const std::uint32_t dep : deps)
     {
-        if (dep == kInvalidVertex || active_[dep])
+        if (dep == kInvalidVertex || active_[dep] != 0)
         {
             continue;
         }
@@ -382,6 +384,15 @@ void ActiveFront::refineForView(std::span<const Vertex> vertices, const Mat4& wo
     coarsenAll();
     const float halfViewport = viewportHeight * 0.5f;
 
+    // Normal matrix = inverse-transpose of the world's linear part, so normals stay perpendicular
+    // to the surface under NON-uniform scale / shear (`world · vec4(n,0)` skews them, flipping
+    // facing and silhouette decisions). For a rigid / uniform-scale world this reduces to the
+    // world's rotation.
+    const Mat3 linear = Mat3::fromColumns({world[0, 0], world[1, 0], world[2, 0]},
+                                          {world[0, 1], world[1, 1], world[2, 1]},
+                                          {world[0, 2], world[1, 2], world[2, 2]});
+    const Mat3 normalMatrix = linear.inverse().transpose();
+
     // Signed facing of one canonical vertex's world normal vs its own view direction: +1 toward the
     // camera, 0 edge-on, -1 away. Each vertex uses its own world position for the view direction. A
     // missing normal returns +1 (front-facing) so it never contributes to a back-face suppression.
@@ -391,9 +402,7 @@ void ActiveFront::refineForView(std::span<const Vertex> vertices, const Mat4& wo
         const Vec4 wp = world * Vec4{lp.x(), lp.y(), lp.z(), 1.0f};
         const Vec3 wpos{wp.x(), wp.y(), wp.z()};
         const float d = std::max(1e-3f, (wpos - cameraPos).magnitude());
-        const Vec3 ln = vertices[v].normal();
-        const Vec4 wn = world * Vec4{ln.x(), ln.y(), ln.z(), 0.0f};
-        const Vec3 wnrm{wn.x(), wn.y(), wn.z()};
+        const Vec3 wnrm = normalMatrix * vertices[v].normal();
         const float nlen = wnrm.magnitude();
         if (nlen <= 1e-6f)
         {
@@ -466,16 +475,26 @@ void ActiveFront::refineForView(std::span<const Vertex> vertices, const Mat4& wo
         }
     }
 
-    repairFoldovers(vertices);
+    repairFoldovers(vertices, world);
 }
 
-void ActiveFront::repairFoldovers(std::span<const Vertex> vertices)
+void ActiveFront::repairFoldovers(std::span<const Vertex> vertices, const Mat4& world)
 {
     // Sweep the finest faces; where the active-ancestor replacement is wound against the original
     // face, force-refine the collapsed corners back in. Each repair only activates vertices (never
     // coarsens), so it strictly progresses toward the original geometry and terminates; refining
     // one face can re-fold a neighbour, so repeat until a full sweep finds nothing (bounded by the
     // forest depth — at worst the whole neighbourhood reaches full detail, which is flip-free).
+    //
+    // Winding is compared in WORLD space (not object space): the rasteriser culls on the post-world
+    // winding, and a non-uniform-scale / mirroring world can flip the relative orientation of the
+    // original vs replacement triangle, so an object-space test would mis-classify foldovers there.
+    auto worldPos = [&](std::uint32_t v)
+    {
+        const Vec3 l = vertices[v].position();
+        const Vec4 w = world * Vec4{l.x(), l.y(), l.z(), 1.0f};
+        return Vec3{w.x(), w.y(), w.z()};
+    };
     bool changed = true;
     while (changed)
     {
@@ -489,11 +508,10 @@ void ActiveFront::repairFoldovers(std::span<const Vertex> vertices)
             {
                 continue; // legitimately collapsed to a degenerate — a neighbour covers it
             }
-            const Vec3 p0 = vertices[fc[0]].position();
-            const Vec3 orig = Vec3::crossProduct(vertices[fc[1]].position() - p0,
-                                                 vertices[fc[2]].position() - p0);
-            const Vec3 repl = Vec3::crossProduct(vertices[a1].position() - vertices[a0].position(),
-                                                 vertices[a2].position() - vertices[a0].position());
+            const Vec3 p0 = worldPos(fc[0]);
+            const Vec3 orig = Vec3::crossProduct(worldPos(fc[1]) - p0, worldPos(fc[2]) - p0);
+            const Vec3 wa0 = worldPos(a0);
+            const Vec3 repl = Vec3::crossProduct(worldPos(a1) - wa0, worldPos(a2) - wa0);
             if (Vec3::dotProduct(orig, repl) >= 0.0f)
             {
                 continue; // replacement keeps the original winding — not a foldover
@@ -501,7 +519,7 @@ void ActiveFront::repairFoldovers(std::span<const Vertex> vertices)
             // Foldover: pull each collapsed corner back toward its finest position.
             for (const std::uint32_t c : fc)
             {
-                if (!active_[c] && forceRefine(forest_.removingSplit[c]))
+                if (active_[c] == 0 && forceRefine(forest_.removingSplit[c]))
                 {
                     changed = true;
                 }
@@ -511,7 +529,8 @@ void ActiveFront::repairFoldovers(std::span<const Vertex> vertices)
 }
 
 void ActiveFront::repairCoverage(std::span<const Vertex> vertices, const Mat4& world,
-                                 const Vec3& cameraPos, const Mat4& viewProj)
+                                 const Vec3& cameraPos, const Mat4& viewProj, float viewportWidth,
+                                 float viewportHeight)
 {
     auto worldPos = [&](std::uint32_t v)
     {
@@ -548,7 +567,7 @@ void ActiveFront::repairCoverage(std::span<const Vertex> vertices, const Mat4& w
         bool did = false;
         for (const std::uint32_t c : fc)
         {
-            if (!active_[c] && forceRefine(forest_.removingSplit[c]))
+            if (active_[c] == 0 && forceRefine(forest_.removingSplit[c]))
             {
                 did = true;
             }
@@ -556,10 +575,13 @@ void ActiveFront::repairCoverage(std::span<const Vertex> vertices, const Mat4& w
         return did;
     };
 
-    // A face below this projected NDC area is at most a pixel or two — not worth refining, and
-    // gating on it keeps a sub-pixel silhouette sliver from thrashing the front frame to frame.
-    // (NDC spans [-1,1], so total screen area is 4; ~1e-5 is a couple of px² at 1000px height.)
-    constexpr float kMinNdcArea = 1.0e-5f;
+    // Refine below this SCREEN area only when it's worth it: a couple of pixels. Expressed in px²
+    // (resolution-independent), then converted to NDC — a triangle of NDC area A covers
+    // A·(w/2)·(h/2) px², since NDC spans [-1,1]. A fixed NDC constant would mean different pixel
+    // sizes per viewport and could skip visible holes on a high-res view.
+    constexpr float kMinScreenAreaPx = 2.0f;
+    const float minNdcArea =
+        kMinScreenAreaPx / std::max(1.0f, 0.25f * viewportWidth * viewportHeight);
 
     bool changed = true;
     while (changed)
@@ -577,14 +599,27 @@ void ActiveFront::repairCoverage(std::span<const Vertex> vertices, const Mat4& w
                 continue; // back-facing original: never a visible-coverage hole
             }
             // The ORIGINAL triangle's projected area gates whether a coverage miss is worth fixing.
+            // A face straddling the near plane (some corners behind the camera) can't be projected
+            // to test coverage, so refine it conservatively; one fully behind the camera isn't
+            // visible.
             Vec2 s0;
             Vec2 s1;
             Vec2 s2;
-            if (!toNdc(w0, s0) || !toNdc(w1, s1) || !toNdc(w2, s2))
+            const int inFront = static_cast<int>(toNdc(w0, s0)) + static_cast<int>(toNdc(w1, s1)) +
+                                static_cast<int>(toNdc(w2, s2));
+            if (inFront == 0)
             {
+                continue; // fully behind the camera — not visible
+            }
+            if (inFront < 3)
+            {
+                if (refineCorners(fc)) // straddles the near plane — can't test coverage, refine
+                {
+                    changed = true;
+                }
                 continue;
             }
-            if (std::abs(edge(s0, s1, s2)) * 0.5f < kMinNdcArea)
+            if (std::abs(edge(s0, s1, s2)) * 0.5f < minNdcArea)
             {
                 continue; // sub-pixel: not a visible hole
             }
@@ -610,6 +645,12 @@ void ActiveFront::repairCoverage(std::span<const Vertex> vertices, const Mat4& w
             if (!toNdc(centroid, sc) || !toNdc(worldPos(a0), sa0) || !toNdc(worldPos(a1), sa1) ||
                 !toNdc(worldPos(a2), sa2))
             {
+                // The replacement (or the centroid) straddles the near plane — can't test coverage,
+                // so refine conservatively rather than silently skipping.
+                if (refineCorners(fc))
+                {
+                    changed = true;
+                }
                 continue;
             }
             if (inside(sc, sa0, sa1, sa2))
@@ -624,7 +665,7 @@ void ActiveFront::repairCoverage(std::span<const Vertex> vertices, const Mat4& w
             const std::array<std::uint32_t, 3> anc{a0, a1, a2};
             for (int k = 0; k < 3; ++k)
             {
-                if (active_[fc[k]])
+                if (active_[fc[k]] != 0)
                 {
                     continue; // this corner is already at finest — cannot displace
                 }
