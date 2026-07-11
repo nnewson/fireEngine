@@ -417,8 +417,9 @@ and local URI images stay behaviorally aligned.
   `uploadImageFromHost` helper drives the staging buffer / barrier / copy / transition flow
   for every texture variant; a `withOneTimeSubmit` template wraps the boilerplate for any
   one-off command-buffer submission (waiting on a per-submit fence, not `queue.waitIdle`).
-  During scene load, `begin/endUploadBatch` coalesces every texture upload into one submit +
-  one fence. Texture slots are tracked by a `GenerationalSlotPool`, so `releaseTexture` (e.g. on
+  During scene load, `begin/endUploadBatch` coalesces every texture **and device-local buffer**
+  upload (static vertices/indices/LODs/VIPM) into one submit + one fence — `createDeviceLocalBuffer`
+  records its staging copy into the open batch instead of submitting per buffer. Texture slots are tracked by a `GenerationalSlotPool`, so `releaseTexture` (e.g. on
   resize) recycles the slot and bumps its generation — a stale handle is detectable via
   `validTexture`, not a silent alias.
 - Creates common 2D render/sample targets through one private target descriptor helper. Offscreen
