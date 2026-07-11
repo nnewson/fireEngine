@@ -14,12 +14,6 @@ namespace fire_engine
 namespace
 {
 
-[[nodiscard]] Vec3 transformPoint(const Mat4& m, Vec3 p)
-{
-    const Vec4 r = m * Vec4{p.x(), p.y(), p.z(), 1.0f};
-    return {r.x(), r.y(), r.z()};
-}
-
 [[nodiscard]] Vec3 matrixScale(const Mat4& m)
 {
     return {Vec3{m[0, 0], m[1, 0], m[2, 0]}.magnitude(),
@@ -36,11 +30,11 @@ WorldShape PhysicsWorld::composeWorldShape(const ColliderShape& shape, const Mat
 
     if (const auto* sphere = std::get_if<SphereShape>(&shape))
     {
-        return WorldSphere{transformPoint(world, sphere->center), sphere->radius * uniform};
+        return WorldSphere{world.transformPoint(sphere->center), sphere->radius * uniform};
     }
     if (const auto* box = std::get_if<BoxShape>(&shape))
     {
-        return WorldBox{transformPoint(world, box->center),
+        return WorldBox{world.transformPoint(box->center),
                         Vec3{box->halfExtents.x() * scale.x(), box->halfExtents.y() * scale.y(),
                              box->halfExtents.z() * scale.z()},
                         rot};
@@ -48,8 +42,8 @@ WorldShape PhysicsWorld::composeWorldShape(const ColliderShape& shape, const Mat
     if (const auto* capsule = std::get_if<CapsuleShape>(&shape))
     {
         const Vec3 c = capsule->center;
-        const Vec3 p0 = transformPoint(world, Vec3{c.x(), c.y() - capsule->halfHeight, c.z()});
-        const Vec3 p1 = transformPoint(world, Vec3{c.x(), c.y() + capsule->halfHeight, c.z()});
+        const Vec3 p0 = world.transformPoint(Vec3{c.x(), c.y() - capsule->halfHeight, c.z()});
+        const Vec3 p1 = world.transformPoint(Vec3{c.x(), c.y() + capsule->halfHeight, c.z()});
         return WorldCapsule{p0, p1, capsule->radius * uniform};
     }
     if (const auto* hull = std::get_if<ConvexHullShape>(&shape))
@@ -58,14 +52,14 @@ WorldShape PhysicsWorld::composeWorldShape(const ColliderShape& shape, const Mat
         convex.vertices.reserve(hull->vertices.size());
         for (const Vec3& v : hull->vertices)
         {
-            convex.vertices.push_back(transformPoint(world, v));
+            convex.vertices.push_back(world.transformPoint(v));
         }
         convex.faces = hull->faces;
         return convex;
     }
     const auto& aabb = std::get<AabbShape>(shape);
     const Vec3 he = aabb.bounds.extent() * 0.5f;
-    return WorldBox{transformPoint(world, aabb.bounds.center()),
+    return WorldBox{world.transformPoint(aabb.bounds.center()),
                     Vec3{he.x() * scale.x(), he.y() * scale.y(), he.z() * scale.z()}, rot};
 }
 

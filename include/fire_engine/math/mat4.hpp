@@ -82,6 +82,18 @@ public:
                 m_[3] * rhs.x() + m_[7] * rhs.y() + m_[11] * rhs.z() + m_[15] * rhs.w()};
     }
 
+    // Transform a position (w = 1) by this matrix. Affine: the homogeneous w of the result is
+    // dropped, not divided out — correct for the affine model/world/view matrices this is used with
+    // (composed translate/rotate/scale, so w stays 1). Do NOT use with a projective matrix, where a
+    // perspective divide is required. (`RigidTransform::transformPoint` is the rigid-only
+    // analogue.)
+    [[nodiscard]]
+    constexpr Vec3 transformPoint(const Vec3& p) const noexcept
+    {
+        const Vec4 r = *this * Vec4{p.x(), p.y(), p.z(), 1.0f};
+        return Vec3{r.x(), r.y(), r.z()};
+    }
+
     // Strict bit-for-bit equality. Two matrices that differ by a single ULP
     // compare not-equal — use approxEqual when you want tolerance.
     [[nodiscard]]
