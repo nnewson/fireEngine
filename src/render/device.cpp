@@ -87,12 +87,92 @@ constexpr std::array deviceExtensions{
 namespace
 {
 
-// Every device feature + descriptor-indexing limit that createLogicalDevice goes on to
-// enable/assume. Verified during device selection so an unsupported GPU is rejected up front with a
-// precise reason, instead of passing suitability and then failing an opaque Vulkan call inside
-// device or pipeline creation. Returns nullopt when the device satisfies everything, or a
-// comma-joined list of the missing capabilities. Keep this in lockstep with the enable-chain in
-// createLogicalDevice.
+// One required device feature: the `vk::Bool32` bit inside a Vulkan feature struct, plus a name for
+// diagnostics. A pointer-to-member so the SAME entry drives both directions — enabling the bit on
+// the device (createLogicalDevice) and verifying it is advertised (missingDeviceCapabilities) —
+// which is the whole point: the "check" and the "enable" list can no longer drift apart.
+template <typename FeatureStruct>
+struct RequiredFeature
+{
+    vk::Bool32 FeatureStruct::* bit;
+    const char* name;
+};
+
+// THE capability description — the single source of truth for the features this renderer requires,
+// one table per feature struct. Add a feature here and both device selection and device creation
+// pick it up. (Descriptor-indexing *limits* are a properties check, handled separately below; they
+// have no enable counterpart.)
+using Feature10 = RequiredFeature<vk::PhysicalDeviceFeatures>;
+constexpr std::array kRequiredFeatures10{
+    Feature10{&vk::PhysicalDeviceFeatures::samplerAnisotropy, "samplerAnisotropy"},
+    Feature10{&vk::PhysicalDeviceFeatures::imageCubeArray,
+              "imageCubeArray"}, // point-shadow cubemaps
+    Feature10{&vk::PhysicalDeviceFeatures::independentBlend,
+              "independentBlend"}, // per-attachment blend (colour vs velocity)
+};
+
+using Feature12 = RequiredFeature<vk::PhysicalDeviceVulkan12Features>;
+constexpr std::array kRequiredFeatures12{
+    Feature12{&vk::PhysicalDeviceVulkan12Features::bufferDeviceAddress,
+              "bufferDeviceAddress"}, // soft-body compute buffer pointers
+    Feature12{&vk::PhysicalDeviceVulkan12Features::descriptorIndexing,
+              "descriptorIndexing"}, // bindless materials
+    Feature12{&vk::PhysicalDeviceVulkan12Features::timelineSemaphore,
+              "timelineSemaphore"}, // frame pacing
+    Feature12{&vk::PhysicalDeviceVulkan12Features::runtimeDescriptorArray,
+              "runtimeDescriptorArray"},
+    Feature12{&vk::PhysicalDeviceVulkan12Features::shaderSampledImageArrayNonUniformIndexing,
+              "shaderSampledImageArrayNonUniformIndexing"},
+    Feature12{&vk::PhysicalDeviceVulkan12Features::descriptorBindingSampledImageUpdateAfterBind,
+              "descriptorBindingSampledImageUpdateAfterBind"},
+    Feature12{&vk::PhysicalDeviceVulkan12Features::descriptorBindingPartiallyBound,
+              "descriptorBindingPartiallyBound"},
+    // (No descriptorBindingVariableDescriptorCount: the bindless array is a fixed
+    // kMaxBindlessTextures slots with partiallyBound, not an eVariableDescriptorCount binding.)
+};
+
+using Feature13 = RequiredFeature<vk::PhysicalDeviceVulkan13Features>;
+constexpr std::array kRequiredFeatures13{
+    Feature13{&vk::PhysicalDeviceVulkan13Features::synchronization2, "synchronization2"},
+    Feature13{&vk::PhysicalDeviceVulkan13Features::dynamicRendering, "dynamicRendering"},
+};
+
+using FeaturePortability = RequiredFeature<vk::PhysicalDevicePortabilitySubsetFeaturesKHR>;
+constexpr std::array kRequiredFeaturesPortability{
+    FeaturePortability{&vk::PhysicalDevicePortabilitySubsetFeaturesKHR::mutableComparisonSamplers,
+                       "mutableComparisonSamplers (portability subset)"}, // sampler2DShadow / PCF
+};
+
+// Set every bit in `table` on `target` (device-creation enable path).
+template <typename FeatureStruct>
+void enableFeatures(FeatureStruct& target, std::span<const RequiredFeature<FeatureStruct>> table)
+{
+    for (const RequiredFeature<FeatureStruct>& f : table)
+    {
+        target.*(f.bit) = vk::True;
+    }
+}
+
+// Append the name of every bit in `table` that `supported` does not advertise (suitability check).
+template <typename FeatureStruct>
+void collectMissingFeatures(const FeatureStruct& supported,
+                            std::span<const RequiredFeature<FeatureStruct>> table,
+                            std::vector<std::string>& missing)
+{
+    for (const RequiredFeature<FeatureStruct>& f : table)
+    {
+        if (supported.*(f.bit) == vk::False)
+        {
+            missing.emplace_back(f.name);
+        }
+    }
+}
+
+// Verified during device selection so an unsupported GPU is rejected up front with a precise
+// reason, instead of passing suitability and then failing an opaque Vulkan call inside device or
+// pipeline creation. Returns nullopt when the device satisfies everything, or a comma-joined list
+// of the missing capabilities. Driven by the kRequiredFeatures* tables above (shared with the
+// enable path).
 [[nodiscard]] std::optional<std::string>
 missingDeviceCapabilities(const vk::raii::PhysicalDevice& d)
 {
@@ -106,28 +186,11 @@ missingDeviceCapabilities(const vk::raii::PhysicalDevice& d)
     const auto& fp = features.get<vk::PhysicalDevicePortabilitySubsetFeaturesKHR>();
 
     std::vector<std::string> missing;
-    auto require = [&missing](vk::Bool32 supported, const char* name)
-    {
-        if (supported == vk::False)
-        {
-            missing.emplace_back(name);
-        }
-    };
-    require(f10.samplerAnisotropy, "samplerAnisotropy");
-    require(f10.imageCubeArray, "imageCubeArray");     // point-shadow cubemap arrays
-    require(f10.independentBlend, "independentBlend"); // per-attachment blend (colour vs velocity)
-    require(f13.synchronization2, "synchronization2");
-    require(f13.dynamicRendering, "dynamicRendering");
-    require(f12.bufferDeviceAddress, "bufferDeviceAddress"); // soft-body compute buffer pointers
-    require(f12.descriptorIndexing, "descriptorIndexing");   // bindless materials
-    require(f12.timelineSemaphore, "timelineSemaphore");     // frame pacing
-    require(f12.runtimeDescriptorArray, "runtimeDescriptorArray");
-    require(f12.shaderSampledImageArrayNonUniformIndexing,
-            "shaderSampledImageArrayNonUniformIndexing");
-    require(f12.descriptorBindingSampledImageUpdateAfterBind,
-            "descriptorBindingSampledImageUpdateAfterBind");
-    require(f12.descriptorBindingPartiallyBound, "descriptorBindingPartiallyBound");
-    require(fp.mutableComparisonSamplers, "mutableComparisonSamplers (portability subset)");
+    collectMissingFeatures<vk::PhysicalDeviceFeatures>(f10, kRequiredFeatures10, missing);
+    collectMissingFeatures<vk::PhysicalDeviceVulkan12Features>(f12, kRequiredFeatures12, missing);
+    collectMissingFeatures<vk::PhysicalDeviceVulkan13Features>(f13, kRequiredFeatures13, missing);
+    collectMissingFeatures<vk::PhysicalDevicePortabilitySubsetFeaturesKHR>(
+        fp, kRequiredFeaturesPortability, missing);
 
     // The global bindless texture array (forward set 2) is kMaxBindlessTextures update-after-bind
     // combined-image-samplers; each counts against both the sampler and the sampled-image
@@ -344,57 +407,24 @@ void Device::createLogicalDevice()
         });
     }
 
-    // Every feature enabled below was already verified present by missingDeviceCapabilities during
-    // device selection (isDeviceSuitable), so this device is known to support the whole set — no
-    // per-feature re-query/throw here. synchronization2 and dynamicRendering are core in Vulkan 1.3
-    // (mandatory in 1.4) but must still be enabled explicitly before the matching APIs are legal.
+    // Enable exactly the features the kRequiredFeatures* tables describe — the same tables
+    // missingDeviceCapabilities checked during selection, so this device is known to support the
+    // whole set (no per-feature re-query/throw here) and the enable/check lists cannot drift. The
+    // structs are chained by pNext below; the tables only decide which bits are set. (What each
+    // feature is for lives in a comment beside its table entry.)
     vk::PhysicalDeviceFeatures features{};
-    features.samplerAnisotropy = vk::True;
-    // Point light shadow maps use samplerCubeArrayShadow over a cubemap-array
-    // depth image. Requires the imageCubeArray feature.
-    features.imageCubeArray = vk::True;
-    // The forward/transmission passes render colour + a TAA velocity attachment
-    // with different blend state per attachment (colour may alpha-blend; the
-    // velocity attachment never blends). Per-attachment blend needs this.
-    features.independentBlend = vk::True;
+    enableFeatures<vk::PhysicalDeviceFeatures>(features, kRequiredFeatures10);
 
-    // synchronization2: barriers/submits use the *2 APIs. dynamicRendering:
-    // rendering without VkRenderPass/VkFramebuffer objects.
     vk::PhysicalDeviceVulkan13Features features13{};
-    features13.synchronization2 = vk::True;
-    features13.dynamicRendering = vk::True;
+    enableFeatures<vk::PhysicalDeviceVulkan13Features>(features13, kRequiredFeatures13);
 
-    // bufferDeviceAddress (core 1.2): the soft-body solver passes its buffers to
-    // compute as 64-bit GPU pointers (GL_EXT_buffer_reference) instead of
-    // descriptor sets.
-    //
-    // descriptorIndexing (core 1.2): bindless materials. The forward shader indexes
-    // one global sampler2D[] texture array and a global materials[] SSBO, so the
-    // array must allow runtime/non-uniform indexing, partially-bound slots (the
-    // array is sparse — indexed by texture handle), and update-after-bind (textures
-    // are written into the array as they load, after the set is first bound).
     vk::PhysicalDeviceVulkan12Features features12{};
-    features12.bufferDeviceAddress = vk::True;
-    features12.descriptorIndexing = vk::True;
-    // timelineSemaphore (core 1.2): frame pacing uses one monotonic timeline
-    // semaphore for CPU↔GPU sync instead of per-frame binary fences. The
-    // swapchain acquire/present semaphores stay binary (WSI doesn't accept
-    // timeline semaphores).
-    features12.timelineSemaphore = vk::True;
-    features12.runtimeDescriptorArray = vk::True;
-    features12.shaderSampledImageArrayNonUniformIndexing = vk::True;
-    features12.descriptorBindingSampledImageUpdateAfterBind = vk::True;
-    features12.descriptorBindingPartiallyBound = vk::True;
-    // (No descriptorBindingVariableDescriptorCount: the bindless array is a fixed
-    // kMaxBindlessTextures slots with partiallyBound, not an eVariableDescriptorCount binding, so
-    // it is not needed.)
+    enableFeatures<vk::PhysicalDeviceVulkan12Features>(features12, kRequiredFeatures12);
     features13.pNext = &features12;
 
-    // Shadow mapping uses sampler2DShadow (hardware PCF), which requires
-    // compareEnable=VK_TRUE on the sampler. MoltenVK gates that behind the
-    // portability-subset feature mutableComparisonSamplers — enable it here.
     vk::PhysicalDevicePortabilitySubsetFeaturesKHR portability{};
-    portability.mutableComparisonSamplers = vk::True;
+    enableFeatures<vk::PhysicalDevicePortabilitySubsetFeaturesKHR>(portability,
+                                                                   kRequiredFeaturesPortability);
     portability.pNext = &features13;
 
     vk::DeviceCreateInfo ci{

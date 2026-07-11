@@ -92,10 +92,19 @@ severity tier, so titles are the stable reference, not a global number.)
 
 ## Could — opportunistic / supporting
 
-- **Rendering optimisations** *(flagged during CR-09)* — skip redundant per-object UBO re-uploads for
-  unchanged (static) objects via a dirty-flag / world-revision check (`Node::worldRevision()`,
-  `SceneCuller::Proxy::worldRevision` are precedent); and revisit routing the active camera through
-  the `RenderableScene` seam rather than an explicit `drawFrame` argument. Pairs with heavier scenes.
+- **Split the per-frame vs per-object forward UBO** *(flagged during CR-09; **not** the quick
+  dirty-flag it first looked like)* — today `UniformBufferObject` (forward set 0, `shader.vert`
+  binding 0) bundles per-frame camera data (view / proj / cameraPos / current+previousViewProj) with
+  per-object data (model / previousModel / hasSkin), and is re-uploaded **per object per frame**. So a
+  `worldRevision` dirty-flag can't skip a static object's write — the camera part changes every frame,
+  and TAA jitters `proj` every frame regardless, so a "nothing moved" skip never triggers. The correct
+  fix is to **split** it: one shared per-frame camera UBO uploaded once and bound for all objects, plus
+  a slim per-object UBO re-uploaded only when `Node::worldRevision()` changes (`SceneCuller::Proxy::worldRevision`
+  is the precedent). Also kills the current duplication of view/proj into every object's UBO. Touches
+  `shader.vert`, the push-descriptor layout, `pushForwardObjectDescriptors`, and the `ubo.hpp`
+  layout/static_asserts — a real change, worthwhile with heavier scenes.
+- **Route the active camera through the `RenderableScene` seam** rather than an explicit `drawFrame`
+  argument *(flagged during CR-09)*.
 - **TAA skinned-deformation velocity** — exact previous-joint-matrix velocity to replace the v1
   camera-motion-only fallback (skinned meshes currently reproject on camera motion only).
 - ✅ **`Mat4::transformPoint` helper** *(branch `cr-mat4-transformpoint`)* — the free
@@ -136,9 +145,16 @@ Candidates" section folds in here:
 - **GPU-driven active front** — drive `refineForView` + emission on the GPU (the forest + errors are
   already just buffers), with reusable scratch emit. The indirect-draw direction #3 opened.
 - **Static GPU residency** — device-local static asset upload split from dynamic mapped buffers
-  (builds on the host-visible-static-buffers item above).
-- **Capability-driven device setup** — one required-capability description drives both physical-device
-  filtering and feature-chain construction (builds on the device-suitability item above).
+  (builds on the host-visible-static-buffers item above). *(Mostly landed in block B; the remaining
+  piece is batching the device-local uploads into the image `uploadBatch_` instead of a per-buffer
+  submit.)*
+- ✅ **Capability-driven device setup** *(branch `cr-capability-driven-device`)* — the required
+  features are now **one** `kRequiredFeatures*` table per feature struct (`{pointer-to-member, name}`
+  entries) that drives *both* `missingDeviceCapabilities` (the suitability check) and
+  `createLogicalDevice` (the enable-chain) via generic `collectMissingFeatures` / `enableFeatures`
+  helpers — so the check and enable lists can no longer drift. Descriptor-indexing *limits* stay a
+  separate properties check (no enable counterpart). Verified: build clean, device still suitable, 0
+  VUID render smoke.
 
 ---
 
