@@ -59,6 +59,7 @@ add_library(fireengine SHARED
     src/graphics/cloth.cpp
     src/graphics/geometry.cpp
     src/graphics/mesh_simplifier.cpp
+    src/graphics/mesh_topology.cpp
     src/graphics/vipm.cpp
     src/graphics/vdpm.cpp
     src/graphics/image.cpp

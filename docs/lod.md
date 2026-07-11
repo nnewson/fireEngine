@@ -114,7 +114,11 @@ Public surface:
    boundary-locked islands that barely simplify (the DamagedHelmet went 15452 → 15361 — 0.6%). So
    collapse connectivity is built on **position-welded** vertices: all vertices at one exact position
    collapse to a canonical. *Decision:* weld by position only (not position+UV) — welding by
-   position+UV re-shatters at seams and caps simplification (~44% on the helmet).
+   position+UV re-shatters at seams and caps simplification (~44% on the helmet). The weld, wedge
+   distance, nearest-wedge and canonical-wedge grouping primitives live in one shared module,
+   `graphics/mesh_topology.{hpp,cpp}` (`weldByPosition` / `wedgeDistance` / `nearestWedge` /
+   `canonicalWedges`), consumed identically by the simplifier, VIPM and VDPM so the canonical-id
+   contract can't drift between them.
 
 2. **Wedge-preserving emit.** Welding by position throws away seam identity (both sides collapse to
    one canonical wedge). To get it back, the emit keeps `origTris_` (original per-corner vertices)
@@ -235,17 +239,26 @@ vertex set, exactly like the simplifier, and render wedges are restored only at 
 ### The vertex forest (`buildVertexForest`)
 
 Replaying the recorded collapse stream backwards is a sequence of **vertex splits** (the inverse of a
-collapse). `buildVertexForest` records, per collapse, a `VertexSplit{parent, child, vl, vr, error,
-uvError, normalError, tangentError}` — Hoppe's fixed-size vsplit encoding: splitting `parent`
+collapse). Each `MeshCollapse` carries a `VertexSplit`'s worth of data — `{parent, child, vl, vr,
+error, uvError, normalError, tangentError}` — Hoppe's fixed-size vsplit encoding: splitting `parent`
 reintroduces `child` between the two faces of the collapsed edge, whose far apexes are `vl`/`vr`
 (`vr == kInvalidVertex` on a boundary edge). A split is *legal* iff `parent` and `vl` (and `vr` if
 present) are active, so no variable-length dependency list is needed — that dependency neighbourhood
 is what keeps adjacent regions at different detail crack-free (no T-junctions). The four `*Error`
-fields are the per-collapse deviations the runtime projects to screen (below). **Caveat:** the forest
-is built by replaying the stream over an evolving adjacency view; a collapse whose edge no longer has
-1 or 2 live faces there (the stream diverged, or non-manifold) is skipped — the DamagedHelmet skips 7
-of ~6800, after which the forest is slightly unfaithful to the stream. The repair passes below cover
-the visible symptoms; a cleaner structural fix would truncate at the first skip.
+fields are the per-collapse deviations the runtime projects to screen (below).
+
+**The apexes are ground truth from the simplifier, not re-derived.** `vl`/`vr` are recorded by the
+simplifier's `collapse()` on the exact live canonical topology it coarsens, then stored on the
+`MeshCollapse`. `buildVertexForest` is a straight transcription of that stream — for each collapse it
+emits one `VertexSplit` and marks `removingSplit[removed]`. This removes the old failure mode: the
+forest used to *re-derive* the apexes by replaying the stream over an independent adjacency view,
+which **desynced** at a **non-manifold welded edge** (position-welding — decision 1 — fuses coincident
+chart pieces into >2-face edges the vsplit can't encode) and then cascaded (DamagedHelmet: 7 genuine
+non-manifold edges snowballed to 19 skipped collapses, leaving the forest unfaithful to the stream).
+Now a non-manifold collapse records `kNoCollapseApex` for `vl`; `buildVertexForest` skips only that
+one collapse, leaving `removed` a **root** (always active) at that isolated spot — a conservative
+fallback (an always-present extra vertex, never a crack) that **cannot cascade**. So the DamagedHelmet
+goes from 19 desynced skips to 7 isolated roots, faithful everywhere else.
 
 ### The active front (`ActiveFront`)
 
