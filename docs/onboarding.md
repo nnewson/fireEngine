@@ -776,9 +776,14 @@ the same change — most have a test or guard that will catch you, but not all.
   `graphics/vipm.hpp` must match `shader.vert`'s `VipmVert`, and `MorphUBO::vipmTargetLevel` in
   `render/ubo.hpp` must match the shader block.
 - **VDPM shares the simplifier's canonical topology, and refines on screen space not topology.** The
-  `VertexForest` / `ActiveFront` (`graphics/vdpm`) weld positions with the *same* key as the simplifier
-  (glTF seam duplicates fuse to one canonical vertex) — if the welds diverge, the recorded collapses'
-  canonical indices stop lining up with the forest's adjacency. `refineForView`/`repairCoverage` are
+  simplifier, VIPM and the `VertexForest` / `ActiveFront` (`graphics/vdpm`) all weld positions through
+  the *one* shared `graphics/mesh_topology::weldByPosition` (glTF seam duplicates fuse to one canonical
+  vertex) — a single impl so the welds *cannot* diverge and the recorded collapses' canonical indices
+  always line up. The forest no longer re-derives split adjacency by replaying the stream: the
+  simplifier records each collapse's `vl`/`vr` apexes as it coarsens (`kNoCollapseApex` where a
+  non-manifold welded edge can't be encoded), and `buildVertexForest` transcribes them — so keep the
+  weld shared and keep `vl`/`vr` recorded on `MeshCollapse` (don't reintroduce a replay).
+  `refineForView`/`repairCoverage` are
   screen-space: `repairCoverage` **must** be fed the **jitter-free** `FrameInfo::currentViewProj`, not
   the TAA-jittered `FrameInfo::proj` (the sub-pixel jitter would thrash the front frame-to-frame). The
   two repair passes exist because a *selective* front is a non-prefix cut of the stream, so the

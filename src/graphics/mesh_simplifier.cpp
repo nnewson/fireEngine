@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <array>
-#include <bit>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -10,6 +9,8 @@
 #include <queue>
 #include <unordered_map>
 #include <vector>
+
+#include <fire_engine/graphics/mesh_topology.hpp>
 
 namespace fire_engine
 {
@@ -270,50 +271,11 @@ struct Quadric
     return std::acos(cosA);
 }
 
-[[nodiscard]] float wedgeDistance(const Vertex& a, const Vertex& b) noexcept
-{
-    const Vec2 uv0 = a.texCoord() - b.texCoord();
-    const Vec2 uv1 = a.texCoord1() - b.texCoord1();
-    const Vec3 normal = a.normal() - b.normal();
-    const Vec4 tangent = a.tangent() - b.tangent();
-    return Vec2::dotProduct(uv0, uv0) + Vec2::dotProduct(uv1, uv1) +
-           0.25f * Vec3::dotProduct(normal, normal) + 0.25f * Vec4::dotProduct(tangent, tangent);
-}
-
 [[nodiscard]] std::uint64_t edgeKey(std::uint32_t a, std::uint32_t b) noexcept
 {
     const std::uint64_t lo = a < b ? a : b;
     const std::uint64_t hi = a < b ? b : a;
     return (lo << 32) | hi;
-}
-
-// Exact-position weld key. glTF duplicates a vertex at every attribute seam; leaving them all split
-// shatters the mesh into boundary-locked islands that can't simplify, so collapse connectivity is
-// built on position-welded vertices (all wedges at one position merge into a canonical). The per-
-// corner UVs are preserved separately at emit time (see emitIndices — nearest-wedge matching).
-struct PosKey
-{
-    std::uint32_t x;
-    std::uint32_t y;
-    std::uint32_t z;
-    bool operator==(const PosKey&) const noexcept = default;
-};
-
-struct PosKeyHash
-{
-    std::size_t operator()(const PosKey& k) const noexcept
-    {
-        std::size_t h = k.x;
-        h = h * 1000003u ^ k.y;
-        h = h * 1000003u ^ k.z;
-        return h;
-    }
-};
-
-[[nodiscard]] PosKey posKey(const Vec3& p) noexcept
-{
-    return PosKey{std::bit_cast<std::uint32_t>(p.x()), std::bit_cast<std::uint32_t>(p.y()),
-                  std::bit_cast<std::uint32_t>(p.z())};
 }
 
 // A candidate collapse in the priority queue. `a`/`b` are the vertex roots at push time; `va`/`vb`
@@ -365,7 +327,6 @@ public:
         nrm_.resize(vertexCount);
         tan_.resize(vertexCount);
         weld_.resize(vertexCount);
-        canonicalWedges_.resize(vertexCount);
         for (std::uint32_t i = 0; i < vertexCount; ++i)
         {
             remap_[i] = i;
@@ -378,14 +339,10 @@ public:
         // Weld coincident positions: build the collapse topology on the canonical (first) vertex at
         // each position so attribute seams don't lock the mesh into un-collapsible islands. The
         // original per-corner vertices are kept (origTris_) so the emit can restore each corner's
-        // own UV from the surviving position's wedges (canonicalWedges_) — see emitIndices.
-        std::unordered_map<PosKey, std::uint32_t, PosKeyHash> weldMap;
-        weldMap.reserve(vertexCount);
-        for (std::uint32_t v = 0; v < vertexCount; ++v)
-        {
-            weld_[v] = weldMap.try_emplace(posKey(pos_[v]), v).first->second;
-            canonicalWedges_[weld_[v]].push_back(v);
-        }
+        // own UV from the surviving position's wedges (canonicalWedges_) — see emitIndices. Shared
+        // with VIPM/VDPM so all three agree on the canonical ids (see graphics/mesh_topology).
+        weld_ = mesh_topology::weldByPosition(vertices);
+        canonicalWedges_ = mesh_topology::canonicalWedges(weld_);
 
         for (std::size_t i = 0; i + 3 <= indices.size(); i += 3)
         {
@@ -439,8 +396,10 @@ public:
                 const std::uint64_t key = edgeKey(v0, v1);
                 auto [it, inserted] = firstWedge.try_emplace(key, std::array{wa, wb});
                 if (!inserted &&
-                    wedgeDistance(vertices_[it->second[0]], vertices_[wa]) <= kChartSeamEps &&
-                    wedgeDistance(vertices_[it->second[1]], vertices_[wb]) <= kChartSeamEps)
+                    mesh_topology::wedgeDistance(vertices_[it->second[0]], vertices_[wa]) <=
+                        kChartSeamEps &&
+                    mesh_topology::wedgeDistance(vertices_[it->second[1]], vertices_[wb]) <=
+                        kChartSeamEps)
                 {
                     chartUnion(it->second[0], wa); // non-seam edge: the two faces share a chart
                     chartUnion(it->second[1], wb);
@@ -575,18 +534,8 @@ public:
     // original vertex `source`.
     [[nodiscard]] std::uint32_t nearestWedge(std::uint32_t canonical, std::uint32_t source) const
     {
-        std::uint32_t best = canonical;
-        float bestDist = std::numeric_limits<float>::max();
-        for (const std::uint32_t w : canonicalWedges_[canonical])
-        {
-            const float dist = wedgeDistance(vertices_[w], vertices_[source]);
-            if (dist < bestDist)
-            {
-                bestDist = dist;
-                best = w;
-            }
-        }
-        return best;
+        return mesh_topology::nearestWedge(vertices_, canonicalWedges_[canonical],
+                                           vertices_[source]);
     }
 
     // Consuming accessor: moves the recorded stream out of a finished run. `&&`-qualified so it can
@@ -818,7 +767,52 @@ private:
         const double weight = std::max(1.0, weight_[kept] + weight_[removed]);
         const auto geomError = static_cast<float>(std::sqrt(std::max(0.0, quadricCost) / weight));
         maxError_ = std::max(maxError_, geomError);
+
+        // Record the vsplit apexes (vl/vr) for the VDPM forest here, on the live canonical
+        // topology, BEFORE the remap below merges removed into kept. The collapsing edge's live
+        // faces are the ones incident to `removed` that also carry `kept`; their third vertex is an
+        // apex. Exactly one (boundary -> vl only) or two (interior -> vl, vr). More than two = a
+        // position-welded non-manifold edge the vsplit can't encode: leave both apexes invalid so
+        // the forest keeps `removed` a root instead of desyncing (the divergence a stream-replay
+        // would cascade).
+        std::uint32_t vl = kNoCollapseApex;
+        std::uint32_t vr = kNoCollapseApex;
+        int edgeFaceCount = 0;
+        for (const std::uint32_t t : vertexTris_[removed])
+        {
+            if (triAlive_[t] == 0)
+            {
+                continue;
+            }
+            const std::uint32_t a = resolve(tris_[t][0]);
+            const std::uint32_t b = resolve(tris_[t][1]);
+            const std::uint32_t c = resolve(tris_[t][2]);
+            if (a != kept && b != kept && c != kept)
+            {
+                continue; // not one of the collapsing edge's faces
+            }
+            const std::uint32_t apex = (a != kept && a != removed)   ? a
+                                       : (b != kept && b != removed) ? b
+                                                                     : c;
+            if (edgeFaceCount == 0)
+            {
+                vl = apex;
+            }
+            else if (edgeFaceCount == 1)
+            {
+                vr = apex;
+            }
+            ++edgeFaceCount;
+        }
+        if (edgeFaceCount > 2)
+        {
+            vl = kNoCollapseApex; // non-manifold: unrepresentable, forest keeps `removed` a root
+            vr = kNoCollapseApex;
+        }
+
         sequence_.push_back(MeshCollapse{kept, removed, pos_[kept], geomError});
+        sequence_.back().vl = vl;
+        sequence_.back().vr = vr;
 
         weight_[kept] += weight_[removed];
         quad_[kept] += quad_[removed];

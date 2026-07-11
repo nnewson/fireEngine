@@ -11,6 +11,11 @@
 namespace fire_engine
 {
 
+// Sentinel for MeshCollapse::vl / vr when a collapse's edge has no second (boundary) face, or when
+// the position-welded edge is non-manifold and the fixed-arity vsplit can't encode it. Numerically
+// equal to vdpm.hpp's kInvalidVertex (the forest consumes these ids directly).
+inline constexpr uint32_t kNoCollapseApex = 0xFFFFFFFFu;
+
 // One recorded edge collapse: vertex `removed` is merged into `kept`. Phase 1 uses *subset*
 // (endpoint) collapse — `kept` stays at its original position, so every simplified level indexes
 // the unchanged original vertex buffer. `position` is `kept`'s position (recorded for the Phase 2/3
@@ -48,6 +53,16 @@ struct MeshCollapse
     // vertex normal and geometry barely move — a distinct error source from the shading-normal
     // channel. Its own VDPM channel with its own scale.
     float tangentDeviationRadius{0.0f};
+    // The vsplit apexes for the VDPM vertex forest: the third vertices of the one (boundary) or two
+    // (interior) live faces on the collapsing edge, recorded here on the true canonical topology
+    // the simplifier collapses so the forest need not re-derive them by replaying the stream. `vr`
+    // is `kNoCollapseApex` on a boundary edge; BOTH are `kNoCollapseApex` when the position-welded
+    // edge is non-manifold (>2 incident faces) and Hoppe's fixed-arity vsplit can't represent it —
+    // the forest then leaves `removed` a root (always active) at that spot rather than emit a
+    // corrupt dependency, which isolates those few edges instead of cascading a topology desync.
+    // Canonical (position-welded) vertex ids, matching `kept` / `removed`.
+    uint32_t vl{kNoCollapseApex};
+    uint32_t vr{kNoCollapseApex};
 };
 
 // Result of a simplification: an index buffer into the ORIGINAL vertex array (no vertex data

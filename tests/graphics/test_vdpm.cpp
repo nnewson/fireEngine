@@ -2,13 +2,12 @@
 
 #include <algorithm>
 #include <array>
-#include <bit>
 #include <cmath>
 #include <cstdint>
-#include <unordered_map>
 #include <vector>
 
 #include <fire_engine/graphics/mesh_simplifier.hpp>
+#include <fire_engine/graphics/mesh_topology.hpp>
 #include <fire_engine/graphics/vdpm.hpp>
 #include <fire_engine/math/vec4.hpp>
 
@@ -179,16 +178,7 @@ std::size_t foldoverCount(const ActiveFront& front, const Mesh& m,
                           const Mat4& world = Mat4::identity())
 {
     const VertexForest& f = front.forest();
-    std::unordered_map<uint64_t, uint32_t> firstAtPos;
-    std::vector<uint32_t> weld(m.verts.size());
-    for (uint32_t v = 0; v < m.verts.size(); ++v)
-    {
-        const Vec3 p = m.verts[v].position();
-        const uint64_t k = (static_cast<uint64_t>(std::bit_cast<uint32_t>(p.x())) * 73856093u) ^
-                           (static_cast<uint64_t>(std::bit_cast<uint32_t>(p.y())) * 19349663u) ^
-                           (static_cast<uint64_t>(std::bit_cast<uint32_t>(p.z())) * 83492791u);
-        weld[v] = firstAtPos.try_emplace(k, v).first->second;
-    }
+    const std::vector<uint32_t> weld = mesh_topology::weldByPosition(m.verts);
     auto ancestor = [&](uint32_t v)
     {
         while (!front.active(v))
@@ -230,16 +220,7 @@ std::size_t coverageFailures(const ActiveFront& front, const Mesh& m, const Mat4
                              const Vec3& cameraPos)
 {
     const VertexForest& f = front.forest();
-    std::unordered_map<uint64_t, uint32_t> firstAtPos;
-    std::vector<uint32_t> weld(m.verts.size());
-    for (uint32_t v = 0; v < m.verts.size(); ++v)
-    {
-        const Vec3 p = m.verts[v].position();
-        const uint64_t k = (static_cast<uint64_t>(std::bit_cast<uint32_t>(p.x())) * 73856093u) ^
-                           (static_cast<uint64_t>(std::bit_cast<uint32_t>(p.y())) * 19349663u) ^
-                           (static_cast<uint64_t>(std::bit_cast<uint32_t>(p.z())) * 83492791u);
-        weld[v] = firstAtPos.try_emplace(k, v).first->second;
-    }
+    const std::vector<uint32_t> weld = mesh_topology::weldByPosition(m.verts);
     auto ancestor = [&](uint32_t v)
     {
         while (!front.active(v))
@@ -648,7 +629,7 @@ TEST_CASE("Tangent channel sees normal-map frame drift independently of the norm
 TEST_CASE("Forest deviation is monotone along parent ancestry; vl/vr probe", "[vdpm]")
 {
     const Mesh m = makeBumpyGrid(17);
-    const VertexForest f = buildVertexForest(m.verts, m.indices, collapsesOf(m));
+    const VertexForest f = buildVertexForest(m.verts, collapsesOf(m));
 
     int parentViolations = 0;
     int vlvrViolations = 0;
@@ -718,9 +699,8 @@ TEST_CASE("buildVertexForest: welds coincident duplicated vertices back into one
         dup.verts.push_back(shared.verts[idx]);
     }
 
-    const VertexForest sharedForest =
-        buildVertexForest(shared.verts, shared.indices, collapsesOf(shared));
-    const VertexForest dupForest = buildVertexForest(dup.verts, dup.indices, collapsesOf(dup));
+    const VertexForest sharedForest = buildVertexForest(shared.verts, collapsesOf(shared));
+    const VertexForest dupForest = buildVertexForest(dup.verts, collapsesOf(dup));
 
     CHECK(!sharedForest.splits.empty());
     CHECK(!dupForest.splits.empty());

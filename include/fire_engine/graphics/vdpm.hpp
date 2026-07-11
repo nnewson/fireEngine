@@ -78,14 +78,13 @@ struct VertexForest
 // Sentinel in VertexForest::removingSplit for a vertex never removed by the recorded stream.
 inline constexpr uint32_t kNoSplit = 0xFFFFFFFFu;
 
-// Build the vertex forest from the finest index buffer + the recorded collapse stream. Welds the
-// input to canonical (position-welded) topology, then replays the collapses over an evolving
-// adjacency view to recover each split's (vl, vr) apex dependencies. Each collapsing edge must have
-// exactly one live adjacent face (boundary -> vr = kInvalidVertex) or two (interior -> the two
-// opposite apexes); zero means the stream and the topology view diverged, and more than two is
-// non-manifold — both are rejected. Vulkan-free + deterministic (headless-tested).
+// Build the vertex forest from the recorded collapse stream. Each collapse already carries its
+// (vl, vr) apex dependencies, recorded by the simplifier on the true canonical topology it
+// coarsened, so this is a faithful transcription — no adjacency replay, no risk of diverging from
+// the simplifier's decisions. A collapse whose position-welded edge was non-manifold carries
+// kNoCollapseApex (the fixed-arity vsplit can't encode >2 apexes) and is skipped, leaving `removed`
+// a root. `vertices` supplies only the canonical vertex count. Vulkan-free + deterministic.
 [[nodiscard]] VertexForest buildVertexForest(std::span<const Vertex> vertices,
-                                             std::span<const uint32_t> indices,
                                              std::span<const MeshCollapse> collapses);
 
 // A selectively-refinable active front over the vertex forest. Holds the current

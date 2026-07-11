@@ -33,16 +33,17 @@ severity tier, so titles are the stable reference, not a global number.)
   signal. Guarded by the existing determinism/replay tests.)
 - ✅ **`QemRun::sequence()` `noexcept`+copy → `&&`-move** *(same branch)* — consuming rvalue accessor;
   `noexcept` is now honest (a vector move can't allocate).
-- **Forest replay after an unreplayable collapse → folded into the shared-topology util below.**
-  Root-caused: the "7 forest skips" are genuine **non-manifold welded edges** (position-welding fuses
-  coincident chart pieces into >2-face edges), which the vl/vr vertex-split encoding can't represent;
-  `buildVertexForest` re-derives that adjacency by an independent replay that then desyncs and cascades
-  (19 skips). *Truncate* rejected (5.6× coarser floor); *veto in the simplifier* rejected (the two
-  topology trackers diverge beyond the non-manifold edges, and it changes discrete/VIPM output). The
-  correct fix is to **record (vl, vr) per collapse in the simplifier** (ground truth) so the forest
-  doesn't re-derive — which *is* the shared-topology work below. Not urgent: the current "continue"
-  is empirically safe (ancestor chains terminate, the front is a valid crack-free cut, the repairs
-  mask any residual). Isolated as a `lod.md` known limit until then.
+- ✅ **Forest replay after an unreplayable collapse → fixed via the shared-topology util below**
+  *(branch `cr08-shared-topology`)*. Root-caused: the "7 forest skips" are genuine **non-manifold
+  welded edges** (position-welding fuses coincident chart pieces into >2-face edges), which the vl/vr
+  vertex-split encoding can't represent; the old `buildVertexForest` re-derived that adjacency by an
+  independent replay that then desynced and cascaded (19 skips). *Truncate* rejected (5.6× coarser
+  floor); *veto in the simplifier* rejected (the two topology trackers diverge beyond the non-manifold
+  edges, and it changes discrete/VIPM output). The fix landed: the simplifier now **records (vl, vr)
+  per collapse** on the true canonical topology it coarsens (ground truth), and `buildVertexForest`
+  transcribes that stream instead of re-deriving — faithful by construction. The few genuinely
+  non-manifold edges carry `kNoCollapseApex` and leave `removed` a root (always active), isolated with
+  no cascade and no coarsening loss (19 skips → 7 roots).
 - ✅ **Coverage repair precision (partial)** *(branch `cr-vdpm-correctness`)* — the area gate is now
   **viewport-relative** (a pixel-area constant → NDC via the passed viewport, so it doesn't drift with
   resolution), and near-plane-crossing faces (some corners behind the camera) are now **conservatively
@@ -58,12 +59,13 @@ severity tier, so titles are the stable reference, not a global number.)
 - ✅ **Cheap hygiene** *(same branch)* — `ActiveFront`'s `std::vector<bool>` → `uint8_t`; the
   `writeMapped` guard is now release-visible (clamps so it can't corrupt neighbouring GPU memory, and
   logs once instead of overflowing silently).
-- **Shared mesh-topology / wedge util (also resolves the forest-replay item)** — position weld, chart
-  id, wedge distance, nearest-wedge are duplicated across simplifier / VIPM / VDPM / tests, exactly
-  where the recent bugs clustered. Extract one utility, and **record (vl, vr) per collapse there** so
-  `buildVertexForest` consumes ground-truth adjacency instead of re-deriving it (faithful by
-  construction, isolates the 7 non-manifold edges with no cascade and no coarsening loss). Highest-
-  leverage refactor; de-risks all future LOD work.
+- ✅ **Shared mesh-topology / wedge util** *(branch `cr08-shared-topology`)* — position weld, wedge
+  distance, nearest-wedge, canonical-wedge grouping were duplicated across simplifier / VIPM / VDPM /
+  tests, exactly where the recent bugs clustered. Now one module `graphics/mesh_topology.{hpp,cpp}`
+  (`weldByPosition`, `wedgeDistance`, `nearestWedge`, `canonicalWedges`) that all four consume, so the
+  canonical-id contract can't drift between them. Step 2 recorded (vl, vr) per collapse in the
+  simplifier (see the forest-replay item above), so `buildVertexForest` transcribes ground-truth
+  adjacency instead of re-deriving it. De-risks all future LOD work.
 
 **(B) Renderer hygiene — independent of VDPM, follows A.**
 - **Device suitability doesn't validate all requested features/limits** — query one full
