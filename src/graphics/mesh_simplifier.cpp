@@ -249,6 +249,28 @@ struct Quadric
     return Vec3{1.0f - v - w, v, w};
 }
 
+// Angular deviation (radians) between attr[removed] and the barycentric interpolation of
+// attr[a],attr[b],attr[c] at removed's spot on the covering face, renormalised (matching how the
+// shader interpolates a per-vertex direction across a triangle). 0 when the field is locally
+// consistent (a flat region with equal directions); the fan angle when it swings. Zero-length
+// inputs — an unpopulated attribute, e.g. a mesh without tangents — read 0. Shared by the
+// shading-normal and tangent VDPM channels.
+[[nodiscard]] float angularInterpDeviation(const std::vector<Vec3>& attr, std::uint32_t removed,
+                                           std::uint32_t a, std::uint32_t b, std::uint32_t c,
+                                           const Vec3& bc) noexcept
+{
+    const Vec3 vi = (attr[a] * bc.x()) + (attr[b] * bc.y()) + (attr[c] * bc.z());
+    const float viLen = vi.magnitude();
+    const float remLen = attr[removed].magnitude();
+    if (viLen <= 1e-6f || remLen <= 1e-6f)
+    {
+        return 0.0f;
+    }
+    const float cosA =
+        std::clamp(Vec3::dotProduct(vi, attr[removed]) / (viLen * remLen), -1.0f, 1.0f);
+    return std::acos(cosA);
+}
+
 [[nodiscard]] float wedgeDistance(const Vertex& a, const Vertex& b) noexcept
 {
     const Vec2 uv0 = a.texCoord() - b.texCoord();
@@ -338,13 +360,20 @@ public:
         vertexTris_.resize(vertexCount);
         deviation_.assign(vertexCount, 0.0f);
         uvDeviation_.assign(vertexCount, 0.0f);
+        normalDeviation_.assign(vertexCount, 0.0f);
+        tangentDeviation_.assign(vertexCount, 0.0f);
         uv_.resize(vertexCount);
+        nrm_.resize(vertexCount);
+        tan_.resize(vertexCount);
         weld_.resize(vertexCount);
         canonicalWedges_.resize(vertexCount);
         for (std::uint32_t i = 0; i < vertexCount; ++i)
         {
             remap_[i] = i;
             uv_[i] = vertices[i].texCoord();
+            nrm_[i] = vertices[i].normal();
+            const Vec4 t = vertices[i].tangent();
+            tan_[i] = Vec3{t.x(), t.y(), t.z()};
         }
 
         // Weld coincident positions: build the collapse topology on the canonical (first) vertex at
@@ -699,6 +728,8 @@ private:
         // seams under-refine.
         float dev = 0.0f;
         float uvStep = 0.0f;
+        float normalStep = 0.0f;
+        float tangentStep = 0.0f;
         float nearestPlane = std::numeric_limits<float>::max();
         float nearestCoverTri = std::numeric_limits<float>::max();
         for (const std::uint32_t t : keptTris)
@@ -750,6 +781,16 @@ private:
             const float du = uv_[removed].s() - ui;
             const float dv = uv_[removed].t() - vi;
             uvStep = std::sqrt((du * du) + (dv * dv));
+
+            // Shading channels: the same covering face interpolates its three vertex normals — and
+            // tangents — to removed's spot; the angle to removed's own direction is the shading
+            // error the collapse introduces. A flat region with a consistent frame reads 0; a
+            // smooth-shaded curve whose normals/tangents fan reads the fan angle even where the
+            // geometry stays coplanar. The tangent frame drives normal-map sampling, so it is a
+            // distinct error source from the shading normal (and reads 0 on meshes without
+            // tangents).
+            normalStep = angularInterpDeviation(nrm_, removed, a, b, c, bc);
+            tangentStep = angularInterpDeviation(tan_, removed, a, b, c, bc);
         }
         if (nearestPlane != std::numeric_limits<float>::max())
         {
@@ -757,8 +798,14 @@ private:
         }
         deviation_[kept] = std::max(deviation_[kept], deviation_[removed]) + dev;
         uvDeviation_[kept] = std::max(uvDeviation_[kept], uvDeviation_[removed]) + uvStep;
+        normalDeviation_[kept] =
+            std::max(normalDeviation_[kept], normalDeviation_[removed]) + normalStep;
+        tangentDeviation_[kept] =
+            std::max(tangentDeviation_[kept], tangentDeviation_[removed]) + tangentStep;
         sequence_.back().deviationRadius = deviation_[kept];
         sequence_.back().uvDeviationRadius = uvDeviation_[kept];
+        sequence_.back().normalDeviationRadius = normalDeviation_[kept];
+        sequence_.back().tangentDeviationRadius = tangentDeviation_[kept];
 
         // Re-cost every edge from kept to its current neighbours.
         std::unordered_map<std::uint32_t, std::uint8_t> neighbours;
@@ -798,7 +845,9 @@ private:
 
     std::span<const Vertex> vertices_;
     std::vector<Vec3> pos_;
-    std::vector<Vec2> uv_;            // per original vertex, for the wedge-preserving emit
+    std::vector<Vec2> uv_;  // per original vertex, for the wedge-preserving emit
+    std::vector<Vec3> nrm_; // per original vertex normal, for the shading-deviation channel
+    std::vector<Vec3> tan_; // per original vertex tangent xyz, for the tangent-deviation channel
     std::vector<std::uint32_t> weld_; // original vertex -> canonical position vertex
     std::vector<std::array<std::uint32_t, 3>> origTris_; // original (pre-weld) corners, for UV emit
     std::vector<std::vector<std::uint32_t>> canonicalWedges_; // canonical -> its native wedges
@@ -807,9 +856,11 @@ private:
     std::vector<std::uint8_t> triAlive_;
     std::vector<std::uint32_t> remap_;
     std::vector<std::uint32_t> version_;
-    std::vector<double> weight_;     // accumulated face-plane weight per vertex (for RMS error)
-    std::vector<float> deviation_;   // cumulative geometric deviation radius per vertex (VDPM)
-    std::vector<float> uvDeviation_; // cumulative UV deviation radius per vertex (VDPM)
+    std::vector<double> weight_;         // accumulated face-plane weight per vertex (for RMS error)
+    std::vector<float> deviation_;       // cumulative geometric deviation radius per vertex (VDPM)
+    std::vector<float> uvDeviation_;     // cumulative UV deviation radius per vertex (VDPM)
+    std::vector<float> normalDeviation_; // cumulative shading-normal deviation (radians) per vertex
+    std::vector<float> tangentDeviation_; // cumulative tangent deviation (radians) per vertex
     std::vector<std::vector<std::uint32_t>> vertexTris_;
     std::priority_queue<Edge, std::vector<Edge>, EdgeGreater> queue_;
     std::vector<MeshCollapse> sequence_;

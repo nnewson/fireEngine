@@ -454,11 +454,11 @@ void Object::writeForwardUniforms(const FrameInfo& frame, const Mat4& world,
         // points the draw at the freshly-uploaded index set.
         if (frame.lodMode == LodMode::ViewDependent && frame.lodEnabled && binding.vdpmFront)
         {
-            binding.vdpmFront->refineForView(binding.geometry->vertices(), world,
-                                             frame.cameraPosition, std::abs(frame.proj[1, 1]),
-                                             static_cast<float>(frame.viewportHeight),
-                                             frame.lodPixelErrorBudget, kVdpmSilhouetteBoost,
-                                             kVdpmBackfaceThreshold, kVdpmUvScale);
+            binding.vdpmFront->refineForView(
+                binding.geometry->vertices(), world, frame.cameraPosition,
+                std::abs(frame.proj[1, 1]), static_cast<float>(frame.viewportHeight),
+                frame.lodPixelErrorBudget, kVdpmSilhouetteBoost, kVdpmBackfaceThreshold,
+                kVdpmUvScale, kVdpmNormalScale, kVdpmTangentScale);
             const std::vector<uint32_t> idx = binding.vdpmFront->emitActiveIndices(
                 binding.geometry->vertices(), binding.geometry->indices());
             binding.vdpmIndexCount = static_cast<uint32_t>(idx.size());

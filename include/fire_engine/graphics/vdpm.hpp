@@ -41,7 +41,12 @@ namespace fire_engine
 // tree, which refineForView projects to screen pixels. `uvError` is the parallel cumulative UV
 // deviation radius (MeshCollapse::uvDeviationRadius) — an independent texture-stretch channel
 // refineForView projects on its own, so a texture-costly-but-geometrically-flat region still
-// refines.
+// refines. `normalError` is the parallel cumulative shading-normal deviation
+// (MeshCollapse::normalDeviationRadius, radians) — a third channel for lighting error a
+// smooth-shaded curve carries even where its vertices stay near-coplanar (small geometric error).
+// `tangentError` is the fourth channel (MeshCollapse::tangentDeviationRadius, radians): the tangent
+// frame drives normal-map sampling, so a collapse that swings it tilts the mapped normals
+// independently of the shading normal (0 on meshes without tangents).
 struct VertexSplit
 {
     uint32_t parent{0};
@@ -50,6 +55,8 @@ struct VertexSplit
     uint32_t vr{0};
     float error{0.0f};
     float uvError{0.0f};
+    float normalError{0.0f};
+    float tangentError{0.0f};
 };
 
 // Sentinel for a missing neighbour (boundary edge) in VertexSplit::vl / vr.
@@ -114,13 +121,16 @@ public:
     // `silhouetteBoost` (0 disables it), so contours stay dense. Clearly back-facing reps (signed
     // facing < -`backfaceThreshold`) skip *discretionary* refinement — they are back-face-culled,
     // so detail there is wasted — but can still be pulled in as a visible split's dependency. A
-    // split also refines if its UV-deviation channel (`uvError · uvScale`, projected the same way)
-    // exceeds the budget, so texture-costly-but-flat regions stay dense. `world` places the mesh;
-    // `projScaleY = proj[1][1]`. The per-region result is the view-dependent LOD. Vulkan-free +
+    // split also refines if its UV-deviation channel (`uvError · uvScale`, projected the same way),
+    // its shading channel (`normalError · normalScale`, likewise), or its tangent channel
+    // (`tangentError · tangentScale`) exceeds the budget, so texture-, shading-, and
+    // normal-map-frame-costly-but-flat regions all stay dense. `world` places the mesh; `projScaleY
+    // = proj[1][1]`. The per-region result is the view-dependent LOD. Vulkan-free +
     // headless-testable.
     void refineForView(std::span<const Vertex> vertices, const Mat4& world, const Vec3& cameraPos,
                        float projScaleY, float viewportHeight, float pixelBudget,
-                       float silhouetteBoost, float backfaceThreshold, float uvScale);
+                       float silhouetteBoost, float backfaceThreshold, float uvScale,
+                       float normalScale, float tangentScale);
 
     [[nodiscard]] bool active(uint32_t canonicalVertex) const
     {

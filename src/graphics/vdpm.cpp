@@ -196,8 +196,9 @@ VertexForest buildVertexForest(std::span<const Vertex> vertices, std::span<const
         }
 
         const auto splitIndex = static_cast<std::uint32_t>(forest.splits.size());
-        forest.splits.push_back(
-            VertexSplit{kept, removed, vl, vr, c.deviationRadius, c.uvDeviationRadius});
+        forest.splits.push_back(VertexSplit{kept, removed, vl, vr, c.deviationRadius,
+                                            c.uvDeviationRadius, c.normalDeviationRadius,
+                                            c.tangentDeviationRadius});
         forest.removingSplit[removed] = splitIndex;
 
         // Apply the collapse: retire the edge's faces, then remap `removed` -> `kept` in every
@@ -376,7 +377,7 @@ bool ActiveFront::forceRefine(std::uint32_t splitIndex)
 void ActiveFront::refineForView(std::span<const Vertex> vertices, const Mat4& world,
                                 const Vec3& cameraPos, float projScaleY, float viewportHeight,
                                 float pixelBudget, float silhouetteBoost, float backfaceThreshold,
-                                float uvScale)
+                                float uvScale, float normalScale, float tangentScale)
 {
     coarsenAll();
     const float halfViewport = viewportHeight * 0.5f;
@@ -421,11 +422,18 @@ void ActiveFront::refineForView(std::span<const Vertex> vertices, const Mat4& wo
         // dense.
         const float boost = 1.0f + silhouetteBoost * (1.0f - std::abs(signedFacing));
 
-        // Two independent channels, each projected e·projScaleY·(vh/2)/d pixels: geometry
-        // (silhouette-boosted) and UV texture stretch. Either over budget refines the split.
+        // Four independent channels, each projected e·projScaleY·(vh/2)/d pixels: geometry
+        // (silhouette-boosted), UV texture stretch, shading-normal deviation, and tangent-frame
+        // deviation (the normal/tangent pair also silhouette-boosted — a lighting error at a
+        // grazing contour is the most visible). Any one over budget refines the split.
         const float geomScreenError = s.error * boost * projScaleY * halfViewport / distance;
         const float uvScreenError = s.uvError * uvScale * projScaleY * halfViewport / distance;
-        if (geomScreenError > pixelBudget || uvScreenError > pixelBudget)
+        const float normalScreenError =
+            s.normalError * normalScale * boost * projScaleY * halfViewport / distance;
+        const float tangentScreenError =
+            s.tangentError * tangentScale * boost * projScaleY * halfViewport / distance;
+        if (geomScreenError > pixelBudget || uvScreenError > pixelBudget ||
+            normalScreenError > pixelBudget || tangentScreenError > pixelBudget)
         {
             forceRefine(i);
         }

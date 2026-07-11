@@ -131,6 +131,37 @@ Mesh makeFlatNonlinearUvGrid(int n)
     return m;
 }
 
+// A flat grid whose per-vertex normals fan smoothly across it, with geometry left coplanar and UV
+// left affine. Only the shading channel can see it: the geometry (point-to-plane) and UV
+// (affine-exact) channels both read ~0. Models a smooth-shaded curve authored flat — exactly the
+// lighting error a coarse collapse flattens without moving a vertex off-plane. (Vertex normals
+// don't steer the simplifier — the R⁵ quadric is position+UV and the flip veto uses face normals —
+// so the collapse stream matches makeGrid; only the measured deviation differs.)
+Mesh makeFlatFannedNormalGrid(int n)
+{
+    Mesh m = makeGrid(n);
+    for (Vertex& v : m.verts)
+    {
+        const float ang = 0.08f * v.position().x(); // 0 .. ~1.3 rad across the grid
+        v.normal(Vec3{std::sin(ang), 0.0f, std::cos(ang)});
+    }
+    return m;
+}
+
+// A flat grid with a constant normal but a tangent that fans across it (w = +1 handedness). Only
+// the tangent channel sees it: geometry is coplanar, UV affine, and the shading normal constant.
+// The normal-map-frame-drift analogue of makeFlatFannedNormalGrid.
+Mesh makeFlatFannedTangentGrid(int n)
+{
+    Mesh m = makeGrid(n);
+    for (Vertex& v : m.verts)
+    {
+        const float ang = 0.08f * v.position().x(); // tangent swings in the xy-plane
+        v.tangent(Vec4{std::cos(ang), std::sin(ang), 0.0f, 1.0f});
+    }
+    return m;
+}
+
 std::vector<MeshCollapse> collapsesOf(const Mesh& m)
 {
     const QuadricSimplifier simp;
@@ -278,11 +309,11 @@ TEST_CASE("ActiveFront: refineForView refines nearer views more than distant one
     const float noSilhouette = 0.0f;
 
     front.refineForView(m.verts, world, Vec3{8.0f, 8.0f, 6.0f}, projScaleY, viewportHeight, budget,
-                        noSilhouette, 2.0f, 0.0f);
+                        noSilhouette, 2.0f, 0.0f, 0.0f, 0.0f);
     const std::size_t nearCount = front.emitActiveCanonical().size();
 
     front.refineForView(m.verts, world, Vec3{8.0f, 8.0f, 400.0f}, projScaleY, viewportHeight,
-                        budget, noSilhouette, 2.0f, 0.0f);
+                        budget, noSilhouette, 2.0f, 0.0f, 0.0f, 0.0f);
     const std::size_t farCount = front.emitActiveCanonical().size();
 
     CHECK(nearCount > farCount); // closer view resolves more triangles
@@ -302,10 +333,10 @@ TEST_CASE("refineForView: back-face suppression coarsens the hidden hemisphere",
 
     // Threshold 2.0 never trips (facing >= -1); 0.5 suppresses the clearly back-facing hemisphere.
     front.refineForView(m.verts, world, cam, projScaleY, viewportHeight, budget, noSilhouette, 2.0f,
-                        0.0f);
+                        0.0f, 0.0f, 0.0f);
     const std::size_t off = front.emitActiveCanonical().size();
     front.refineForView(m.verts, world, cam, projScaleY, viewportHeight, budget, noSilhouette, 0.5f,
-                        0.0f);
+                        0.0f, 0.0f, 0.0f);
     const std::size_t on = front.emitActiveCanonical().size();
     CHECK(on < off); // the hidden hemisphere's discretionary detail is dropped
     CHECK(on >= 2);
@@ -313,10 +344,10 @@ TEST_CASE("refineForView: back-face suppression coarsens the hidden hemisphere",
     // Suppression must not break the distance criterion: a near view still resolves more than a
     // far.
     front.refineForView(m.verts, world, Vec3{0.0f, 0.0f, 2.5f}, projScaleY, viewportHeight, budget,
-                        noSilhouette, 0.5f, 0.0f);
+                        noSilhouette, 0.5f, 0.0f, 0.0f, 0.0f);
     const std::size_t nearCount = front.emitActiveCanonical().size();
     front.refineForView(m.verts, world, Vec3{0.0f, 0.0f, 60.0f}, projScaleY, viewportHeight, budget,
-                        noSilhouette, 0.5f, 0.0f);
+                        noSilhouette, 0.5f, 0.0f, 0.0f, 0.0f);
     const std::size_t farCount = front.emitActiveCanonical().size();
     CHECK(nearCount > farCount);
 }
@@ -367,6 +398,63 @@ TEST_CASE("UV deviation channel sees texture stretch geometry cannot", "[vdpm]")
     }
     CHECK(skewGeom < 1e-3f);
     CHECK(skewUv > 0.01f);
+}
+
+TEST_CASE("Shading-normal channel sees lighting error geometry and UV cannot", "[vdpm]")
+{
+    // Flat grid, affine UV, constant normals: all three channels stay ~0.
+    float flatNormal = 0.0f;
+    for (const MeshCollapse& c : collapsesOf(makeGrid(17)))
+    {
+        flatNormal = std::max(flatNormal, c.normalDeviationRadius);
+    }
+    CHECK(flatNormal < 1e-3f);
+
+    // Flat grid, affine UV, but the normals fan across it: geometry (coplanar) and UV (affine) are
+    // both blind, yet the shading channel accumulates the fan angle — the information neither other
+    // channel carries.
+    float fanNormal = 0.0f;
+    float fanGeom = 0.0f;
+    float fanUv = 0.0f;
+    for (const MeshCollapse& c : collapsesOf(makeFlatFannedNormalGrid(17)))
+    {
+        fanNormal = std::max(fanNormal, c.normalDeviationRadius);
+        fanGeom = std::max(fanGeom, c.deviationRadius);
+        fanUv = std::max(fanUv, c.uvDeviationRadius);
+    }
+    CHECK(fanGeom < 1e-3f);
+    CHECK(fanUv < 1e-3f);
+    CHECK(fanNormal > 0.01f);
+}
+
+TEST_CASE("Tangent channel sees normal-map frame drift independently of the normal", "[vdpm]")
+{
+    // makeGrid has no tangents (Vec4{}) — the zero-length guard must read the tangent channel as 0,
+    // so a mesh without tangents costs nothing.
+    float noTangent = 0.0f;
+    for (const MeshCollapse& c : collapsesOf(makeGrid(17)))
+    {
+        noTangent = std::max(noTangent, c.tangentDeviationRadius);
+    }
+    CHECK(noTangent < 1e-3f);
+
+    // Flat grid, affine UV, constant normal, but a fanning tangent: geometry, UV, and the shading
+    // normal are all blind; only the tangent channel accumulates the frame drift.
+    float fanTangent = 0.0f;
+    float fanNormal = 0.0f;
+    float fanGeom = 0.0f;
+    float fanUv = 0.0f;
+    for (const MeshCollapse& c : collapsesOf(makeFlatFannedTangentGrid(17)))
+    {
+        fanTangent = std::max(fanTangent, c.tangentDeviationRadius);
+        fanNormal = std::max(fanNormal, c.normalDeviationRadius);
+        fanGeom = std::max(fanGeom, c.deviationRadius);
+        fanUv = std::max(fanUv, c.uvDeviationRadius);
+    }
+    CHECK(fanGeom < 1e-3f);
+    CHECK(fanUv < 1e-3f);
+    CHECK(fanNormal < 1e-3f);
+    CHECK(fanTangent > 0.01f);
 }
 
 TEST_CASE("Forest deviation is monotone along parent ancestry; vl/vr probe", "[vdpm]")

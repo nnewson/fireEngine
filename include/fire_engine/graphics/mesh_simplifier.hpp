@@ -31,6 +31,19 @@ struct MeshCollapse
     // regions whose parameterisation stretches even where the geometry is flat (the geometric
     // radius alone can't see that). Uses the canonical/representative UV — see the collapse() note.
     float uvDeviationRadius{0.0f};
+    // Cumulative shading-normal deviation, in radians: the angle between the removed vertex's
+    // normal and the normal the covering face interpolates to at its spot, accumulated up the
+    // collapse tree the same way. Catches shading error the geometry and UV channels miss — a
+    // smooth-shaded curved region whose vertices sit near-coplanar (small geometric δ) but whose
+    // normals fan, so a coarse collapse there flattens the lighting. Projected on its own channel
+    // in VDPM's refineForView.
+    float normalDeviationRadius{0.0f};
+    // Cumulative tangent deviation, in radians: the same accumulation for the tangent direction
+    // (the tangent Vec4's xyz). A tangent-space normal map is sampled in the interpolated tangent
+    // frame, so a coarse collapse that swings the tangent tilts the mapped normals even where the
+    // vertex normal and geometry barely move — a distinct error source from the shading-normal
+    // channel. Its own VDPM channel with its own scale.
+    float tangentDeviationRadius{0.0f};
 };
 
 // Result of a simplification: an index buffer into the ORIGINAL vertex array (no vertex data

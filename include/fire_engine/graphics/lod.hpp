@@ -62,6 +62,20 @@ inline constexpr float kVdpmBackfaceThreshold = 0.5f;
 // separate from the simplifier's kUvWeightFactor, which only orders collapses.
 inline constexpr float kVdpmUvScale = 1.0f;
 
+// VDPM shading channel scale: turns a collapse's cumulative shading-normal deviation (radians) into
+// pixel-equivalent screen error against the same pixel budget, so a smooth-shaded curve that stays
+// near-coplanar (invisible to the geometry channel) but whose normals fan still refines under
+// magnification. The primary dial for shading fidelity vs triangle count; kept separate from the
+// simplifier's collapse ordering. Radians are perceptually potent, so this rides below the UV/geom
+// unit scale — tune it up if lighting still flattens at close range, down if the mesh over-refines.
+inline constexpr float kVdpmNormalScale = 0.5f;
+
+// VDPM tangent channel scale: as kVdpmNormalScale, but for the tangent-frame deviation (radians)
+// that steers tangent-space normal-map sampling. Separate from the shading-normal dial so a
+// normal-mapped asset's frame drift can be tuned independently of its interpolated-normal drift;
+// reads 0 on meshes without tangents, so it costs nothing there.
+inline constexpr float kVdpmTangentScale = 0.5f;
+
 // Pick the coarsest LOD whose projected geometric error fits the pixel budget. `projScaleY` is the
 // projection matrix's [1][1] term (= 1/tan(fovY/2)); a world deviation `e` at view distance `d`
 // projects to `e·projScaleY·viewportHeight/(2d)` pixels. Returns 0 (the full mesh) when no coarser
