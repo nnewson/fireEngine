@@ -175,7 +175,8 @@ std::vector<MeshCollapse> collapsesOf(const Mesh& m)
 // foldover the rasteriser back-face-culls (a hole to the background). Replicates activeAncestor via
 // the front's public forest()/active(), so it needs no internals. A selective front is a non-prefix
 // cut, so the simplifier's linear wouldFlip() does not cover it; the front's own repair pass must.
-std::size_t foldoverCount(const ActiveFront& front, const Mesh& m)
+std::size_t foldoverCount(const ActiveFront& front, const Mesh& m,
+                          const Mat4& world = Mat4::identity())
 {
     const VertexForest& f = front.forest();
     std::unordered_map<uint64_t, uint32_t> firstAtPos;
@@ -196,6 +197,13 @@ std::size_t foldoverCount(const ActiveFront& front, const Mesh& m)
         }
         return v;
     };
+    // World space — matches what the rasteriser culls on, and what repairFoldovers now tests.
+    auto wp = [&](uint32_t v)
+    {
+        const Vec3 p = m.verts[v].position();
+        const Vec4 w = world * Vec4{p.x(), p.y(), p.z(), 1.0f};
+        return Vec3{w.x(), w.y(), w.z()};
+    };
     std::size_t folds = 0;
     for (std::size_t i = 0; i + 2 < m.indices.size(); i += 3)
     {
@@ -205,10 +213,8 @@ std::size_t foldoverCount(const ActiveFront& front, const Mesh& m)
         {
             continue; // legitimately collapsed away
         }
-        const Vec3 og = Vec3::crossProduct(m.verts[o1].position() - m.verts[o0].position(),
-                                           m.verts[o2].position() - m.verts[o0].position());
-        const Vec3 rg = Vec3::crossProduct(m.verts[a1].position() - m.verts[a0].position(),
-                                           m.verts[a2].position() - m.verts[a0].position());
+        const Vec3 og = Vec3::crossProduct(wp(o1) - wp(o0), wp(o2) - wp(o0));
+        const Vec3 rg = Vec3::crossProduct(wp(a1) - wp(a0), wp(a2) - wp(a0));
         if (Vec3::dotProduct(og, rg) < 0.0f)
         {
             ++folds;
@@ -494,16 +500,20 @@ TEST_CASE("refineForView repairs foldovers: no emitted triangle winds against th
     // wouldFlip only certifies the prefix). A curved sphere and a bumpy grid, refined from a front
     // camera at a spread of budgets, exercise mixed near/far refinement — the foldover-prone case.
     // refineForView's repair pass must leave ZERO foldovers, or the rasteriser back-face-culls the
-    // flipped triangles and punches holes to the background.
-    const Mat4 world = Mat4::identity();
-    for (const Mesh& m : {makeUvSphere(24, 32), makeBumpyGrid(17)})
+    // flipped triangles and punches holes to the background. Run under identity AND a NON-uniform
+    // scale — facing (normal matrix) and foldover winding (world-space) must both be correct there,
+    // and winding is checked in the same world space the rasteriser culls on.
+    for (const Mat4& world : {Mat4::identity(), Mat4::scale(Vec3{2.0f, 0.5f, 1.5f})})
     {
-        ActiveFront front = ActiveFront::build(m.verts, m.indices, collapsesOf(m));
-        for (const float budget : {0.5f, 1.0f, 2.0f, 4.0f, 8.0f})
+        for (const Mesh& m : {makeUvSphere(24, 32), makeBumpyGrid(17)})
         {
-            front.refineForView(m.verts, world, Vec3{0.0f, 0.0f, 4.0f}, 1.7f, 1000.0f, budget, 2.0f,
-                                0.5f, 1.0f, 0.5f, 0.5f);
-            CHECK(foldoverCount(front, m) == 0);
+            ActiveFront front = ActiveFront::build(m.verts, m.indices, collapsesOf(m));
+            for (const float budget : {0.5f, 1.0f, 2.0f, 4.0f, 8.0f})
+            {
+                front.refineForView(m.verts, world, Vec3{0.0f, 0.0f, 4.0f}, 1.7f, 1000.0f, budget,
+                                    2.0f, 0.5f, 1.0f, 0.5f, 0.5f);
+                CHECK(foldoverCount(front, m, world) == 0);
+            }
         }
     }
 }
@@ -525,7 +535,7 @@ TEST_CASE("repairCoverage: every front-facing triangle stays covered by its repl
     {
         front.refineForView(m.verts, world, cam, std::abs(projScaleY), 1000.0f, budget, 2.0f, 0.5f,
                             1.0f, 0.5f, 0.5f);
-        front.repairCoverage(m.verts, world, cam, viewProj);
+        front.repairCoverage(m.verts, world, cam, viewProj, 1000.0f, 1000.0f);
         CHECK(coverageFailures(front, m, viewProj, cam) == 0);
     }
 }

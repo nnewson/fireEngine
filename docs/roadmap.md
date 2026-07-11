@@ -43,15 +43,21 @@ severity tier, so titles are the stable reference, not a global number.)
   doesn't re-derive — which *is* the shared-topology work below. Not urgent: the current "continue"
   is empirically safe (ancestor chains terminate, the front is a valid crack-free cut, the repairs
   mask any residual). Isolated as a `lod.md` known limit until then.
-- **Coverage repair precision** — centroid-only containment can miss an edge/corner
-  recession; `kMinNdcArea` is a fixed NDC constant so its pixel meaning drifts with resolution; the
-  `w ≤ 0` early-out skips near-plane-crossing triangles. Projected-triangle test + viewport-relative
-  area + near-plane clip. (Supersedes the `lod.md` coverage-precision note.)
-- **Non-uniform-scale transforms** — facing uses `world·vec4(n,0)` not the
-  inverse-transpose; foldover winding is tested in object space, not the projected space that decides
-  raster cull. Fix, or enforce + document a uniform-scale-only invariant.
-- **Cheap hygiene:** `ActiveFront`'s `std::vector<bool>` → `uint8_t`; a release-visible `writeMapped`
-  guard.
+- ✅ **Coverage repair precision (partial)** *(branch `cr-vdpm-correctness`)* — the area gate is now
+  **viewport-relative** (a pixel-area constant → NDC via the passed viewport, so it doesn't drift with
+  resolution), and near-plane-crossing faces (some corners behind the camera) are now **conservatively
+  refined** instead of silently skipped. The **multi-sample** corner-coverage idea was deliberately
+  NOT taken: measured, sampling a fine triangle's corners against its OWN replacement flags ~5800
+  mostly-false positives (the neighbour's replacement covers them), so it would massively over-refine;
+  a correct version needs true point-location against the active mesh — deferred, and the centroid +
+  degenerate handling already closes the visible holes. (Supersedes the `lod.md` coverage-precision
+  note for the two parts done.)
+- ✅ **Non-uniform-scale transforms** *(same branch)* — facing now uses the inverse-transpose normal
+  matrix, and foldover winding is compared in **world space** (what the rasteriser culls on). Guarded
+  by a non-uniform-scale case in the foldover test.
+- ✅ **Cheap hygiene** *(same branch)* — `ActiveFront`'s `std::vector<bool>` → `uint8_t`; the
+  `writeMapped` guard is now release-visible (clamps so it can't corrupt neighbouring GPU memory, and
+  logs once instead of overflowing silently).
 - **Shared mesh-topology / wedge util (also resolves the forest-replay item)** — position weld, chart
   id, wedge distance, nearest-wedge are duplicated across simplifier / VIPM / VDPM / tests, exactly
   where the recent bugs clustered. Extract one utility, and **record (vl, vr) per collapse there** so

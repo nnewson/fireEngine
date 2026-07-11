@@ -464,8 +464,9 @@ void Object::writeForwardUniforms(const FrameInfo& frame, const Mat4& world,
             // deviation/foldover criteria can't see). Uses the JITTER-FREE currentViewProj, not the
             // TAA-jittered frame.proj — the sub-pixel jitter would shift the coverage test ±0.5px
             // each frame and thrash the front (a borderline hole flickering with no camera motion).
-            binding.vdpmFront->repairCoverage(binding.geometry->vertices(), world,
-                                              frame.cameraPosition, frame.currentViewProj);
+            binding.vdpmFront->repairCoverage(
+                binding.geometry->vertices(), world, frame.cameraPosition, frame.currentViewProj,
+                static_cast<float>(frame.viewportWidth), static_cast<float>(frame.viewportHeight));
             const std::vector<uint32_t> idx = binding.vdpmFront->emitActiveIndices(
                 binding.geometry->vertices(), binding.geometry->indices());
             binding.vdpmIndexCount = static_cast<uint32_t>(idx.size());
