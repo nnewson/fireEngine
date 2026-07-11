@@ -55,8 +55,8 @@ void Geometry::load(Resources& resources)
             // It is bound only on the Continuous draw path; the discrete draw ignores it.
             const std::vector<MorphVertex> morph =
                 buildVipmMorphData(vertices_, progressive.collapses, progressive.lods);
-            morphBuffer_ =
-                resources.createStorageBuffer(morph.size() * sizeof(MorphVertex), morph.data());
+            morphBuffer_ = resources.createStaticStorageBuffer(morph.size() * sizeof(MorphVertex),
+                                                               morph.data());
 
             // VDPM (View-dependent LOD): keep the collapse stream so an ActiveFront can be built
             // per instance and refined per frame into a dynamic index buffer.

@@ -66,24 +66,24 @@ Descriptors::Descriptors(const Device& device, const Pipeline& pipeline, const R
 {
 }
 
-Descriptors::DescriptorPoolEntry&
+vk::DescriptorPool
 Descriptors::createDescriptorPool(std::span<const vk::DescriptorPoolSize> poolSizes,
                                   uint32_t maxSets)
 {
+    // No eFreeDescriptorSet: sets are never freed individually — the pool is destroyed as a unit at
+    // shutdown, which reclaims them. Requesting per-set freeing we never use only weakens the
+    // allocator's assumptions.
     vk::DescriptorPoolCreateInfo ci{
-        .flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet,
         .maxSets = maxSets,
         .poolSizeCount = static_cast<uint32_t>(poolSizes.size()),
         .pPoolSizes = poolSizes.data(),
     };
-    auto& poolEntry = descriptorPools_.emplace_back();
-    poolEntry.pool = vk::raii::DescriptorPool(device_->device(), ci);
-    return poolEntry;
+    return *descriptorPools_.emplace_back(device_->device(), ci);
 }
 
-std::vector<vk::raii::DescriptorSet>
-Descriptors::allocateDescriptorSets(vk::DescriptorPool pool, vk::DescriptorSetLayout layout,
-                                    uint32_t count) const
+std::vector<vk::DescriptorSet> Descriptors::allocateDescriptorSets(vk::DescriptorPool pool,
+                                                                   vk::DescriptorSetLayout layout,
+                                                                   uint32_t count) const
 {
     std::vector<vk::DescriptorSetLayout> layouts(count, layout);
     vk::DescriptorSetAllocateInfo ai{
@@ -91,7 +91,17 @@ Descriptors::allocateDescriptorSets(vk::DescriptorPool pool, vk::DescriptorSetLa
         .descriptorSetCount = static_cast<uint32_t>(layouts.size()),
         .pSetLayouts = layouts.data(),
     };
-    return device_->device().allocateDescriptorSets(ai);
+    // Allocate, then release each RAII wrapper's ownership: the sets belong to the pool (freed on
+    // pool destruction), so nothing must try to free them individually — the pool has no
+    // eFreeDescriptorSet, which makes an individual free illegal anyway.
+    std::vector<vk::raii::DescriptorSet> owned = device_->device().allocateDescriptorSets(ai);
+    std::vector<vk::DescriptorSet> handles;
+    handles.reserve(owned.size());
+    for (vk::raii::DescriptorSet& s : owned)
+    {
+        handles.push_back(s.release());
+    }
+    return handles;
 }
 
 DescriptorSetHandle Descriptors::registerDescriptorSet(vk::DescriptorSet set)
@@ -101,32 +111,21 @@ DescriptorSetHandle Descriptors::registerDescriptorSet(vk::DescriptorSet set)
     return DescriptorSetHandle{dsHandle};
 }
 
-void Descriptors::retainDescriptorSets(DescriptorPoolEntry& poolEntry,
-                                       std::vector<vk::raii::DescriptorSet>& sets)
-{
-    for (auto& s : sets)
-    {
-        poolEntry.sets.push_back(std::move(s));
-    }
-}
-
 std::array<DescriptorSetHandle, kMaxFramesInFlight>
-Descriptors::allocateFrameSets(DescriptorPoolEntry& poolEntry, vk::DescriptorSetLayout layout,
+Descriptors::allocateFrameSets(vk::DescriptorPool pool, vk::DescriptorSetLayout layout,
                                const FrameWriter& writeFrame)
 {
-    auto sets = allocateDescriptorSets(*poolEntry.pool, layout, kMaxFramesInFlight);
+    auto sets = allocateDescriptorSets(pool, layout, kMaxFramesInFlight);
 
     std::array<DescriptorSetHandle, kMaxFramesInFlight> result{};
     for (int i = 0; i < kMaxFramesInFlight; ++i)
     {
         if (writeFrame)
         {
-            writeFrame(*sets[i], i);
+            writeFrame(sets[i], i);
         }
-        result[i] = registerDescriptorSet(*sets[i]);
+        result[i] = registerDescriptorSet(sets[i]);
     }
-
-    retainDescriptorSets(poolEntry, sets);
     return result;
 }
 
@@ -134,8 +133,8 @@ std::array<DescriptorSetHandle, kMaxFramesInFlight>
 Descriptors::buildFrameSets(std::span<const vk::DescriptorPoolSize> poolSizes,
                             vk::DescriptorSetLayout layout, const FrameWriter& writeFrame)
 {
-    auto& poolEntry = createDescriptorPool(poolSizes, kMaxFramesInFlight);
-    return allocateFrameSets(poolEntry, layout, writeFrame);
+    return allocateFrameSets(createDescriptorPool(poolSizes, kMaxFramesInFlight), layout,
+                             writeFrame);
 }
 
 void pushForwardObjectDescriptors(vk::CommandBuffer cmd, const Resources& resources,
@@ -477,13 +476,13 @@ DescriptorSetHandle Descriptors::createImageViewDescriptor(vk::DescriptorSetLayo
     std::array<vk::DescriptorPoolSize, 1> poolSizes = {{
         {vk::DescriptorType::eCombinedImageSampler, 1},
     }};
-    auto& poolEntry = createDescriptorPool(poolSizes, 1);
-    auto sets = allocateDescriptorSets(*poolEntry.pool, layout, 1);
+    vk::DescriptorPool pool = createDescriptorPool(poolSizes, 1);
+    auto sets = allocateDescriptorSets(pool, layout, 1);
 
     vk::DescriptorImageInfo imgInfo =
         makeDescriptorImageInfo(sampler, view, vk::ImageLayout::eShaderReadOnlyOptimal);
     vk::WriteDescriptorSet write{
-        .dstSet = *sets[0],
+        .dstSet = sets[0],
         .dstBinding = 0,
         .descriptorCount = 1,
         .descriptorType = vk::DescriptorType::eCombinedImageSampler,
@@ -491,9 +490,7 @@ DescriptorSetHandle Descriptors::createImageViewDescriptor(vk::DescriptorSetLayo
     };
     device_->device().updateDescriptorSets(write, {});
 
-    auto handle = registerDescriptorSet(*sets[0]);
-    retainDescriptorSets(poolEntry, sets);
-    return handle;
+    return registerDescriptorSet(sets[0]);
 }
 
 std::array<DescriptorSetHandle, kMaxFramesInFlight>

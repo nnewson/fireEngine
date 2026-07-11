@@ -118,12 +118,6 @@ public:
     [[nodiscard]] vk::DescriptorSet vulkanDescriptorSet(DescriptorSetHandle handle) const noexcept;
 
 private:
-    struct DescriptorPoolEntry
-    {
-        vk::raii::DescriptorPool pool{nullptr};
-        std::vector<vk::raii::DescriptorSet> sets;
-    };
-
     [[nodiscard]] static vk::DescriptorBufferInfo makeDescriptorBufferInfo(vk::Buffer buffer,
                                                                            vk::DeviceSize range);
     [[nodiscard]] static vk::DescriptorImageInfo
@@ -136,9 +130,13 @@ private:
     void writeGlobalBindings(vk::DescriptorSet set, const GlobalDescriptorRequest& req,
                              int frame) const;
 
-    DescriptorPoolEntry& createDescriptorPool(std::span<const vk::DescriptorPoolSize> poolSizes,
-                                              uint32_t maxSets);
-    [[nodiscard]] std::vector<vk::raii::DescriptorSet>
+    // Creates a pool held for the whole `Descriptors` lifetime and returns its handle. No
+    // eFreeDescriptorSet: every set allocated from it lives as long as the pool and is reclaimed
+    // when the pool is destroyed (renderer shutdown), never freed individually — so the sets are
+    // stored as plain handles (owned by the pool), not per-set RAII.
+    vk::DescriptorPool createDescriptorPool(std::span<const vk::DescriptorPoolSize> poolSizes,
+                                            uint32_t maxSets);
+    [[nodiscard]] std::vector<vk::DescriptorSet>
     allocateDescriptorSets(vk::DescriptorPool pool, vk::DescriptorSetLayout layout,
                            uint32_t count) const;
 
@@ -148,11 +146,11 @@ private:
     using FrameWriter = std::function<void(vk::DescriptorSet set, int frame)>;
 
     // Shared create envelope: allocate kMaxFramesInFlight sets of `layout` from
-    // `poolEntry`, run `writeFrame` on each (skipped when empty — callers that
-    // populate via a separate update*() helper pass {}), register and retain
-    // them, and return the per-frame handles.
+    // `pool`, run `writeFrame` on each (skipped when empty — callers that populate
+    // via a separate update*() helper pass {}), register them, and return the
+    // per-frame handles.
     std::array<DescriptorSetHandle, kMaxFramesInFlight>
-    allocateFrameSets(DescriptorPoolEntry& poolEntry, vk::DescriptorSetLayout layout,
+    allocateFrameSets(vk::DescriptorPool pool, vk::DescriptorSetLayout layout,
                       const FrameWriter& writeFrame);
 
     // allocateFrameSets plus a fresh pool sized by `poolSizes` (maxSets =
@@ -161,13 +159,13 @@ private:
     buildFrameSets(std::span<const vk::DescriptorPoolSize> poolSizes,
                    vk::DescriptorSetLayout layout, const FrameWriter& writeFrame);
     [[nodiscard]] DescriptorSetHandle registerDescriptorSet(vk::DescriptorSet set);
-    void retainDescriptorSets(DescriptorPoolEntry& poolEntry,
-                              std::vector<vk::raii::DescriptorSet>& sets);
 
     const Device* device_{nullptr};
     const Pipeline* pipeline_{nullptr};
     const Resources* resources_{nullptr};
-    std::vector<DescriptorPoolEntry> descriptorPools_{};
+    // Long-lived pools, one per create*() group. Each owns its sets for the whole Descriptors
+    // lifetime; destroying the pool (at renderer shutdown) frees them — no per-set free.
+    std::vector<vk::raii::DescriptorPool> descriptorPools_{};
     std::vector<vk::DescriptorSet> descriptorSetTable_{};
 };
 

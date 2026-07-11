@@ -401,11 +401,18 @@ and local URI images stay behaviorally aligned.
 
 `Resources` is the bridge between Vulkan-free graphics data and Vulkan objects.
 
-- Creates vertex/index/storage/uniform buffers. Host-visible buffer creation and per-frame mapped
-  buffer creation are centralized behind private helpers; public methods should only choose usage
-  flags and whether they need initial data. Buffers and images are sub-allocated from the **VMA
-  arena** (`Device::allocator()`) via the `UniqueVmaBuffer`/`UniqueVmaImage` RAII wrappers — never
-  a `vkAllocateMemory` per resource (see CLAUDE.md "GPU resource model").
+- Creates vertex/index/storage/uniform buffers. Three private building blocks pick the memory class;
+  public methods only choose usage flags + initial data: **`createDeviceLocalBuffer`** for long-lived
+  GPU-only data that's written once and never CPU-touched again (static vertices/indices — including
+  every LOD cut — and the VIPM geomorph table via `createStaticStorageBuffer`); it stages through a
+  transient host-visible buffer + a one-time copy. **`createHostVisibleBuffer` / `createMappedHostVisibleBuffers`**
+  for data the CPU (re)writes — per-frame UBOs, the VDPM dynamic index set, debug lines, and the
+  soft-body/cloth buffers (`createStorageBuffer`, `createSharedStorageBuffer`, cloth's
+  `createStorageVertexBuffer`). **Invariant: static geometry is device-local; anything CPU-written
+  per frame stays host-visible** — don't route a per-frame buffer through the staging path (it would
+  pay a copy every frame), and don't leave bulk static geometry host-visible. Buffers and images are
+  sub-allocated from the **VMA arena** (`Device::allocator()`) via the `UniqueVmaBuffer`/`UniqueVmaImage`
+  RAII wrappers — never a `vkAllocateMemory` per resource (see CLAUDE.md "GPU resource model").
 - Uploads textures and fallback textures (8-bit RGBA, HDR float, Basis/KTX2). A single
   `uploadImageFromHost` helper drives the staging buffer / barrier / copy / transition flow
   for every texture variant; a `withOneTimeSubmit` template wraps the boilerplate for any
@@ -422,7 +429,11 @@ and local URI images stay behaviorally aligned.
   per-frame forward-globals set 1. The **forward** set 0 is no longer allocated — it is a
   `VK_KHR_push_descriptor` layout pushed inline per draw (`pushForwardObjectDescriptors`).
   `Descriptors::createGlobalDescriptors` allocates set 1 once at startup;
-  `Descriptors::updateGlobalDescriptors` rewrites it after swapchain resize.
+  `Descriptors::updateGlobalDescriptors` rewrites it after swapchain resize. These pools are
+  renderer-lifetime: their sets are allocated once and **never freed individually**, so the pools
+  carry **no `eFreeDescriptorSet`** and hold their sets as plain `vk::DescriptorSet` handles (the pool
+  owns them; destroying it reclaims them). Don't reintroduce the flag or per-set RAII for this path.
+  (The bindless set 2 pool is the exception — it keeps one `vk::raii` set + `eFreeDescriptorSet`.)
 - Owns the global **bindless materials set 2** (update-after-bind): one `sampler2D[]`
   texture array (`registerBindlessTexture`, indexed by texture handle) + a materials[]
   SSBO (`registerMaterial`, dedup by `Material*` → the per-draw material index).

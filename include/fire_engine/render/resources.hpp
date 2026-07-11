@@ -50,12 +50,15 @@ public:
 
     // --- Buffer creation ---
 
+    // Static mesh geometry: device-local (fast GPU reads), filled once via a staging copy.
+    // Long-lived and never CPU-rewritten, so it does not belong in host-visible memory.
     [[nodiscard]] BufferHandle createVertexBuffer(std::span<const Vertex> vertices);
     // Vertex buffer that is also a storage buffer, so the cloth/soft-body compute
     // solver can write positions + normals into it in place each frame and the
     // forward/shadow passes read it as vertex input. Host-visible (mapped initial
-    // upload), like createVertexBuffer.
+    // upload) — CPU-seeded and GPU-mutated, unlike the static createVertexBuffer.
     [[nodiscard]] BufferHandle createStorageVertexBuffer(std::span<const Vertex> vertices);
+    // Static index buffers (base mesh + every LOD cut): device-local, staged upload.
     [[nodiscard]] BufferHandle createIndexBuffer(std::span<const uint16_t> indices);
     [[nodiscard]] BufferHandle createIndexBuffer(std::span<const uint32_t> indices);
 
@@ -92,13 +95,21 @@ public:
     // Per-frame, persistently-mapped host-visible index buffers for VDPM's dynamic, view-dependent
     // index set (rebuilt each frame from the active front).
     [[nodiscard]] MappedBufferSet createMappedIndexBuffers(std::size_t size);
-    [[nodiscard]] MappedBufferSet createMappedStorageBuffer(std::size_t size,
-                                                            const void* initialData);
+    // Single host-visible storage buffer (eStorageBuffer | eTransferDst) shared across all
+    // frames-in-flight — the GPU serialises frames on the graphics queue, so no per-frame copies
+    // are needed. eTransferDst lets callers clear/upload via vkCmdFillBuffer/copy. (Distinct from
+    // createStorageBuffer, which adds eShaderDeviceAddress for the buffer_reference solver path.)
+    [[nodiscard]] BufferHandle createSharedStorageBuffer(std::size_t size, const void* initialData);
     // Single persistent host-visible storage buffer with initial contents. Used
     // for the soft-body solver's particle / constraint buffers (per-instance sim
     // state, shared across frames — the GPU serialises frames on the graphics
     // queue, so no per-frame copies are needed).
     [[nodiscard]] BufferHandle createStorageBuffer(std::size_t size, const void* initialData);
+    // Static, GPU-read-only storage buffer: device-local, filled once via a staging copy. For
+    // long-lived SSBO data built at load and never CPU-rewritten (the VIPM geomorph table). Unlike
+    // createStorageBuffer this is not host-visible and carries no device address — it is bound as a
+    // plain SSBO, not chained by buffer_reference.
+    [[nodiscard]] BufferHandle createStaticStorageBuffer(std::size_t size, const void* initialData);
     // Per-frame, persistently-mapped storage buffers with a device address (for
     // the soft-body solver's per-frame collider buffer, addressed via bDA).
     [[nodiscard]] MappedBufferSet createMappedDeviceAddressBuffers(std::size_t size);
@@ -293,6 +304,12 @@ private:
     [[nodiscard]] BufferHandle createHostVisibleBuffer(vk::DeviceSize size,
                                                        vk::BufferUsageFlags usage,
                                                        const void* initialData = nullptr);
+    // Device-local buffer filled once from `initialData` through a transient host-visible staging
+    // buffer + a one-time copy submit. `usage` is OR'd with eTransferDst. For long-lived, GPU-only,
+    // never-CPU-rewritten data (static vertices/indices, LOD index sets, VIPM tables).
+    [[nodiscard]] BufferHandle createDeviceLocalBuffer(vk::DeviceSize size,
+                                                       vk::BufferUsageFlags usage,
+                                                       const void* initialData);
     [[nodiscard]] MappedBufferSet createMappedHostVisibleBuffers(std::size_t size,
                                                                  vk::BufferUsageFlags usage);
     [[nodiscard]] TextureHandle createFallbackTexture(FallbackTextureKind kind);

@@ -67,15 +67,26 @@ severity tier, so titles are the stable reference, not a global number.)
   simplifier (see the forest-replay item above), so `buildVertexForest` transcribes ground-truth
   adjacency instead of re-deriving it. De-risks all future LOD work.
 
-**(B) Renderer hygiene — independent of VDPM, follows A.**
-- **Device suitability doesn't validate all requested features/limits** — query one full
-  `PhysicalDeviceFeatures2` chain (+ portability-subset, descriptor-indexing limits) during
-  suitability; reject with a precise reason. Drop `descriptorBindingVariableDescriptorCount` unless
-  the layout gains a variable binding. (Prerequisite-shaped for the GPU-driven direction.)
-- **Descriptor-pool lifecycle + `createMappedStorageBuffer` misnaming**.
-- **Static vertex/index buffers are host-visible, not device-local** — add a device-local
-  + staging path for long-lived static geometry; keep mapped host-visible for per-frame dynamic
-  buffers. Larger; feeds the GPU-driven / static-residency work below.
+**(B) Renderer hygiene — independent of VDPM.** *(all landed, branch `cr-renderer-hygiene`)*
+- ✅ **Device suitability validates all requested features/limits** — `missingDeviceCapabilities`
+  queries one `PhysicalDeviceFeatures2` chain (1.0/1.2/1.3 + portability-subset) plus the
+  descriptor-indexing update-after-bind limits during selection, and rejects an unsuitable GPU with a
+  named reason (logged) instead of failing an opaque call later. `createLogicalDevice` dropped its
+  redundant per-feature re-checks (suitability is now authoritative) and the dead
+  `descriptorBindingVariableDescriptorCount` request (the bindless array is fixed-size + partiallyBound,
+  not an `eVariableDescriptorCount` binding).
+- ✅ **Descriptor-pool lifecycle + `createMappedStorageBuffer` misnaming** — the per-group pools drop
+  `eFreeDescriptorSet` (sets are never freed individually; the pool is destroyed as a unit at
+  shutdown) and now own their sets as plain handles rather than per-set RAII. `createMappedStorageBuffer`
+  (which built one shared buffer, duplicated its handle into every frame slot, and returned empty
+  mapped spans) became `createSharedStorageBuffer` returning a single `BufferHandle`; particle-system
+  and morph/VIPM-dummy call sites updated.
+- ✅ **Static vertex/index buffers are now device-local** — new `createDeviceLocalBuffer` (device-local
+  + transient staging buffer + one-time copy). `createVertexBuffer` / both `createIndexBuffer`
+  overloads (so base mesh + every LOD cut) and the VIPM geomorph table (`createStaticStorageBuffer`)
+  use it; per-frame dynamic buffers (UBOs, VDPM index sets, debug lines, cloth storage-vertex) stay
+  host-visible/mapped. The batched-upload optimisation (join the image `uploadBatch_` instead of a
+  per-buffer submit) is left as a follow-up under static-residency below.
 
 ---
 

@@ -138,7 +138,7 @@ Resources::MappedBufferSet Resources::createMappedHostVisibleBuffers(std::size_t
 
 BufferHandle Resources::createVertexBuffer(std::span<const Vertex> vertices)
 {
-    return createHostVisibleBuffer(vertices.size_bytes(), vk::BufferUsageFlagBits::eVertexBuffer,
+    return createDeviceLocalBuffer(vertices.size_bytes(), vk::BufferUsageFlagBits::eVertexBuffer,
                                    vertices.data());
 }
 
@@ -150,6 +150,15 @@ BufferHandle Resources::createStorageBuffer(std::size_t size, const void* initia
                                    vk::BufferUsageFlagBits::eStorageBuffer |
                                        vk::BufferUsageFlagBits::eShaderDeviceAddress,
                                    initialData);
+}
+
+BufferHandle Resources::createStaticStorageBuffer(std::size_t size, const void* initialData)
+{
+    // Load-time, GPU-read-only SSBO (the VIPM geomorph table): device-local, staged upload. Bound
+    // as a plain storage buffer, so no eShaderDeviceAddress (unlike the host-visible
+    // createStorageBuffer).
+    return createDeviceLocalBuffer(static_cast<vk::DeviceSize>(size),
+                                   vk::BufferUsageFlagBits::eStorageBuffer, initialData);
 }
 
 BufferHandle Resources::createStorageVertexBuffer(std::span<const Vertex> vertices)
@@ -178,13 +187,13 @@ vk::DeviceAddress Resources::bufferAddress(BufferHandle handle) const noexcept
 
 BufferHandle Resources::createIndexBuffer(std::span<const uint16_t> indices)
 {
-    return createHostVisibleBuffer(indices.size_bytes(), vk::BufferUsageFlagBits::eIndexBuffer,
+    return createDeviceLocalBuffer(indices.size_bytes(), vk::BufferUsageFlagBits::eIndexBuffer,
                                    indices.data());
 }
 
 BufferHandle Resources::createIndexBuffer(std::span<const uint32_t> indices)
 {
-    return createHostVisibleBuffer(indices.size_bytes(), vk::BufferUsageFlagBits::eIndexBuffer,
+    return createDeviceLocalBuffer(indices.size_bytes(), vk::BufferUsageFlagBits::eIndexBuffer,
                                    indices.data());
 }
 
@@ -477,6 +486,30 @@ void transitionDepthImageToReadOnly(const Device& device, vk::CommandPool pool, 
 }
 
 } // namespace
+
+BufferHandle Resources::createDeviceLocalBuffer(vk::DeviceSize size, vk::BufferUsageFlags usage,
+                                                const void* initialData)
+{
+    auto deviceBuf = device_->createBuffer(size, usage | vk::BufferUsageFlagBits::eTransferDst,
+                                           vk::MemoryPropertyFlagBits::eDeviceLocal);
+    if (initialData != nullptr && size > 0)
+    {
+        // Upload once through a transient host-visible staging buffer + a one-time copy. The
+        // staging buffer is freed when it leaves scope, after withOneTimeSubmit has waited on the
+        // copy.
+        auto staging = device_->createBuffer(size, vk::BufferUsageFlagBits::eTransferSrc,
+                                             vk::MemoryPropertyFlagBits::eHostVisible |
+                                                 vk::MemoryPropertyFlagBits::eHostCoherent);
+        writeMapped(staging.mapped(), initialData, static_cast<std::size_t>(size));
+        withOneTimeSubmit(*device_, *cmdPool_,
+                          [&](vk::CommandBuffer cmd)
+                          {
+                              const vk::BufferCopy region{.size = size};
+                              cmd.copyBuffer(*staging, *deviceBuf, region);
+                          });
+    }
+    return storeBuffer(std::move(deviceBuf));
+}
 
 Resources::TextureEntry& Resources::appendTextureEntry(TextureHandle& handle, vk::Format format,
                                                        uint32_t mipLevels)
@@ -1197,23 +1230,15 @@ Resources::MappedBufferSet Resources::createMappedIndexBuffers(std::size_t size)
     return createMappedHostVisibleBuffers(size, vk::BufferUsageFlagBits::eIndexBuffer);
 }
 
-Resources::MappedBufferSet Resources::createMappedStorageBuffer(std::size_t size,
-                                                                const void* initialData)
+BufferHandle Resources::createSharedStorageBuffer(std::size_t size, const void* initialData)
 {
-    MappedBufferSet result;
-    // Storage buffers are shared across frames — create a single buffer,
-    // but fill both slots so callers can index by frame uniformly.
-    // eTransferDst lets callers clear/upload via vkCmdFillBuffer / copy.
-    auto handle = createHostVisibleBuffer(static_cast<vk::DeviceSize>(size),
-                                          vk::BufferUsageFlagBits::eStorageBuffer |
-                                              vk::BufferUsageFlagBits::eTransferDst,
-                                          initialData);
-    for (int i = 0; i < kMaxFramesInFlight; ++i)
-    {
-        result.buffers[i] = handle;
-        result.mapped[i] = {};
-    }
-    return result;
+    // One buffer shared across all frames-in-flight (frames serialise on the graphics queue, so no
+    // per-frame copies are needed). eTransferDst lets callers clear/upload via
+    // vkCmdFillBuffer/copy.
+    return createHostVisibleBuffer(static_cast<vk::DeviceSize>(size),
+                                   vk::BufferUsageFlagBits::eStorageBuffer |
+                                       vk::BufferUsageFlagBits::eTransferDst,
+                                   initialData);
 }
 
 // --- Pipeline registry ---

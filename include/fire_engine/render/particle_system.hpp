@@ -67,9 +67,9 @@ private:
 
     ComputePipeline simulatePipeline_;
     Pipeline renderPipeline_;
-    Resources::MappedBufferSet particlePool_; // shared SSBO (same handle per slot)
-    Resources::MappedBufferSet spawnClaim_;   // shared SSBO (kMaxParticleEmitters counters)
-    Resources::MappedBufferSet frameUbo_;     // per-frame UBO
+    BufferHandle particlePool_{NullBuffer}; // shared SSBO across frames
+    BufferHandle spawnClaim_{NullBuffer};   // shared SSBO (kMaxParticleEmitters counters)
+    Resources::MappedBufferSet frameUbo_;   // per-frame UBO
 
     vk::raii::DescriptorPool descriptorPool_{nullptr};
     vk::raii::DescriptorSets computeSets_{nullptr};
