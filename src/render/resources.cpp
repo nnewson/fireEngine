@@ -494,19 +494,31 @@ BufferHandle Resources::createDeviceLocalBuffer(vk::DeviceSize size, vk::BufferU
                                            vk::MemoryPropertyFlagBits::eDeviceLocal);
     if (initialData != nullptr && size > 0)
     {
-        // Upload once through a transient host-visible staging buffer + a one-time copy. The
-        // staging buffer is freed when it leaves scope, after withOneTimeSubmit has waited on the
-        // copy.
+        // Upload once through a transient host-visible staging buffer + a copy.
         auto staging = device_->createBuffer(size, vk::BufferUsageFlagBits::eTransferSrc,
                                              vk::MemoryPropertyFlagBits::eHostVisible |
                                                  vk::MemoryPropertyFlagBits::eHostCoherent);
         writeMapped(staging.mapped(), initialData, static_cast<std::size_t>(size));
-        withOneTimeSubmit(*device_, *cmdPool_,
-                          [&](vk::CommandBuffer cmd)
-                          {
-                              const vk::BufferCopy region{.size = size};
-                              cmd.copyBuffer(*staging, *deviceBuf, region);
-                          });
+        auto record = [&](vk::CommandBuffer cmd)
+        {
+            const vk::BufferCopy region{.size = size};
+            cmd.copyBuffer(*staging, *deviceBuf, region);
+        };
+        // When a load-time batch is open (scene load), record into its shared command buffer and
+        // let its single submit + fence cover this copy alongside every texture upload — instead of
+        // a per-buffer submit + stall. Outside a batch, submit and wait immediately. The recorded
+        // copy references the VkBuffer handles, which survive the moves below (staging into the
+        // retained batch list, deviceBuf into buffers_) unchanged — the same contract the image
+        // path relies on.
+        if (uploadBatch_.active)
+        {
+            record(*uploadBatch_.cmd);
+            uploadBatch_.staging.push_back(std::move(staging));
+        }
+        else
+        {
+            withOneTimeSubmit(*device_, *cmdPool_, record);
+        }
     }
     return storeBuffer(std::move(deviceBuf));
 }

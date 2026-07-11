@@ -144,10 +144,12 @@ Candidates" section folds in here:
   "repairs vs cones" note; promote it now the repairs are proven.
 - **GPU-driven active front** — drive `refineForView` + emission on the GPU (the forest + errors are
   already just buffers), with reusable scratch emit. The indirect-draw direction #3 opened.
-- **Static GPU residency** — device-local static asset upload split from dynamic mapped buffers
-  (builds on the host-visible-static-buffers item above). *(Mostly landed in block B; the remaining
-  piece is batching the device-local uploads into the image `uploadBatch_` instead of a per-buffer
-  submit.)*
+- ✅ **Static GPU residency** — device-local static asset upload split from dynamic mapped buffers.
+  Landed in block B (`createDeviceLocalBuffer` for static vertices/indices/LODs/VIPM), and the batching
+  follow-up is now done too *(branch `cr-static-residency-batch`)*: when a load-time `uploadBatch_` is
+  open, `createDeviceLocalBuffer` records its staging copy into the batch's shared command buffer and
+  retains the staging buffer, so the whole scene's buffer **and** texture uploads ride one submit +
+  fence instead of a per-buffer stall. Outside a batch it still submits immediately.
 - ✅ **Capability-driven device setup** *(branch `cr-capability-driven-device`)* — the required
   features are now **one** `kRequiredFeatures*` table per feature struct (`{pointer-to-member, name}`
   entries) that drives *both* `missingDeviceCapabilities` (the suitability check) and
