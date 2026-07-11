@@ -141,8 +141,8 @@ void DebugOverlay::buildUi(const FrameStats& stats, RenderTunables& tunables)
     {
         ImGui::Checkbox("Enabled", &tunables.lodEnabled);
         ImGui::BeginDisabled(!tunables.lodEnabled);
-        static constexpr const char* kLodModes[] = {"Discrete (hard swap)",
-                                                    "Continuous (VIPM geomorph)"};
+        static constexpr const char* kLodModes[] = {
+            "Discrete (hard swap)", "Continuous (VIPM geomorph)", "View-dependent (VDPM)"};
         int lodMode = static_cast<int>(tunables.lodMode);
         if (ImGui::Combo("Mode", &lodMode, kLodModes, IM_ARRAYSIZE(kLodModes)))
         {

@@ -46,6 +46,22 @@ inline constexpr float kLodPixelErrorBudget = 2.0f;
 // shadow), so their pixel budget is scaled up by this factor.
 inline constexpr float kShadowLodBias = 3.0f;
 
+// VDPM silhouette boost: how much tighter the pixel budget is where a vertex's world normal is
+// edge-on to the view (0 = uniform screen-space error). Keeps contours dense.
+inline constexpr float kVdpmSilhouetteBoost = 2.0f;
+
+// VDPM back-face gate: reps whose signed facing (world normal · view direction) is below -this are
+// treated as clearly back-facing and skip discretionary refinement (they're back-face-culled, so
+// the detail is wasted). Conservative (not plain 0) since a per-vertex normal stands in for a
+// region; near edge-on stays silhouette-refined.
+inline constexpr float kVdpmBackfaceThreshold = 0.5f;
+
+// VDPM UV channel scale: turns a collapse's cumulative UV-deviation radius into pixel-equivalent
+// screen error against the same pixel budget (a texel-density stand-in — per-material texture
+// resolution would refine it). The primary dial for texture fidelity vs triangle count; kept
+// separate from the simplifier's kUvWeightFactor, which only orders collapses.
+inline constexpr float kVdpmUvScale = 1.0f;
+
 // Pick the coarsest LOD whose projected geometric error fits the pixel budget. `projScaleY` is the
 // projection matrix's [1][1] term (= 1/tan(fovY/2)); a world deviation `e` at view distance `d`
 // projects to `e·projScaleY·viewportHeight/(2d)` pixels. Returns 0 (the full mesh) when no coarser

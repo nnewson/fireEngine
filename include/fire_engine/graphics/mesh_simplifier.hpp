@@ -22,6 +22,15 @@ struct MeshCollapse
     uint32_t removed{0};
     Vec3 position{};
     float error{0.0f};
+    // Cumulative geometric deviation radius for VDPM: a conservative screen-space estimate (not a
+    // rigorous bound) of how far the surface subsumed by this collapse sits from the original,
+    // accumulated up the collapse tree so a coarse collapse over a curved region carries the whole
+    // region's deviation. `error` (RMS) is left untouched for discrete/VIPM selection.
+    float deviationRadius{0.0f};
+    // Cumulative UV deviation radius: the same accumulation in texture space, so VDPM can refine
+    // regions whose parameterisation stretches even where the geometry is flat (the geometric
+    // radius alone can't see that). Uses the canonical/representative UV — see the collapse() note.
+    float uvDeviationRadius{0.0f};
 };
 
 // Result of a simplification: an index buffer into the ORIGINAL vertex array (no vertex data

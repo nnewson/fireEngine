@@ -85,6 +85,52 @@ Mesh makeBumpyGrid(int n)
     return m;
 }
 
+// A UV sphere with radial normals — clear front/back hemispheres for the back-face-gate test.
+Mesh makeUvSphere(int rings, int segments)
+{
+    Mesh m;
+    constexpr float pi = 3.14159265f;
+    for (int r = 0; r <= rings; ++r)
+    {
+        const float lat = pi * (static_cast<float>(r) / static_cast<float>(rings) - 0.5f);
+        for (int s = 0; s <= segments; ++s)
+        {
+            const float lon = 2.0f * pi * static_cast<float>(s) / static_cast<float>(segments);
+            const Vec3 nrm{std::cos(lat) * std::cos(lon), std::sin(lat),
+                           std::cos(lat) * std::sin(lon)};
+            m.verts.push_back(Vertex{nrm, Colour3{}, nrm,
+                                     Vec2{static_cast<float>(s) / static_cast<float>(segments),
+                                          static_cast<float>(r) / static_cast<float>(rings)}});
+        }
+    }
+    const int stride = segments + 1;
+    for (int r = 0; r < rings; ++r)
+    {
+        for (int s = 0; s < segments; ++s)
+        {
+            const auto a = static_cast<uint32_t>(r * stride + s);
+            const auto b = static_cast<uint32_t>(r * stride + s + 1);
+            const auto c = static_cast<uint32_t>((r + 1) * stride + s);
+            const auto d = static_cast<uint32_t>((r + 1) * stride + s + 1);
+            m.indices.insert(m.indices.end(), {a, b, d, a, d, c});
+        }
+    }
+    return m;
+}
+
+// A flat grid with a deliberately nonlinear (quadratic) UV map: geometry stays coplanar (geometric
+// δ ~0) but the parameterisation stretches, so the UV channel must accumulate.
+Mesh makeFlatNonlinearUvGrid(int n)
+{
+    Mesh m = makeGrid(n);
+    for (Vertex& v : m.verts)
+    {
+        const Vec2 uv = v.texCoord();
+        v.texCoord(Vec2{uv.s() * uv.s(), uv.t() * uv.t()});
+    }
+    return m;
+}
+
 std::vector<MeshCollapse> collapsesOf(const Mesh& m)
 {
     const QuadricSimplifier simp;
@@ -232,15 +278,134 @@ TEST_CASE("ActiveFront: refineForView refines nearer views more than distant one
     const float noSilhouette = 0.0f;
 
     front.refineForView(m.verts, world, Vec3{8.0f, 8.0f, 6.0f}, projScaleY, viewportHeight, budget,
-                        noSilhouette);
+                        noSilhouette, 2.0f, 0.0f);
     const std::size_t nearCount = front.emitActiveCanonical().size();
 
     front.refineForView(m.verts, world, Vec3{8.0f, 8.0f, 400.0f}, projScaleY, viewportHeight,
-                        budget, noSilhouette);
+                        budget, noSilhouette, 2.0f, 0.0f);
     const std::size_t farCount = front.emitActiveCanonical().size();
 
     CHECK(nearCount > farCount); // closer view resolves more triangles
     CHECK(farCount >= 2);        // never below the coarsest
+}
+
+TEST_CASE("refineForView: back-face suppression coarsens the hidden hemisphere", "[vdpm]")
+{
+    const Mesh m = makeUvSphere(24, 32);
+    ActiveFront front = ActiveFront::build(m.verts, m.indices, collapsesOf(m));
+    const Mat4 world = Mat4::identity();
+    const float projScaleY = 1.0f;
+    const float viewportHeight = 1000.0f;
+    const float budget = 2.0f;
+    const float noSilhouette = 0.0f;
+    const Vec3 cam{0.0f, 0.0f, 4.0f};
+
+    // Threshold 2.0 never trips (facing >= -1); 0.5 suppresses the clearly back-facing hemisphere.
+    front.refineForView(m.verts, world, cam, projScaleY, viewportHeight, budget, noSilhouette, 2.0f,
+                        0.0f);
+    const std::size_t off = front.emitActiveCanonical().size();
+    front.refineForView(m.verts, world, cam, projScaleY, viewportHeight, budget, noSilhouette, 0.5f,
+                        0.0f);
+    const std::size_t on = front.emitActiveCanonical().size();
+    CHECK(on < off); // the hidden hemisphere's discretionary detail is dropped
+    CHECK(on >= 2);
+
+    // Suppression must not break the distance criterion: a near view still resolves more than a
+    // far.
+    front.refineForView(m.verts, world, Vec3{0.0f, 0.0f, 2.5f}, projScaleY, viewportHeight, budget,
+                        noSilhouette, 0.5f, 0.0f);
+    const std::size_t nearCount = front.emitActiveCanonical().size();
+    front.refineForView(m.verts, world, Vec3{0.0f, 0.0f, 60.0f}, projScaleY, viewportHeight, budget,
+                        noSilhouette, 0.5f, 0.0f);
+    const std::size_t farCount = front.emitActiveCanonical().size();
+    CHECK(nearCount > farCount);
+}
+
+TEST_CASE("Deviation radius is ~0 on a flat mesh and accumulates on a curved one", "[vdpm]")
+{
+    // Flat grid: every collapse is coplanar, so the point-to-plane dev is ~0 and nothing
+    // accumulates.
+    float flatMax = 0.0f;
+    for (const MeshCollapse& c : collapsesOf(makeGrid(17)))
+    {
+        flatMax = std::max(flatMax, c.deviationRadius);
+    }
+    CHECK(flatMax < 1e-3f);
+
+    // Bumpy grid (amplitude 0.5): real curvature, so the coarse approximation deviates and the
+    // radius accumulates to a meaningful, bounded fraction of the mesh.
+    float bumpMax = 0.0f;
+    for (const MeshCollapse& c : collapsesOf(makeBumpyGrid(17)))
+    {
+        bumpMax = std::max(bumpMax, c.deviationRadius);
+    }
+    CHECK(bumpMax > 0.1f);
+    CHECK(bumpMax < 50.0f);
+}
+
+TEST_CASE("UV deviation channel sees texture stretch geometry cannot", "[vdpm]")
+{
+    // Flat + affine UV: both channels stay ~0.
+    float affineUv = 0.0f;
+    float affineGeom = 0.0f;
+    for (const MeshCollapse& c : collapsesOf(makeGrid(17)))
+    {
+        affineUv = std::max(affineUv, c.uvDeviationRadius);
+        affineGeom = std::max(affineGeom, c.deviationRadius);
+    }
+    CHECK(affineUv < 1e-3f);
+    CHECK(affineGeom < 1e-3f);
+
+    // Flat + nonlinear UV: geometry is still flat (geometric δ is blind), but the UV channel
+    // accumulates real stretch — proving the channel adds information geometry cannot see.
+    float skewUv = 0.0f;
+    float skewGeom = 0.0f;
+    for (const MeshCollapse& c : collapsesOf(makeFlatNonlinearUvGrid(17)))
+    {
+        skewUv = std::max(skewUv, c.uvDeviationRadius);
+        skewGeom = std::max(skewGeom, c.deviationRadius);
+    }
+    CHECK(skewGeom < 1e-3f);
+    CHECK(skewUv > 0.01f);
+}
+
+TEST_CASE("Forest deviation is monotone along parent ancestry; vl/vr probe", "[vdpm]")
+{
+    const Mesh m = makeBumpyGrid(17);
+    const VertexForest f = buildVertexForest(m.verts, m.indices, collapsesOf(m));
+
+    int parentViolations = 0;
+    int vlvrViolations = 0;
+    auto probe = [&](uint32_t dep, float dependentError, int& counter)
+    {
+        if (dep == kInvalidVertex)
+        {
+            return;
+        }
+        const uint32_t depSplit = f.removingSplit[dep];
+        if (depSplit == kNoSplit)
+        {
+            return; // a root dependency is always active
+        }
+        if (f.splits[depSplit].error < dependentError - 1e-4f)
+        {
+            ++counter;
+        }
+    };
+    for (const VertexSplit& s : f.splits)
+    {
+        probe(s.parent, s.error, parentViolations);
+        probe(s.vl, s.error, vlvrViolations);
+        probe(s.vr, s.error, vlvrViolations);
+    }
+
+    // Accumulation up the kept-chain guarantees the parent dependency carries >= the dependent's
+    // radius.
+    CHECK(parentViolations == 0);
+    // vl/vr are neighbours, not folded descendants, so their radius is NOT monotone — this
+    // documents that the non-monotonicity is real, which is exactly why refineForView force-refines
+    // its dependencies to stay legal (a simple gate-then-refine loop would leave splits stuck).
+    CHECK(vlvrViolations > 0);
 }
 
 TEST_CASE("ActiveFront: boundary splits are recorded with an invalid vr", "[vdpm]")

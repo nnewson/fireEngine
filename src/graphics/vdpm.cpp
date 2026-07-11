@@ -196,7 +196,8 @@ VertexForest buildVertexForest(std::span<const Vertex> vertices, std::span<const
         }
 
         const auto splitIndex = static_cast<std::uint32_t>(forest.splits.size());
-        forest.splits.push_back(VertexSplit{kept, removed, vl, vr, c.error});
+        forest.splits.push_back(
+            VertexSplit{kept, removed, vl, vr, c.deviationRadius, c.uvDeviationRadius});
         forest.removingSplit[removed] = splitIndex;
 
         // Apply the collapse: retire the edge's faces, then remap `removed` -> `kept` in every
@@ -224,6 +225,9 @@ VertexForest buildVertexForest(std::span<const Vertex> vertices, std::span<const
         vertexFaces[removed].clear();
     }
 
+    // Note: `error` here is the simplifier's cumulative deviation radius (already accumulated up
+    // the collapse tree), so no propagation pass is needed. Whether it is monotone across vl/vr
+    // dependencies (not just endpoint ancestry) is checked by the [vdpm] tests, not assumed.
     return forest;
 }
 
@@ -340,9 +344,39 @@ void ActiveFront::coarsenAll()
     }
 }
 
+bool ActiveFront::forceRefine(std::uint32_t splitIndex)
+{
+    if (splitIndex >= forest_.splits.size())
+    {
+        return false;
+    }
+    if (refined_[splitIndex])
+    {
+        return true;
+    }
+    const VertexSplit& s = forest_.splits[splitIndex];
+    // Bring in any dependency neighbourhood that isn't active yet. Parent is monotone so it is
+    // usually already active; vl/vr are not, so this is where the non-monotonicity is absorbed.
+    const std::array<std::uint32_t, 3> deps{s.parent, s.vl, s.vr};
+    for (const std::uint32_t dep : deps)
+    {
+        if (dep == kInvalidVertex || active_[dep])
+        {
+            continue;
+        }
+        const std::uint32_t depSplit = forest_.removingSplit[dep];
+        if (depSplit == kNoSplit || !forceRefine(depSplit))
+        {
+            return false;
+        }
+    }
+    return refine(splitIndex);
+}
+
 void ActiveFront::refineForView(std::span<const Vertex> vertices, const Mat4& world,
                                 const Vec3& cameraPos, float projScaleY, float viewportHeight,
-                                float pixelBudget, float silhouetteBoost)
+                                float pixelBudget, float silhouetteBoost, float backfaceThreshold,
+                                float uvScale)
 {
     coarsenAll();
     const float halfViewport = viewportHeight * 0.5f;
@@ -358,29 +392,42 @@ void ActiveFront::refineForView(std::span<const Vertex> vertices, const Mat4& wo
         const Vec3 worldPos{wp4.x(), wp4.y(), wp4.z()};
         const float distance = std::max(1e-3f, (worldPos - cameraPos).magnitude());
 
-        // Silhouette: a world normal near edge-on to the view direction gets a tighter budget.
-        float boost = 1.0f;
-        if (silhouetteBoost > 0.0f)
+        // Signed facing of the rep's world normal vs the view direction: +1 toward the camera, 0
+        // edge-on (silhouette), -1 away (back). One dot drives both the back-face gate and the
+        // silhouette boost.
+        float signedFacing = 1.0f;
+        const Vec3 ln = vertices[s.child].normal();
+        const Vec4 wn4 = world * Vec4{ln.x(), ln.y(), ln.z(), 0.0f};
+        const Vec3 worldNormal{wn4.x(), wn4.y(), wn4.z()};
+        const float nLen = worldNormal.magnitude();
+        if (nLen > 1e-6f)
         {
-            const Vec3 ln = vertices[s.child].normal();
-            const Vec4 wn4 = world * Vec4{ln.x(), ln.y(), ln.z(), 0.0f};
-            const Vec3 worldNormal{wn4.x(), wn4.y(), wn4.z()};
-            const float nLen = worldNormal.magnitude();
-            if (nLen > 1e-6f)
-            {
-                const Vec3 viewDir = (cameraPos - worldPos) * (1.0f / distance);
-                const float facing =
-                    std::abs(Vec3::dotProduct(worldNormal * (1.0f / nLen), viewDir));
-                boost = 1.0f + silhouetteBoost * (1.0f - facing);
-            }
+            const Vec3 viewDir = (cameraPos - worldPos) * (1.0f / distance);
+            signedFacing = Vec3::dotProduct(worldNormal * (1.0f / nLen), viewDir);
         }
 
-        // Same projection as selectLod: a world deviation e projects to e·projScaleY·(vh/2)/d
-        // pixels.
-        const float screenError = s.error * boost * projScaleY * halfViewport / distance;
-        if (screenError > pixelBudget)
+        // Back-face gate: skip *budget-driven* refinement of clearly back-facing reps — they are
+        // back-face-culled, so refining them is vertex work for no visible pixels. This suppresses
+        // only discretionary refinement; forceRefine can still pull a back-facing split in as the
+        // dependency of a visible/silhouette split. A threshold (not plain < 0) because a
+        // per-vertex normal stands in for a region, and near-edge-on reps must stay
+        // silhouette-refined.
+        if (signedFacing < -backfaceThreshold)
         {
-            refine(i);
+            continue;
+        }
+
+        // Silhouette: near edge-on (|signedFacing| ~ 0) gets a tighter budget so contours stay
+        // dense.
+        const float boost = 1.0f + silhouetteBoost * (1.0f - std::abs(signedFacing));
+
+        // Two independent channels, each projected e·projScaleY·(vh/2)/d pixels: geometry
+        // (silhouette-boosted) and UV texture stretch. Either over budget refines the split.
+        const float geomScreenError = s.error * boost * projScaleY * halfViewport / distance;
+        const float uvScreenError = s.uvError * uvScale * projScaleY * halfViewport / distance;
+        if (geomScreenError > pixelBudget || uvScreenError > pixelBudget)
+        {
+            forceRefine(i);
         }
     }
 }

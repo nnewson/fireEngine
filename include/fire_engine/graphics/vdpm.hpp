@@ -35,8 +35,13 @@ namespace fire_engine
 // kInvalidVertex`. Hoppe's fixed-size vsplit encoding — the split is legal iff `parent` and `vl`
 // are active and (`vr == kInvalidVertex` || `vr` active), so no variable-length dependency list is
 // needed. Coarsening additionally needs the split to be currently refined with `child` a leaf (no
-// refined descendants); the ActiveFront tracks that. `error` is the per-vertex screen-space
-// selection metric (the RMS deviation this collapse introduced).
+// refined descendants); the ActiveFront tracks that. `error` is the simplifier's **cumulative
+// geometric deviation radius** (MeshCollapse::deviationRadius) — a conservative estimate of how far
+// the region this collapse subsumes sits from the original surface, accumulated up the collapse
+// tree, which refineForView projects to screen pixels. `uvError` is the parallel cumulative UV
+// deviation radius (MeshCollapse::uvDeviationRadius) — an independent texture-stretch channel
+// refineForView projects on its own, so a texture-costly-but-geometrically-flat region still
+// refines.
 struct VertexSplit
 {
     uint32_t parent{0};
@@ -44,6 +49,7 @@ struct VertexSplit
     uint32_t vl{0};
     uint32_t vr{0};
     float error{0.0f};
+    float uvError{0.0f};
 };
 
 // Sentinel for a missing neighbour (boundary edge) in VertexSplit::vl / vr.
@@ -105,12 +111,16 @@ public:
     // coarsest, then refine every split (coarse-first, so dependencies stay satisfied) whose
     // world-space error projects beyond `pixelBudget` screen pixels. Silhouette regions — where the
     // vertex's world normal is near edge-on to the view — are held to a tighter budget via
-    // `silhouetteBoost` (0 disables it), so contours stay dense. `world` places the mesh;
+    // `silhouetteBoost` (0 disables it), so contours stay dense. Clearly back-facing reps (signed
+    // facing < -`backfaceThreshold`) skip *discretionary* refinement — they are back-face-culled,
+    // so detail there is wasted — but can still be pulled in as a visible split's dependency. A
+    // split also refines if its UV-deviation channel (`uvError · uvScale`, projected the same way)
+    // exceeds the budget, so texture-costly-but-flat regions stay dense. `world` places the mesh;
     // `projScaleY = proj[1][1]`. The per-region result is the view-dependent LOD. Vulkan-free +
     // headless-testable.
     void refineForView(std::span<const Vertex> vertices, const Mat4& world, const Vec3& cameraPos,
                        float projScaleY, float viewportHeight, float pixelBudget,
-                       float silhouetteBoost);
+                       float silhouetteBoost, float backfaceThreshold, float uvScale);
 
     [[nodiscard]] bool active(uint32_t canonicalVertex) const
     {
@@ -140,6 +150,10 @@ public:
 
 private:
     [[nodiscard]] uint32_t activeAncestor(uint32_t canonicalVertex) const;
+    // Refine a split, first (recursively) force-refining any inactive dependency splits. vl/vr
+    // errors are not monotone (see the [vdpm] probe), so a legal coarse-first refine can require a
+    // lower-error neighbour split the budget alone wouldn't bring in.
+    bool forceRefine(uint32_t splitIndex);
 
     VertexForest forest_;
     std::vector<bool> active_;                           // per canonical vertex
