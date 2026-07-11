@@ -360,6 +360,39 @@ TEST_CASE("Mat4MultiplyVec4.GeneralCaseUsesRowByColumnIndexing", "[Mat4MultiplyV
 }
 
 // ==========================================================================
+// transformPoint (affine point transform, w = 1, no perspective divide)
+// ==========================================================================
+
+TEST_CASE("Mat4TransformPoint.IdentityPreservesPoint", "[Mat4TransformPoint]")
+{
+    const Vec3 p = Mat4::identity().transformPoint(Vec3{1.0f, 2.0f, 3.0f});
+    CHECK(p.x() == Catch::Approx(1.0f).margin(kEps));
+    CHECK(p.y() == Catch::Approx(2.0f).margin(kEps));
+    CHECK(p.z() == Catch::Approx(3.0f).margin(kEps));
+}
+
+TEST_CASE("Mat4TransformPoint.TranslationOffsetsPoint", "[Mat4TransformPoint]")
+{
+    const Vec3 p = Mat4::translate({5.0f, 6.0f, 7.0f}).transformPoint(Vec3{1.0f, 2.0f, 3.0f});
+    CHECK(p.x() == Catch::Approx(6.0f).margin(kEps));
+    CHECK(p.y() == Catch::Approx(8.0f).margin(kEps));
+    CHECK(p.z() == Catch::Approx(10.0f).margin(kEps));
+}
+
+TEST_CASE("Mat4TransformPoint.MatchesVec4MultiplyWithWOne", "[Mat4TransformPoint]")
+{
+    // The affine transformPoint must equal (m * {p, 1}).xyz for any composed model matrix.
+    const Mat4 m = Mat4::translate({2.0f, -1.0f, 4.0f}) * Mat4::rotateY(0.7f) *
+                   Mat4::scale({1.5f, 2.0f, 0.5f});
+    const Vec3 p{3.0f, -2.0f, 1.0f};
+    const Vec4 h = m * Vec4{p.x(), p.y(), p.z(), 1.0f};
+    const Vec3 tp = m.transformPoint(p);
+    CHECK(tp.x() == Catch::Approx(h.x()).margin(kEps));
+    CHECK(tp.y() == Catch::Approx(h.y()).margin(kEps));
+    CHECK(tp.z() == Catch::Approx(h.z()).margin(kEps));
+}
+
+// ==========================================================================
 // RotateX
 // ==========================================================================
 

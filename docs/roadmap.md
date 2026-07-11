@@ -98,9 +98,12 @@ severity tier, so titles are the stable reference, not a global number.)
   the `RenderableScene` seam rather than an explicit `drawFrame` argument. Pairs with heavier scenes.
 - **TAA skinned-deformation velocity** — exact previous-joint-matrix velocity to replace the v1
   camera-motion-only fallback (skinned meshes currently reproject on camera motion only).
-- **`Mat4::transformPoint` helper** *(clang-tidy cleanup)* — the free `transformPoint(const Mat4&,
-  Vec3)` is copy-pasted in `physics_world.cpp`, `physics_world_shapes.cpp`, `scene_culler.cpp`. Lift
-  it onto `Mat4` (`RigidTransform` already has one) + replace the three copies. Small + mechanical.
+- ✅ **`Mat4::transformPoint` helper** *(branch `cr-mat4-transformpoint`)* — the free
+  `transformPoint(const Mat4&, Vec3)` copy-pasted in `physics_world.cpp`, `physics_world_shapes.cpp`,
+  `scene_culler.cpp` is now one affine `Mat4::transformPoint(Vec3)` method (drops the homogeneous w, no
+  perspective divide — correct for the composed model/world matrices all three sites use; the
+  `scene_culler` copy's defensive `/w` was dead for its affine input). All copies replaced; three
+  `[Mat4TransformPoint]` tests added. Determinism golden unchanged (physics behaviour byte-identical).
 
 ---
 

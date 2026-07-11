@@ -210,12 +210,6 @@ namespace
         shape);
 }
 
-[[nodiscard]] Vec3 transformPoint(const Mat4& m, Vec3 p)
-{
-    const Vec4 r = m * Vec4{p.x(), p.y(), p.z(), 1.0f};
-    return {r.x(), r.y(), r.z()};
-}
-
 struct CompoundMassProperties
 {
     Vec3 com;
@@ -439,7 +433,7 @@ PhysicsColliderHandle PhysicsWorld::createMeshCollider(PhysicsBodyHandle bodyHan
     data->worldVertices.reserve(mesh.vertices.size());
     for (const Vec3& v : mesh.vertices)
     {
-        data->worldVertices.push_back(transformPoint(world, v));
+        data->worldVertices.push_back(world.transformPoint(v));
     }
     const std::size_t triCount = data->indices.size() / 3;
     for (std::size_t t = 0; t < triCount; ++t)

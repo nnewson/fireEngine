@@ -13,22 +13,17 @@ namespace fire_engine
 namespace
 {
 
-[[nodiscard]] Vec3 transformPoint(const Mat4& m, Vec3 p)
-{
-    const Vec4 h = m * Vec4{p.x(), p.y(), p.z(), 1.0f};
-    const float w = h.w() != 0.0f ? h.w() : 1.0f;
-    return Vec3{h.x() / w, h.y() / w, h.z() / w};
-}
-
-// World-space AABB of `local` transformed by `m` (tight bound of the eight corners).
+// World-space AABB of `local` transformed by `m` (tight bound of the eight corners). `m` is a
+// node's composed world matrix (affine), so Mat4::transformPoint's affine (no-perspective-divide)
+// semantics are exactly right here.
 [[nodiscard]] AABB transformBounds(const Mat4& m, const Bounds3& local)
 {
     const auto corners = local.corners();
-    Vec3 lo = transformPoint(m, corners.front());
+    Vec3 lo = m.transformPoint(corners.front());
     Vec3 hi = lo;
     for (std::size_t i = 1; i < corners.size(); ++i)
     {
-        const Vec3 world = transformPoint(m, corners[i]);
+        const Vec3 world = m.transformPoint(corners[i]);
         lo = {std::min(lo.x(), world.x()), std::min(lo.y(), world.y()),
               std::min(lo.z(), world.z())};
         hi = {std::max(hi.x(), world.x()), std::max(hi.y(), world.y()),
