@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <span>
 #include <vector>
 
@@ -14,12 +15,16 @@
 namespace fire_engine
 {
 
-// Coarse-cull accounting for the overlay: how many renderables the scene tracked this frame and
-// how many it dropped as outside every frustum.
+// Per-frame scene-side accounting the renderer surfaces in the overlay. Coarse-cull counts (how
+// many renderables the scene tracked and dropped as outside every frustum) plus VDPM repair work
+// (the vertices each per-frame repair pass pulled back in, summed over every VDPM instance) — a
+// diagnostic so a repair-count regression is visible.
 struct CullStats
 {
     std::size_t tracked{0};
     std::size_t culled{0};
+    uint32_t vdpmFoldoversRepaired{0};
+    uint32_t vdpmCoverageRepaired{0};
 };
 
 // The active camera's world-space pose, as the scene reports it to the renderer through the seam.

@@ -154,6 +154,13 @@ void DebugOverlay::buildUi(const FrameStats& stats, RenderTunables& tunables)
                            "%.2f");
         ImGui::EndDisabled();
         ImGui::Text("Triangles drawn: %d", stats.trianglesDrawn);
+        if (tunables.lodMode == LodMode::ViewDependent)
+        {
+            // Per-frame VDPM repair work (vertices each pass pulled back in). A sudden jump signals
+            // a refine/repair regression; steady low numbers are expected.
+            ImGui::Text("VDPM repairs (verts): foldover %d, coverage %d",
+                        stats.vdpmFoldoversRepaired, stats.vdpmCoverageRepaired);
+        }
         ImGui::TextDisabled("View > 'LOD tint' colours by level (green/yellow/red)");
     }
 

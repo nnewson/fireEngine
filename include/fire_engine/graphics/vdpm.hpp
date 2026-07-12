@@ -171,6 +171,23 @@ public:
     // identity. This is the index buffer a draw would use.
     [[nodiscard]] std::vector<uint32_t> emitActiveIndices(std::span<const Vertex> vertices,
                                                           std::span<const uint32_t> indices) const;
+    // Same, but fills a caller-owned buffer (cleared first) instead of allocating — the per-frame
+    // render path passes a reused scratch vector so emission does no heap allocation each frame.
+    void emitActiveIndices(std::span<const Vertex> vertices, std::span<const uint32_t> indices,
+                           std::vector<uint32_t>& out) const;
+
+    // Per-frame repair diagnostics (overlay/regression watch): vertices each repair pass pulled
+    // back in (successful force-refines) during the last refineForView + repair cycle — the
+    // `active_==0` guard makes it a dedup'd per-frame work count. Reset at the top of
+    // refineForView.
+    [[nodiscard]] uint32_t foldoversRepaired() const noexcept
+    {
+        return foldoversRepaired_;
+    }
+    [[nodiscard]] uint32_t coverageRepaired() const noexcept
+    {
+        return coverageRepaired_;
+    }
 
 private:
     [[nodiscard]] uint32_t activeAncestor(uint32_t canonicalVertex) const;
@@ -196,6 +213,20 @@ private:
     std::vector<std::array<uint32_t, 3>> finestFaces_;   // canonical, welded, deduped
     std::vector<uint32_t> weld_;                         // original vertex -> canonical
     std::vector<std::vector<uint32_t>> canonicalWedges_; // canonical -> original render wedges
+
+    // Per-frame scratch, reused across frames so the per-frame path allocates nothing steady-state.
+    // `facingCache_` memoises facingOf(v) within a refineForView call (a vertex is a witness of
+    // many splits, so it is otherwise recomputed repeatedly); `ancestorCache_` memoises
+    // activeAncestor(v) for emit (the front is settled by then, so it is stable). Both are pure
+    // per-frame functions, so the cache is behaviour-identical to the inline computation. `mutable`
+    // because they are filled by logically-const query methods.
+    mutable std::vector<float> facingCache_;        // per canonical vertex (refineForView)
+    mutable std::vector<std::uint8_t> facingValid_; // per canonical vertex: facingCache_ populated?
+    mutable std::vector<uint32_t> ancestorCache_;   // per canonical vertex (emit)
+
+    // Repair counters for the last refineForView + repair cycle (see the accessors above).
+    uint32_t foldoversRepaired_{0};
+    uint32_t coverageRepaired_{0};
 };
 
 } // namespace fire_engine
