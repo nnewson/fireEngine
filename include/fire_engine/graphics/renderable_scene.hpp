@@ -9,6 +9,7 @@
 #include <fire_engine/graphics/frustum.hpp>
 #include <fire_engine/graphics/lighting.hpp>
 #include <fire_engine/graphics/particle.hpp>
+#include <fire_engine/math/vec3.hpp>
 
 namespace fire_engine
 {
@@ -21,16 +22,26 @@ struct CullStats
     std::size_t culled{0};
 };
 
+// The active camera's world-space pose, as the scene reports it to the renderer through the seam.
+// Position + look-at target only — the renderer derives view/projection (and owns FOV/near/far). A
+// future camera-types pass can widen this if a camera legitimately owns its own lens.
+struct CameraView
+{
+    Vec3 position;
+    Vec3 target;
+};
+
 // The render-facing view of a scene, and the Vulkan-free seam between the scene and render
 // layers (CR-09). The renderer holds a RenderableScene& and pulls per-frame draw data through it
 // without ever touching the scene graph's node tree; the scene never sees a Vulkan handle. Every
 // type crossing this interface lives in graphics/ (or math/), so neither `render/` nor `scene/`
 // depends on the other — both depend only on this shared layer.
 //
-// Matrix ownership: the scene owns all transforms (camera + per-object). Per-object world
-// matrices flow to the renderer inside the emitted DrawCommands; the camera transform is supplied
-// back as the `frame` argument the renderer derives its view/projection from. The renderer owns
-// only the render-pipeline matrices (view/projection/shadow) it derives from those inputs.
+// Matrix ownership: the scene owns all transforms (camera + per-object). Per-object world matrices
+// flow to the renderer inside the emitted DrawCommands; the active camera's pose flows through
+// `activeCamera()`. The renderer owns only the render-pipeline matrices (view/projection/shadow) it
+// derives from those inputs — the camera no longer crosses the seam as a bespoke drawFrame
+// argument.
 class RenderableScene
 {
 public:
@@ -41,6 +52,12 @@ public:
     RenderableScene& operator=(const RenderableScene&) = default;
     RenderableScene(RenderableScene&&) noexcept = default;
     RenderableScene& operator=(RenderableScene&&) noexcept = default;
+
+    // This frame's active-camera pose (position + look-at target). Must reflect the current frame,
+    // so the scene's per-frame update (which refreshes camera world transforms) has to run before
+    // the renderer reads this. An implementation with no camera authored returns a fixed debug
+    // fallback (not a real scene entity) — see SceneGraph.
+    [[nodiscard]] virtual CameraView activeCamera() const = 0;
 
     // Resolve this frame's world-space lights into `out` (cleared first).
     virtual void gatherLights(std::vector<Lighting>& out) const = 0;

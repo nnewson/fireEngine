@@ -519,21 +519,22 @@ void FireEngine::loadScene(std::string_view scene_path)
         }
     }
 
-    if (activeCamera != nullptr)
+    // Tell the scene which node the renderer views from. Prefer the glTF-authored camera; if the
+    // scene has none (or its node lacks a Camera component), author a default one so there is
+    // always a real, movable camera node driving the view.
+    Node* cameraNode = (activeCamera != nullptr && activeCamera->componentAs<Camera>() != nullptr)
+                           ? activeCamera
+                           : nullptr;
+    if (cameraNode == nullptr)
     {
-        camera_ = activeCamera->componentAs<Camera>();
-    }
-
-    if (camera_ == nullptr)
-    {
-        auto cameraNode = std::make_unique<Node>("Camera");
-        auto& camera = cameraNode->component().emplace<Camera>();
+        auto node = std::make_unique<Node>("Camera");
+        auto& camera = node->component().emplace<Camera>();
         camera.localPosition({2.0f, 2.0f, 2.0f});
         camera.localPitch(-0.615f);
         camera.localYaw(-2.356f);
-        scene_.addNode(std::move(cameraNode));
-        camera_ = &camera;
+        cameraNode = &scene_.addNode(std::move(node));
     }
+    scene_.activeCamera(cameraNode);
 
     // Seed default directional only when the asset didn't author its own
     // (KHR_lights_punctual). Aim local -Z along normalise(1, -1, 1) so the
@@ -579,8 +580,7 @@ void FireEngine::mainLoop()
         stepSimulation(dt, accumulator);
         syncRenderState(now);
 
-        renderer_->drawFrame(*window_, scene_, camera_->worldPosition(), camera_->worldTarget(),
-                             dt);
+        renderer_->drawFrame(*window_, scene_, dt);
     }
     renderer_->waitIdle();
 }

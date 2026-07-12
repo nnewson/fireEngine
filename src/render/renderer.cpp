@@ -853,9 +853,15 @@ void Renderer::recordPostProcessing(vk::CommandBuffer cmd, uint32_t imageIndex)
     profiler_.end(cmd, currentFrame_, ProfilePass::Post);
 }
 
-void Renderer::drawFrame(Window& display, RenderableScene& scene, Vec3 cameraPosition,
-                         Vec3 cameraTarget, float dt)
+void Renderer::drawFrame(Window& display, RenderableScene& scene, float dt)
 {
+    // The scene owns the active camera; pull its pose through the seam. (The scene's per-frame
+    // update — which refreshes camera world transforms — has already run in the main loop before
+    // this.)
+    const CameraView camera = scene.activeCamera();
+    const Vec3 cameraPosition = camera.position;
+    const Vec3 cameraTarget = camera.target;
+
     auto imageIndex = acquireNextImage(display);
     if (!imageIndex)
     {

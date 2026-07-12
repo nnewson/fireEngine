@@ -1,3 +1,7 @@
+#include <cassert>
+
+#include <fire_engine/core/log.hpp>
+#include <fire_engine/scene/camera.hpp>
 #include <fire_engine/scene/light.hpp>
 #include <fire_engine/scene/particle_emitter.hpp>
 #include <fire_engine/scene/scene_draw_context.hpp>
@@ -161,6 +165,36 @@ CullStats SceneGraph::buildDrawCommands(const FrameInfo& frame, std::span<const 
         node->render(ctx, rootTransform_);
     }
     return stats;
+}
+
+CameraView SceneGraph::activeCamera() const
+{
+    if (activeCameraNode_ == nullptr)
+    {
+        // No camera authored. Return a fixed debug pose — deliberately NOT a scene node, so it
+        // can't be moved or drawn and never becomes a crutch that papers over an unauthored scene.
+        // Warn once so the missing camera is visible in the log rather than silently worked around.
+        static bool warned = false;
+        if (!warned)
+        {
+            warned = true;
+            log::warn(
+                log::category::general,
+                "No active camera set; rendering from the debug fallback pose. Author a Camera "
+                "node and pass it to SceneGraph::activeCamera(node).");
+        }
+        return CameraView{Vec3{2.0f, 2.0f, 2.0f}, Vec3{0.0f, 0.0f, 0.0f}};
+    }
+    const Camera* camera = activeCameraNode_->componentAs<Camera>();
+    assert(camera != nullptr && "active camera node lost its Camera component");
+    return CameraView{camera->worldPosition(), camera->worldTarget()};
+}
+
+void SceneGraph::activeCamera(Node* cameraNode) noexcept
+{
+    assert((cameraNode == nullptr || cameraNode->componentAs<Camera>() != nullptr) &&
+           "SceneGraph::activeCamera: node must carry a Camera component");
+    activeCameraNode_ = cameraNode;
 }
 
 void SceneGraph::gatherLights(std::vector<Lighting>& out) const
