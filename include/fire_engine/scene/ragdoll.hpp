@@ -3,9 +3,12 @@
 #include <cstddef>
 #include <cstdint>
 #include <span>
+#include <string>
+#include <unordered_map>
 #include <vector>
 
 #include <fire_engine/math/constants.hpp>
+#include <fire_engine/math/vec3.hpp>
 #include <fire_engine/physics/physics_handle.hpp>
 
 namespace fire_engine
@@ -13,6 +16,18 @@ namespace fire_engine
 
 class Node;
 class PhysicsWorld;
+
+// Per-bone joint override: authors a specific bone's joint as a true 1-DOF hinge (Revolute) with an
+// asymmetric angle range about `axis` (bone-local, radians), instead of the ragdoll's default
+// uniform spherical cone-twist. A knee/elbow — bends within [lower, upper] one way only. Applies to
+// the articulated (`makeArticulated`) path only; keyed by the bone node's name in
+// RagdollParams::hinges.
+struct RagdollHinge
+{
+    Vec3 axis{1.0f, 0.0f, 0.0f};
+    float lower{0.0f};
+    float upper{0.0f};
+};
 
 // Tuning for an auto-built ragdoll. One capsule body per bone (radius `radius`,
 // length from the bone-to-parent span or `defaultBoneLength` for a root/leaf), with
@@ -26,6 +41,9 @@ struct RagdollParams
     bool coneTwist{true};
     float swingLimit{0.7f}; // cone half-angle (radians, ~40°)
     float twistLimit{0.5f}; // ± twist (radians)
+    // Per-bone hinge overrides (articulated path): a listed bone becomes a 1-DOF Revolute with its
+    // own axis + range; unlisted bones keep the uniform spherical cone above. Keyed by bone name.
+    std::unordered_map<std::string, RagdollHinge> hinges;
     // Build a reduced-coordinate articulation (makeArticulated) instead of maximal-coordinate
     // rigid bodies + joints (make). Joint error is zero by construction, so a complex skeleton
     // settles where the maximal chain limit-cycles — needed for a full humanoid like CesiumMan.
@@ -53,11 +71,12 @@ public:
                         const RagdollParams& params = {});
 
     // Reduced-coordinate variant (Phase F): binds the bones to a single `Articulation`
-    // instead of N rigid bodies + joints — a floating-base pelvis (the root bone), one
-    // spherical joint per child bone (seeded from the bind pose), a capsule link collider
-    // per bone, and (with `coneTwist`) uniform swing-cone + twist limits. Joint error is
-    // zero by construction, so it settles where the maximal-coordinate chain limit-cycles.
-    // Requires a single root bone. Uniform limits for now; per-joint authoring layers on top.
+    // instead of N rigid bodies + joints — a floating-base pelvis (the root bone), a spherical
+    // joint per child bone (seeded from the bind pose) with (with `coneTwist`) uniform swing-cone +
+    // twist limits, and a capsule link collider per bone. Bones named in `params.hinges` instead
+    // get a true 1-DOF **Revolute** hinge with their own axis + asymmetric range (a knee/elbow).
+    // Joint error is zero by construction, so it settles where the maximal-coordinate chain
+    // limit-cycles. Requires a single root bone.
     [[nodiscard]]
     static Ragdoll makeArticulated(PhysicsWorld& physics, std::span<Node* const> bones,
                                    const RagdollParams& params = {});

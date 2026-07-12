@@ -52,18 +52,20 @@ PhysicsArticulationHandle PhysicsWorld::createArticulation()
     const GenerationalSlotPool::Slot slot = articulationSlots_.acquire();
     const PhysicsArticulationHandle handle =
         PhysicsArticulationHandle::make(slot.index, slot.generation);
-    // The sleep arrays are 1:1 with articulations_ by slot. Grow all three in lockstep, or reset
+    // The sleep arrays are 1:1 with articulations_ by slot. Grow them in lockstep, or reset
     // the recycled slot's payload (a fresh 0-link articulation) + sleep state.
     if (slot.index >= articulations_.size())
     {
         articulations_.emplace_back();
         articulationSleepTimers_.push_back(0.0f);
+        articulationRestSnapTimers_.push_back(0.0f);
         articulationSleeping_.push_back(0U);
     }
     else
     {
         articulations_[slot.index] = Articulation{};
         articulationSleepTimers_[slot.index] = 0.0f;
+        articulationRestSnapTimers_[slot.index] = 0.0f;
         articulationSleeping_[slot.index] = 0U;
     }
     return handle;
@@ -87,6 +89,7 @@ bool PhysicsWorld::destroyArticulation(PhysicsArticulationHandle handle)
     const std::uint32_t index = handle.index();
     articulations_[index] = Articulation{}; // release links; a 0-link articulation is inert
     articulationSleepTimers_[index] = 0.0f;
+    articulationRestSnapTimers_[index] = 0.0f;
     articulationSleeping_[index] = 0U;
     articulationSlots_.release(index); // bumps generation → stale handles detectably invalid
     return true;
@@ -179,6 +182,10 @@ void PhysicsWorld::stepArticulations(float dt)
     if (articulationSleepTimers_.size() != articulations_.size())
     {
         articulationSleepTimers_.resize(articulations_.size(), 0.0f);
+    }
+    if (articulationRestSnapTimers_.size() != articulations_.size())
+    {
+        articulationRestSnapTimers_.resize(articulations_.size(), 0.0f);
     }
     if (articulationSleeping_.size() != articulations_.size())
     {
@@ -326,6 +333,7 @@ void PhysicsWorld::stepArticulations(float dt)
         if (!sleepingEnabled_)
         {
             articulationSleepTimers_[i] = 0.0f;
+            articulationRestSnapTimers_[i] = 0.0f;
             articulationSleeping_[i] = 0U;
             stepArticulationOnPlanes(art, perArticulation[i], gravity_, dt, kArticulationDamping,
                                      perArticulationLink[i]);
@@ -341,6 +349,7 @@ void PhysicsWorld::stepArticulations(float dt)
             }
             articulationSleeping_[i] = 0U;
             articulationSleepTimers_[i] = 0.0f;
+            articulationRestSnapTimers_[i] = 0.0f;
         }
 
         stepArticulationOnPlanes(art, perArticulation[i], gravity_, dt, kArticulationDamping,
@@ -355,7 +364,21 @@ void PhysicsWorld::stepArticulations(float dt)
             articulationSleepTimers_[i] = 0.0f;
         }
 
-        if (articulationSleepTimers_[i] >= kSleepTime)
+        // Near-rest snap: a lone straggler (e.g. a shoulder creeping in after the body has landed)
+        // sits right at the sleep threshold, resetting the strict dwell above, while the rest of
+        // the chain is already still. Once EVERYTHING is within the wider near-rest band for a
+        // short dwell, zero the residual so the body sleeps as a unit instead of trailing the limb.
+        if (belowArticulationSleepThreshold(art, kArticulationRestSnapThreshold))
+        {
+            articulationRestSnapTimers_[i] += dt;
+        }
+        else
+        {
+            articulationRestSnapTimers_[i] = 0.0f;
+        }
+
+        if (articulationSleepTimers_[i] >= kSleepTime ||
+            articulationRestSnapTimers_[i] >= kArticulationRestSnapTime)
         {
             zeroArticulationVelocity(art);
             articulationSleeping_[i] = 1U;

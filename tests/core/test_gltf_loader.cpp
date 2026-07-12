@@ -696,6 +696,40 @@ TEST_CASE("GltfNodeExtras.RagdollFieldsParse", "[GltfNodeExtras]")
     CHECK(params->twistLimit == Catch::Approx(0.6f));
 }
 
+TEST_CASE("GltfNodeExtras.RagdollHingeJointsParse", "[GltfNodeExtras]")
+{
+    // Per-bone hinge overrides: a map keyed by bone node name, each a 1-DOF Revolute (axis +
+    // range).
+    const auto params = nodeExtrasRagdollFromJson(
+        R"({"Ragdoll":{"Articulated":true,"Joints":{)"
+        R"("LeftLowerLeg":{"Type":"Hinge","Axis":[1,0,0],"Min":0.0,"Max":2.6},)"
+        R"("RightForeArm":{"Type":"Hinge","Axis":[0,0,1],"Min":-0.2,"Max":2.4}}}})");
+    REQUIRE(params.has_value());
+    REQUIRE(params->hinges.size() == 2u);
+
+    const auto knee = params->hinges.find("LeftLowerLeg");
+    REQUIRE(knee != params->hinges.end());
+    CHECK(knee->second.axis.x() == Catch::Approx(1.0f));
+    CHECK(knee->second.axis.y() == Catch::Approx(0.0f));
+    CHECK(knee->second.lower == Catch::Approx(0.0f));
+    CHECK(knee->second.upper == Catch::Approx(2.6f));
+
+    const auto elbow = params->hinges.find("RightForeArm");
+    REQUIRE(elbow != params->hinges.end());
+    CHECK(elbow->second.axis.z() == Catch::Approx(1.0f));
+    CHECK(elbow->second.lower == Catch::Approx(-0.2f));
+    CHECK(elbow->second.upper == Catch::Approx(2.4f));
+}
+
+TEST_CASE("GltfNodeExtras.RagdollUnknownJointTypeThrows", "[GltfNodeExtras]")
+{
+    // Only "Hinge" is authorable today; an unknown Type is a hard error, not a silent skip.
+    CHECK_THROWS_AS(
+        nodeExtrasRagdollFromJson(
+            R"({"Ragdoll":{"Joints":{"Knee":{"Type":"Ball","Axis":[1,0,0],"Min":0,"Max":1}}}})"),
+        std::runtime_error);
+}
+
 TEST_CASE("GltfNodeExtras.InvalidRagdollObjectThrows", "[GltfNodeExtras]")
 {
     CHECK_THROWS_AS(nodeExtrasRagdollFromJson(R"({"Ragdoll":true})"), std::runtime_error);

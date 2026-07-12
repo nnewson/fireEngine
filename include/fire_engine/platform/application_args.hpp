@@ -115,6 +115,12 @@ struct ApplicationArgs
             args.debug.view = DebugView::Ssao;
             continue;
         }
+        if (arg == "--debug-joints")
+        {
+            // Replaces the scene meshes with the ragdoll articulation gizmo + index:name labels.
+            args.debug.view = DebugView::Joints;
+            continue;
+        }
         if (arg == "--no-shadows")
         {
             args.debug.noShadows = true;

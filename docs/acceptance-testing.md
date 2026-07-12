@@ -274,11 +274,21 @@ top.) Images are `placeholder.jpg` for now.
 Original assets (no upstream source / image). Reference images are `placeholder.jpg` for now.
 
 ### CesiumManRagdoll — articulated ragdoll settling on a floor (needs `-f`)
-Falls and settles into a plausible pose; without `-f` there is no floor and it falls through.
+Falls and settles into a plausible pose; without `-f` there is no floor and it falls through. The
+knees and elbows are authored as true 1-DOF hinges (`extras.Ragdoll.Joints`), so the limbs fold one
+way about their hinge axis rather than swinging in a cone.
 ```bash
 ./fireEngineApp CesiumMan/CesiumManRagdoll.gltf skybox.hdr -f
 ```
 ![CesiumManRagdoll](placeholder.jpg)
+
+Add `--debug-joints` (or overlay **View → Joints**) to replace the mesh with the per-joint RGB axis
+gizmo + "index: bone-name" labels — used to author/verify the hinge axes. The labels should track the
+joints as the camera moves, and turning the view off should restore the mesh with no leftover gizmo.
+```bash
+./fireEngineApp CesiumMan/CesiumManRagdoll.gltf skybox.hdr -f --debug-joints
+```
+![CesiumManRagdoll joints](placeholder.jpg)
 
 ### ClothBanner — authored `extras.Cloth` (pinned banner)
 Cloth hangs from its pinned edge and sways.

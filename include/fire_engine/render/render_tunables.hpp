@@ -6,9 +6,11 @@
 namespace fire_engine
 {
 
-// Selects which debug-view branch the forward fragment shader runs. Mapped
-// 1:1 to LightUBO::environmentParams[2] (0..5) — keep the enum and shader
-// constants in lockstep.
+// Selects which debug-view branch the forward fragment shader runs. Values 0..7 map
+// 1:1 to LightUBO::environmentParams[2] — keep the enum and shader constants in lockstep.
+// `Joints` (8) is the exception: it has no shader branch — instead it replaces the scene
+// geometry with the ragdoll articulation gizmo + labels, and is forced to `None` when
+// written to the shader (see Renderer::updateLightData).
 enum class DebugView : int
 {
     None = 0,
@@ -23,6 +25,10 @@ enum class DebugView : int
     Ssao = 6,
     // Tints each mesh by its selected discrete LOD level (0 green → 1 yellow → 2 red → …).
     Lod = 7,
+    // Overlay-only (no shader branch): suppresses the scene meshes and draws a per-joint RGB
+    // axis gizmo + an "index: bone-name" label for each articulation link, so a skeleton's
+    // joints can be identified (e.g. to author per-bone hinge limits).
+    Joints = 8,
 };
 
 // Live, runtime-editable render parameters surfaced by the debug overlay. Seeded

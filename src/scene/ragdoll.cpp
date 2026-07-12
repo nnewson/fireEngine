@@ -330,7 +330,6 @@ Ragdoll Ragdoll::makeArticulated(PhysicsWorld& physics, std::span<Node* const> b
         {
             const auto pb = static_cast<std::size_t>(parent[bi]);
             desc.parent = linkOf[pb];
-            desc.joint = ArticulationJointType::Spherical;
             // Relative parent→child transform so forward kinematics at q = 0 reproduces the
             // bind pose (jointToChild stays identity — the joint sits at the child origin).
             desc.parentToJoint = RigidTransform{rot[pb].conjugate() * rot[bi],
@@ -340,11 +339,27 @@ Ragdoll Ragdoll::makeArticulated(PhysicsWorld& physics, std::span<Node* const> b
             {
                 boneAxisLocal = rot[bi].conjugate().rotate(Vec3::normalise(boneDirWorld));
             }
-            desc.jointAxis = boneAxisLocal;
-            if (params.coneTwist)
+            // Per-bone hinge override: an authored knee/elbow becomes a true 1-DOF Revolute with an
+            // asymmetric range about its authored axis; every other bone keeps the uniform
+            // spherical cone-twist. (The capsule still spans boneAxisLocal below — the joint axis
+            // is separate.)
+            if (const auto hinge = params.hinges.find(boneNodes[bi]->name());
+                hinge != params.hinges.end())
             {
-                desc.swingLimit = params.swingLimit;
-                desc.twistLimit = params.twistLimit;
+                desc.joint = ArticulationJointType::Revolute;
+                desc.jointAxis = Vec3::normalise(hinge->second.axis);
+                desc.jointLowerLimit = hinge->second.lower;
+                desc.jointUpperLimit = hinge->second.upper;
+            }
+            else
+            {
+                desc.joint = ArticulationJointType::Spherical;
+                desc.jointAxis = boneAxisLocal;
+                if (params.coneTwist)
+                {
+                    desc.swingLimit = params.swingLimit;
+                    desc.twistLimit = params.twistLimit;
+                }
             }
             linkOf[bi] = art->addLink(desc);
         }

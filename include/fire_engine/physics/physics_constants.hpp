@@ -115,12 +115,31 @@ inline constexpr float kBaseSettleDamping = 8.0f; // 1/s — strong linear decay
 inline constexpr float kJointSettleSpeed = 0.5f;   // rad/s — below this a joint is "settling"
 inline constexpr float kJointSettleDamping = 8.0f; // 1/s — strong decay of residual joint velocity
 
+// Once the base has *landed* (its linear speed has fallen below kBaseSettleSpeed), the joint settle
+// gate widens to this. The residual hip/limb wiggle after a collapse rings in a band (~1–4 rad/s)
+// that is too fast for kJointSettleSpeed yet well below the dramatic collapse (6–13 rad/s); gating
+// the wider band on "landed" bleeds the wiggle while the airborne collapse — whose joints are
+// faster than this — is left untouched (the base can momentarily read slow mid-collapse, so the
+// speed gate still guards the fast joints even then).
+inline constexpr float kJointSettleSpeedLanded = 4.0f; // rad/s
+
 // Settle decay for the base's spin about the vertical (yaw) only, once the base is settling.
 // Contact friction doesn't resist rotation about the vertical, so a rested ragdoll keeps a slow
 // residual yaw — the last visible motion once the limbs stop. Damping the *full* base angular
 // destabilises a near-planar chain, so only the world-up component is decayed
 // (Articulation::integrateVelocities).
 inline constexpr float kBaseYawSettleDamping = 8.0f; // 1/s
+
+// Settle decay for the base's roll/pitch (spin about a *horizontal* axis) once the base is
+// settling. A ragdoll that has collapsed onto its side/back rocks left-right about a horizontal
+// axis — the base linear + yaw dampers don't touch it, so it's the last mode to ring out (only
+// contact friction + passive joint damping bleed it, slowly). Damping the full base angular during
+// a *violent* impact destabilises a near-planar chain (why it was left out), so this is
+// double-gated: applied only while the base is settling (linear-speed gate below kBaseSettleSpeed)
+// AND only to a residual roll/pitch already slower than kBaseRockSettleSpeed. A fast, dramatic
+// collapse is left untouched.
+inline constexpr float kBaseRockSettleSpeed = 1.2f; // rad/s — below this the roll/pitch is residual
+inline constexpr float kBaseRockSettleDamping = 6.0f; // 1/s — decay of that residual roll/pitch
 
 // Velocity-level cone-twist joint-limit push-out (solveJointLimits): close a fraction
 // kJointLimitErp of the angular over-limit per step, capped at kJointLimitMaxPush rad/s so a
@@ -157,6 +176,19 @@ inline constexpr float kAngularSleepThreshold = 0.05f;
 // jointed-island rigid-body threshold instead of the singleton rigid-body angular threshold.
 inline constexpr float kArticulationAngularSleepThreshold = 0.15f;
 inline constexpr float kSleepTime = 0.5f;
+
+// Near-rest snap for a reduced-coordinate articulation. A lone straggler DOF (e.g. a shoulder
+// creeping in under gravity after the body has landed) can hover right at
+// kArticulationAngularSleepThreshold, ticking above it often enough to keep resetting the sleep
+// dwell — so the whole chain stays awake for ~a second while one limb crawls to rest. Once
+// EVERYTHING (base linear via kLinearSleepThreshold, base angular, and every joint rate) sits
+// within this slightly wider band for kArticulationRestSnapTime, the residual is zeroed so the body
+// sleeps as a unit instead of trailing a limb. Wider than the sleep threshold (to catch the
+// straggler) with a shorter dwell (it is a "basically done" signal); the dwell keeps it from firing
+// mid-motion, and by fire time the residual has decayed well under the band so the zero is not a
+// visible pop.
+inline constexpr float kArticulationRestSnapThreshold = 0.30f; // rad/s
+inline constexpr float kArticulationRestSnapTime = 0.25f;      // s held below the band before snap
 
 // Static-mesh contacts (P6): a triangle contact point deeper than this below the
 // triangle plane is treated as a degenerate EPA result (a garbage witness point on a

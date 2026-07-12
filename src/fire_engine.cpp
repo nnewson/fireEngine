@@ -657,31 +657,104 @@ void FireEngine::syncRenderState(double time)
 {
     // World colliders for the cloth solver: physics bodies + the ground plane.
     auto colliders = physics_.gatherColliders();
-    // Physics debug draw uses the authored shapes (pre-plane); only gather the
-    // rest of the debug data when a debug-draw category is enabled. The query-probe
-    // rays draw independently of the --debug-physics categories.
-    if (renderer_->physicsDebugWanted() || queryProbeActive_)
+    // Rebuild the debug-draw data every frame — even when nothing is enabled — so toggling a
+    // category off actually clears last frame's geometry (a retained PhysicsDebugData would keep
+    // drawing it). The query-probe rays and the joint view each gather independently of the
+    // --debug-physics wireframe categories. Physics debug draw uses the authored shapes
+    // (pre-plane).
+    PhysicsDebugData debugData;
+    if (queryProbeActive_)
     {
-        PhysicsDebugData debugData;
         debugData.queryLines = queryProbeLines(time);
-        if (renderer_->physicsDebugWanted())
+    }
+    // Collider wireframes are the spatial context for both the physics categories and the joint
+    // view (which suppresses the mesh) — draw them for either so the joints aren't floating in a
+    // void.
+    if (renderer_->physicsDebugWanted() || renderer_->jointDebugWanted())
+    {
+        debugData.shapes = colliders;
+        debugData.shapesAsleep = physics_.debugColliderSleeping();
+    }
+    if (renderer_->physicsDebugWanted())
+    {
+        debugData.aabbs = physics_.debugColliderBounds();
+        debugData.contacts = physics_.debugContacts();
+        for (const DebugJointAnchor& joint : physics_.debugJointAnchors())
         {
-            debugData.aabbs = physics_.debugColliderBounds();
-            debugData.shapes = colliders;
-            debugData.contacts = physics_.debugContacts();
-            debugData.shapesAsleep = physics_.debugColliderSleeping();
-            for (const DebugJointAnchor& joint : physics_.debugJointAnchors())
+            debugData.jointLinks.push_back(
+                DebugCapsule{joint.originA, joint.originB, 0.025f, Colour3{0.1f, 0.65f, 1.0f}});
+            const float stretch = (joint.anchorA - joint.anchorB).magnitude();
+            const Colour3 colour =
+                stretch > 0.02f ? Colour3{1.0f, 0.2f, 0.1f} : Colour3{0.1f, 0.9f, 0.35f};
+            debugData.queryLines.push_back(DebugLine{joint.anchorA, joint.anchorB, colour});
+        }
+    }
+    // Ragdoll articulation joints (the "Joints" debug view, which also suppresses the scene mesh):
+    // per link a local-frame RGB axis gizmo (reference for reading off the hinge axis) + a
+    // degree-of-freedom overlay keyed on the joint type (a bright hinge line for a 1-DOF Revolute)
+    // + an "index: bone-name (Type)" label, so joints can be identified for extras.Ragdoll.Joints
+    // authoring and their DOF seen at a glance.
+    if (renderer_->jointDebugWanted())
+    {
+        for (const Ragdoll& ragdoll : ragdolls_)
+        {
+            if (!ragdoll.articulated())
             {
-                debugData.jointLinks.push_back(
-                    DebugCapsule{joint.originA, joint.originB, 0.025f, Colour3{0.1f, 0.65f, 1.0f}});
-                const float stretch = (joint.anchorA - joint.anchorB).magnitude();
-                const Colour3 colour =
-                    stretch > 0.02f ? Colour3{1.0f, 0.2f, 0.1f} : Colour3{0.1f, 0.9f, 0.35f};
-                debugData.queryLines.push_back(DebugLine{joint.anchorA, joint.anchorB, colour});
+                continue;
+            }
+            const Articulation* art = physics_.articulation(ragdoll.articulation());
+            if (art == nullptr)
+            {
+                continue;
+            }
+            for (std::size_t i = 0; i < ragdoll.boneCount(); ++i)
+            {
+                const int link = ragdoll.link(i);
+                if (link < 0)
+                {
+                    continue;
+                }
+                const auto linkIdx = static_cast<std::size_t>(link);
+                const RigidTransform lw = art->linkWorld(linkIdx);
+                const Vec3 origin = lw.translation;
+                constexpr float len = 0.06f;
+                debugData.queryLines.push_back(
+                    DebugLine{origin, origin + lw.rotation.rotate(Vec3{len, 0.0f, 0.0f}),
+                              Colour3{1.0f, 0.25f, 0.25f}}); // X = red
+                debugData.queryLines.push_back(
+                    DebugLine{origin, origin + lw.rotation.rotate(Vec3{0.0f, len, 0.0f}),
+                              Colour3{0.25f, 1.0f, 0.25f}}); // Y = green
+                debugData.queryLines.push_back(
+                    DebugLine{origin, origin + lw.rotation.rotate(Vec3{0.0f, 0.0f, len}),
+                              Colour3{0.3f, 0.5f, 1.0f}}); // Z = blue
+
+                // Degree-of-freedom overlay. Revolute (1 DOF): a bright bidirectional line along
+                // the hinge axis it rotates about — the dominant, instantly-readable marker.
+                // Spherical (3 DOF): the RGB triad already spans it. Fixed (0 DOF): nothing extra.
+                const ArticulationJointType jointType = art->jointType(linkIdx);
+                const char* typeName = "Fixed";
+                if (jointType == ArticulationJointType::Revolute)
+                {
+                    typeName = "Revolute";
+                    const Vec3 axis = lw.rotation.rotate(art->jointAxis(linkIdx));
+                    constexpr float hingeLen = 0.11f;
+                    debugData.queryLines.push_back(
+                        DebugLine{origin - axis * hingeLen, origin + axis * hingeLen,
+                                  Colour3{1.0f, 0.9f, 0.15f}}); // DOF axis
+                }
+                else if (jointType == ArticulationJointType::Spherical)
+                {
+                    typeName = "Spherical";
+                }
+
+                const Node* node = ragdoll.node(i);
+                debugData.jointLabels.push_back(DebugLabel{
+                    origin, std::to_string(link) + ": " + (node != nullptr ? node->name() : "?") +
+                                " (" + typeName + ")"});
             }
         }
-        renderer_->setPhysicsDebug(std::move(debugData));
     }
+    renderer_->setPhysicsDebug(std::move(debugData));
     colliders.push_back(makePlaneCollider(Vec3{0.0f, 1.0f, 0.0f}, 0.0f));
     renderer_->setClothColliders(colliders);
 }

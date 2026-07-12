@@ -91,6 +91,8 @@ int Articulation::addLink(const ArticulationLinkDesc& desc)
     link.comLocal = desc.comLocal;
     link.swingLimit = desc.swingLimit;
     link.twistLimit = desc.twistLimit;
+    link.jointLowerLimit = desc.jointLowerLimit;
+    link.jointUpperLimit = desc.jointUpperLimit;
     link.driveTarget = desc.driveTarget;
     link.driveTargetRotation = desc.driveTargetRotation;
     link.driveStiffness = desc.driveStiffness;
@@ -631,7 +633,10 @@ Vec3 Articulation::jointImpulseResponse(std::size_t link, const Vec3& genImpulse
     // recoils, exactly conserving momentum (so clamping a joint rate stays physical).
     const std::size_t n = links_.size();
     const Link& target = links_[link];
-    if (target.joint != ArticulationJointType::Spherical)
+    // Works for any moving joint: the ABA sweep below is DOF-count-generic, and `genImpulse`'s
+    // x/y/z supply the target's up-to-3 DOFs (Revolute reads only .x()). A 0-DOF (Fixed) target has
+    // no rate to change.
+    if (target.dofCount == 0)
     {
         return Vec3{};
     }
@@ -707,7 +712,10 @@ Vec3 Articulation::jointImpulseResponse(std::size_t link, const Vec3& genImpulse
         }
     }
 
-    const Vec3 dOmega{dq[targetOff], dq[targetOff + 1], dq[targetOff + 2]};
+    // Only the target's own DOFs (dq[targetOff .. +dofCount-1]) are its rate change; guard the
+    // +1/+2 reads so a 1-DOF Revolute target doesn't read a neighbour's slot (or past the end).
+    const Vec3 dOmega{dq[targetOff], target.dofCount > 1 ? dq[targetOff + 1] : 0.0f,
+                      target.dofCount > 2 ? dq[targetOff + 2] : 0.0f};
     if (commit)
     {
         for (int k = 0; k < dofCount_; ++k)
@@ -852,6 +860,45 @@ void Articulation::solveJointLimits(float invH, bool useBias, float erp, float m
     for (std::size_t i = 1; i < links_.size(); ++i)
     {
         const Link& link = links_[i];
+
+        if (link.joint == ArticulationJointType::Revolute)
+        {
+            // Revolute angle stop: keep q inside [jointLowerLimit, jointUpperLimit] (a true hinge —
+            // asymmetric 1-DOF range) with the same velocity-level unilateral push-back the
+            // cone-twist limit uses. Disabled (free spin) unless a range is authored (upper >
+            // lower).
+            if (link.jointUpperLimit <= link.jointLowerLimit)
+            {
+                continue;
+            }
+            const auto off = static_cast<std::size_t>(link.dofOffset);
+            const float q = q_[off];
+            const bool overMax = q > link.jointUpperLimit;
+            const bool underMin = q < link.jointLowerLimit;
+            if (!overMax && !underMin)
+            {
+                continue;
+            }
+            // Effective inverse mass of the single DOF: Δq̇ per unit generalized impulse on it.
+            const float invEff = jointImpulseResponse(i, Vec3{1.0f, 0.0f, 0.0f}, false).x();
+            if (invEff <= 1.0e-9f)
+            {
+                continue;
+            }
+            const float excess = overMax ? (q - link.jointUpperLimit) : (link.jointLowerLimit - q);
+            const float push = useBias ? std::min(excess * erp * invH, maxPush) : 0.0f;
+            // Target joint rate: back inward (−push past the max, +push past the min). Apply an
+            // impulse only if the rate is currently worse than that (moving further out / not
+            // returning fast enough), mirroring the cone-twist unilateral test.
+            const float qDotTarget = overMax ? -push : push;
+            const bool violating = overMax ? (qDot_[off] > qDotTarget) : (qDot_[off] < qDotTarget);
+            if (violating)
+            {
+                jointImpulseResponse(i, Vec3{(qDotTarget - qDot_[off]) / invEff, 0.0f, 0.0f}, true);
+            }
+            continue;
+        }
+
         if (link.joint != ArticulationJointType::Spherical)
         {
             continue;
@@ -928,12 +975,18 @@ void Articulation::integrateVelocities(float dt)
     // to the sleep threshold over seconds. Fast, dramatic collapse motion is left untouched.
     // Mirrors the base's linear settle assist below; gated on jointDamping_ > 0 so a free
     // articulation is untouched.
+    // Once the base has landed, widen the gate to catch the residual hip/limb wiggle band (which is
+    // faster than kJointSettleSpeed but slower than the airborne collapse). baseVel_ here is the
+    // substep-start base velocity (the base half integrates below), a valid "has it landed" signal.
+    const bool baseLanded =
+        !baseFixed_ && jointDamping_ > 0.0f && baseVel_.linear.magnitude() < kBaseSettleSpeed;
     if (jointDamping_ > 0.0f)
     {
         const float decay = 1.0f / (1.0f + kJointSettleDamping * dt);
+        const float gate = baseLanded ? kJointSettleSpeedLanded : kJointSettleSpeed;
         for (int i = 0; i < dofCount_; ++i)
         {
-            if (std::abs(qDot_[static_cast<std::size_t>(i)]) < kJointSettleSpeed)
+            if (std::abs(qDot_[static_cast<std::size_t>(i)]) < gate)
             {
                 qDot_[static_cast<std::size_t>(i)] *= decay;
             }
@@ -963,6 +1016,20 @@ void Articulation::integrateVelocities(float dt)
                 const float yaw = Vec3::dotProduct(baseVel_.angular, upBase);
                 const float yawDecay = 1.0f / (1.0f + kBaseYawSettleDamping * dt);
                 baseVel_.angular = baseVel_.angular - upBase * (yaw * (1.0f - yawDecay));
+
+                // Residual roll/pitch (the non-yaw, horizontal-axis spin) is the base's last
+                // ringing mode — a collapsed ragdoll rocking left-right. Decay it too, but only the
+                // slow residual (below kBaseRockSettleSpeed) so a violent impact's fast
+                // base-angular is untouched and the near-planar instability that kept full
+                // base-angular damping out isn't re-tripped. Uses the post-yaw-decay angular so the
+                // two don't double-count.
+                const float yawAfter = Vec3::dotProduct(baseVel_.angular, upBase);
+                const Vec3 rock = baseVel_.angular - upBase * yawAfter; // roll + pitch only
+                if (rock.magnitude() < kBaseRockSettleSpeed)
+                {
+                    const float rockDecay = 1.0f / (1.0f + kBaseRockSettleDamping * dt);
+                    baseVel_.angular = baseVel_.angular - rock * (1.0f - rockDecay);
+                }
             }
         }
     }

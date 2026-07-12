@@ -209,6 +209,71 @@ TEST_CASE("Articulation.FloatingBaseConservesLinearMomentum", "[Articulation]")
     CHECK(comAccel == Catch::Approx(-9.81f).margin(0.02f)); // COM free-falls at g
 }
 
+TEST_CASE("Articulation.RevoluteJointHeldWithinAuthoredAngleLimit", "[Articulation]")
+{
+    // A revolute hinge with an authored asymmetric range is a true 1-DOF stop: driven past the
+    // upper limit it is pushed back inside by the velocity-level unilateral constraint and stays
+    // at/under the stop; a joint with no authored range spins freely (the default 0/0 disables the
+    // limit).
+    const float dt = 1.0f / 240.0f;
+    const float invH = 1.0f / dt;
+
+    Articulation a; // fixed base (default)
+    a.addRootLink(ArticulationLinkDesc{});
+    ArticulationLinkDesc hinge;
+    hinge.parent = 0;
+    hinge.joint = ArticulationJointType::Revolute;
+    hinge.jointAxis = Vec3{0.0f, 0.0f, 1.0f};
+    hinge.mass = 1.0f;
+    hinge.inertiaLocal = Vec3{0.1f, 0.1f, 0.1f};
+    hinge.jointLowerLimit = -0.5f;
+    hinge.jointUpperLimit = 0.8f;
+    a.addLink(hinge);
+
+    // Driven past the upper stop and still moving further out — the limit pushes the rate back
+    // inward on this very sweep.
+    a.q(0, 1.2f);
+    a.qDot(0, 3.0f);
+    a.factorizeArticulatedInertia();
+    a.solveJointLimits(invH, /*useBias=*/true, /*erp=*/0.2f, /*maxPush=*/20.0f);
+    CHECK(a.qDot()[0] < 0.0f); // was +3, now pushed back toward the stop
+
+    // Over a short gravity-free sim (joint damping bleeds the residual rate) it settles at/under
+    // the stop and never exceeds it.
+    for (int i = 0; i < 300; ++i)
+    {
+        a.computeAccelerations(Vec3{}, /*jointDamping=*/2.0f);
+        a.solveJointLimits(invH, true, 0.2f, 20.0f);
+        a.integrate(dt);
+    }
+    CHECK(a.q()[0] <= Catch::Approx(0.8f).margin(0.05f)); // held at/under the upper stop
+    CHECK(a.q()[0] > 0.0f); // stayed on the upper side, didn't collapse
+
+    // Symmetric lower stop: drive below the lower limit, confirm it's pushed back up.
+    a.q(0, -1.0f);
+    a.qDot(0, -3.0f);
+    a.factorizeArticulatedInertia();
+    a.solveJointLimits(invH, true, 0.2f, 20.0f);
+    CHECK(a.qDot()[0] > 0.0f); // pushed back up toward the lower stop
+
+    // No authored range (default 0/0 → upper <= lower): the joint spins freely, limit never
+    // engages.
+    Articulation freeSpin;
+    freeSpin.addRootLink(ArticulationLinkDesc{});
+    ArticulationLinkDesc spin;
+    spin.parent = 0;
+    spin.joint = ArticulationJointType::Revolute;
+    spin.jointAxis = Vec3{0.0f, 0.0f, 1.0f};
+    spin.mass = 1.0f;
+    spin.inertiaLocal = Vec3{0.1f, 0.1f, 0.1f};
+    freeSpin.addLink(spin);
+    freeSpin.q(0, 5.0f);
+    freeSpin.qDot(0, 2.0f);
+    freeSpin.factorizeArticulatedInertia();
+    freeSpin.solveJointLimits(invH, true, 0.2f, 20.0f);
+    CHECK(freeSpin.qDot()[0] == Catch::Approx(2.0f)); // untouched — free spin
+}
+
 TEST_CASE("RigidTransform.ComposeAndInverseRoundTrip", "[Articulation]")
 {
     const RigidTransform t{Quaternion::fromAxisAngle(Vec3{0.0f, 1.0f, 0.0f}, 0.7f),

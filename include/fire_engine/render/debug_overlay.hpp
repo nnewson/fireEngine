@@ -1,9 +1,12 @@
 #pragma once
 
 #include <array>
+#include <span>
 
 #include <vulkan/vulkan_raii.hpp>
 
+#include <fire_engine/math/mat4.hpp>
+#include <fire_engine/render/debug_draw.hpp>
 #include <fire_engine/render/gpu_profiler.hpp>
 #include <fire_engine/render/render_tunables.hpp>
 
@@ -37,6 +40,14 @@ public:
     // Build the overlay panels from the latest frame stats; widgets write back
     // into `tunables`. No-op (apart from frame-time history) when hidden.
     void buildUi(const FrameStats& stats, RenderTunables& tunables);
+    // Draw world-anchored text labels (ragdoll joint index:name) into the ImGui foreground draw
+    // list, projected to screen via `viewProj`. Off-screen / behind-camera labels are culled. Call
+    // between beginFrame and record (like buildUi) — and after the frame's viewProj is finalised,
+    // so labels track the joints as the camera moves. No-op when the overlay is hidden. Screen
+    // mapping uses ImGui's DisplaySize (logical points), not the swapchain pixel extent, so labels
+    // land on the geometry on high-DPI/retina displays where the two differ.
+    void drawWorldLabels(std::span<const DebugLabel> labels, const Mat4& viewProj);
+
     // Render the ImGui draw data into the swap image (must already be in
     // ColorAttachmentOptimal). Draws nothing when hidden (empty draw list).
     void record(vk::CommandBuffer cmd, vk::ImageView swapView, vk::Extent2D extent);

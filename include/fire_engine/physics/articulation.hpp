@@ -52,6 +52,15 @@ struct ArticulationLinkDesc
     float swingLimit{pi};
     float twistLimit{pi};
 
+    // 1-DOF joint coordinate limit — the Revolute joint's angle range about `jointAxis` (radians),
+    // a true hinge stop (a knee/elbow bends only within [lower, upper], asymmetrically). Active iff
+    // `jointUpperLimit > jointLowerLimit`; the default (0/0) is an unlimited free spin. Held inside
+    // by the same velocity-level unilateral projection as the cone-twist limit
+    // (Articulation::solveJointLimits). Generic over 1-DOF joints, so a future prismatic can reuse
+    // it as a distance range.
+    float jointLowerLimit{0.0f};
+    float jointUpperLimit{0.0f};
+
     // Passive drive: a spring pulling the joint toward a target pose (a muscle / a bias to a
     // rest pose), active when `driveStiffness > 0`. τ = driveStiffness·(target − q) −
     // driveDamping·q̇. `driveTarget` is the target angle for a Revolute joint; `driveTargetRotation`
@@ -156,6 +165,23 @@ public:
     Quaternion jointRotation(std::size_t link) const noexcept
     {
         return links_[link].jointRotation;
+    }
+
+    // Link `i`'s joint type (Fixed / Revolute / Spherical) — lets a binder/test confirm how a link
+    // was authored.
+    [[nodiscard]]
+    ArticulationJointType jointType(std::size_t link) const noexcept
+    {
+        return links_[link].joint;
+    }
+
+    // Link `i`'s joint axis in the link's local frame: for a Revolute, the hinge axis it rotates
+    // about (the 1-DOF direction); for a Spherical/Fixed it's the stored default. Lets a debug view
+    // draw the actual degree of freedom.
+    [[nodiscard]]
+    Vec3 jointAxis(std::size_t link) const noexcept
+    {
+        return links_[link].jointAxis;
     }
 
     // The generalized-coordinate offset of link `i`'s joint (−1 for a 0-DOF Fixed joint
@@ -355,6 +381,8 @@ private:
         Quaternion jointRotation{Quaternion::identity()}; // Spherical joint state
         float swingLimit{pi};
         float twistLimit{pi};
+        float jointLowerLimit{0.0f}; // Revolute angle range (active iff upper > lower)
+        float jointUpperLimit{0.0f};
         float driveTarget{0.0f};
         Quaternion driveTargetRotation{Quaternion::identity()};
         float driveStiffness{0.0f};
