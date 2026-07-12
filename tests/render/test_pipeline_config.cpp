@@ -18,10 +18,11 @@ TEST_CASE("PipelineConfig.ForwardConfigBindingsSplitBetweenSets", "[PipelineConf
     auto config = Pipeline::forwardConfig();
 
     // Set 0 — per-object + per-frame push UBOs/SSBO: frame (per-object), camera (per-frame), skin,
-    // morph UBO + morph-targets SSBO + VIPM geomorph SSBO (6 total). Camera is in set 0 (not the
-    // global set 1) so the depth prepass — which reuses shader.vert but binds no globals — gets it
-    // via the same push. Material data (textures + scalars) is fully bindless (set 2).
-    CHECK(config.bindings.size() == 6u);
+    // prev-skin (per-frame joints for skinned motion vectors), morph UBO + morph-targets SSBO +
+    // VIPM geomorph SSBO (7 total). Camera + prev-skin are in set 0 (not the global set 1) so the
+    // depth prepass — which reuses shader.vert but binds no globals — gets them via the same push.
+    // Material data (textures + scalars) is fully bindless (set 2).
+    CHECK(config.bindings.size() == 7u);
     // Set 1 — forward globals: light UBO + 5 shadow maps + debug image + 2
     // standalone samplers + 3 IBL textures + sceneColor + ssao.
     CHECK(config.globalBindings.size() == 14u);
@@ -44,6 +45,7 @@ TEST_CASE("PipelineConfig.ForwardConfigBindingsSplitBetweenSets", "[PipelineConf
     CHECK(hasObjectBinding(ForwardBinding::Frame));
     CHECK(hasObjectBinding(ForwardBinding::Camera));
     CHECK(hasObjectBinding(ForwardBinding::Skin));
+    CHECK(hasObjectBinding(ForwardBinding::PrevSkin));
     CHECK(hasObjectBinding(ForwardBinding::Morph));
     CHECK(hasObjectBinding(ForwardBinding::MorphTargets));
     CHECK(hasObjectBinding(ForwardBinding::VipmMorph));

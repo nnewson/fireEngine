@@ -152,11 +152,16 @@ void Object::createForwardBindings(Resources& resources)
             joint = Mat4::identity();
         }
         auto skinSet = resources.createMappedUniformBuffers(sizeof(SkinUBO));
+        auto prevSkinSet = resources.createMappedUniformBuffers(sizeof(SkinUBO));
         for (int i = 0; i < kMaxFramesInFlight; ++i)
         {
             binding.skinMapped[i] = skinSet.mapped[i];
             binding.skinBufs[i] = skinSet.buffers[i];
             writeMapped(skinSet.mapped[i], skinUbo);
+            // Previous-frame joints — identity until the first skinned frame writes real ones.
+            binding.prevSkinMapped[i] = prevSkinSet.mapped[i];
+            binding.prevSkinBufs[i] = prevSkinSet.buffers[i];
+            writeMapped(prevSkinSet.mapped[i], skinUbo);
         }
 
         // Morph UBO buffers
@@ -410,10 +415,24 @@ void Object::writeForwardUniforms(const FrameInfo& frame, const Mat4& world,
         {
             skinUbo.joints[j] = jointMatrices[j];
         }
+        // Previous-frame joints for the motion vector: last frame's, or this frame's on the very
+        // first frame (zero deformation velocity until there is a real previous). This mirrors how
+        // previousModel works for rigid nodes — previous = the immediately preceding rendered
+        // frame.
+        const std::span<const Mat4> prevJoints =
+            previousJointMatrices_.empty() ? jointMatrices
+                                           : std::span<const Mat4>{previousJointMatrices_};
+        SkinUBO prevSkinUbo{};
+        for (std::size_t j = 0; j < prevJoints.size() && j < kMaxJoints; ++j)
+        {
+            prevSkinUbo.joints[j] = prevJoints[j];
+        }
         for (auto& binding : bindings_)
         {
             writeMapped(binding.skinMapped[frame.currentFrame], skinUbo);
+            writeMapped(binding.prevSkinMapped[frame.currentFrame], prevSkinUbo);
         }
+        previousJointMatrices_.assign(jointMatrices.begin(), jointMatrices.end());
     }
 
     for (auto& binding : bindings_)
@@ -548,6 +567,7 @@ std::vector<DrawCommand> Object::buildDrawCommands(const FrameInfo& frame, const
         cmd.frameUbo = uniformBufs_[frame.currentFrame];
         cmd.cameraUbo = frame.cameraUbo;
         cmd.skinUbo = binding.skinBufs[frame.currentFrame];
+        cmd.prevSkinUbo = binding.prevSkinBufs[frame.currentFrame];
         cmd.morphUbo = binding.morphUboBufs[frame.currentFrame];
         cmd.morphSsbo = binding.morphSsbo;
         cmd.vipmBuffer = binding.vipmBuffer;

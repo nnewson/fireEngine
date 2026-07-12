@@ -45,6 +45,9 @@ struct DrawCommand
     BufferHandle frameUbo{NullBuffer};
     BufferHandle cameraUbo{NullBuffer};
     BufferHandle skinUbo{NullBuffer};
+    // Previous-frame skin matrices (forward set-0 PrevSkin binding) for skinned motion vectors.
+    // Identity for non-skinned draws. Not used by the shadow pass.
+    BufferHandle prevSkinUbo{NullBuffer};
     BufferHandle morphUbo{NullBuffer};
     BufferHandle morphSsbo{NullBuffer};
     // VIPM per-vertex geomorph SSBO (Continuous LOD). The geometry's morph buffer for VIPM meshes,

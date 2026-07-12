@@ -25,6 +25,12 @@ layout(binding = 3) uniform SkinUBO {
     mat4 joints[64];
 } skin;
 
+// Previous-frame joint matrices (TAA motion vectors for skinned meshes). Identity for non-skinned
+// draws (unread there). Same layout as SkinUBO.
+layout(binding = 30) uniform PrevSkinUBO {
+    mat4 joints[64];
+} prevSkin;
+
 layout(binding = 4) uniform MorphUBO {
     int hasMorph;
     int morphTargetCount;
@@ -124,29 +130,36 @@ void main() {
     }
 
     mat4 transform;
+    mat4 prevTransform; // last frame's transform, for the TAA motion vector
     mat3 normalTransform;
     if (ubo.hasSkin == 1) {
         transform = inWeights.x * skin.joints[inJoints.x]
                   + inWeights.y * skin.joints[inJoints.y]
                   + inWeights.z * skin.joints[inJoints.z]
                   + inWeights.w * skin.joints[inJoints.w];
+        // Same vertex weights against last frame's joints — reprojecting through this captures the
+        // vertex's own deformation motion, not just camera motion.
+        prevTransform = inWeights.x * prevSkin.joints[inJoints.x]
+                      + inWeights.y * prevSkin.joints[inJoints.y]
+                      + inWeights.z * prevSkin.joints[inJoints.z]
+                      + inWeights.w * prevSkin.joints[inJoints.w];
         // Skin matrices can contain armature conversion and blended joint
         // scale/shear, so normals need the same inverse-transpose treatment as
         // static meshes.
         normalTransform = transpose(inverse(mat3(transform)));
     } else {
         transform = ubo.model;
+        prevTransform = ubo.previousModel;
         normalTransform = transpose(inverse(mat3(transform)));
     }
 
     vec4 worldPos = transform * vec4(pos, 1.0);
+    // TAA motion vectors. Skinned meshes reproject each vertex through last frame's joints (exact
+    // per-vertex deformation velocity); rigid/animated nodes use the node's previous world matrix.
+    // Both view-projections are jitter-free so velocity is independent of the sub-pixel jitter.
+    vec4 prevWorldPos = prevTransform * vec4(pos, 1.0);
     gl_Position = camera.proj * camera.view * worldPos;
 
-    // TAA motion vectors. Skinned meshes have no previous joint data, so they
-    // fall back to camera-only velocity (previous == current world position);
-    // rigid/animated nodes use the node's previous world matrix. Both view-
-    // projections are jitter-free so the velocity is independent of the jitter.
-    vec4 prevWorldPos = (ubo.hasSkin == 1) ? worldPos : ubo.previousModel * vec4(pos, 1.0);
     fragCurClip = camera.currentViewProj * worldPos;
     fragPrevClip = camera.previousViewProj * prevWorldPos;
 

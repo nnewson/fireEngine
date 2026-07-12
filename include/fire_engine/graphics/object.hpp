@@ -90,6 +90,10 @@ private:
         // set). Frame UBO is object-wide (Object::uniformBufs_); these are
         // per-geometry.
         std::array<BufferHandle, kMaxFramesInFlight> skinBufs{NullBuffer, NullBuffer};
+        // Previous-frame joint matrices for skinned-mesh TAA motion vectors (forward set-0
+        // PrevSkin).
+        std::array<std::span<std::byte>, kMaxFramesInFlight> prevSkinMapped{};
+        std::array<BufferHandle, kMaxFramesInFlight> prevSkinBufs{NullBuffer, NullBuffer};
         std::array<BufferHandle, kMaxFramesInFlight> morphUboBufs{NullBuffer, NullBuffer};
         BufferHandle morphSsbo{NullBuffer};
         // VIPM geomorph buffer (Continuous LOD): the geometry's per-vertex morph data, or a dummy.
@@ -134,7 +138,8 @@ private:
 
     std::array<std::span<std::byte>, kMaxFramesInFlight> uniformMapped_{};
     // Per-object UBO buffer handles (pushed as forward set-0 binding 0 per draw). Holds model /
-    // hasSkin / previousModel only — the camera lives in the per-frame set-1 CameraUBO now.
+    // hasSkin / previousModel only — the camera lives in the per-frame CameraUBO (set-0 binding
+    // 29).
     std::array<BufferHandle, kMaxFramesInFlight> uniformBufs_{NullBuffer, NullBuffer};
     // Last values written into each frame slot's ObjectUBO, so a static object (unchanged world +
     // previous world) skips the mapped re-upload. Default-zero worlds never match a real (affine)
@@ -143,6 +148,11 @@ private:
     std::array<Mat4, kMaxFramesInFlight> lastWorld_{};
     std::array<Mat4, kMaxFramesInFlight> lastPreviousWorld_{};
     std::array<int, kMaxFramesInFlight> lastHasSkin_{};
+    // Last frame's joint matrices, so a skinned mesh's TAA motion vector reprojects each vertex
+    // from where it actually was (per-vertex deformation velocity), not just camera motion. Empty
+    // until the first skinned frame — then previous == current (zero deformation velocity on frame
+    // one).
+    std::vector<Mat4> previousJointMatrices_;
 
     std::vector<GeometryBindings> bindings_;
     // Lazily computed local-space AABB over the geometry vertices (see localBounds()).
