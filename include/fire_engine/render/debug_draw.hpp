@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
 #include <vector>
 
 #include <vulkan/vulkan_raii.hpp>
@@ -44,6 +45,14 @@ struct DebugCapsule
     Colour3 colour{1.0f, 1.0f, 1.0f};
 };
 
+// A world-anchored text label, drawn as an ImGui overlay projected to screen (not line geometry) —
+// used for ragdoll joint identification.
+struct DebugLabel
+{
+    Vec3 worldPosition{};
+    std::string text;
+};
+
 struct PhysicsDebugData
 {
     std::vector<AABB> aabbs;
@@ -52,8 +61,11 @@ struct PhysicsDebugData
     std::vector<DebugContact> contacts;
     // Parallel to `shapes` (1 = asleep): sleeping bodies draw in a distinct colour.
     std::vector<std::uint8_t> shapesAsleep;
-    // Free-form coloured lines (query rays / overlap markers); always drawn when present.
+    // Free-form coloured lines (query rays / overlap markers); always drawn when present. The
+    // ragdoll joint gizmo (per-joint RGB axes) is appended here too.
     std::vector<DebugLine> queryLines;
+    // Ragdoll joint labels (index:name), drawn as projected ImGui text by the overlay.
+    std::vector<DebugLabel> jointLabels;
 };
 
 // Renderer-owned immediate-mode wireframe debug pass. Each frame it builds

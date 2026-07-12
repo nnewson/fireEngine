@@ -146,9 +146,48 @@ severity tier, so titles are the stable reference, not a global number.)
 
 ## Maybe — cosmetic / on demand
 
-- **Ragdoll per-joint hinge limits** — knees/elbows want authored hinge limits rather than the uniform
-  cone. (The post-settle arm-drift and residual settle-yaw are already fixed on `ragdoll-joint-settle`
-  — see [`collision.md`](collision.md).)
+- ✅ **Ragdoll per-joint hinge limits** *(branch `cr-ragdoll-hinge-limits`)* — knees/elbows are now
+  authored as true 1-DOF **Revolute** hinges with an asymmetric angle range, not the uniform swing
+  cone. Three parts: (1) **physics** — `ArticulationLinkDesc` gained `jointLowerLimit`/`jointUpperLimit`
+  and `solveJointLimits` a Revolute branch enforcing them via the same velocity-level unilateral
+  push-back as the cone-twist; `jointImpulseResponse` generalised from spherical-only to any DOF count
+  (the **extensibility hook** for future joint types). (2) **authoring** — `extras.Ragdoll.Joints` maps
+  a bone node name → `{Type:"Hinge", Axis, Min, Max}` (unlisted bones keep the uniform cone). (3)
+  **build** — `makeArticulated` builds a Revolute for a hinge-authored bone. Purely additive/opt-in, so
+  **the determinism golden is unchanged** (no re-baseline). Tests: `[Articulation]` limit,
+  `[GltfNodeExtras]` parse ×2, `[Ragdoll]` build. (Post-settle arm-drift + settle-yaw were already
+  fixed on `ragdoll-joint-settle` — see [`collision.md`](collision.md).)
+  - **Joint debug view + authored ragdoll** *(same branch)* — a `DebugView::Joints` mode (overlay
+    "View → Joints", or `--debug-joints`) **replaces the scene mesh** (keeping the collider wireframes
+    for context) with a per-link RGB axis gizmo (the link's local frame — pick the hinge `Axis` off
+    it), a **degree-of-freedom overlay** (bright hinge-axis line for a 1-DOF Revolute; the triad spans
+    a Spherical), and an on-screen "index: bone-name (Type)" label, so a skeleton's joints — and their
+    DOF — can be found without guessing.
+  - **Base roll/pitch settle damper** *(same branch)* — with the knees now folding correctly, a
+    collapsed ragdoll rocked left-right for a while: the base's **roll/pitch** was the one settled DOF
+    with no dedicated damper (linear + yaw had one; full base-angular damping was left out because it
+    destabilises a near-planar chain). Added `kBaseRockSettle*` — decays the residual non-yaw base
+    spin, double-gated on *settling* + a slow angular so a violent impact is untouched. Articulation-
+    only ⇒ **golden-neutral**; the `[slow]` settle/soak gate stays green.
+  - **Hip-wiggle settle (landed-widened joint gate)** *(same branch)* — after the base-roll fix a
+    residual *hip* wiggle remained (traced: `leg_joint_*_1` ringing at ~1–4 rad/s for ~1 s after
+    landing, re-exciting the base rock). It sat in a band too fast for `kJointSettleSpeed` (0.5) yet
+    far below the collapse (6–13 rad/s). Fix: once the base has **landed** (linear < `kBaseSettleSpeed`)
+    the joint settle gate widens to `kJointSettleSpeedLanded` (4 rad/s), bleeding the wiggle while the
+    speed gate still protects the fast airborne collapse (which can momentarily read "landed"). Cut
+    the hip wiggle ~½ and killed the 1.5 s base-rock re-spike; collapse **shape** (gyration / head-foot
+    chord gates) preserved, golden-neutral.
+  - **Near-rest snap (straggler sleep)** *(same branch)* — after the wiggle fix a lone shoulder DOF
+    still crept in at ~0.15 rad/s for ~1 s after the body stopped (traced: hand moved ~3 mm while the
+    joint held ~terminal velocity — a straggler hovering at the 0.15 sleep threshold, resetting the
+    dwell). Added `kArticulationRestSnap*`: once the whole articulation sits within a wider near-rest
+    band (0.30) for a short dwell (0.25 s), zero the residual so it sleeps as a unit. Cut settle from
+    ~4.8 s → ~2.9 s; collapse untouched (byte-identical early frames), shape gates green, golden-
+    neutral. Snap magnitude is tiny (fires ~0.15 rad/s) so it shouldn't pop — pending visual confirm. Labels project through the ImGui foreground
+    draw list (`DebugOverlay::drawWorldLabels`) using `DisplaySize` (retina-correct) and this frame's
+    finalised `viewProj` (no lag). With this, `CesiumManRagdoll.gltf` is now authored with real 1-DOF
+    knees (`leg_joint_L/R_3`), ankles (`leg_joint_L/R_5`), and elbows (`Skeleton_arm_joint_R__3_` /
+    `Skeleton_arm_joint_L__2_` — note the L/R numbering asymmetry the labels expose).
 
 ---
 

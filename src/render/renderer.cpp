@@ -470,7 +470,11 @@ void Renderer::writeIblAndDebugParams(LightUBO& out) const
     out.pointSpotShadowParams[1] = kPointSpotShadowSlopeBias;
     out.environmentParams[0] = kSkyboxIntensity;
     out.environmentParams[1] = kEnvironmentShadowStrength;
-    out.environmentParams[2] = static_cast<float>(tunables_.debugView);
+    // Joints is an overlay-only view with no shader branch (it suppresses geometry instead), so it
+    // maps to None for the fragment shader's debug-view selector.
+    const DebugView shaderView =
+        tunables_.debugView == DebugView::Joints ? DebugView::None : tunables_.debugView;
+    out.environmentParams[2] = static_cast<float>(shaderView);
     out.environmentParams[3] = tunables_.noShadows ? 1.0f : 0.0f;
 }
 
@@ -730,9 +734,14 @@ void Renderer::recordDebugDrawPass(vk::CommandBuffer cmd)
 void Renderer::recordForwardPass(vk::CommandBuffer cmd, const DrawBuckets& buckets)
 {
     beginForwardRendering(cmd);
-    auto lastBoundPipeline = PipelineHandle{std::numeric_limits<uint32_t>::max()};
-    recordDrawBucket(cmd, buckets.opaque, lastBoundPipeline);
-    recordDrawBucket(cmd, buckets.blend, lastBoundPipeline);
+    // The Joints debug view replaces the scene with the articulation gizmo/labels: skip the mesh
+    // (and skybox) draws so nothing occludes the joints — the HDR target keeps its clear colour.
+    if (tunables_.debugView != DebugView::Joints)
+    {
+        auto lastBoundPipeline = PipelineHandle{std::numeric_limits<uint32_t>::max()};
+        recordDrawBucket(cmd, buckets.opaque, lastBoundPipeline);
+        recordDrawBucket(cmd, buckets.blend, lastBoundPipeline);
+    }
     endForwardRendering(cmd);
 }
 
@@ -973,6 +982,10 @@ void Renderer::drawFrame(Window& display, RenderableScene& scene, float dt)
     profiler_.end(cmd, currentFrame_, ProfilePass::DebugDraw);
 
     recordPostProcessing(cmd, *imageIndex);
+    // Ragdoll joint labels: projected ImGui text (the marker gizmo lines go through debugDraw_).
+    // Added to the foreground draw list here, after currentViewProj_ is refreshed above, so the
+    // labels project with this frame's camera (not last frame's) and track the joints as it moves.
+    overlay_.drawWorldLabels(physicsDebug_.jointLabels, currentViewProj_);
     // Post-process leaves the swap image in ColorAttachmentOptimal; the overlay
     // draws over it, then we transition to present.
     overlay_.record(cmd, *swapchain_.imageViews()[*imageIndex], swapchain_.extent());

@@ -377,10 +377,11 @@ private:
     // Articulations live in a deque so the Articulation references handed out via
     // articulation() stay stable as slots are added/recycled (links/colliders cache the handle,
     // not a pointer). Indexed directly by the handle's slot index (articulationSlots_); a freed
-    // slot holds a default (0-link) Articulation until reused. Sleep state is kept in the two
+    // slot holds a default (0-link) Articulation until reused. Sleep state is kept in the
     // parallel arrays below, sized 1:1 with articulations_ and indexed by the same slot.
     std::deque<Articulation> articulations_;
     std::vector<float> articulationSleepTimers_;
+    std::vector<float> articulationRestSnapTimers_; // near-rest snap dwell (kArticulationRestSnap*)
     std::vector<std::uint8_t> articulationSleeping_;
     // Collider address → slot index, so a broadphase pair's `Collider*` resolves back to its
     // entry. (Bodies/colliders/joints no longer need a handle→index map — the handle is the

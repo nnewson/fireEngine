@@ -137,8 +137,21 @@ detection runs once per fixed step, then the *solve* is substepped:
    are gathered from this step's broadphase (real narrowphase manifolds, tracked link-local
    across the substeps), then each articulation runs its own TGS substep loop — ABA free
    dynamics, contact + velocity-level cone-twist joint-limit sweeps through the
-   `ConstraintBody` / pair-impulse seams, and a settle assist on the floating base's linear
-   velocity. Articulations do not yet join rigid islands (link-vs-dynamic-rigid is deferred).
+   `ConstraintBody` / pair-impulse seams, and a **settle assist** on the floating base + joints.
+   The free 6-DOF base has no passive joint damping, so once it is *settling* (linear speed below
+   `kBaseSettleSpeed`) a set of dampers bleed its residual modes: linear velocity, yaw
+   (spin-about-vertical), and the residual **roll/pitch** (the collapsed-ragdoll left-right rock —
+   double-gated on settling *and* a slow non-yaw angular so a violent impact's fast base spin, which
+   would destabilise a near-planar chain, is untouched). Joint velocities get the same slow-residual
+   decay, and once the base has **landed** (linear speed below `kBaseSettleSpeed`) that gate **widens**
+   (`kJointSettleSpeedLanded`) to also bleed the residual hip/limb *wiggle* — a band (~1–4 rad/s) too
+   fast for the resting gate yet well below the dramatic collapse (6–13 rad/s), which the speed gate
+   still protects even when the base momentarily reads slow mid-collapse. A **near-rest snap**
+   (`kArticulationRestSnap*`) finishes the job: a lone straggler DOF (a shoulder creeping in after the
+   body lands) can hover right at the sleep threshold, resetting the sleep dwell while the rest of the
+   chain is already still; once *everything* sits within a slightly wider band for a short dwell the
+   residual is zeroed so the body sleeps as a unit instead of trailing a limb for ~a second.
+   Articulations do not yet join rigid islands (link-vs-dynamic-rigid is deferred).
 8. Write final velocities back; if anything moved, reset collider frame bounds and rebuild
    broadphase pair state.
 9. Capture each active body's current position as `previousPosition`.
@@ -488,6 +501,45 @@ joint per bone, seeded from the bind pose:
 | `SwingLimit` | number | `0.7` | Cone half-angle in radians. |
 | `TwistLimit` | number | `0.5` | ± twist in radians. |
 | `Articulated` | bool | `false` | Build a **reduced-coordinate articulation** (`Ragdoll::makeArticulated`) instead of maximal-coordinate bodies + joints. |
+| `Joints` | object | `{}` | Per-bone joint overrides (articulated path). Keyed by bone node name; a listed bone becomes a true 1-DOF hinge instead of the uniform spherical cone. See below. |
+
+**Per-bone hinge overrides (`Joints`, articulated only).** A knee or elbow is a 1-DOF joint — it
+bends within an asymmetric range one way only, which the uniform swing cone can't represent. List such
+bones under `Joints`, keyed by the bone node's name; each becomes a **Revolute** (true hinge) with its
+own axis + `[Min, Max]` range (radians, about `Axis` in the bone's local frame). Unlisted bones keep
+the uniform swing-cone/twist. Only `"Hinge"` is authorable today (an unknown `Type` is a hard error);
+the underlying articulation limit solver is generic over 1-DOF joints, so future types layer on.
+
+```json
+"extras": {
+  "Ragdoll": {
+    "Articulated": true, "SwingLimit": 0.7, "TwistLimit": 0.5,
+    "Joints": {
+      "LeftLowerLeg":  { "Type": "Hinge", "Axis": [1, 0, 0], "Min": 0.0,  "Max": 2.6 },
+      "RightForeArm":  { "Type": "Hinge", "Axis": [1, 0, 0], "Min": 0.0,  "Max": 2.4 }
+    }
+  }
+}
+```
+
+| Joint field | Type | Default | Notes |
+|---|---:|---:|---|
+| `Type` | string | — | Must be `"Hinge"` (the only joint type currently authorable). |
+| `Axis` | number[3] | `[1,0,0]` | Hinge axis in the bone's local frame. |
+| `Min` / `Max` | number | `0` | Angle range in radians (a hinge is active iff `Max > Min`). |
+
+**Finding the bone names + axis — the Joints debug view.** Authoring `Joints` needs two things the
+glTF doesn't hand you: the exact bone **node name** and which local axis the joint should bend about.
+Run with `--debug-joints` (or pick overlay **View → Joints**): it **replaces the scene mesh** (but
+keeps the physics **collider wireframes** as spatial context) with, per articulation link, an **RGB
+axis gizmo** drawn in the link's local frame (red = local X, green = Y, blue = Z — the `Axis` you
+author is one of these), a **degree-of-freedom overlay** (a bright yellow bidirectional line along the
+hinge axis for a 1-DOF Revolute; the triad already spans a 3-DOF Spherical; nothing extra for a Fixed
+joint), and an on-screen **"index: bone-name (Type)"** label. Rotate around the settling ragdoll to
+read off the bend axis and confirm each joint's type/DOF. This is how `CesiumManRagdoll.gltf`'s
+knees (`leg_joint_L_3` / `leg_joint_R_3`), ankles (`leg_joint_L_5` / `leg_joint_R_5`), and elbows
+(`Skeleton_arm_joint_R__3_` / `Skeleton_arm_joint_L__2_` — the left/right arm chains number in
+opposite order) were identified.
 
 Presence of the `Ragdoll` object is what flags the node; all fields are optional. The
 bones are driven via a `Node` world-override (the skinning path renders the simulated

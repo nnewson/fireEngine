@@ -71,7 +71,11 @@
           "Radius": 0.06,
           "ConeTwist": true,
           "SwingLimit": 0.7,
-          "TwistLimit": 0.5
+          "TwistLimit": 0.5,
+          "Joints": {
+            "leg_joint_L_2": { "Type": "Hinge", "Axis": [0, 1, 0], "Min": 0.0, "Max": 2.0 },
+            "leg_joint_R_2": { "Type": "Hinge", "Axis": [0, 1, 0], "Min": 0.0, "Max": 2.0 }
+          }
         }
       }
     },

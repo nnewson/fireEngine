@@ -142,6 +142,13 @@ public:
                tunables_.debugDrawContacts;
     }
 
+    // True when the ragdoll joint debug view is selected — the app gathers per-joint markers +
+    // labels, and the forward pass suppresses the scene geometry, only then.
+    [[nodiscard]] bool jointDebugWanted() const noexcept
+    {
+        return tunables_.debugView == DebugView::Joints;
+    }
+
     [[nodiscard]] Resources& resources() noexcept
     {
         return resources_;

@@ -348,6 +348,36 @@ TEST_CASE("Ragdoll.BuildsBodyAndJointPerBone", "[Ragdoll]")
     CHECK(bodyPos(physics, rag, 2).y() == Catch::Approx(1.4f));
 }
 
+TEST_CASE("Ragdoll.ArticulatedHingeOverrideBuildsRevoluteJoint", "[Ragdoll]")
+{
+    SceneGraph sg;
+    Node& b0 = sg.addNode(std::make_unique<Node>("bone0"));
+    b0.transform().position({0.0f, 2.0f, 0.0f});
+    Node& b1 = b0.addChild(std::make_unique<Node>("bone1"));
+    b1.transform().position({0.0f, -0.3f, 0.0f});
+    Node& b2 = b1.addChild(std::make_unique<Node>("bone2"));
+    b2.transform().position({0.0f, -0.3f, 0.0f});
+    sg.update(InputState{});
+
+    PhysicsWorld physics;
+    const std::vector<Node*> bones{&b0, &b1, &b2};
+
+    RagdollParams params;
+    params.articulated = true;
+    // Author bone1 as a hinge; bone2 is left to the default spherical cone.
+    params.hinges["bone1"] = fire_engine::RagdollHinge{Vec3{1.0f, 0.0f, 0.0f}, 0.0f, 2.0f};
+
+    const Ragdoll rag = Ragdoll::makeArticulated(physics, bones, params);
+    REQUIRE(rag.articulated());
+    const fire_engine::Articulation* art = physics.articulation(rag.articulation());
+    REQUIRE(art != nullptr);
+
+    const auto link1 = static_cast<std::size_t>(rag.link(1));
+    const auto link2 = static_cast<std::size_t>(rag.link(2));
+    CHECK(art->jointType(link1) == fire_engine::ArticulationJointType::Revolute);
+    CHECK(art->jointType(link2) == fire_engine::ArticulationJointType::Spherical);
+}
+
 TEST_CASE("Ragdoll.ActivateSetsWorldOverrideOnBones", "[Ragdoll]")
 {
     SceneGraph sg;

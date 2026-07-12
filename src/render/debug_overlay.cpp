@@ -166,8 +166,9 @@ void DebugOverlay::buildUi(const FrameStats& stats, RenderTunables& tunables)
 
     if (ImGui::CollapsingHeader("Debug view", ImGuiTreeNodeFlags_DefaultOpen))
     {
-        static constexpr const char* kViews[] = {"None",         "Normals",  "N·L",  "Shadow",
-                                                 "Shadow depth", "Velocity", "SSAO", "LOD tint"};
+        static constexpr const char* kViews[] = {"None",   "Normals",      "N·L",
+                                                 "Shadow", "Shadow depth", "Velocity",
+                                                 "SSAO",   "LOD tint",     "Joints"};
         int view = static_cast<int>(tunables.debugView);
         if (ImGui::Combo("View", &view, kViews, IM_ARRAYSIZE(kViews)))
         {
@@ -229,6 +230,40 @@ void DebugOverlay::buildUi(const FrameStats& stats, RenderTunables& tunables)
     }
 
     ImGui::End();
+}
+
+void DebugOverlay::drawWorldLabels(std::span<const DebugLabel> labels, const Mat4& viewProj)
+{
+    if (!visible_ || labels.empty())
+    {
+        return;
+    }
+    ImDrawList* drawList = ImGui::GetForegroundDrawList();
+    // The foreground draw list is in ImGui's coordinate space (DisplaySize, logical points), which
+    // on retina is the swapchain pixel extent / DisplayFramebufferScale — using the pixel extent
+    // here would scale the labels off the geometry as the camera pans.
+    const ImVec2 display = ImGui::GetIO().DisplaySize;
+    const float w = display.x;
+    const float h = display.y;
+    for (const DebugLabel& label : labels)
+    {
+        const Vec3& p = label.worldPosition;
+        const Vec4 clip = viewProj * Vec4{p.x(), p.y(), p.z(), 1.0f};
+        if (clip.w() <= 1.0e-4f)
+        {
+            continue; // behind the camera
+        }
+        const float ndcX = clip.x() / clip.w();
+        const float ndcY = clip.y() / clip.w();
+        if (ndcX < -1.0f || ndcX > 1.0f || ndcY < -1.0f || ndcY > 1.0f)
+        {
+            continue; // off-screen
+        }
+        // Vulkan NDC (y already flipped in the projection) → framebuffer pixels (ImGui's top-left
+        // origin), matching where the scene rasterised.
+        const ImVec2 screen{(ndcX * 0.5f + 0.5f) * w, (ndcY * 0.5f + 0.5f) * h};
+        drawList->AddText(screen, IM_COL32(255, 235, 60, 255), label.text.c_str());
+    }
 }
 
 void DebugOverlay::record(vk::CommandBuffer cmd, vk::ImageView swapView, vk::Extent2D extent)

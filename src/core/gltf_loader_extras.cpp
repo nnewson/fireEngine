@@ -437,6 +437,39 @@ std::optional<RagdollParams> GltfLoader::nodeExtrasRagdoll(simdjson::dom::object
         params.articulated = articulated;
     }
 
+    // Per-bone hinge overrides (articulated path): { "<boneNodeName>": { "Type":"Hinge",
+    // "Axis":[x,y,z], "Min":<rad>, "Max":<rad> }, … }. A listed bone becomes a 1-DOF Revolute with
+    // its own axis + asymmetric range; unlisted bones keep the uniform spherical cone above.
+    if (auto jointsElement = ragdollObject.at_key("Joints");
+        jointsElement.error() != simdjson::NO_SUCH_FIELD)
+    {
+        simdjson::dom::object jointsObject;
+        if (jointsElement.get_object().get(jointsObject) != simdjson::SUCCESS)
+        {
+            throw std::runtime_error("glTF Ragdoll Joints must be an object");
+        }
+        for (auto field : jointsObject)
+        {
+            simdjson::dom::object jointObject;
+            if (field.value.get_object().get(jointObject) != simdjson::SUCCESS)
+            {
+                throw std::runtime_error("glTF Ragdoll Joints entry must be an object");
+            }
+            std::string_view type;
+            if (jointObject.at_key("Type").get(type) != simdjson::SUCCESS || type != "Hinge")
+            {
+                throw std::runtime_error("glTF Ragdoll Joints entry must have Type \"Hinge\" (the "
+                                         "only joint type currently authorable)");
+            }
+            const ExtrasReader jointReader{jointObject, "Ragdoll Joints"};
+            RagdollHinge hinge;
+            hinge.axis = jointReader.readVec3("Axis", hinge.axis, "Axis");
+            hinge.lower = jointReader.readFloat("Min", hinge.lower, "Min");
+            hinge.upper = jointReader.readFloat("Max", hinge.upper, "Max");
+            params.hinges.emplace(std::string(field.key), hinge);
+        }
+    }
+
     return params;
 }
 
