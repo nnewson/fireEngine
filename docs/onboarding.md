@@ -428,7 +428,13 @@ and local URI images stay behaviorally aligned.
   belongs in that helper.
 - Owns descriptor pools and descriptor sets for the per-object **shadow** set 0 plus the
   per-frame forward-globals set 1. The **forward** set 0 is no longer allocated — it is a
-  `VK_KHR_push_descriptor` layout pushed inline per draw (`pushForwardObjectDescriptors`).
+  `VK_KHR_push_descriptor` layout pushed inline per draw (`pushForwardObjectDescriptors`). Forward
+  set 0 carries two UBOs: a slim per-object **`ObjectUBO`** (model/hasSkin/previousModel, binding 0)
+  and a per-frame **`CameraUBO`** (view/proj/cameraPos/view-projections, binding 29). `CameraUBO`
+  lives in set 0 (not the global set 1) on purpose — the depth prepass reuses `shader.vert` but binds
+  no globals, and set 0 is already pushed there. The Renderer writes `CameraUBO` **once per frame**;
+  `Object` re-writes its `ObjectUBO` only when world/previousWorld/hasSkin change (a static object
+  skips it).
   `Descriptors::createGlobalDescriptors` allocates set 1 once at startup;
   `Descriptors::updateGlobalDescriptors` rewrites it after swapchain resize. These pools are
   renderer-lifetime: their sets are allocated once and **never freed individually**, so the pools

@@ -39,6 +39,10 @@ struct FrameInfo
     // Jitter-free current/previous view-projection for motion vectors (TAA).
     Mat4 currentViewProj{Mat4::identity()};
     Mat4 previousViewProj{Mat4::identity()};
+    // Per-frame camera UBO buffer for this frame slot (forward set-0 Camera binding, pushed per
+    // draw). Written once per frame by the Renderer; the object draw-build copies it into each
+    // DrawCommand.
+    BufferHandle cameraUbo{NullBuffer};
     AlphaPipelines pipelines{};
     // Discrete mesh LOD (set by the renderer from RenderTunables). When enabled, the object
     // draw-build picks a coarser index set for distant/small static meshes within this pixel

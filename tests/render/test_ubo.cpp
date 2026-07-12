@@ -7,15 +7,16 @@
 #include <fire_engine/render/descriptor_bindings.hpp>
 #include <fire_engine/render/ubo.hpp>
 
+using fire_engine::CameraUBO;
 using fire_engine::EnvironmentCaptureUBO;
 using fire_engine::ForwardPushConstants;
 using fire_engine::LightUBO;
 using fire_engine::MaterialUBO;
 using fire_engine::MorphUBO;
+using fire_engine::ObjectUBO;
 using fire_engine::ShadowPushConstants;
 using fire_engine::ShadowUBO;
 using fire_engine::SkinUBO;
-using fire_engine::UniformBufferObject;
 
 // ---------------------------------------------------------------------------
 // MorphUBO structure tests
@@ -66,10 +67,15 @@ TEST_CASE("MorphUBO.SetWeights", "[MorphUBO]")
 // UBO alignment sanity
 // ---------------------------------------------------------------------------
 
-TEST_CASE("UBO.UniformBufferObjectSize", "[UBO]")
+TEST_CASE("UBO.ForwardUboSizes", "[UBO]")
 {
-    // Must be compatible with std140 layout
-    CHECK(sizeof(UniformBufferObject) % 16 == 0u);
+    // Both must be std140-compatible (16-byte multiples). The header pins exact offsets/sizes.
+    CHECK(sizeof(ObjectUBO) % 16 == 0u);
+    CHECK(sizeof(CameraUBO) % 16 == 0u);
+    // The split is disjoint: the two together carry the fields the old single UBO did, minus no
+    // duplication — camera is written once per frame, ObjectUBO once per (changed) object.
+    CHECK(sizeof(ObjectUBO) == 144u);
+    CHECK(sizeof(CameraUBO) == 272u);
 }
 
 TEST_CASE("UBO.MaterialUBOSize", "[UBO]")

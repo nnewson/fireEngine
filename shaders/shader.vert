@@ -1,19 +1,25 @@
 #version 450
 
-layout(binding = 0) uniform UBO {
+// Per-object data (set 0, pushed per draw). previousModel is last frame's world for motion vectors.
+layout(binding = 0) uniform ObjectUBO {
     mat4 model;
-    mat4 view;
-    mat4 proj; // jittered (TAA) — rasterisation only
-    vec4 cameraPos;
     int hasSkin;
     int _pad1;
     int _pad2;
     int _pad3;
-    // Motion-vector matrices (TAA). The two view-projections are jitter-free.
     mat4 previousModel;
+} ubo;
+
+// Per-frame camera data (set 0, binding 29 — pushed per draw with the same handle every draw, so the
+// depth prepass gets it too). proj is jittered (TAA) for rasterisation; the two view-projections are
+// jitter-free so motion vectors are independent of the sub-pixel jitter.
+layout(binding = 29) uniform CameraUBO {
+    mat4 view;
+    mat4 proj;
+    vec4 cameraPos;
     mat4 currentViewProj;
     mat4 previousViewProj;
-} ubo;
+} camera;
 
 layout(binding = 3) uniform SkinUBO {
     mat4 joints[64];
@@ -134,18 +140,18 @@ void main() {
     }
 
     vec4 worldPos = transform * vec4(pos, 1.0);
-    gl_Position = ubo.proj * ubo.view * worldPos;
+    gl_Position = camera.proj * camera.view * worldPos;
 
     // TAA motion vectors. Skinned meshes have no previous joint data, so they
     // fall back to camera-only velocity (previous == current world position);
     // rigid/animated nodes use the node's previous world matrix. Both view-
     // projections are jitter-free so the velocity is independent of the jitter.
     vec4 prevWorldPos = (ubo.hasSkin == 1) ? worldPos : ubo.previousModel * vec4(pos, 1.0);
-    fragCurClip = ubo.currentViewProj * worldPos;
-    fragPrevClip = ubo.previousViewProj * prevWorldPos;
+    fragCurClip = camera.currentViewProj * worldPos;
+    fragPrevClip = camera.previousViewProj * prevWorldPos;
 
     fragColor = inColor;
-    fragViewDepth = -(ubo.view * worldPos).z;
+    fragViewDepth = -(camera.view * worldPos).z;
     fragTexCoord1 = uv1;
 
     fragNormal = normalize(normalTransform * normal);

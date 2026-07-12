@@ -279,6 +279,9 @@ private:
     std::array<DescriptorSetHandle, kMaxFramesInFlight> skyboxDescSets_{};
     BufferHandle skyboxIndexBuffer_{NullBuffer};
     Resources::MappedBufferSet lightUbo_;
+    // Per-frame camera UBO (forward set 1, binding Camera) — view/proj/cameraPos/view-projections,
+    // written once per frame here instead of duplicated into every object's set-0 UBO.
+    Resources::MappedBufferSet cameraUbo_;
     // Forward pipeline globals (descriptor set 1) — one set per frame-in-flight,
     // bound once at the start of every forward pass.
     std::array<DescriptorSetHandle, kMaxFramesInFlight> globalDescSets_{};

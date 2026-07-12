@@ -43,6 +43,11 @@ enum class ForwardBinding : std::uint32_t
     // VIPM per-vertex geomorph SSBO (Continuous LOD), forward set 0. A tail binding: set 0
     // otherwise uses only 0/3/4/5, and the mid-range enum values name legacy/other-set slots.
     VipmMorph = 28,
+    // Per-frame camera UBO (view/proj/cameraPos/view-projections). Set 0 (pushed per draw) rather
+    // than the global set 1 so the depth prepass — which reuses shader.vert but binds no globals —
+    // gets it too via the same push. Written once per frame by the Renderer; the buffer handle is
+    // the same across every draw. Vertex + fragment.
+    Camera = 29,
 };
 
 // Forward-pipeline globals live on descriptor set 1 — bound once per frame,

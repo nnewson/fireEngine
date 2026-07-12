@@ -133,8 +133,16 @@ private:
     uint32_t objectId_{0};
 
     std::array<std::span<std::byte>, kMaxFramesInFlight> uniformMapped_{};
-    // Shared frame UBO buffer handles (pushed as forward set-0 binding 0 per draw).
+    // Per-object UBO buffer handles (pushed as forward set-0 binding 0 per draw). Holds model /
+    // hasSkin / previousModel only — the camera lives in the per-frame set-1 CameraUBO now.
     std::array<BufferHandle, kMaxFramesInFlight> uniformBufs_{NullBuffer, NullBuffer};
+    // Last values written into each frame slot's ObjectUBO, so a static object (unchanged world +
+    // previous world) skips the mapped re-upload. Default-zero worlds never match a real (affine)
+    // transform, so the first frame per slot always writes. Mat4 == is exact/bitwise — intended
+    // here.
+    std::array<Mat4, kMaxFramesInFlight> lastWorld_{};
+    std::array<Mat4, kMaxFramesInFlight> lastPreviousWorld_{};
+    std::array<int, kMaxFramesInFlight> lastHasSkin_{};
 
     std::vector<GeometryBindings> bindings_;
     // Lazily computed local-space AABB over the geometry vertices (see localBounds()).
