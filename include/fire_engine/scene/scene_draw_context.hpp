@@ -21,6 +21,10 @@ struct SceneDrawContext
     const FrameInfo& frame;
     const std::unordered_set<const Node*>* culledNodes{nullptr};
     std::vector<DrawCommand>* drawCommands{nullptr};
+    // Per-frame VDPM repair accumulators (null ⇒ not gathered): the mesh render path adds each
+    // instance's repair work so SceneGraph can report a scene total for the overlay diagnostic.
+    uint32_t* vdpmFoldoversRepaired{nullptr};
+    uint32_t* vdpmCoverageRepaired{nullptr};
 };
 
 } // namespace fire_engine

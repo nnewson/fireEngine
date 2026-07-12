@@ -805,6 +805,8 @@ const Renderer::DrawBuckets& Renderer::collectDrawCommands(RenderableScene& scen
     const CullStats cull = scene.buildDrawCommands(frame, frustumScratch_, drawCommandScratch_);
     stats_.trackedNodes = static_cast<int>(cull.tracked);
     stats_.culledNodes = static_cast<int>(cull.culled);
+    stats_.vdpmFoldoversRepaired = static_cast<int>(cull.vdpmFoldoversRepaired);
+    stats_.vdpmCoverageRepaired = static_cast<int>(cull.vdpmCoverageRepaired);
 
     assignSelfShadowSlots(drawCommandScratch_);
     buildDrawBuckets(drawCommandScratch_, drawBucketsScratch_);

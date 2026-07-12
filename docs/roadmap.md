@@ -92,6 +92,18 @@ severity tier, so titles are the stable reference, not a global number.)
 
 ## Could — opportunistic / supporting
 
+- ✅ **VDPM per-frame CPU emission scratch + repair counters** *(branch `cr-vdpm-emit-scratch`; the
+  CPU-only, no-GPU-rewrite subset of codereview.md "VDPM per-frame work is correct but expensive")*.
+  Three pieces: **(a)** `emitActiveIndices` now fills a caller-owned reused buffer (`object.cpp` passes
+  a per-binding scratch vector) — no per-frame heap allocation; a vector-returning overload is kept for
+  tests. **(b)** `refineForView` memoises `facingOf(v)` per canonical vertex (a vertex is a witness of
+  many splits) and `emit` precomputes `activeAncestor` once per frame (the front is settled there);
+  both are pure per-frame functions, so behaviour is byte-identical to the inline computation. **(c)**
+  `ActiveFront` exposes per-frame repair counters (vertices each pass pulled back in, `active_==0`-guard
+  dedup'd), plumbed `Object → SceneDrawContext → CullStats → FrameStats` into the overlay's LOD panel
+  ("VDPM repairs (verts): foldover X, coverage Y", shown in View-dependent mode) so a repair-count
+  regression is visible. Verified: build clean, fast suite (incl. `[vdpm]`) green, 0 VUID smoke. The
+  full GPU active front stays the separate arc below.
 - ✅ **Split the per-frame vs per-object forward UBO** *(branch `cr-ubo-split`)* — the old
   `UniformBufferObject` bundled per-frame camera data with per-object data and was re-uploaded per
   object per frame. Now split into **`CameraUBO`** (view / proj / cameraPos / view-projections) and a
@@ -159,7 +171,9 @@ Candidates" section folds in here:
   with precomputed per-split foldover / silhouette / coverage cones. This *is* the `lod.md`
   "repairs vs cones" note; promote it now the repairs are proven.
 - **GPU-driven active front** — drive `refineForView` + emission on the GPU (the forest + errors are
-  already just buffers), with reusable scratch emit. The indirect-draw direction #3 opened.
+  already just buffers). The indirect-draw direction #3 opened. (The CPU-side reusable-scratch-emit +
+  repair-counters piece is split out as its own near-term item under "Could" above — do that first;
+  this arc is the full GPU move.)
 - ✅ **Static GPU residency** — device-local static asset upload split from dynamic mapped buffers.
   Landed in block B (`createDeviceLocalBuffer` for static vertices/indices/LODs/VIPM), and the batching
   follow-up is now done too *(branch `cr-static-residency-batch`)*: when a load-time `uploadBatch_` is

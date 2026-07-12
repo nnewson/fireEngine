@@ -220,6 +220,10 @@ void ActiveFront::refineForView(std::span<const Vertex> vertices, const Mat4& wo
                                 float uvScale, float normalScale, float tangentScale)
 {
     coarsenAll();
+    // New per-frame cycle: reset the repair diagnostics (repairFoldovers below + the caller's
+    // repairCoverage accumulate into these).
+    foldoversRepaired_ = 0;
+    coverageRepaired_ = 0;
     const float halfViewport = viewportHeight * 0.5f;
 
     // Normal matrix = inverse-transpose of the world's linear part, so normals stay perpendicular
@@ -234,19 +238,29 @@ void ActiveFront::refineForView(std::span<const Vertex> vertices, const Mat4& wo
     // Signed facing of one canonical vertex's world normal vs its own view direction: +1 toward the
     // camera, 0 edge-on, -1 away. Each vertex uses its own world position for the view direction. A
     // missing normal returns +1 (front-facing) so it never contributes to a back-face suppression.
+    // Memoised per canonical vertex for this call: a vertex is a witness (child/parent/vl/vr) of
+    // many splits, so it would otherwise be recomputed repeatedly. facingOf is a pure function of
+    // the per-frame-constant world/cameraPos/normalMatrix, so the cache is behaviour-identical.
+    facingCache_.assign(vertices.size(), 0.0f);
+    facingValid_.assign(vertices.size(), 0);
     auto facingOf = [&](std::uint32_t v) -> float
     {
+        if (facingValid_[v] != 0)
+        {
+            return facingCache_[v];
+        }
         const Vec3 lp = vertices[v].position();
         const Vec4 wp = world * Vec4{lp.x(), lp.y(), lp.z(), 1.0f};
         const Vec3 wpos{wp.x(), wp.y(), wp.z()};
         const float d = std::max(1e-3f, (wpos - cameraPos).magnitude());
         const Vec3 wnrm = normalMatrix * vertices[v].normal();
         const float nlen = wnrm.magnitude();
-        if (nlen <= 1e-6f)
-        {
-            return 1.0f;
-        }
-        return Vec3::dotProduct(wnrm * (1.0f / nlen), (cameraPos - wpos) * (1.0f / d));
+        const float facing =
+            nlen <= 1e-6f ? 1.0f
+                          : Vec3::dotProduct(wnrm * (1.0f / nlen), (cameraPos - wpos) * (1.0f / d));
+        facingCache_[v] = facing;
+        facingValid_[v] = 1;
+        return facing;
     };
 
     // Coarsest split first (reverse stream order): a split's parent/vl/vr are removed only by later
@@ -360,6 +374,7 @@ void ActiveFront::repairFoldovers(std::span<const Vertex> vertices, const Mat4& 
                 if (active_[c] == 0 && forceRefine(forest_.removingSplit[c]))
                 {
                     changed = true;
+                    ++foldoversRepaired_;
                 }
             }
         }
@@ -408,6 +423,7 @@ void ActiveFront::repairCoverage(std::span<const Vertex> vertices, const Mat4& w
             if (active_[c] == 0 && forceRefine(forest_.removingSplit[c]))
             {
                 did = true;
+                ++coverageRepaired_;
             }
         }
         return did;
@@ -546,17 +562,28 @@ std::vector<std::array<std::uint32_t, 3>> ActiveFront::emitActiveCanonical() con
     return out;
 }
 
-std::vector<std::uint32_t> ActiveFront::emitActiveIndices(std::span<const Vertex> vertices,
-                                                          std::span<const uint32_t> indices) const
+void ActiveFront::emitActiveIndices(std::span<const Vertex> vertices,
+                                    std::span<const uint32_t> indices,
+                                    std::vector<std::uint32_t>& out) const
 {
-    std::vector<std::uint32_t> out;
+    out.clear();
     out.reserve(indices.size());
+
+    // The front is settled at emit time, so activeAncestor(v) is stable — memoise it for every
+    // canonical vertex once (a vertex is a corner of many faces) instead of re-walking the split
+    // parent chain per corner. Reuses its capacity across frames.
+    ancestorCache_.assign(active_.size(), 0);
+    for (std::uint32_t c = 0; c < ancestorCache_.size(); ++c)
+    {
+        ancestorCache_[c] = activeAncestor(c);
+    }
+
     for (std::size_t i = 0; i + 2 < indices.size(); i += 3)
     {
         const std::array<std::uint32_t, 3> oc{indices[i], indices[i + 1], indices[i + 2]};
-        const std::array<std::uint32_t, 3> anc{activeAncestor(weld_[oc[0]]),
-                                               activeAncestor(weld_[oc[1]]),
-                                               activeAncestor(weld_[oc[2]])};
+        const std::array<std::uint32_t, 3> anc{ancestorCache_[weld_[oc[0]]],
+                                               ancestorCache_[weld_[oc[1]]],
+                                               ancestorCache_[weld_[oc[2]]]};
         if (anc[0] == anc[1] || anc[1] == anc[2] || anc[0] == anc[2])
         {
             continue; // collapsed to a degenerate at the current front
@@ -569,6 +596,13 @@ std::vector<std::uint32_t> ActiveFront::emitActiveIndices(std::span<const Vertex
                 mesh_topology::nearestWedge(vertices, canonicalWedges_[anc[k]], vertices[oc[k]]));
         }
     }
+}
+
+std::vector<std::uint32_t> ActiveFront::emitActiveIndices(std::span<const Vertex> vertices,
+                                                          std::span<const uint32_t> indices) const
+{
+    std::vector<std::uint32_t> out;
+    emitActiveIndices(vertices, indices, out);
     return out;
 }
 

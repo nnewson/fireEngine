@@ -55,6 +55,11 @@ struct FrameStats
     // Triangles actually submitted in the forward opaque bucket this frame (post LOD + cull), so
     // the overlay can show the LOD saving.
     int trianglesDrawn{0};
+    // VDPM per-frame repair work summed over every instance (vertices each pass pulled back in) — a
+    // diagnostic so a repair-count regression is visible in the overlay. 0 outside ViewDependent
+    // LOD.
+    int vdpmFoldoversRepaired{0};
+    int vdpmCoverageRepaired{0};
 };
 
 class GpuProfiler

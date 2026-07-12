@@ -85,9 +85,15 @@ Object::writeForwardUniforms()            [per draw, per frame]
   shader morphs only vertices whose `collapseLevel` equals that target level.
 - **Refine (VDPM)** — for a mesh with a collapse stream, `Geometry::load` also stores the raw
   collapses; `Object` builds a per-instance `ActiveFront` (over a `VertexForest`) at load, and in
-  `writeForwardUniforms` runs `refineForView` + `repairCoverage` per frame, emitting a fresh index
-  buffer into a per-`currentFrame` dynamic buffer. `buildDrawCommands` points the draw at it, taking
-  precedence over discrete/VIPM. Vulkan-free + headless-testable; see the VDPM section.
+  `writeForwardUniforms` runs `refineForView` + `repairCoverage` per frame, emitting the active index
+  set into a per-`currentFrame` dynamic buffer. `buildDrawCommands` points the draw at it, taking
+  precedence over discrete/VIPM. The per-frame path is **allocation-free steady-state**: `emit` fills a
+  reused per-binding scratch vector (not a fresh `std::vector` each frame), `refineForView` memoises
+  `facingOf(v)` per canonical vertex, and `emit` precomputes `activeAncestor` once (the front is
+  settled by then) — all pure per-frame functions, so behaviour is identical to the inline compute.
+  `ActiveFront` also exposes **per-frame repair counters** (vertices each pass pulled back in), summed
+  over instances and shown in the overlay LOD panel as a regression watch. Vulkan-free +
+  headless-testable; see the VDPM section.
 
 ---
 

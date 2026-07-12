@@ -61,6 +61,11 @@ public:
     std::vector<DrawCommand> render(const FrameInfo& frame, const Mat4& world,
                                     const Mat4& previousWorld);
 
+    // Add this frame's VDPM repair work (vertices each pass pulled back in) across this object's
+    // active fronts to the running totals. Valid after render() this frame; a diagnostic surfaced
+    // in the overlay so a repair-count regression is visible.
+    void addVdpmRepairCounts(uint32_t& foldovers, uint32_t& coverage) const;
+
     // Local-space (bind-pose) AABB over the geometry vertices, cached on first use.
     // Used for frustum culling: a rigid object's world bound is this transformed by its
     // node's world matrix (exact). Deformable objects are not culled by it (see below).
@@ -106,6 +111,8 @@ private:
         std::array<BufferHandle, kMaxFramesInFlight> vdpmIndexBufs{NullBuffer, NullBuffer};
         std::array<std::span<std::byte>, kMaxFramesInFlight> vdpmIndexMapped{};
         uint32_t vdpmIndexCount{0};
+        // Reused emit buffer so the per-frame VDPM emission allocates nothing steady-state.
+        std::vector<uint32_t> vdpmEmitScratch;
         // Per-object ShadowUBO buffer handles (shadow set-0 binding 0, pushed
         // inline per draw — no descriptor set). skin/morph/morphSsbo above are
         // reused for the shadow draw.

@@ -383,6 +383,18 @@ std::vector<DrawCommand> Object::render(const FrameInfo& frame, const Mat4& worl
     return buildDrawCommands(frame, world, hasSkin, shadowBounds);
 }
 
+void Object::addVdpmRepairCounts(uint32_t& foldovers, uint32_t& coverage) const
+{
+    for (const auto& binding : bindings_)
+    {
+        if (binding.vdpmFront)
+        {
+            foldovers += binding.vdpmFront->foldoversRepaired();
+            coverage += binding.vdpmFront->coverageRepaired();
+        }
+    }
+}
+
 void Object::writeForwardUniforms(const FrameInfo& frame, const Mat4& world,
                                   const Mat4& previousWorld, bool hasSkin,
                                   std::span<const Mat4> jointMatrices)
@@ -487,8 +499,9 @@ void Object::writeForwardUniforms(const FrameInfo& frame, const Mat4& world,
             binding.vdpmFront->repairCoverage(
                 binding.geometry->vertices(), world, frame.cameraPosition, frame.currentViewProj,
                 static_cast<float>(frame.viewportWidth), static_cast<float>(frame.viewportHeight));
-            const std::vector<uint32_t> idx = binding.vdpmFront->emitActiveIndices(
-                binding.geometry->vertices(), binding.geometry->indices());
+            binding.vdpmFront->emitActiveIndices(
+                binding.geometry->vertices(), binding.geometry->indices(), binding.vdpmEmitScratch);
+            const std::vector<uint32_t>& idx = binding.vdpmEmitScratch;
             binding.vdpmIndexCount = static_cast<uint32_t>(idx.size());
             writeMapped(binding.vdpmIndexMapped[frame.currentFrame], idx.data(),
                         idx.size() * sizeof(uint32_t));
