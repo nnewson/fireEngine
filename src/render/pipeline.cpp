@@ -77,9 +77,10 @@ void enableAdditiveBlend(PipelineConfig& config)
 }
 
 // The per-object set 0 shared by the forward pipeline and the depth prepass:
-// frame / skin / morph UBOs + morph-targets SSBO, all vertex-stage (Frame is
-// also fragment-visible for the forward shader). Pushed inline per draw
-// (VK_KHR_push_descriptor) by pushForwardObjectDescriptors.
+// per-object frame UBO + per-frame camera UBO + skin / morph UBOs + morph-targets
+// and VIPM SSBOs, all vertex-stage (Frame and Camera are also fragment-visible for
+// the forward shader). Pushed inline per draw (VK_KHR_push_descriptor) by
+// pushForwardObjectDescriptors.
 [[nodiscard]]
 std::vector<vk::DescriptorSetLayoutBinding> perObjectSet0Bindings()
 {
@@ -90,6 +91,11 @@ std::vector<vk::DescriptorSetLayoutBinding> perObjectSet0Bindings()
     };
     return {
         uniform(ForwardBinding::Frame,
+                vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment),
+        // Per-frame camera UBO — vertex (gl_Position + motion vectors) + fragment (view vector,
+        // transmission reprojection). In set 0 so the depth prepass, which pushes set 0 but binds
+        // no globals, gets it too. Same buffer handle pushed for every draw this frame.
+        uniform(ForwardBinding::Camera,
                 vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment),
         uniform(ForwardBinding::Skin, vk::ShaderStageFlagBits::eVertex),
         uniform(ForwardBinding::Morph, vk::ShaderStageFlagBits::eVertex),

@@ -8,13 +8,24 @@
 // dynamically uniform (one material per draw), so plain indexing is sufficient.
 #extension GL_EXT_nonuniform_qualifier : require
 
-layout(binding = 0) uniform UBO {
+// Per-object data (set 0, pushed per draw) — must match ObjectUBO in shader.vert / render/ubo.hpp.
+layout(binding = 0) uniform ObjectUBO {
     mat4 model;
+    int hasSkin;
+    int _pad1;
+    int _pad2;
+    int _pad3;
+    mat4 previousModel;
+} ubo;
+
+// Per-frame camera data (set 0, binding 29 — pushed per draw) — must match CameraUBO in shader.vert.
+layout(binding = 29) uniform CameraUBO {
     mat4 view;
     mat4 proj;
     vec4 cameraPos;
-    int hasSkin;
-} ubo;
+    mat4 currentViewProj;
+    mat4 previousViewProj;
+} camera;
 
 // KHR_texture_transform packed per material texture slot. `offsetScale.xy` is
 // the UV offset; `offsetScale.zw` is the UV scale (identity = 0,0,1,1).
@@ -415,7 +426,7 @@ void main() {
         shadowNormal = -shadowNormal;
     }
 
-    vec3 V = normalize(ubo.cameraPos.xyz - fragWorldPos);
+    vec3 V = normalize(camera.cameraPos.xyz - fragWorldPos);
     float NdotV = max(dot(N, V), 0.001);
     // KHR_materials_ior. Use the authored dielectric IOR to derive F0 instead
     // of the previous hard-coded 0.04 baseline. This keeps Air (IOR = 1.0)
@@ -784,7 +795,7 @@ void main() {
 
         // Exit point in world space, projected to screen UV (F3 refraction).
         vec3 exitPos = fragWorldPos + refractDir * worldThickness;
-        vec4 exitClip = ubo.proj * ubo.view * vec4(exitPos, 1.0);
+        vec4 exitClip = camera.proj * camera.view * vec4(exitPos, 1.0);
         vec2 sampleUv = exitClip.xy / max(exitClip.w, 1e-4) * 0.5 + 0.5;
         // Vulkan screen UV has Y pointing down; clip-space y is inverted.
         sampleUv.y = 1.0 - sampleUv.y;

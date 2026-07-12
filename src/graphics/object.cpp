@@ -133,7 +133,7 @@ void Object::createForwardBindings(Resources& resources)
 {
     // Shared per-object UBO (model/view/proj), pushed as forward set-0 binding 0
     // per draw via VK_KHR_push_descriptor — no per-object descriptor set.
-    auto uniformSet = resources.createMappedUniformBuffers(sizeof(UniformBufferObject));
+    auto uniformSet = resources.createMappedUniformBuffers(sizeof(ObjectUBO));
     for (int i = 0; i < kMaxFramesInFlight; ++i)
     {
         uniformMapped_[i] = uniformSet.mapped[i];
@@ -382,22 +382,26 @@ void Object::writeForwardUniforms(const FrameInfo& frame, const Mat4& world,
                                   const Mat4& previousWorld, bool hasSkin,
                                   std::span<const Mat4> jointMatrices)
 {
-    // Shared per-object UBO. view/proj are computed once per frame and carried
-    // on FrameInfo (built by the renderer), not recomputed here.
-    UniformBufferObject ubo{};
-    ubo.model = world;
-    ubo.view = frame.view;
-    ubo.proj = frame.proj;
-    ubo.cameraPos[0] = frame.cameraPosition.x();
-    ubo.cameraPos[1] = frame.cameraPosition.y();
-    ubo.cameraPos[2] = frame.cameraPosition.z();
-    ubo.cameraPos[3] = 0.0f;
-    ubo.hasSkin = hasSkin ? 1 : 0;
-    // Motion-vector inputs (TAA): previous model + jitter-free view-projections.
-    ubo.previousModel = previousWorld;
-    ubo.currentViewProj = frame.currentViewProj;
-    ubo.previousViewProj = frame.previousViewProj;
-    writeMapped(uniformMapped_[frame.currentFrame], ubo);
+    // Per-object UBO — model + hasSkin + previousModel only. The camera (view/proj/cameraPos/
+    // view-projections) is per-frame data written once by the Renderer into the set-1 CameraUBO,
+    // not duplicated here per object. Skip the mapped write when this frame slot already holds the
+    // same world/previousWorld/hasSkin (a static object): after the first write per slot, a still
+    // object does no per-frame UBO upload. previousWorld changes every frame for a moving object,
+    // so it always rewrites — exactly when it must.
+    const std::uint32_t slot = frame.currentFrame;
+    const int skinFlag = hasSkin ? 1 : 0;
+    if (lastWorld_[slot] != world || lastPreviousWorld_[slot] != previousWorld ||
+        lastHasSkin_[slot] != skinFlag)
+    {
+        ObjectUBO ubo{};
+        ubo.model = world;
+        ubo.hasSkin = skinFlag;
+        ubo.previousModel = previousWorld;
+        writeMapped(uniformMapped_[slot], ubo);
+        lastWorld_[slot] = world;
+        lastPreviousWorld_[slot] = previousWorld;
+        lastHasSkin_[slot] = skinFlag;
+    }
 
     if (hasSkin)
     {
@@ -542,6 +546,7 @@ std::vector<DrawCommand> Object::buildDrawCommands(const FrameInfo& frame, const
         // Forward set 0 is pushed inline at draw time, not bound — carry the
         // buffer handles instead of a descriptor set.
         cmd.frameUbo = uniformBufs_[frame.currentFrame];
+        cmd.cameraUbo = frame.cameraUbo;
         cmd.skinUbo = binding.skinBufs[frame.currentFrame];
         cmd.morphUbo = binding.morphUboBufs[frame.currentFrame];
         cmd.morphSsbo = binding.morphSsbo;

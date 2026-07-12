@@ -9,28 +9,43 @@
 namespace fire_engine
 {
 
-struct UniformBufferObject
+// Per-object data for the forward pass (set 0, binding 0 — pushed per draw). Only what actually
+// varies per object: the world transform, its previous-frame value (TAA motion vectors), and the
+// skin flag. Re-uploaded only when it changes (Object caches + skips a byte-identical rewrite), so
+// a static object costs no per-frame UBO write. The camera/view data that USED to live here moved
+// to CameraUBO (per-frame, bound once) — see the note there. Read by the vertex stage (skinning +
+// motion vectors) and the fragment stage (transmission thickness uses `model`; `hasSkin`).
+struct ObjectUBO
 {
     Mat4 model;
-    Mat4 view;
-    Mat4 proj; // jittered (sub-pixel) for TAA — used only for gl_Position.
-    alignas(16) float cameraPos[4];
     alignas(4) int hasSkin{0};
     int _pad1{0};
     int _pad2{0};
     int _pad3{0};
-    // Motion-vector matrices (TAA). previousModel = the node's composed world
-    // from last frame; the two view-projections are jitter-free so velocity is
-    // the true screen motion, independent of the sub-pixel jitter above. Appended
-    // at the end so existing field offsets (and the shader block) are unchanged.
+    // previousModel = the node's composed world from last frame, for the jitter-free motion vector.
     Mat4 previousModel{Mat4::identity()};
+};
+
+static_assert(offsetof(ObjectUBO, previousModel) == 80, "ObjectUBO std140 layout");
+static_assert(sizeof(ObjectUBO) == 144, "ObjectUBO std140 size");
+
+// Per-frame camera data for the forward pass (set 1, the global per-frame set — bound once per
+// frame, not per object). Shared by every forward draw, so it is written exactly once per frame by
+// the Renderer instead of being duplicated into every object's UBO. `proj` is jittered (TAA) for
+// rasterisation; the two view-projections are jitter-free so motion vectors are independent of the
+// sub-pixel jitter. Read by the vertex stage (gl_Position + motion vectors) and the fragment stage
+// (view vector from cameraPos; transmission F3 reprojection uses proj·view).
+struct CameraUBO
+{
+    Mat4 view;
+    Mat4 proj;
+    alignas(16) float cameraPos[4];
     Mat4 currentViewProj{Mat4::identity()};
     Mat4 previousViewProj{Mat4::identity()};
 };
 
-static_assert(offsetof(UniformBufferObject, previousModel) == 224,
-              "motion-vector matrices must follow the original UBO fields unchanged");
-static_assert(sizeof(UniformBufferObject) == 416, "UniformBufferObject std140 size");
+static_assert(offsetof(CameraUBO, currentViewProj) == 144, "CameraUBO std140 layout");
+static_assert(sizeof(CameraUBO) == 272, "CameraUBO std140 size");
 
 // KHR_texture_transform packed per material texture slot. `offsetScale.xy` is
 // the UV offset; `offsetScale.zw` is the UV scale (identity = 0,0,1,1).

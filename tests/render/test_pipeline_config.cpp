@@ -17,10 +17,11 @@ TEST_CASE("PipelineConfig.ForwardConfigBindingsSplitBetweenSets", "[PipelineConf
     using fire_engine::ForwardGlobalBinding;
     auto config = Pipeline::forwardConfig();
 
-    // Set 0 — per-object vertex-stage UBOs/SSBO only now: frame, skin, morph UBO +
-    // morph-targets SSBO + VIPM geomorph SSBO (5 total). Material data (textures +
-    // scalars) is fully bindless (set 2).
-    CHECK(config.bindings.size() == 5u);
+    // Set 0 — per-object + per-frame push UBOs/SSBO: frame (per-object), camera (per-frame), skin,
+    // morph UBO + morph-targets SSBO + VIPM geomorph SSBO (6 total). Camera is in set 0 (not the
+    // global set 1) so the depth prepass — which reuses shader.vert but binds no globals — gets it
+    // via the same push. Material data (textures + scalars) is fully bindless (set 2).
+    CHECK(config.bindings.size() == 6u);
     // Set 1 — forward globals: light UBO + 5 shadow maps + debug image + 2
     // standalone samplers + 3 IBL textures + sceneColor + ssao.
     CHECK(config.globalBindings.size() == 14u);
@@ -41,6 +42,7 @@ TEST_CASE("PipelineConfig.ForwardConfigBindingsSplitBetweenSets", "[PipelineConf
 
     // Per-object set 0 bindings (material UBO + textures are no longer here).
     CHECK(hasObjectBinding(ForwardBinding::Frame));
+    CHECK(hasObjectBinding(ForwardBinding::Camera));
     CHECK(hasObjectBinding(ForwardBinding::Skin));
     CHECK(hasObjectBinding(ForwardBinding::Morph));
     CHECK(hasObjectBinding(ForwardBinding::MorphTargets));

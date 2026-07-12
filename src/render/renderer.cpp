@@ -210,6 +210,7 @@ Renderer::Renderer(const Window& window, std::string environmentPath, RendererDe
 
     lightUbo_ = resources_.createMappedUniformBuffers(sizeof(LightUBO));
     resources_.lightBuffers(lightUbo_.buffers);
+    cameraUbo_ = resources_.createMappedUniformBuffers(sizeof(CameraUBO));
     EnvironmentPrecompute environmentPrecompute{device_, resources_, environmentPath_};
     environmentPrecompute.create(skyboxPipeline_.descriptorSetLayout(), skyboxUbo_,
                                  sizeof(SkyboxUBO), lightUbo_, sizeof(LightUBO));
@@ -753,6 +754,19 @@ const Renderer::DrawBuckets& Renderer::collectDrawCommands(RenderableScene& scen
         recordSkybox(cameraPosition, cameraTarget, drawCommandScratch_);
     }
 
+    // Per-frame camera UBO (set 1) — written once here for every forward draw this frame, rather
+    // than baked into each object's per-object UBO. proj is the jittered projection (TAA).
+    CameraUBO cameraData{};
+    cameraData.view = view_;
+    cameraData.proj = jitteredProj_;
+    cameraData.cameraPos[0] = cameraPosition.x();
+    cameraData.cameraPos[1] = cameraPosition.y();
+    cameraData.cameraPos[2] = cameraPosition.z();
+    cameraData.cameraPos[3] = 0.0f;
+    cameraData.currentViewProj = currentViewProj_;
+    cameraData.previousViewProj = previousViewProj_;
+    writeMapped(cameraUbo_.mapped[currentFrame_], cameraData);
+
     const auto extent = swapchain_.extent();
     const AlphaPipelines pipelines{forwardOpaqueHandle_, forwardBlendHandle_};
     const FrameInfo frame{.currentFrame = currentFrame_,
@@ -764,6 +778,7 @@ const Renderer::DrawBuckets& Renderer::collectDrawCommands(RenderableScene& scen
                           .proj = jitteredProj_,
                           .currentViewProj = currentViewProj_,
                           .previousViewProj = previousViewProj_,
+                          .cameraUbo = cameraUbo_.buffers[currentFrame_],
                           .pipelines = pipelines,
                           .lodEnabled = tunables_.lodEnabled,
                           .lodPixelErrorBudget = tunables_.lodPixelErrorBudget,

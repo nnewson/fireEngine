@@ -146,6 +146,8 @@ void pushForwardObjectDescriptors(vk::CommandBuffer cmd, const Resources& resour
     // because each buffer was created exactly sized.
     const vk::DescriptorBufferInfo frameInfo{
         .buffer = resources.vulkanBuffer(dc.frameUbo), .offset = 0, .range = vk::WholeSize};
+    const vk::DescriptorBufferInfo cameraInfo{
+        .buffer = resources.vulkanBuffer(dc.cameraUbo), .offset = 0, .range = vk::WholeSize};
     const vk::DescriptorBufferInfo skinInfo{
         .buffer = resources.vulkanBuffer(dc.skinUbo), .offset = 0, .range = vk::WholeSize};
     const vk::DescriptorBufferInfo morphInfo{
@@ -157,11 +159,15 @@ void pushForwardObjectDescriptors(vk::CommandBuffer cmd, const Resources& resour
 
     constexpr auto kUbo = vk::DescriptorType::eUniformBuffer;
     constexpr auto kSsbo = vk::DescriptorType::eStorageBuffer;
-    const std::array<vk::WriteDescriptorSet, 5> writes{{
+    const std::array<vk::WriteDescriptorSet, 6> writes{{
         {.dstBinding = bindingIndex(ForwardBinding::Frame),
          .descriptorCount = 1,
          .descriptorType = kUbo,
          .pBufferInfo = &frameInfo},
+        {.dstBinding = bindingIndex(ForwardBinding::Camera),
+         .descriptorCount = 1,
+         .descriptorType = kUbo,
+         .pBufferInfo = &cameraInfo},
         {.dstBinding = bindingIndex(ForwardBinding::Skin),
          .descriptorCount = 1,
          .descriptorType = kUbo,
@@ -318,7 +324,7 @@ std::array<DescriptorSetHandle, kMaxFramesInFlight>
 Descriptors::createGlobalDescriptors(const GlobalDescriptorRequest& req)
 {
     // One global set per frame-in-flight. Pool sizes are exact per the
-    // ForwardGlobalBinding enum: 1 UBO + 5 CIS (IBL ×3 + sceneColor + ssao) + 6 SI
+    // ForwardGlobalBinding enum: 1 UBO (light) + 5 CIS (IBL ×3 + sceneColor + ssao) + 6 SI
     // (shadow maps ×5 + debug colour) + 2 plain samplers (compare + debug).
     std::array<vk::DescriptorPoolSize, 4> poolSizes = {{
         {vk::DescriptorType::eUniformBuffer, kMaxFramesInFlight},

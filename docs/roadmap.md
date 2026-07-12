@@ -92,17 +92,18 @@ severity tier, so titles are the stable reference, not a global number.)
 
 ## Could — opportunistic / supporting
 
-- **Split the per-frame vs per-object forward UBO** *(flagged during CR-09; **not** the quick
-  dirty-flag it first looked like)* — today `UniformBufferObject` (forward set 0, `shader.vert`
-  binding 0) bundles per-frame camera data (view / proj / cameraPos / current+previousViewProj) with
-  per-object data (model / previousModel / hasSkin), and is re-uploaded **per object per frame**. So a
-  `worldRevision` dirty-flag can't skip a static object's write — the camera part changes every frame,
-  and TAA jitters `proj` every frame regardless, so a "nothing moved" skip never triggers. The correct
-  fix is to **split** it: one shared per-frame camera UBO uploaded once and bound for all objects, plus
-  a slim per-object UBO re-uploaded only when `Node::worldRevision()` changes (`SceneCuller::Proxy::worldRevision`
-  is the precedent). Also kills the current duplication of view/proj into every object's UBO. Touches
-  `shader.vert`, the push-descriptor layout, `pushForwardObjectDescriptors`, and the `ubo.hpp`
-  layout/static_asserts — a real change, worthwhile with heavier scenes.
+- ✅ **Split the per-frame vs per-object forward UBO** *(branch `cr-ubo-split`)* — the old
+  `UniformBufferObject` bundled per-frame camera data with per-object data and was re-uploaded per
+  object per frame. Now split into **`CameraUBO`** (view / proj / cameraPos / view-projections) and a
+  slim **`ObjectUBO`** (model / previousModel / hasSkin). `CameraUBO` is written **once per frame** by
+  the Renderer (no more duplicating view/proj into every object). `ObjectUBO` is re-uploaded only when
+  it changes — `Object` caches the last world/previousWorld/hasSkin per frame slot and skips a
+  byte-identical rewrite, so a static object does no per-frame UBO write. **Design note:** camera went
+  into the *push* set 0 (binding 29), **not** the global set 1 — the depth prepass reuses `shader.vert`
+  but binds no globals, and set 0 is already pushed there, so set 0 is the only place both passes see
+  it (a first cut using set 1 failed pipeline creation exactly here). Camera is still only *bound* per
+  draw (a cheap push, not a re-upload). Touched `ubo.hpp` (+static_asserts), both forward shaders, the
+  set-0 layout, `pushForwardObjectDescriptors`, `DrawCommand`/`FrameInfo`, `Object`, and the Renderer.
 - **Route the active camera through the `RenderableScene` seam** rather than an explicit `drawFrame`
   argument *(flagged during CR-09)*.
 - **TAA skinned-deformation velocity** — exact previous-joint-matrix velocity to replace the v1

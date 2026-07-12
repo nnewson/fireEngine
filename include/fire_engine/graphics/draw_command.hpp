@@ -40,8 +40,10 @@ struct DrawCommand
     // and shadow draws leave this null and instead carry the per-object buffers
     // below, which the renderer pushes inline via VK_KHR_push_descriptor.
     DescriptorSetHandle descriptorSet{NullDescriptorSet};
-    // Forward set-0 push buffers: frame/skin/morph UBOs + morph-targets SSBO.
+    // Forward set-0 push buffers: per-object (frame) + per-frame camera + skin/morph UBOs + morph
+    // SSBO. cameraUbo is the same handle for every draw in a frame (written once by the Renderer).
     BufferHandle frameUbo{NullBuffer};
+    BufferHandle cameraUbo{NullBuffer};
     BufferHandle skinUbo{NullBuffer};
     BufferHandle morphUbo{NullBuffer};
     BufferHandle morphSsbo{NullBuffer};
