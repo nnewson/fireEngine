@@ -59,7 +59,6 @@ private:
     Assets assets_;
     SceneGraph scene_;
     PhysicsWorld physics_;
-    Camera* camera_{nullptr};
     // Ragdolls auto-built from `extras.Ragdoll` skinned nodes. Retained for the
     // app's lifetime: they hold the bone-node ↔ body bindings (the bodies live in
     // physics_, but the Ragdoll owns the activation/override state).

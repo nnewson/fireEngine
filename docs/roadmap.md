@@ -104,8 +104,17 @@ severity tier, so titles are the stable reference, not a global number.)
   it (a first cut using set 1 failed pipeline creation exactly here). Camera is still only *bound* per
   draw (a cheap push, not a re-upload). Touched `ubo.hpp` (+static_asserts), both forward shaders, the
   set-0 layout, `pushForwardObjectDescriptors`, `DrawCommand`/`FrameInfo`, `Object`, and the Renderer.
-- **Route the active camera through the `RenderableScene` seam** rather than an explicit `drawFrame`
-  argument *(flagged during CR-09)*.
+- ✅ **Route the active camera through the `RenderableScene` seam** *(branch `cr-camera-through-seam`)*
+  — the camera was the one piece of scene-owned per-frame data that bypassed the seam (passed as two
+  loose `drawFrame(… Vec3 cameraPosition, Vec3 cameraTarget …)` args the app extracted). Now
+  `RenderableScene::activeCamera()` returns a `CameraView{position, target}` and `drawFrame` drops the
+  args. `SceneGraph` owns the active camera as a **`Node*`** (`activeCamera(Node*)` setter, asserts the
+  node carries a `Camera` component); it reads the node's **live** world pose, so a moved camera node
+  (e.g. a future route system animating its `Transform`) moves the view for free. No authored camera →
+  a fixed debug fallback pose ({2,2,2}→origin, **not** a scene node, warns once) so a missing camera is
+  visible, not a crutch. Camera *types* (FlyCamera/FirstPersonCamera + per-type input) are deliberately
+  out of scope — this is the seam they'll plug into. `[SceneGraph]` tests cover the setter/getter +
+  fallback.
 - ✅ **TAA skinned-deformation velocity** *(branch `cr-taa-skinned-velocity`)* — skinned meshes used
   to reproject on camera motion only (`prevWorldPos = worldPos` for `hasSkin`), so animated
   deformation ghosted. Now a **`PrevSkin`** UBO (forward set-0 binding 30) carries last frame's joint

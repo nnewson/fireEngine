@@ -189,6 +189,11 @@ orientation slerp) — smooth motion on a 120 Hz panel. It is purely visual: `bo
 (the sim state) is untouched, so determinism is unaffected. Articulated ragdoll bones aren't
 body-bound, so `Ragdoll::syncNodes(alpha)` interpolates their link transforms the same way.
 
+`drawFrame` takes no camera argument — it pulls the active camera from the scene through the seam
+(`scene.activeCamera()`). That's why `scene_.update(input_state)` (which refreshes camera world
+transforms) **must** run before `drawFrame` in the loop above. The scene owns which node is the
+active camera (`SceneGraph::activeCamera(Node*)`); the renderer only reads its pose.
+
 Useful files:
 
 - `src/scene/node.cpp`
@@ -807,6 +812,13 @@ the same change — most have a test or guard that will catch you, but not all.
   two repair passes exist because a *selective* front is a non-prefix cut of the stream, so the
   simplifier's linear `wouldFlip` and the deviation metrics don't cover its foldover / coverage holes —
   do not delete them assuming a "closed, non-folded" emit is hole-free.
+- **The scene owns the active camera; the renderer reads it through the seam.** The camera crosses
+  `graphics/renderable_scene.hpp` via `activeCamera()` (returns a `CameraView{position, target}`),
+  exactly like lights/emitters/draws — it is *not* a `drawFrame` argument. `SceneGraph` holds the
+  active camera as a `Node*` and returns its **live** world pose, so `SceneGraph::update()` (which
+  refreshes camera world transforms) **must** run before `Renderer::drawFrame` reads it (the main loop
+  already orders them so). Don't reintroduce a camera parameter on `drawFrame`, and don't cache the
+  camera pose across the update→draw boundary.
 - **Where a constant lives.** Scalar render tunables (biases, strengths, extents, FOV) go in
   `render/constants.hpp`; GPU data-layout limits the Vulkan-free graphics layer also needs go in
   `graphics/gpu_limits.hpp`. `constants.hpp` includes the latter, so render-side code still sees

@@ -64,6 +64,13 @@ public:
     [[nodiscard]] CullStats buildDrawCommands(const FrameInfo& frame,
                                               std::span<const Frustum> frustums,
                                               std::vector<DrawCommand>& out) override;
+    [[nodiscard]] CameraView activeCamera() const override;
+
+    // Select the node the renderer views the scene from. The node must carry a Camera component
+    // (asserted); nullptr clears the selection, after which activeCamera() returns a fixed debug
+    // fallback. The camera is a normal scene node — moving it (e.g. a future route system animating
+    // its Transform) moves the view automatically, since activeCamera() reads its live world pose.
+    void activeCamera(Node* cameraNode) noexcept;
 
     [[nodiscard]] std::vector<Lighting> gatherLights() const;
     [[nodiscard]] std::vector<EmitterState> gatherEmitters() const;
@@ -78,6 +85,9 @@ private:
     std::vector<std::unique_ptr<Node>> nodes_;
     Mat4 rootTransform_{Mat4::identity()};
     SceneCuller culler_;
+    // The node the renderer views from (non-owning; the node lives in nodes_). nullptr = no camera
+    // authored → activeCamera() returns a fixed debug fallback.
+    Node* activeCameraNode_{nullptr};
 };
 
 } // namespace fire_engine

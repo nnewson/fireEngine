@@ -74,8 +74,9 @@ public:
     Renderer(Renderer&&) noexcept = delete;
     Renderer& operator=(Renderer&&) noexcept = delete;
 
-    void drawFrame(Window& display, RenderableScene& scene, Vec3 cameraPosition, Vec3 cameraTarget,
-                   float dt);
+    // The active camera comes from the scene through the RenderableScene seam
+    // (scene.activeCamera()), not as an argument — the scene owns all transforms.
+    void drawFrame(Window& display, RenderableScene& scene, float dt);
 
     void waitIdle() const
     {

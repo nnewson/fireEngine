@@ -16,17 +16,22 @@
 #include <fire_engine/graphics/material.hpp>
 #include <fire_engine/graphics/object.hpp>
 #include <fire_engine/graphics/vertex.hpp>
+#include <fire_engine/input/input_state.hpp>
 #include <fire_engine/math/constants.hpp>
 #include <fire_engine/math/vec2.hpp>
 #include <fire_engine/math/vec3.hpp>
+#include <fire_engine/scene/camera.hpp>
 #include <fire_engine/scene/mesh.hpp>
 
+using fire_engine::Camera;
+using fire_engine::CameraView;
 using fire_engine::Colour3;
 using fire_engine::CullStats;
 using fire_engine::DrawCommand;
 using fire_engine::FrameInfo;
 using fire_engine::Frustum;
 using fire_engine::Geometry;
+using fire_engine::InputState;
 using fire_engine::Mat4;
 using fire_engine::Material;
 using fire_engine::Mesh;
@@ -225,4 +230,39 @@ TEST_CASE("SceneGraphDraw.NonRenderableNodesAreNotTracked", "[SceneGraphDraw]")
     CHECK(out.empty());
     CHECK(stats.tracked == 1u); // only the cube
     CHECK(stats.culled == 1u);
+}
+
+// activeCamera — the RenderableScene seam the renderer views the scene from.
+
+TEST_CASE("SceneGraph.ActiveCameraFallbackWhenUnset", "[SceneGraph]")
+{
+    // No camera authored: a fixed debug pose (not a scene node). Position {2,2,2} looking at
+    // origin.
+    SceneGraph sg;
+    const CameraView cv = sg.activeCamera();
+    CHECK(cv.position.x() == Catch::Approx(2.0f));
+    CHECK(cv.position.y() == Catch::Approx(2.0f));
+    CHECK(cv.position.z() == Catch::Approx(2.0f));
+    CHECK(cv.target.x() == Catch::Approx(0.0f));
+    CHECK(cv.target.y() == Catch::Approx(0.0f));
+    CHECK(cv.target.z() == Catch::Approx(0.0f));
+}
+
+TEST_CASE("SceneGraph.ActiveCameraReflectsSetNode", "[SceneGraph]")
+{
+    // A set camera node drives the view; activeCamera() reads its live world pose (so a moved node
+    // moves the view). Update first so the Camera computes its world position from the node
+    // transform.
+    SceneGraph sg;
+    auto node = std::make_unique<Node>("Camera");
+    auto& camera = node->component().emplace<Camera>();
+    camera.localPosition({5.0f, 1.0f, -3.0f});
+    Node& added = sg.addNode(std::move(node));
+    sg.activeCamera(&added);
+    sg.update(InputState{});
+
+    const CameraView cv = sg.activeCamera();
+    CHECK(cv.position.x() == Catch::Approx(5.0f));
+    CHECK(cv.position.y() == Catch::Approx(1.0f));
+    CHECK(cv.position.z() == Catch::Approx(-3.0f));
 }
