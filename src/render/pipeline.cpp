@@ -98,6 +98,9 @@ std::vector<vk::DescriptorSetLayoutBinding> perObjectSet0Bindings()
         uniform(ForwardBinding::Camera,
                 vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment),
         uniform(ForwardBinding::Skin, vk::ShaderStageFlagBits::eVertex),
+        // Previous-frame skin matrices for skinned-mesh motion vectors (vertex only). Identity for
+        // non-skinned draws.
+        uniform(ForwardBinding::PrevSkin, vk::ShaderStageFlagBits::eVertex),
         uniform(ForwardBinding::Morph, vk::ShaderStageFlagBits::eVertex),
         {bindingIndex(ForwardBinding::MorphTargets), vk::DescriptorType::eStorageBuffer, 1,
          vk::ShaderStageFlagBits::eVertex},

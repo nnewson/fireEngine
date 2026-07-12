@@ -150,6 +150,8 @@ void pushForwardObjectDescriptors(vk::CommandBuffer cmd, const Resources& resour
         .buffer = resources.vulkanBuffer(dc.cameraUbo), .offset = 0, .range = vk::WholeSize};
     const vk::DescriptorBufferInfo skinInfo{
         .buffer = resources.vulkanBuffer(dc.skinUbo), .offset = 0, .range = vk::WholeSize};
+    const vk::DescriptorBufferInfo prevSkinInfo{
+        .buffer = resources.vulkanBuffer(dc.prevSkinUbo), .offset = 0, .range = vk::WholeSize};
     const vk::DescriptorBufferInfo morphInfo{
         .buffer = resources.vulkanBuffer(dc.morphUbo), .offset = 0, .range = vk::WholeSize};
     const vk::DescriptorBufferInfo morphSsboInfo{
@@ -159,7 +161,7 @@ void pushForwardObjectDescriptors(vk::CommandBuffer cmd, const Resources& resour
 
     constexpr auto kUbo = vk::DescriptorType::eUniformBuffer;
     constexpr auto kSsbo = vk::DescriptorType::eStorageBuffer;
-    const std::array<vk::WriteDescriptorSet, 6> writes{{
+    const std::array<vk::WriteDescriptorSet, 7> writes{{
         {.dstBinding = bindingIndex(ForwardBinding::Frame),
          .descriptorCount = 1,
          .descriptorType = kUbo,
@@ -172,6 +174,10 @@ void pushForwardObjectDescriptors(vk::CommandBuffer cmd, const Resources& resour
          .descriptorCount = 1,
          .descriptorType = kUbo,
          .pBufferInfo = &skinInfo},
+        {.dstBinding = bindingIndex(ForwardBinding::PrevSkin),
+         .descriptorCount = 1,
+         .descriptorType = kUbo,
+         .pBufferInfo = &prevSkinInfo},
         {.dstBinding = bindingIndex(ForwardBinding::Morph),
          .descriptorCount = 1,
          .descriptorType = kUbo,

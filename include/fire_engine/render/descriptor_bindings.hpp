@@ -48,6 +48,11 @@ enum class ForwardBinding : std::uint32_t
     // gets it too via the same push. Written once per frame by the Renderer; the buffer handle is
     // the same across every draw. Vertex + fragment.
     Camera = 29,
+    // Previous-frame skin matrices (TAA motion vectors for skinned meshes) — the joint matrices
+    // from last frame, so the vertex shader can reproject a skinned vertex to where it was and get
+    // exact per-vertex deformation velocity instead of the camera-only fallback. Vertex only;
+    // identity for non-skinned draws (unread there).
+    PrevSkin = 30,
 };
 
 // Forward-pipeline globals live on descriptor set 1 — bound once per frame,

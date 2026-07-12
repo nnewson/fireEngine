@@ -106,8 +106,14 @@ severity tier, so titles are the stable reference, not a global number.)
   set-0 layout, `pushForwardObjectDescriptors`, `DrawCommand`/`FrameInfo`, `Object`, and the Renderer.
 - **Route the active camera through the `RenderableScene` seam** rather than an explicit `drawFrame`
   argument *(flagged during CR-09)*.
-- **TAA skinned-deformation velocity** — exact previous-joint-matrix velocity to replace the v1
-  camera-motion-only fallback (skinned meshes currently reproject on camera motion only).
+- ✅ **TAA skinned-deformation velocity** *(branch `cr-taa-skinned-velocity`)* — skinned meshes used
+  to reproject on camera motion only (`prevWorldPos = worldPos` for `hasSkin`), so animated
+  deformation ghosted. Now a **`PrevSkin`** UBO (forward set-0 binding 30) carries last frame's joint
+  matrices, and `shader.vert` skins the bind-pose vertex with them to get exact per-vertex velocity.
+  Unified with the rigid path via `prevTransform` (previous joints when skinned, `previousModel`
+  otherwise). `Object` caches `previousJointMatrices_` (previous == current on frame one → zero
+  velocity). Camera-only was the *v1*; this is the exact form. Verified: skinned (CesiumMan) + rigid
+  render 0 VUID; the velocity debug view (=5) shows the deformation motion.
 - ✅ **`Mat4::transformPoint` helper** *(branch `cr-mat4-transformpoint`)* — the free
   `transformPoint(const Mat4&, Vec3)` copy-pasted in `physics_world.cpp`, `physics_world_shapes.cpp`,
   `scene_culler.cpp` is now one affine `Mat4::transformPoint(Vec3)` method (drops the homogeneous w, no
