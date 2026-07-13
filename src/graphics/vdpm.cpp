@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <vector>
 
+#include <fire_engine/graphics/lod.hpp>
 #include <fire_engine/graphics/mesh_topology.hpp>
 #include <fire_engine/math/mat3.hpp>
 #include <fire_engine/math/vec4.hpp>
@@ -244,12 +245,17 @@ void ActiveFront::refineForView(std::span<const Vertex> vertices, const Mat4& wo
                                 float pixelBudget, float silhouetteBoost, float backfaceThreshold,
                                 float uvScale, float normalScale, float tangentScale)
 {
-    coarsenAll();
-    // New per-frame cycle: reset the repair diagnostics (repairFoldovers below + the caller's
-    // repairCoverage accumulate into these) and the per-channel metric instrumentation.
+    // The active front PERSISTS across frames — no coarsenAll(). The score pass below tags every
+    // split for this view; a refine pass then pulls in splits over the pixel budget, and a coarsen
+    // pass drops those under kVdpmCoarsenRatio × budget. The dead band between the two thresholds
+    // is the hysteresis that stops a split whose score hovers at the budget (small camera moves,
+    // TAA jitter) from popping in and out each frame. New per-frame cycle: reset the diagnostics
+    // and the per-split score scratch.
     foldoversRepaired_ = 0;
     coverageRepaired_ = 0;
     channelStats_ = ChannelStats{};
+    splitScore_.assign(forest_.splits.size(), 0.0f);
+    splitBackface_.assign(forest_.splits.size(), 0);
     const float halfViewport = viewportHeight * 0.5f;
 
     // Normal matrix = inverse-transpose of the world's linear part, so normals stay perpendicular
@@ -297,9 +303,9 @@ void ActiveFront::refineForView(std::span<const Vertex> vertices, const Mat4& wo
         return facing;
     };
 
-    // Coarsest split first (reverse stream order): a split's parent/vl/vr are removed only by later
-    // collapses, so refining coarse-first keeps every legal refine's dependencies already active.
-    for (std::uint32_t i = static_cast<std::uint32_t>(forest_.splits.size()); i-- > 0;)
+    // Score pass: tag every split with its max screen-space channel score + back-face flag for this
+    // view (order-independent — no front mutation here).
+    for (std::uint32_t i = 0; i < forest_.splits.size(); ++i)
     {
         const VertexSplit& s = forest_.splits[i];
 
@@ -345,6 +351,7 @@ void ActiveFront::refineForView(std::span<const Vertex> vertices, const Mat4& wo
         }
         if (maxFacing < -backfaceThreshold)
         {
+            splitBackface_[i] = 1; // culled: score 0, skip refine, eligible to coarsen
             continue;
         }
 
@@ -389,29 +396,27 @@ void ActiveFront::refineForView(std::span<const Vertex> vertices, const Mat4& wo
         channelStats_.maxTangentRatio =
             std::max(channelStats_.maxTangentRatio, tangentScreenError * invBudget);
 
-        if (geomScreenError > pixelBudget || uvScreenError > pixelBudget ||
-            normalScreenError > pixelBudget || tangentScreenError > pixelBudget)
+        splitScore_[i] =
+            std::max({geomScreenError, uvScreenError, normalScreenError, tangentScreenError});
+
+        // A split that is NOT yet refined and is over the budget will be pulled in by the refine
+        // pass below — attribute that new *trigger* to its winning channel (the one furthest over
+        // budget), so the counts read as "which channel is driving new detail this frame".
+        // Already-refined splits that merely stay refined are not re-counted (steady-state ⇒ few
+        // triggers, which is the point of persistence). The max ratios above track every split,
+        // refined or not.
+        if (refined_[i] == 0 && splitScore_[i] > pixelBudget)
         {
-            // Attribute this over-budget *trigger* to its winning channel — the one furthest over
-            // budget — so the counts read as "which channel is driving detail". These are TRIGGER
-            // counts, not resulting-refine counts: one direct metric decision legitimately pulls in
-            // several dependency splits through forceRefine (which may also no-op if the split is
-            // already active as another split's dependency). The dominant channel is the actionable
-            // signal; the max ratios below say how hard each is pushing even when it doesn't win.
-            const float geom = geomScreenError;
-            const float uv = uvScreenError;
-            const float nrm = normalScreenError;
-            const float tan = tangentScreenError;
-            const float winner = std::max({geom, uv, nrm, tan});
-            if (winner == geom)
+            const float winner = splitScore_[i];
+            if (winner == geomScreenError)
             {
                 ++channelStats_.geometryTriggers;
             }
-            else if (winner == uv)
+            else if (winner == uvScreenError)
             {
                 ++channelStats_.uvTriggers;
             }
-            else if (winner == nrm)
+            else if (winner == normalScreenError)
             {
                 ++channelStats_.normalTriggers;
             }
@@ -419,7 +424,37 @@ void ActiveFront::refineForView(std::span<const Vertex> vertices, const Mat4& wo
             {
                 ++channelStats_.tangentTriggers;
             }
+        }
+    }
+
+    // Refine pass: coarse-first (reverse stream order, so a split's parent/vl/vr are already
+    // active), pull in every front-facing split over the budget that isn't already refined.
+    // forceRefine brings any inactive dependency neighbourhood with it.
+    for (std::uint32_t i = static_cast<std::uint32_t>(forest_.splits.size()); i-- > 0;)
+    {
+        if (splitBackface_[i] == 0 && refined_[i] == 0 && splitScore_[i] > pixelBudget)
+        {
             forceRefine(i);
+        }
+    }
+
+    // Coarsen pass: a fine-first fixpoint collapsing every refined split now under the coarsen
+    // budget (or back-face-culled) whose child is a leaf. A split can't coarsen until the finer
+    // splits that depend on it have, so repeat until a full sweep changes nothing (bounded by the
+    // forest depth). Only removes sub-band detail, so the front strictly relaxes toward the current
+    // score.
+    const float coarsenBudget = pixelBudget * kVdpmCoarsenRatio;
+    bool changed = true;
+    while (changed)
+    {
+        changed = false;
+        for (std::uint32_t i = 0; i < forest_.splits.size(); ++i)
+        {
+            if (refined_[i] != 0 && (splitBackface_[i] != 0 || splitScore_[i] < coarsenBudget) &&
+                coarsen(i))
+            {
+                changed = true;
+            }
         }
     }
 
