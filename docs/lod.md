@@ -464,9 +464,17 @@ at a fraction of the triangles. The remaining residuals and follow-ons, in rough
     in a sharp highlight. Passed straight into `refineForView`'s existing `uv/normal/tangentScale`
     args at the `object.cpp` call site — no change to the simplifier, forest, or front. Unit-tested
     per rule.
-  - **Still open.** A persistent front with refine/coarsen hysteresis (today `refineForView` rebuilds
-    from `coarsenAll()` every frame, so small camera moves around the budget pop topology). Also
-    deferred: texel-density UV budget (convert the UV channel via per-material texture resolution).
+  - **Step 7 — persistent front + hysteresis (done).** `refineForView` no longer `coarsenAll()`s every
+    frame — the front persists across frames. Each frame: a score pass tags every split (max of its
+    four channels + a back-face flag), a refine pass (coarse-first) pulls in splits over `pixelBudget`,
+    and a coarsen pass (fine-first fixpoint) drops refined splits under `kVdpmCoarsenRatio × pixelBudget`
+    (or back-face-culled) whose child is a leaf. The **dead band** between the two thresholds is the
+    hysteresis: a split whose score hovers at the budget stops popping in/out under small camera moves
+    or TAA jitter. A static camera now yields an identical front every frame; the repair passes still
+    run each frame so correctness is unchanged. Steady-state also does *less* work than the old rebuild
+    (only the sub-band splits coarsen, vs coarsenAll's full collapse). *(This is the last metric-arc
+    step. Still parked: texel-density UV budget; the exact-visibility cones that would retire the
+    per-frame repair sweeps.)*
 
 - **VDPM repair passes vs. cones.** Foldover and coverage are fixed each frame by monotone repair
   sweeps over the finest faces. The exact criterion is a per-split **facing / foldover cone**

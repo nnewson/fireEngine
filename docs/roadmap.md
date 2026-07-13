@@ -241,9 +241,15 @@ Candidates" section folds in here:
   material can't show is disabled: unlit → normal+tangent off; no normal/clearcoat map → tangent off (a
   mesh with tangents stops protecting a frame nothing samples); no textures → UV off; glossy → normal
   channel scaled up. Passed into `refineForView`'s existing scale args at the `object.cpp` call site — no
-  simplifier/forest/front change; unit-tested per rule. **Next: persistent front + hysteresis** (stop
-  rebuilding the front from `coarsenAll()` every frame; refine above a high threshold, coarsen below a
-  low one, so small camera moves near the budget don't pop topology).
+  simplifier/forest/front change; unit-tested per rule.
+  **(7) persistent front + hysteresis** *(branch `cr-vdpm-persistent-front`)* — `refineForView` no
+  longer `coarsenAll()`s each frame; the front persists. Score pass → refine pass (over budget) →
+  coarsen pass (under `kVdpmCoarsenRatio × budget`); the dead band between stops splits popping in/out
+  under small camera moves / TAA jitter (a static camera now yields an identical front every frame).
+  Repairs still run each frame, and steady-state does *less* work than the old full rebuild. Tests:
+  static-view stability + sub-band hold. **This completes the VDPM metric-fidelity arc.** Parked
+  next-steps if it's ever revisited: exact-visibility cones (retire the per-frame repair sweeps),
+  GPU-driven active front, texel-density UV budget.
   See [`lod.md`](lod.md) § Known limits (Metric fidelity). Render-path only ⇒ golden-neutral.
 - **VDPM exact-visibility cones** — replace the per-frame `repairFoldovers` / `repairCoverage` sweeps
   with precomputed per-split foldover / silhouette / coverage cones. This *is* the `lod.md`

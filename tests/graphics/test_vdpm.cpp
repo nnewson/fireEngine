@@ -442,6 +442,55 @@ TEST_CASE("ActiveFront: refineForView refines nearer views more than distant one
     CHECK(farCount >= 2);        // never below the coarsest
 }
 
+TEST_CASE("refineForView: the persistent front is stable under a repeated identical view", "[vdpm]")
+{
+    // The front persists across frames instead of rebuilding from coarsest, so a STATIC camera must
+    // produce an identical front every frame — no topology pop with no camera motion.
+    const Mesh m = makeBumpyGrid(17);
+    ActiveFront front = ActiveFront::build(m.verts, m.indices, collapsesOf(m));
+    const Vec3 cam{8.0f, 8.0f, 6.0f};
+    auto refineHere = [&]
+    {
+        front.refineForView(m.verts, Mat4::identity(), cam, 1.0f, 1000.0f, 2.0f, 0.0f, 2.0f, 0.0f,
+                            0.0f, 0.0f);
+        return normalize(front.emitActiveCanonical());
+    };
+    const FaceSet first = refineHere();
+    const FaceSet second = refineHere();
+    CHECK(first == second);  // identical view ⇒ identical front (no pop)
+    CHECK(first.size() > 2); // and it actually refined
+}
+
+TEST_CASE("refineForView: hysteresis holds sub-budget detail a from-scratch front would drop",
+          "[vdpm]")
+{
+    // After refining a near view then receding, the persistent front keeps splits whose score fell
+    // into the dead band (below the pixel budget but above kVdpmCoarsenRatio × budget) — detail a
+    // rebuilt-from-coarsest front at the same distance never adds. That hold is exactly the
+    // anti-pop hysteresis.
+    const Mesh m = makeBumpyGrid(17);
+    const auto collapses = collapsesOf(m);
+    constexpr float budget = 2.0f;
+    auto refine = [&](ActiveFront& f, float camZ)
+    {
+        f.refineForView(m.verts, Mat4::identity(), Vec3{8.0f, 8.0f, camZ}, 1.0f, 1000.0f, budget,
+                        0.0f, 2.0f, 0.0f, 0.0f, 0.0f);
+    };
+
+    // Persistent: refine near, then recede — the front relaxes but keeps in-band detail.
+    ActiveFront persistent = ActiveFront::build(m.verts, m.indices, collapses);
+    refine(persistent, 6.0f);
+    refine(persistent, 12.0f);
+    const std::size_t persistentCount = persistent.emitActiveCanonical().size();
+
+    // From scratch at the receded distance only.
+    ActiveFront scratch = ActiveFront::build(m.verts, m.indices, collapses);
+    refine(scratch, 12.0f);
+    const std::size_t scratchCount = scratch.emitActiveCanonical().size();
+
+    CHECK(persistentCount > scratchCount); // the dead band held detail the scratch front dropped
+}
+
 TEST_CASE("refineForView: back-face suppression coarsens the hidden hemisphere", "[vdpm]")
 {
     const Mesh m = makeUvSphere(24, 32);

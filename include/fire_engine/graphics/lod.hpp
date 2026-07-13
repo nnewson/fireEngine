@@ -76,6 +76,14 @@ inline constexpr float kVdpmNormalScale = 0.5f;
 // reads 0 on meshes without tangents, so it costs nothing there.
 inline constexpr float kVdpmTangentScale = 0.5f;
 
+// VDPM refine/coarsen hysteresis: the active front persists across frames rather than rebuilding
+// from coarsest every frame, so a split refines when its score exceeds the pixel budget but only
+// coarsens once its score drops below this FRACTION of the budget. The dead band between the two
+// keeps a split whose score hovers around the budget (small camera moves, sub-pixel jitter) from
+// popping in and out each frame. 1.0 disables hysteresis (coarsen at the budget); lower = stickier
+// / less popping but slightly more triangles held near the boundary.
+inline constexpr float kVdpmCoarsenRatio = 0.6f;
+
 // Material-aware multiplier on the shading-normal channel for a fully-glossy (roughness 0)
 // material, ramped down to 1.0 at fully-rough. A shading-normal error reads far more strongly in a
 // sharp specular highlight than on a diffuse surface, so a mirror-like material refines its normals

@@ -120,19 +120,21 @@ public:
     void refineAll();
     void coarsenAll();
 
-    // Selectively refine the front for a camera view (the per-frame VDPM driver): reset to
-    // coarsest, then refine every split (coarse-first, so dependencies stay satisfied) whose
-    // world-space error projects beyond `pixelBudget` screen pixels. Silhouette regions — where the
-    // vertex's world normal is near edge-on to the view — are held to a tighter budget via
-    // `silhouetteBoost` (0 disables it), so contours stay dense. Clearly back-facing reps (signed
-    // facing < -`backfaceThreshold`) skip *discretionary* refinement — they are back-face-culled,
-    // so detail there is wasted — but can still be pulled in as a visible split's dependency. A
-    // split also refines if its UV-deviation channel (`uvError · uvScale`, projected the same way),
-    // its shading channel (`normalError · normalScale`, likewise), or its tangent channel
-    // (`tangentError · tangentScale`) exceeds the budget, so texture-, shading-, and
-    // normal-map-frame-costly-but-flat regions all stay dense. `world` places the mesh; `projScaleY
-    // = proj[1][1]`. The per-region result is the view-dependent LOD. Vulkan-free +
-    // headless-testable.
+    // Selectively refine the front for a camera view (the per-frame VDPM driver). The front
+    // PERSISTS across frames — it is NOT reset to coarsest each call. Each split is scored (the max
+    // of its four screen-space channels, silhouette-boosted); then a refine pass (coarse-first, so
+    // dependencies stay satisfied) pulls in every front-facing split whose score exceeds
+    // `pixelBudget`, and a coarsen pass drops every refined split whose score falls below
+    // `kVdpmCoarsenRatio × pixelBudget` (or is back-face-culled) and whose child is a leaf. The
+    // dead band between the two thresholds is the HYSTERESIS: a split whose score hovers at the
+    // budget doesn't pop in and out under small camera moves / sub-pixel jitter. The four channels
+    // are geometry (`error`), UV-stretch (`uvError · uvScale`), shading normal (`normalError ·
+    // normalScale`) and tangent frame (`tangentError · tangentScale`), so texture-, shading-, and
+    // normal-map-frame-costly-but-flat regions all stay dense. Silhouette regions (world normal
+    // near edge-on) get a tighter budget via `silhouetteBoost` (0 disables it); clearly back-facing
+    // reps (signed facing < -`backfaceThreshold`) skip discretionary refinement (back-face-culled)
+    // but can still be pulled in as a visible split's dependency. `world` places the mesh;
+    // `projScaleY = proj[1][1]`. Vulkan-free + headless-testable.
     void refineForView(std::span<const Vertex> vertices, const Mat4& world, const Vec3& cameraPos,
                        float projScaleY, float viewportHeight, float pixelBudget,
                        float silhouetteBoost, float backfaceThreshold, float uvScale,
@@ -254,6 +256,14 @@ private:
     mutable std::vector<float> facingCache_;        // per canonical vertex (refineForView)
     mutable std::vector<std::uint8_t> facingValid_; // per canonical vertex: facingCache_ populated?
     mutable std::vector<uint32_t> ancestorCache_;   // per canonical vertex (emit)
+
+    // Persistent-front hysteresis scratch (per split), filled by refineForView's score pass and
+    // read by its refine + coarsen passes. `splitScore_` is the split's max screen-space channel
+    // score (0 for a back-face-culled split); `splitBackface_` marks a split whose whole support is
+    // clearly back-facing (skip refine, allow coarsen). The front persists across frames, so these
+    // describe only THIS frame's view.
+    std::vector<float> splitScore_;
+    std::vector<std::uint8_t> splitBackface_;
 
     // Repair counters for the last refineForView + repair cycle (see the accessors above).
     uint32_t foldoversRepaired_{0};
