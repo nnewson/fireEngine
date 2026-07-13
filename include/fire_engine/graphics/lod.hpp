@@ -76,6 +76,13 @@ inline constexpr float kVdpmNormalScale = 0.5f;
 // reads 0 on meshes without tangents, so it costs nothing there.
 inline constexpr float kVdpmTangentScale = 0.5f;
 
+// Material-aware multiplier on the shading-normal channel for a fully-glossy (roughness 0)
+// material, ramped down to 1.0 at fully-rough. A shading-normal error reads far more strongly in a
+// sharp specular highlight than on a diffuse surface, so a mirror-like material refines its normals
+// harder. Applied per material in `vdpmChannelScales` (refine time), so the collapse stream stays
+// material-agnostic. 1.0 = disable the gloss boost.
+inline constexpr float kVdpmGlossyNormalBoost = 3.0f;
+
 // Pick the coarsest LOD whose projected geometric error fits the pixel budget. `projScaleY` is the
 // projection matrix's [1][1] term (= 1/tan(fovY/2)); a world deviation `e` at view distance `d`
 // projects to `e·projScaleY·viewportHeight/(2d)` pixels. Returns 0 (the full mesh) when no coarser

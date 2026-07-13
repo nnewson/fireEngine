@@ -62,6 +62,7 @@ add_library(fireengine SHARED
     src/graphics/mesh_topology.cpp
     src/graphics/vipm.cpp
     src/graphics/vdpm.cpp
+    src/graphics/vdpm_material.cpp
     src/graphics/image.cpp
     src/graphics/ktx_image.cpp
     src/graphics/material_binding.cpp
@@ -303,6 +304,7 @@ add_executable(test_fire_engine
     tests/graphics/test_skin.cpp
     tests/graphics/test_assets.cpp
     tests/graphics/test_material.cpp
+    tests/graphics/test_vdpm_material.cpp
     tests/graphics/test_geometry.cpp
     tests/graphics/test_gpu_handle.cpp
     tests/graphics/test_mapped_buffer.cpp

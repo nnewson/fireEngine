@@ -453,11 +453,20 @@ at a fraction of the triangles. The remaining residuals and follow-ons, in rough
     catching both a tangent roll and a handedness flip; still independent of the shading-normal channel
     (which covers `N`). Unit-tested through `measureCollapseDeviation` (a hand-built frame with an
     opposite-`w` bitangent registers ~π; consistent handedness reads 0).
-  - **Still open.** Material-aware tolerances (disable the tangent channel when no normal/clearcoat map
-    samples it; unlit → drop normal/tangent; no textures → drop UV; tighter normal tolerance for
-    glossy) — computed at *refine* time from the material so the collapse stream stays material-agnostic.
-    Then a persistent front with refine/coarsen hysteresis (today `refineForView` rebuilds from
-    `coarsenAll()` every frame, so small camera moves around the budget pop topology).
+  - **Step 6 — material-aware tolerances (done).** `vdpmChannelScales(material)` (a pure,
+    Vulkan-free helper in `graphics/vdpm_material.*`) derives the per-channel refine scales at *refine
+    time* from the binding's active material, so a channel a material can't show is disabled (scale 0
+    ⇒ its score never exceeds budget) and the collapse stream stays material-agnostic / reusable across
+    variants. Rules: **unlit** → normal + tangent off (no shading); **no tangent-space normal map**
+    (base or clearcoat) → tangent off (a mesh shipping tangents no longer protects a frame nothing
+    samples); **no textures at all** → UV off; **glossy** → the normal channel is scaled up
+    (`kVdpmGlossyNormalBoost`, ramped by `1 − roughness`) since a shading error reads far more strongly
+    in a sharp highlight. Passed straight into `refineForView`'s existing `uv/normal/tangentScale`
+    args at the `object.cpp` call site — no change to the simplifier, forest, or front. Unit-tested
+    per rule.
+  - **Still open.** A persistent front with refine/coarsen hysteresis (today `refineForView` rebuilds
+    from `coarsenAll()` every frame, so small camera moves around the budget pop topology). Also
+    deferred: texel-density UV budget (convert the UV channel via per-material texture resolution).
 
 - **VDPM repair passes vs. cones.** Foldover and coverage are fixed each frame by monotone repair
   sweeps over the finest faces. The exact criterion is a per-split **facing / foldover cone**
