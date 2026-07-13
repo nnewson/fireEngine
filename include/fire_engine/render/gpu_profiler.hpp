@@ -60,6 +60,18 @@ struct FrameStats
     // LOD.
     int vdpmFoldoversRepaired{0};
     int vdpmCoverageRepaired{0};
+    // VDPM per-channel refine attribution (which metric channel won each over-budget trigger,
+    // summed over instances) + the largest score/budget ratio each channel reached (max over
+    // instances) — the counts say what drove detail, the ratios say how close an under-firing
+    // channel came. 0 outside ViewDependent.
+    int vdpmGeometryTriggers{0};
+    int vdpmUvTriggers{0};
+    int vdpmNormalTriggers{0};
+    int vdpmTangentTriggers{0};
+    float vdpmMaxGeometryRatio{0.0f};
+    float vdpmMaxUvRatio{0.0f};
+    float vdpmMaxNormalRatio{0.0f};
+    float vdpmMaxTangentRatio{0.0f};
 };
 
 class GpuProfiler

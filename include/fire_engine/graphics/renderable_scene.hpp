@@ -15,16 +15,36 @@
 namespace fire_engine
 {
 
+// Per-frame VDPM refine attribution summed over every instance: how many over-budget *triggers*
+// each metric channel *won* (was the dominant reason to refine — trigger counts, not
+// resulting-refine counts, since one decision pulls in dependency splits), plus the largest
+// score/budget ratio each channel reached (max-reduced, not summed). The ratios are what
+// distinguish "genuinely zero" from "reached 99% of budget" — an under-firing channel is only
+// visible with them. Exposes the metric itself in the overlay — the first thing needed to see why a
+// region is (or isn't) refining.
+struct VdpmChannelStats
+{
+    uint32_t geometryTriggers{0};
+    uint32_t uvTriggers{0};
+    uint32_t normalTriggers{0};
+    uint32_t tangentTriggers{0};
+    float maxGeometryRatio{0.0f};
+    float maxUvRatio{0.0f};
+    float maxNormalRatio{0.0f};
+    float maxTangentRatio{0.0f};
+};
+
 // Per-frame scene-side accounting the renderer surfaces in the overlay. Coarse-cull counts (how
 // many renderables the scene tracked and dropped as outside every frustum) plus VDPM repair work
-// (the vertices each per-frame repair pass pulled back in, summed over every VDPM instance) — a
-// diagnostic so a repair-count regression is visible.
+// (the vertices each per-frame repair pass pulled back in, summed over every VDPM instance) and the
+// per-channel refine attribution — diagnostics so a repair-count/refine regression is visible.
 struct CullStats
 {
     std::size_t tracked{0};
     std::size_t culled{0};
     uint32_t vdpmFoldoversRepaired{0};
     uint32_t vdpmCoverageRepaired{0};
+    VdpmChannelStats vdpmChannels;
 };
 
 // The active camera's world-space pose, as the scene reports it to the renderer through the seam.

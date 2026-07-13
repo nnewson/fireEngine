@@ -1,11 +1,13 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <span>
 #include <vector>
 
 #include <fire_engine/graphics/vertex.hpp>
+#include <fire_engine/math/vec2.hpp>
 #include <fire_engine/math/vec3.hpp>
 
 namespace fire_engine
@@ -53,6 +55,15 @@ struct MeshCollapse
     // vertex normal and geometry barely move — a distinct error source from the shading-normal
     // channel. Its own VDPM channel with its own scale.
     float tangentDeviationRadius{0.0f};
+    // Spatial support radius (world/object units): the extent of the region this collapse subsumes,
+    // a bounding sphere around `kept` grown to enclose the collapsed subtree. The angular channels
+    // (normal/tangent, radians) multiply their chord by the support radius projected to pixels — an
+    // angular deviation matters in proportion to the SCREEN FOOTPRINT of the region it affects, so
+    // projecting a length (support) makes the shading score scale-invariant, exactly like the
+    // geometric channel, instead of the old fixed-length projection. Conservative (a running
+    // enclose-the-child bound, so it can over-estimate the region's true diameter — a real bounding
+    // sphere would tighten it); never under-bounds.
+    float supportRadius{0.0f};
     // The vsplit apexes for the VDPM vertex forest: the third vertices of the one (boundary) or two
     // (interior) live faces on the collapsing edge, recorded here on the true canonical topology
     // the simplifier collapses so the forest need not re-derive them by replaying the stream. `vr`
@@ -91,6 +102,40 @@ struct ProgressiveMesh
     std::vector<ProgressiveLod> lods;
     std::vector<MeshCollapse> collapses;
 };
+
+namespace detail
+{
+
+// One collapse's VDPM deviation, factored out of the simplifier's inner loop so the correspondence
+// decision is unit-testable in isolation (it is otherwise buried in topology iteration). Each
+// channel is the per-collapse *step*, before the tree accumulation the simplifier layers on top.
+struct CollapseDeviation
+{
+    float geometry{
+        0.0f}; // point-to-plane vs the nearest surviving triangle (0 across an in-plane gap)
+    float normal{
+        0.0f}; // shading-normal angular step, radians (vs the clamped closest-point interp)
+    float tangent{0.0f}; // tangent-frame angular step, radians (0 without tangents)
+    float uv{0.0f};      // smooth stretch on the containing face, MAX'd with the atlas wedge spread
+    // Whether `removed` projected INSIDE some surviving face. The geometry/UV channels use it (UV
+    // requires containment); the shading channels deliberately do NOT (they clamp to the nearest
+    // point), so a false here with a non-zero `normal` is exactly the no-containing-face case the
+    // decoupled correspondence must still measure — the property the regression test pins.
+    bool hadContainingFace{false};
+};
+
+// Measure the deviation of collapsing `removed` into its surviving one-ring `faces` (vertex-id
+// triples). The attribute spans are indexed by those ids; `removedWedgeUv` holds `removed`'s
+// render-wedge UVs (for the seam-spread term). Pure + free-standing, so a test can feed a
+// hand-built one-ring — including one where `removed` sits outside every face — and assert the
+// channels directly. Mirrors exactly what the simplifier's inner loop records per collapse.
+[[nodiscard]] CollapseDeviation
+measureCollapseDeviation(std::uint32_t removed, std::span<const std::array<std::uint32_t, 3>> faces,
+                         std::span<const Vec3> pos, std::span<const Vec3> nrm,
+                         std::span<const Vec3> tan, std::span<const Vec2> uv,
+                         std::span<const Vec2> removedWedgeUv) noexcept;
+
+} // namespace detail
 
 // Backend-swappable triangle-mesh simplifier. Our quadric-error-metric implementation is the first
 // backend; the interface lets a different one (meshoptimizer, or a test oracle) drop in without

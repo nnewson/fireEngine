@@ -36,6 +36,31 @@ canonicalFaces(std::span<const std::uint32_t> weld, std::span<const std::uint32_
     return faces;
 }
 
+// Largest singular value of a 3x3 (its spectral norm): the greatest factor by which the matrix
+// stretches any direction. Power iteration on mᵀm (symmetric PSD) converges to its largest
+// eigenvalue; σ_max is its square root. EXACT for a uniform scale (mᵀm = s²I ⇒ σ = s); a
+// CONSERVATIVE upper bound over all directions for non-uniform scale / shear. Lets an instance
+// transform's object-space deviation/support radii be bounded into world space by one scalar, so a
+// scaled instance refines correctly instead of using the unscaled object-space radius.
+[[nodiscard]] float largestSingularValue(const Mat3& m) noexcept
+{
+    const Mat3 ata = m.transpose() * m;
+    Vec3 v{1.0f, 1.0f, 1.0f};
+    float lambda = 0.0f;
+    for (int iter = 0; iter < 24; ++iter)
+    {
+        const Vec3 av = ata * v;
+        const float len = av.magnitude();
+        if (len <= 1e-20f)
+        {
+            return 0.0f;
+        }
+        v = av * (1.0f / len);
+        lambda = Vec3::dotProduct(v, ata * v);
+    }
+    return std::sqrt(std::max(0.0f, lambda));
+}
+
 } // namespace
 
 VertexForest buildVertexForest(std::span<const Vertex> vertices,
@@ -65,7 +90,7 @@ VertexForest buildVertexForest(std::span<const Vertex> vertices,
         const std::uint32_t vr = c.vr == kNoCollapseApex ? kInvalidVertex : c.vr;
         forest.splits.push_back(VertexSplit{c.kept, c.removed, c.vl, vr, c.deviationRadius,
                                             c.uvDeviationRadius, c.normalDeviationRadius,
-                                            c.tangentDeviationRadius});
+                                            c.tangentDeviationRadius, c.supportRadius});
         forest.removingSplit[c.removed] = splitIndex;
     }
 
@@ -221,9 +246,10 @@ void ActiveFront::refineForView(std::span<const Vertex> vertices, const Mat4& wo
 {
     coarsenAll();
     // New per-frame cycle: reset the repair diagnostics (repairFoldovers below + the caller's
-    // repairCoverage accumulate into these).
+    // repairCoverage accumulate into these) and the per-channel metric instrumentation.
     foldoversRepaired_ = 0;
     coverageRepaired_ = 0;
+    channelStats_ = ChannelStats{};
     const float halfViewport = viewportHeight * 0.5f;
 
     // Normal matrix = inverse-transpose of the world's linear part, so normals stay perpendicular
@@ -234,6 +260,14 @@ void ActiveFront::refineForView(std::span<const Vertex> vertices, const Mat4& wo
                                           {world[0, 1], world[1, 1], world[2, 1]},
                                           {world[0, 2], world[1, 2], world[2, 2]});
     const Mat3 normalMatrix = linear.inverse().transpose();
+
+    // The deviation + support radii are OBJECT-space lengths, but the split is projected against a
+    // WORLD-space distance, so a mesh instanced at a non-unit world scale must have its radii
+    // bounded into world space or it would refine as if unscaled (a 10× instance under-refining).
+    // The largest singular value of the linear part is that bound — exact for uniform scale,
+    // conservative for non-uniform. (UV error is texture-space, not a world length, so it is NOT
+    // scaled.)
+    const float worldLengthScale = largestSingularValue(linear);
 
     // Signed facing of one canonical vertex's world normal vs its own view direction: +1 toward the
     // camera, 0 edge-on, -1 away. Each vertex uses its own world position for the view direction. A
@@ -274,6 +308,14 @@ void ActiveFront::refineForView(std::span<const Vertex> vertices, const Mat4& wo
         const Vec3 worldPos{wp4.x(), wp4.y(), wp4.z()};
         const float distance = std::max(1e-3f, (worldPos - cameraPos).magnitude());
 
+        // The support sphere is centred on `kept` (= s.parent), so its footprint must project from
+        // the PARENT's world position, not the child's — otherwise the radius and the projection
+        // centre describe different spheres and a large collapse mis-estimates its footprint.
+        const Vec3 parentLocal = vertices[s.parent].position();
+        const Vec4 pw4 = world * Vec4{parentLocal.x(), parentLocal.y(), parentLocal.z(), 1.0f};
+        const float parentDistance =
+            std::max(1e-3f, (Vec3{pw4.x(), pw4.y(), pw4.z()} - cameraPos).magnitude());
+
         // Signed facing of the child rep's world normal vs the view direction: +1 toward the
         // camera, 0 edge-on (silhouette), -1 away (back). Drives the silhouette boost below.
         const float signedFacing = facingOf(s.child);
@@ -310,19 +352,73 @@ void ActiveFront::refineForView(std::span<const Vertex> vertices, const Mat4& wo
         // dense.
         const float boost = 1.0f + silhouetteBoost * (1.0f - std::abs(signedFacing));
 
-        // Four independent channels, each projected e·projScaleY·(vh/2)/d pixels: geometry
-        // (silhouette-boosted), UV texture stretch, shading-normal deviation, and tangent-frame
-        // deviation (the normal/tangent pair also silhouette-boosted — a lighting error at a
-        // grazing contour is the most visible). Any one over budget refines the split.
-        const float geomScreenError = s.error * boost * projScaleY * halfViewport / distance;
+        // Four independent channels in screen pixels; any one over budget refines the split. The
+        // GEOMETRIC channels are world-length deviations projected e·projScaleY·(vh/2)/d: geometry
+        // (silhouette-boosted; its object-space radius bounded into world space by worldLengthScale
+        // so a scaled instance refines correctly) and UV (texture-space, so NOT world-scaled). The
+        // ANGULAR channels (normal/tangent, radians) matter in proportion to the projected SCREEN
+        // EXTENT of the region they affect, so they project the split's world-space support radius
+        // as that same geometric extent and multiply by the chord 2·sin(θ/2) — the dimensionless
+        // angular magnitude (≈θ small-angle, saturating at 2 for a flipped normal). This makes the
+        // shading score scale exactly like geometry (angle dimensionless, extent scales with the
+        // mesh), unlike the old fixed-length projection which shrank the shading score when model +
+        // camera scaled together. The support extent uses the PARENT-centred near-sphere depth
+        // (parentDistance − worldSupport), a conservative projection of a sphere centred on kept.
+        // Both angular channels are silhouette-boosted (a lighting error at a grazing contour is
+        // the most visible).
+        const float worldSupport = s.supportRadius * worldLengthScale;
+        const float geomScreenError =
+            s.error * worldLengthScale * boost * projScaleY * halfViewport / distance;
         const float uvScreenError = s.uvError * uvScale * projScaleY * halfViewport / distance;
+        const float nearDistance = std::max(1e-3f, parentDistance - worldSupport);
+        const float extent = worldSupport * projScaleY * halfViewport / nearDistance;
         const float normalScreenError =
-            s.normalError * normalScale * boost * projScaleY * halfViewport / distance;
+            2.0f * std::sin(0.5f * s.normalError) * normalScale * boost * extent;
         const float tangentScreenError =
-            s.tangentError * tangentScale * boost * projScaleY * halfViewport / distance;
+            2.0f * std::sin(0.5f * s.tangentError) * tangentScale * boost * extent;
+
+        // Metric instrumentation: track how hard each channel is pushing (max ratio over all
+        // splits) regardless of whether this split refines, so an under-firing channel is still
+        // visible.
+        const float invBudget = pixelBudget > 0.0f ? 1.0f / pixelBudget : 0.0f;
+        channelStats_.maxGeometryRatio =
+            std::max(channelStats_.maxGeometryRatio, geomScreenError * invBudget);
+        channelStats_.maxUvRatio = std::max(channelStats_.maxUvRatio, uvScreenError * invBudget);
+        channelStats_.maxNormalRatio =
+            std::max(channelStats_.maxNormalRatio, normalScreenError * invBudget);
+        channelStats_.maxTangentRatio =
+            std::max(channelStats_.maxTangentRatio, tangentScreenError * invBudget);
+
         if (geomScreenError > pixelBudget || uvScreenError > pixelBudget ||
             normalScreenError > pixelBudget || tangentScreenError > pixelBudget)
         {
+            // Attribute this over-budget *trigger* to its winning channel — the one furthest over
+            // budget — so the counts read as "which channel is driving detail". These are TRIGGER
+            // counts, not resulting-refine counts: one direct metric decision legitimately pulls in
+            // several dependency splits through forceRefine (which may also no-op if the split is
+            // already active as another split's dependency). The dominant channel is the actionable
+            // signal; the max ratios below say how hard each is pushing even when it doesn't win.
+            const float geom = geomScreenError;
+            const float uv = uvScreenError;
+            const float nrm = normalScreenError;
+            const float tan = tangentScreenError;
+            const float winner = std::max({geom, uv, nrm, tan});
+            if (winner == geom)
+            {
+                ++channelStats_.geometryTriggers;
+            }
+            else if (winner == uv)
+            {
+                ++channelStats_.uvTriggers;
+            }
+            else if (winner == nrm)
+            {
+                ++channelStats_.normalTriggers;
+            }
+            else
+            {
+                ++channelStats_.tangentTriggers;
+            }
             forceRefine(i);
         }
     }

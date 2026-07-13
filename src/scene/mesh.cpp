@@ -129,6 +129,10 @@ Mat4 Mesh::render(const SceneDrawContext& ctx, const Mat4& world, const Mat4& pr
     {
         object_.addVdpmRepairCounts(*ctx.vdpmFoldoversRepaired, *ctx.vdpmCoverageRepaired);
     }
+    if (ctx.vdpmChannels != nullptr)
+    {
+        object_.addVdpmChannelStats(*ctx.vdpmChannels);
+    }
     return world;
 }
 

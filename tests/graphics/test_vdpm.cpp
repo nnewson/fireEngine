@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <vector>
 
+#include <fire_engine/graphics/lod.hpp>
 #include <fire_engine/graphics/mesh_simplifier.hpp>
 #include <fire_engine/graphics/mesh_topology.hpp>
 #include <fire_engine/graphics/vdpm.hpp>
@@ -706,4 +707,137 @@ TEST_CASE("buildVertexForest: welds coincident duplicated vertices back into one
     CHECK(!dupForest.splits.empty());
     // Welding recovered connectivity, so the duplicated mesh collapses in the same ballpark.
     CHECK(dupForest.splits.size() >= sharedForest.splits.size() / 2);
+}
+
+// --- Metric instrumentation (VDPM metric arc, step 1) -----------------------------------------
+
+TEST_CASE("refineForView: channel stats attribute a budget-driven refine to its winning channel",
+          "[vdpm]")
+{
+    const Mesh m = makeBumpyGrid(17);
+    ActiveFront front = ActiveFront::build(m.verts, m.indices, collapsesOf(m));
+    // Geometry only (uv/normal/tangent scale 0), near view: a bumpy grid must refine on geometry,
+    // and the instrumentation must now see it (invisible before this step).
+    front.refineForView(m.verts, Mat4::identity(), Vec3{8.0f, 8.0f, 6.0f}, 1.0f, 1000.0f, 2.0f,
+                        0.0f, 2.0f, 0.0f, 0.0f, 0.0f);
+    const ActiveFront::ChannelStats& cs = front.channelStats();
+    CHECK(cs.geometryTriggers > 0);
+    CHECK(cs.maxGeometryRatio > 1.0f); // at least one split projected over budget
+    CHECK(cs.uvTriggers == 0);
+    CHECK(cs.normalTriggers == 0);
+    CHECK(cs.tangentTriggers == 0);
+}
+
+TEST_CASE("refineForView: the shading-normal channel drives refinement on flat, fanned-normal "
+          "geometry",
+          "[vdpm]")
+{
+    const Mesh m = makeFlatFannedNormalGrid(17);
+    ActiveFront front = ActiveFront::build(m.verts, m.indices, collapsesOf(m));
+    const Mat4 world = Mat4::identity();
+    const Vec3 cam{8.0f, 8.0f, 6.0f};
+
+    // Geometry + UV are flat, so with the normal channel OFF nothing distance-dependent fires.
+    front.refineForView(m.verts, world, cam, 1.0f, 1000.0f, 2.0f, 0.0f, 2.0f, 0.0f, 0.0f, 0.0f);
+    const std::size_t normalOff = front.emitActiveCanonical().size();
+
+    // Turn the normal channel on: the fanned normals must now drive refinement.
+    front.refineForView(m.verts, world, cam, 1.0f, 1000.0f, 2.0f, 0.0f, 2.0f, 0.0f, 4.0f, 0.0f);
+    const std::size_t normalOn = front.emitActiveCanonical().size();
+
+    CHECK(normalOn > normalOff);
+    CHECK(front.channelStats().normalTriggers > 0);
+    CHECK(front.channelStats().geometryTriggers ==
+          0); // flat geometry attributes nothing to geometry
+}
+
+TEST_CASE("refineForView: the shading-normal channel fires at the production scale", "[vdpm]")
+{
+    // #9: the test above uses an amplified normalScale (4.0) to prove the channel is *connected*.
+    // Confirm it also drives refinement at the PRODUCTION default kVdpmNormalScale, so the shipped
+    // constant actually resolves shading facets rather than relying on a test-inflated gain. Close
+    // camera + tight budget on the fanned-normal grid (geometry + UV are flat, so only the normal
+    // channel can fire).
+    const Mesh m = makeFlatFannedNormalGrid(17);
+    ActiveFront front = ActiveFront::build(m.verts, m.indices, collapsesOf(m));
+    const Vec3 cam{8.0f, 8.0f, 2.5f};
+    constexpr float budget = 0.5f;
+
+    front.refineForView(m.verts, Mat4::identity(), cam, 1.0f, 1000.0f, budget, 0.0f, 2.0f, 0.0f,
+                        0.0f, 0.0f);
+    const std::size_t off = front.emitActiveCanonical().size();
+
+    front.refineForView(m.verts, Mat4::identity(), cam, 1.0f, 1000.0f, budget, 0.0f, 2.0f, 0.0f,
+                        kVdpmNormalScale, 0.0f);
+    const std::size_t on = front.emitActiveCanonical().size();
+
+    CHECK(on > off);
+    CHECK(front.channelStats().normalTriggers > 0);
+}
+
+TEST_CASE("measureCollapseDeviation: shading is measured for a no-containing-face collapse",
+          "[vdpm]")
+{
+    using fire_engine::detail::CollapseDeviation;
+    using fire_engine::detail::measureCollapseDeviation;
+
+    // Directly test the correspondence decision on a hand-built one-ring — the valid form of the
+    // no-containing-face regression. `removed` (id 0) sits far OUTSIDE the single surviving
+    // triangle (ids 1,2,3), so no face contains its projection: exactly the endpoint-collapse hole
+    // that used to record ZERO shading error. Geometry is flat; only the fanned normals carry
+    // error. The fix (clamped closest-point correspondence, decoupled from the UV containment gate)
+    // must still measure it.
+    const std::vector<Vec3> pos{Vec3{2.0f, 2.0f, 0.0f}, // removed
+                                Vec3{0.0f, 0.0f, 0.0f}, Vec3{1.0f, 0.0f, 0.0f},
+                                Vec3{0.0f, 1.0f, 0.0f}}; // triangle
+    const std::vector<Vec3> nrm{Vec3{0.0f, 0.0f, 1.0f}, Vec3{0.0f, 0.0f, 1.0f},
+                                Vec3{std::sin(0.6f), 0.0f, std::cos(0.6f)},
+                                Vec3{0.0f, std::sin(0.6f), std::cos(0.6f)}}; // fanned
+    const std::vector<Vec3> tan(4, Vec3{});                                  // no tangents
+    const std::vector<Vec2> uv(4, Vec2{0.0f, 0.0f});
+    const std::array<std::array<uint32_t, 3>, 1> faces{{{1u, 2u, 3u}}};
+
+    const CollapseDeviation outside = measureCollapseDeviation(0u, faces, pos, nrm, tan, uv, {});
+    CHECK_FALSE(outside.hadContainingFace); // removed projects outside every surviving face
+    CHECK(outside.normal > 0.0f);           // yet the shading channel measured the fan (the fix)
+    CHECK(outside.tangent == 0.0f);         // no tangents ⇒ tangent channel silent
+
+    // Positive control: move `removed` INSIDE the triangle — containment true, geometry ~0 (the
+    // point is in-plane), the same fan still registers.
+    std::vector<Vec3> posIn = pos;
+    posIn[0] = Vec3{0.25f, 0.25f, 0.0f};
+    const CollapseDeviation inside = measureCollapseDeviation(0u, faces, posIn, nrm, tan, uv, {});
+    CHECK(inside.hadContainingFace);
+    CHECK(inside.geometry < 1.0e-4f);
+    CHECK(inside.normal > 0.0f);
+}
+
+TEST_CASE("refineForView: the shading front is scale-invariant under a matched model+camera scale",
+          "[vdpm]")
+{
+    // Rendering the SAME mesh + collapse stream at a world scale of k, with the camera at k× the
+    // distance, is an identical image, so it must produce an identical active front. This tests the
+    // production instance-transform path directly (one forest — no floating-point QEM-ordering
+    // differences from rebuilding a scaled mesh, which is what makes this test trustworthy). Driven
+    // purely by the shading-normal channel (flat, fanned-normal grid): that channel now projects
+    // the support radius, bounded into world space by the largest singular value of the world's
+    // linear part, times a dimensionless chord — so it scales exactly like the geometry channel.
+    // The old fixed-length projection (and the missing world-scale) shrank the shading score by k
+    // and changed the front; this was [!shouldfail] until this step.
+    const Mesh m = makeFlatFannedNormalGrid(17);
+    ActiveFront front = ActiveFront::build(m.verts, m.indices, collapsesOf(m));
+    auto faces = [&](const Mat4& world, const Vec3& cam)
+    {
+        front.refineForView(m.verts, world, cam, 1.0f, 1000.0f, 2.0f, 0.0f, 2.0f, 0.0f, 4.0f, 0.0f);
+        return normalize(front.emitActiveCanonical());
+    };
+
+    const Vec3 camBase{8.0f, 8.0f, 6.0f};
+    const FaceSet unit = faces(Mat4::identity(), camBase);
+
+    constexpr float k = 10.0f;
+    const FaceSet big = faces(Mat4::scale(Vec3{k, k, k}), camBase * k);
+
+    CHECK(unit == big);
+    CHECK(unit.size() > 2); // the shading channel actually fired (a non-trivial front)
 }

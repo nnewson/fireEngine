@@ -160,6 +160,19 @@ void DebugOverlay::buildUi(const FrameStats& stats, RenderTunables& tunables)
             // a refine/repair regression; steady low numbers are expected.
             ImGui::Text("VDPM repairs (verts): foldover %d, coverage %d",
                         stats.vdpmFoldoversRepaired, stats.vdpmCoverageRepaired);
+            // Per-channel refine attribution: which metric channel won each over-budget trigger,
+            // and the largest score/budget ratio each channel reached this frame. The ratios expose
+            // an under-firing channel the counts can't — a smooth interior with normal triggers 0
+            // but a normal ratio near 1 is a hair under budget; near 0 means the channel is
+            // genuinely blind.
+            ImGui::Text("VDPM triggers: geom %d, uv %d, normal %d, tangent %d",
+                        stats.vdpmGeometryTriggers, stats.vdpmUvTriggers, stats.vdpmNormalTriggers,
+                        stats.vdpmTangentTriggers);
+            ImGui::Text("VDPM max score/budget: geom %.2f, uv %.2f, normal %.2f, tangent %.2f",
+                        static_cast<double>(stats.vdpmMaxGeometryRatio),
+                        static_cast<double>(stats.vdpmMaxUvRatio),
+                        static_cast<double>(stats.vdpmMaxNormalRatio),
+                        static_cast<double>(stats.vdpmMaxTangentRatio));
         }
         ImGui::TextDisabled("View > 'LOD tint' colours by level (green/yellow/red)");
     }

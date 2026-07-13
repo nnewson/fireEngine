@@ -816,6 +816,14 @@ const Renderer::DrawBuckets& Renderer::collectDrawCommands(RenderableScene& scen
     stats_.culledNodes = static_cast<int>(cull.culled);
     stats_.vdpmFoldoversRepaired = static_cast<int>(cull.vdpmFoldoversRepaired);
     stats_.vdpmCoverageRepaired = static_cast<int>(cull.vdpmCoverageRepaired);
+    stats_.vdpmGeometryTriggers = static_cast<int>(cull.vdpmChannels.geometryTriggers);
+    stats_.vdpmUvTriggers = static_cast<int>(cull.vdpmChannels.uvTriggers);
+    stats_.vdpmNormalTriggers = static_cast<int>(cull.vdpmChannels.normalTriggers);
+    stats_.vdpmTangentTriggers = static_cast<int>(cull.vdpmChannels.tangentTriggers);
+    stats_.vdpmMaxGeometryRatio = cull.vdpmChannels.maxGeometryRatio;
+    stats_.vdpmMaxUvRatio = cull.vdpmChannels.maxUvRatio;
+    stats_.vdpmMaxNormalRatio = cull.vdpmChannels.maxNormalRatio;
+    stats_.vdpmMaxTangentRatio = cull.vdpmChannels.maxTangentRatio;
 
     assignSelfShadowSlots(drawCommandScratch_);
     buildDrawBuckets(drawCommandScratch_, drawBucketsScratch_);

@@ -206,6 +206,33 @@ severity tier, so titles are the stable reference, not a global number.)
 Not new features — the maturation of things already noted. `codereview.md`'s "Larger Rewrite
 Candidates" section folds in here:
 
+- 🔨 **VDPM metric fidelity** *(branch `cr-vdpm-metric-instrumentation`; in progress)* — the four-channel
+  refine metric is correct in shape but not a reliable perceptual bound: the angular (normal/tangent)
+  channels aren't scale-invariant (angular error projected as a world length), and the shading channels
+  can silently read zero when a collapse's removed vertex projects outside every surviving face (no
+  covering-face fallback, unlike UV) — the likely cause of close-range interior faceting. Sequenced:
+  **(1) instrumentation + invariant tests** *(done)* — `ActiveFront::channelStats()` per-channel refine
+  attribution + overlay "VDPM splits" line + a `[!shouldfail]` scale-invariance test.
+  **(2) shading correspondence decoupled** *(done)* — normal/tangent now measure against the closest
+  point on the nearest surviving triangle (`closestPointBary`), not only a *containing* face, so
+  endpoint collapses stop silently recording zero shading error (the holes).
+  **(3) geometry vs the nearest actual triangle** *(done)* — the geometry channel measures point-to-plane
+  against the nearest surviving *triangle*, not the `min` over every one-ring *infinite plane* (an
+  unrelated coincident plane no longer quiets a curved patch).
+  **(4) support bounds + scale-invariant angular projection** *(done)* — each collapse records a support
+  radius (bounding sphere); the angular channels project it as a screen extent × the chord `2·sin(θ/2)`
+  from the parent near-sphere depth, with object-space radii bounded into world space by the world
+  matrix's largest singular value (so instanced non-unit scale refines correctly), and the angular
+  radii capped at π. Scale-invariance test now passes on the production instance path. Instrumentation
+  refined to per-channel *triggers* + max score/budget ratios (a zero count with a near-1 ratio = a
+  hair under budget). Review follow-ups also done: the collapse measurement is now a unit-testable
+  `detail::measureCollapseDeviation` (the no-containing-face regression feeds it a hand-built one-ring
+  where `removed` is provably outside every face and asserts non-zero shading — not a `(parent,vl,vr)`
+  proxy); the two closest-point helpers merged into one `closestOnTriangle` (barycentric + squared
+  distance) with a conservative MAX over equal-distance ties; and a normal-channel test at the
+  production `kVdpmNormalScale`. Then: full TBN tangent metric → material-aware tolerances → persistent
+  front + hysteresis.
+  See [`lod.md`](lod.md) § Known limits (Metric fidelity). Render-path only ⇒ golden-neutral.
 - **VDPM exact-visibility cones** — replace the per-frame `repairFoldovers` / `repairCoverage` sweeps
   with precomputed per-split foldover / silhouette / coverage cones. This *is* the `lod.md`
   "repairs vs cones" note; promote it now the repairs are proven.
