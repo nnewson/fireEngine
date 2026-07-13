@@ -8,6 +8,7 @@
 #include <fire_engine/graphics/material.hpp>
 #include <fire_engine/graphics/material_binding.hpp>
 #include <fire_engine/graphics/skin.hpp>
+#include <fire_engine/graphics/vdpm_material.hpp>
 #include <fire_engine/graphics/vipm.hpp>
 #include <fire_engine/math/constants.hpp>
 #include <fire_engine/math/vec4.hpp>
@@ -507,11 +508,17 @@ void Object::writeForwardUniforms(const FrameInfo& frame, const Mat4& world,
         // points the draw at the freshly-uploaded index set.
         if (frame.lodMode == LodMode::ViewDependent && frame.lodEnabled && binding.vdpmFront)
         {
-            binding.vdpmFront->refineForView(
-                binding.geometry->vertices(), world, frame.cameraPosition,
-                std::abs(frame.proj[1, 1]), static_cast<float>(frame.viewportHeight),
-                frame.lodPixelErrorBudget, kVdpmSilhouetteBoost, kVdpmBackfaceThreshold,
-                kVdpmUvScale, kVdpmNormalScale, kVdpmTangentScale);
+            // Material-aware channel scales: disable the channels this material can't show (unlit →
+            // no shading/tangent; no normal map → no tangent frame; no textures → no UV) and
+            // tighten the normal channel for glossy materials. Derived here at refine time so the
+            // collapse stream stays material-agnostic (activeMaterial is always set — see
+            // createForwardBindings).
+            const VdpmChannelScales vs = vdpmChannelScales(*binding.activeMaterial);
+            binding.vdpmFront->refineForView(binding.geometry->vertices(), world,
+                                             frame.cameraPosition, std::abs(frame.proj[1, 1]),
+                                             static_cast<float>(frame.viewportHeight),
+                                             frame.lodPixelErrorBudget, kVdpmSilhouetteBoost,
+                                             kVdpmBackfaceThreshold, vs.uv, vs.normal, vs.tangent);
             // Screen-space coverage repair: refine any front-facing face whose coarse replacement
             // recedes inside its projected footprint (a silhouette hole to the background that the
             // deviation/foldover criteria can't see). Uses the JITTER-FREE currentViewProj, not the

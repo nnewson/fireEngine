@@ -235,9 +235,15 @@ Candidates" section folds in here:
   tangent xyz, but the shader samples a normal map in the per-vertex TBN frame (T Gram-Schmidt'd
   against N, B = cross(N,T)·handedness), so a handedness (`w`) flip read as zero. The simplifier now
   precomputes the frame axes and the channel measures the MAX of the T- and B-axis deviation (catches
-  roll + handedness flip); unit-tested via `measureCollapseDeviation`. Then: material-aware tolerances
-  (disable channels a material can't see, computed at refine time so the stream stays material-agnostic)
-  → persistent front + hysteresis (stop rebuilding the front from `coarsenAll()` every frame).
+  roll + handedness flip); unit-tested via `measureCollapseDeviation`.
+  **(6) material-aware tolerances** *(branch `cr-vdpm-material-tolerances`)* — `vdpmChannelScales(material)`
+  (pure `graphics/vdpm_material.*`) derives the per-channel refine scales at refine time, so a channel a
+  material can't show is disabled: unlit → normal+tangent off; no normal/clearcoat map → tangent off (a
+  mesh with tangents stops protecting a frame nothing samples); no textures → UV off; glossy → normal
+  channel scaled up. Passed into `refineForView`'s existing scale args at the `object.cpp` call site — no
+  simplifier/forest/front change; unit-tested per rule. **Next: persistent front + hysteresis** (stop
+  rebuilding the front from `coarsenAll()` every frame; refine above a high threshold, coarsen below a
+  low one, so small camera moves near the budget don't pop topology).
   See [`lod.md`](lod.md) § Known limits (Metric fidelity). Render-path only ⇒ golden-neutral.
 - **VDPM exact-visibility cones** — replace the per-frame `repairFoldovers` / `repairCoverage` sweeps
   with precomputed per-split foldover / silhouette / coverage cones. This *is* the `lod.md`
