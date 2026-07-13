@@ -348,15 +348,39 @@ public:
         support_.assign(vertexCount, 0.0f);
         uv_.resize(vertexCount);
         nrm_.resize(vertexCount);
-        tan_.resize(vertexCount);
+        tanFrameT_.assign(vertexCount, Vec3{});
+        tanFrameB_.assign(vertexCount, Vec3{});
         weld_.resize(vertexCount);
         for (std::uint32_t i = 0; i < vertexCount; ++i)
         {
             remap_[i] = i;
             uv_[i] = vertices[i].texCoord();
             nrm_[i] = vertices[i].normal();
+            // Precompute the shader's per-vertex TBN frame axes (shader.vert): T is the tangent
+            // Gram-Schmidt-orthogonalised against N, B = cross(N,T)·handedness. The tangent VDPM
+            // channel measures the drift of THIS frame (which normal-map sampling actually uses),
+            // including a handedness (w) flip — not the raw tangent xyz, which the shader never
+            // uses directly. A missing/degenerate tangent leaves both axes zero, so the channel
+            // reads 0.
             const Vec4 t = vertices[i].tangent();
-            tan_[i] = Vec3{t.x(), t.y(), t.z()};
+            const Vec3 nrm = nrm_[i];
+            const Vec3 traw{t.x(), t.y(), t.z()};
+            const float nlen = nrm.magnitude();
+            const float tlen = traw.magnitude();
+            if (nlen > 1.0e-6f && tlen > 1.0e-6f)
+            {
+                const Vec3 nUnit = nrm * (1.0f / nlen);
+                const Vec3 tOrtho = traw - nUnit * Vec3::dotProduct(nUnit, traw);
+                const float olen = tOrtho.magnitude();
+                if (olen > 1.0e-6f)
+                {
+                    const Vec3 tUnit = tOrtho * (1.0f / olen);
+                    const Vec3 b = Vec3::crossProduct(nUnit, tUnit);
+                    const float blen = b.magnitude();
+                    tanFrameT_[i] = tUnit;
+                    tanFrameB_[i] = blen > 1.0e-6f ? b * (t.w() / blen) : Vec3{};
+                }
+            }
         }
 
         // Weld coincident positions: build the collapse topology on the canonical (first) vertex at
@@ -893,7 +917,7 @@ private:
             removedWedgeUv.push_back(uv_[w]);
         }
         const detail::CollapseDeviation step = detail::measureCollapseDeviation(
-            removed, oneRing, pos_, nrm_, tan_, uv_, removedWedgeUv);
+            removed, oneRing, pos_, nrm_, tanFrameT_, tanFrameB_, uv_, removedWedgeUv);
         // Accumulate the per-collapse step up the tree. Geometry accumulates by running sum (a
         // spatial envelope that genuinely compounds). UV accumulates by MAX: it is a screen-space
         // texture discontinuity — the eye sees the single WORST jump in the region, not a
@@ -961,7 +985,11 @@ private:
     std::vector<Vec3> pos_;
     std::vector<Vec2> uv_;  // per original vertex, for the wedge-preserving emit
     std::vector<Vec3> nrm_; // per original vertex normal, for the shading-deviation channel
-    std::vector<Vec3> tan_; // per original vertex tangent xyz, for the tangent-deviation channel
+    // Per original vertex TBN frame axes (shader.vert construction) for the tangent-deviation
+    // channel: T Gram-Schmidt-orthogonalised against N, B = cross(N,T)·handedness. Zero when the
+    // vertex has no usable tangent.
+    std::vector<Vec3> tanFrameT_;
+    std::vector<Vec3> tanFrameB_;
     std::vector<std::uint32_t> weld_; // original vertex -> canonical position vertex
     std::vector<std::array<std::uint32_t, 3>> origTris_; // original (pre-weld) corners, for UV emit
     std::vector<std::vector<std::uint32_t>> canonicalWedges_; // canonical -> its native wedges
@@ -995,7 +1023,8 @@ namespace detail
 CollapseDeviation measureCollapseDeviation(std::uint32_t removed,
                                            std::span<const std::array<std::uint32_t, 3>> faces,
                                            std::span<const Vec3> pos, std::span<const Vec3> nrm,
-                                           std::span<const Vec3> tan, std::span<const Vec2> uv,
+                                           std::span<const Vec3> tanT, std::span<const Vec3> tanB,
+                                           std::span<const Vec2> uv,
                                            std::span<const Vec2> removedWedgeUv) noexcept
 {
     CollapseDeviation out;
@@ -1003,6 +1032,13 @@ CollapseDeviation measureCollapseDeviation(std::uint32_t removed,
     float nearestTriSq = std::numeric_limits<float>::max();
     float nearestCoverTriSq = std::numeric_limits<float>::max();
     const Vec3 p = pos[removed];
+    // Tangent-frame deviation vs the interpolated frame at `bc`: the MAX of the T-axis and B-axis
+    // angular deviation. Catches a tangent roll (T drifts) and a handedness flip (B flips → ~π).
+    const auto tangentStep = [&](std::uint32_t a, std::uint32_t b, std::uint32_t c, const Vec3& bc)
+    {
+        return std::max(angularInterpDeviation(tanT, removed, a, b, c, bc),
+                        angularInterpDeviation(tanB, removed, a, b, c, bc));
+    };
     for (const std::array<std::uint32_t, 3>& f : faces)
     {
         const std::uint32_t a = f[0];
@@ -1031,15 +1067,14 @@ CollapseDeviation measureCollapseDeviation(std::uint32_t removed,
             nearestTriSq = cp.distanceSquared;
             nearestPlane = pointPlaneDistance(p, pos[a], pos[b], pos[c]);
             out.normal = angularInterpDeviation(nrm, removed, a, b, c, cp.barycentric);
-            out.tangent = angularInterpDeviation(tan, removed, a, b, c, cp.barycentric);
+            out.tangent = tangentStep(a, b, c, cp.barycentric);
         }
         else if (cp.distanceSquared <= nearestTriSq * (1.0f + kTieRel))
         {
             nearestPlane = std::max(nearestPlane, pointPlaneDistance(p, pos[a], pos[b], pos[c]));
             out.normal =
                 std::max(out.normal, angularInterpDeviation(nrm, removed, a, b, c, cp.barycentric));
-            out.tangent = std::max(out.tangent,
-                                   angularInterpDeviation(tan, removed, a, b, c, cp.barycentric));
+            out.tangent = std::max(out.tangent, tangentStep(a, b, c, cp.barycentric));
         }
 
         // UV smooth-stretch term keeps its own CONTAINMENT rule (unclamped plane barycentric on the

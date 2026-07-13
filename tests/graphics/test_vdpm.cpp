@@ -793,11 +793,12 @@ TEST_CASE("measureCollapseDeviation: shading is measured for a no-containing-fac
     const std::vector<Vec3> nrm{Vec3{0.0f, 0.0f, 1.0f}, Vec3{0.0f, 0.0f, 1.0f},
                                 Vec3{std::sin(0.6f), 0.0f, std::cos(0.6f)},
                                 Vec3{0.0f, std::sin(0.6f), std::cos(0.6f)}}; // fanned
-    const std::vector<Vec3> tan(4, Vec3{});                                  // no tangents
+    const std::vector<Vec3> zeroFrame(4, Vec3{}); // no tangents → both frame axes zero
     const std::vector<Vec2> uv(4, Vec2{0.0f, 0.0f});
     const std::array<std::array<uint32_t, 3>, 1> faces{{{1u, 2u, 3u}}};
 
-    const CollapseDeviation outside = measureCollapseDeviation(0u, faces, pos, nrm, tan, uv, {});
+    const CollapseDeviation outside =
+        measureCollapseDeviation(0u, faces, pos, nrm, zeroFrame, zeroFrame, uv, {});
     CHECK_FALSE(outside.hadContainingFace); // removed projects outside every surviving face
     CHECK(outside.normal > 0.0f);           // yet the shading channel measured the fan (the fix)
     CHECK(outside.tangent == 0.0f);         // no tangents ⇒ tangent channel silent
@@ -806,10 +807,43 @@ TEST_CASE("measureCollapseDeviation: shading is measured for a no-containing-fac
     // point is in-plane), the same fan still registers.
     std::vector<Vec3> posIn = pos;
     posIn[0] = Vec3{0.25f, 0.25f, 0.0f};
-    const CollapseDeviation inside = measureCollapseDeviation(0u, faces, posIn, nrm, tan, uv, {});
+    const CollapseDeviation inside =
+        measureCollapseDeviation(0u, faces, posIn, nrm, zeroFrame, zeroFrame, uv, {});
     CHECK(inside.hadContainingFace);
     CHECK(inside.geometry < 1.0e-4f);
     CHECK(inside.normal > 0.0f);
+}
+
+TEST_CASE(
+    "measureCollapseDeviation: a handedness (tangent.w) flip registers as tangent-frame error",
+    "[vdpm]")
+{
+    using fire_engine::detail::CollapseDeviation;
+    using fire_engine::detail::measureCollapseDeviation;
+
+    // The tangent channel measures the shader's TBN frame (T, B), so identical tangent xyz with
+    // OPPOSITE handedness — a flipped bitangent, very visible on a normal map — must read a large
+    // error, which the old raw-tangent-xyz comparison missed entirely. `removed` (id 0) is inside
+    // the triangle; T agrees everywhere, only B's sign differs.
+    const std::vector<Vec3> pos{Vec3{0.25f, 0.25f, 0.0f}, Vec3{0.0f, 0.0f, 0.0f},
+                                Vec3{1.0f, 0.0f, 0.0f}, Vec3{0.0f, 1.0f, 0.0f}};
+    const std::vector<Vec3> nrm(4, Vec3{0.0f, 0.0f, 1.0f});
+    const std::vector<Vec3> tanT(4, Vec3{1.0f, 0.0f, 0.0f}); // same tangent direction everywhere
+    const std::vector<Vec2> uv(4, Vec2{0.0f, 0.0f});
+    const std::array<std::array<uint32_t, 3>, 1> faces{{{1u, 2u, 3u}}};
+
+    // `removed`'s bitangent points the opposite way (opposite w); the triangle's three agree.
+    const std::vector<Vec3> tanBflip{Vec3{0.0f, -1.0f, 0.0f}, Vec3{0.0f, 1.0f, 0.0f},
+                                     Vec3{0.0f, 1.0f, 0.0f}, Vec3{0.0f, 1.0f, 0.0f}};
+    const CollapseDeviation flipped =
+        measureCollapseDeviation(0u, faces, pos, nrm, tanT, tanBflip, uv, {});
+    CHECK(flipped.tangent > 3.0f); // ~π — the bitangent flipped
+
+    // Consistent handedness everywhere → no frame error.
+    const std::vector<Vec3> tanBsame(4, Vec3{0.0f, 1.0f, 0.0f});
+    const CollapseDeviation consistent =
+        measureCollapseDeviation(0u, faces, pos, nrm, tanT, tanBsame, uv, {});
+    CHECK(consistent.tangent < 1.0e-4f);
 }
 
 TEST_CASE("refineForView: the shading front is scale-invariant under a matched model+camera scale",
