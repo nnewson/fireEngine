@@ -49,12 +49,13 @@ struct MeshCollapse
     // normals fan, so a coarse collapse there flattens the lighting. Projected on its own channel
     // in VDPM's refineForView.
     float normalDeviationRadius{0.0f};
-    // Cumulative tangent deviation, in radians: the drift of the shader's TBN frame (the MAX of the T-
-    // and B-axis angular deviation, T Gram-Schmidt'd against N, B = cross(N,T)·handedness), so it sees
-    // both a tangent roll AND a handedness (w) flip — the raw tangent xyz, which the shader never
-    // samples directly, would miss the flip. A tangent-space normal map is sampled in this frame, so a
-    // coarse collapse that swings it tilts the mapped normals even where the vertex normal + geometry
-    // barely move — a distinct error source from the shading-normal channel. Its own VDPM channel.
+    // Cumulative tangent deviation, in radians: the drift of the shader's TBN frame (the MAX of the
+    // T- and B-axis angular deviation, T Gram-Schmidt'd against N, B = cross(N,T)·handedness), so
+    // it sees both a tangent roll AND a handedness (w) flip — the raw tangent xyz, which the shader
+    // never samples directly, would miss the flip. A tangent-space normal map is sampled in this
+    // frame, so a coarse collapse that swings it tilts the mapped normals even where the vertex
+    // normal + geometry barely move — a distinct error source from the shading-normal channel. Its
+    // own VDPM channel.
     float tangentDeviationRadius{0.0f};
     // Spatial support radius (world/object units): the extent of the region this collapse subsumes,
     // a bounding sphere around `kept` grown to enclose the collapsed subtree. The angular channels
