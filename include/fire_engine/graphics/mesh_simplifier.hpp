@@ -49,11 +49,13 @@ struct MeshCollapse
     // normals fan, so a coarse collapse there flattens the lighting. Projected on its own channel
     // in VDPM's refineForView.
     float normalDeviationRadius{0.0f};
-    // Cumulative tangent deviation, in radians: the same accumulation for the tangent direction
-    // (the tangent Vec4's xyz). A tangent-space normal map is sampled in the interpolated tangent
-    // frame, so a coarse collapse that swings the tangent tilts the mapped normals even where the
-    // vertex normal and geometry barely move — a distinct error source from the shading-normal
-    // channel. Its own VDPM channel with its own scale.
+    // Cumulative tangent deviation, in radians: the drift of the shader's TBN frame (the MAX of the
+    // T- and B-axis angular deviation, T Gram-Schmidt'd against N, B = cross(N,T)·handedness), so
+    // it sees both a tangent roll AND a handedness (w) flip — the raw tangent xyz, which the shader
+    // never samples directly, would miss the flip. A tangent-space normal map is sampled in this
+    // frame, so a coarse collapse that swings it tilts the mapped normals even where the vertex
+    // normal + geometry barely move — a distinct error source from the shading-normal channel. Its
+    // own VDPM channel.
     float tangentDeviationRadius{0.0f};
     // Spatial support radius (world/object units): the extent of the region this collapse subsumes,
     // a bounding sphere around `kept` grown to enclose the collapsed subtree. The angular channels
@@ -115,8 +117,11 @@ struct CollapseDeviation
         0.0f}; // point-to-plane vs the nearest surviving triangle (0 across an in-plane gap)
     float normal{
         0.0f}; // shading-normal angular step, radians (vs the clamped closest-point interp)
-    float tangent{0.0f}; // tangent-frame angular step, radians (0 without tangents)
-    float uv{0.0f};      // smooth stretch on the containing face, MAX'd with the atlas wedge spread
+    // Tangent-frame angular step, radians: the MAX of the T-axis and B-axis deviation of the
+    // shader's TBN frame, so it catches a tangent roll AND a handedness (w) flip (which flips B); 0
+    // without tangents. Independent of the shading-normal channel (which covers N).
+    float tangent{0.0f};
+    float uv{0.0f}; // smooth stretch on the containing face, MAX'd with the atlas wedge spread
     // Whether `removed` projected INSIDE some surviving face. The geometry/UV channels use it (UV
     // requires containment); the shading channels deliberately do NOT (they clamp to the nearest
     // point), so a false here with a non-zero `normal` is exactly the no-containing-face case the
@@ -125,15 +130,17 @@ struct CollapseDeviation
 };
 
 // Measure the deviation of collapsing `removed` into its surviving one-ring `faces` (vertex-id
-// triples). The attribute spans are indexed by those ids; `removedWedgeUv` holds `removed`'s
-// render-wedge UVs (for the seam-spread term). Pure + free-standing, so a test can feed a
-// hand-built one-ring — including one where `removed` sits outside every face — and assert the
+// triples). The attribute spans are indexed by those ids: `nrm` shading normals, `tanT`/`tanB` the
+// per-vertex TBN frame axes (shader construction — the tangent channel measures this frame, not raw
+// tangent xyz, so a handedness flip is seen); `removedWedgeUv` holds `removed`'s render-wedge UVs
+// (seam-spread term). Pure + free-standing, so a test can feed a hand-built one-ring — including
+// one where `removed` sits outside every face, or a handedness-flipped frame — and assert the
 // channels directly. Mirrors exactly what the simplifier's inner loop records per collapse.
 [[nodiscard]] CollapseDeviation
 measureCollapseDeviation(std::uint32_t removed, std::span<const std::array<std::uint32_t, 3>> faces,
                          std::span<const Vec3> pos, std::span<const Vec3> nrm,
-                         std::span<const Vec3> tan, std::span<const Vec2> uv,
-                         std::span<const Vec2> removedWedgeUv) noexcept;
+                         std::span<const Vec3> tanT, std::span<const Vec3> tanB,
+                         std::span<const Vec2> uv, std::span<const Vec2> removedWedgeUv) noexcept;
 
 } // namespace detail
 

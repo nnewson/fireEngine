@@ -289,7 +289,7 @@ dial in `graphics/lod.hpp`:
 | Geometry δ | `error` | `deviationRadius` (point-to-**plane**, additive) | off-surface curvature; ~0 on a flat region |
 | UV seam/stretch | `uvError` | `uvDeviationRadius` (**max**-accumulated, per-wedge) | texture stretch, and atlas seams the geometry can't see |
 | Shading normal | `normalError` | `normalDeviationRadius` (angular, rad) | lighting flattening a smooth-shaded curve carries even when near-coplanar |
-| Tangent frame | `tangentError` | `tangentDeviationRadius` (angular, rad) | normal-map frame drift, independent of the shading normal (0 without tangents) |
+| Tangent frame | `tangentError` | `tangentDeviationRadius` (angular, rad) | drift of the shader's TBN frame — MAX of the T- and B-axis deviation, so it sees a tangent roll AND a handedness (w) flip — independent of the shading normal (0 without tangents) |
 
 Point-to-**plane** (not point-to-triangle) keeps the geometry channel ~0 across the small in-plane gap
 a collapse leaves, so flats stay flat. The UV channel accumulates by **max**, not the geometric
@@ -444,6 +444,20 @@ at a fraction of the triangles. The remaining residuals and follow-ons, in rough
     instance-transform path, with no QEM-ordering noise from rebuilding a scaled mesh. Still VDPM-only,
     collapse order unchanged. *(The discrete `selectLod` still projects object-space error against
     world distance without the instance scale — the same fix should reach it eventually.)*
+  - **Step 5 — full TBN tangent metric (done).** The tangent channel used to compare raw tangent
+    **xyz**, but the shader never samples that directly: it builds a per-vertex TBN frame (`shader.vert`)
+    — `T` Gram-Schmidt-orthogonalised against `N`, `B = cross(N,T)·handedness` — and a normal map is
+    sampled in *that* frame. So a **handedness (`w`) flip** (which flips `B`, very visible on a normal
+    map) read as **zero** error. The simplifier now precomputes the frame axes per vertex (`tanFrameT_`
+    / `tanFrameB_`) and the tangent channel measures the **MAX of the T- and B-axis angular deviation**,
+    catching both a tangent roll and a handedness flip; still independent of the shading-normal channel
+    (which covers `N`). Unit-tested through `measureCollapseDeviation` (a hand-built frame with an
+    opposite-`w` bitangent registers ~π; consistent handedness reads 0).
+  - **Still open.** Material-aware tolerances (disable the tangent channel when no normal/clearcoat map
+    samples it; unlit → drop normal/tangent; no textures → drop UV; tighter normal tolerance for
+    glossy) — computed at *refine* time from the material so the collapse stream stays material-agnostic.
+    Then a persistent front with refine/coarsen hysteresis (today `refineForView` rebuilds from
+    `coarsenAll()` every frame, so small camera moves around the budget pop topology).
 
 - **VDPM repair passes vs. cones.** Foldover and coverage are fixed each frame by monotone repair
   sweeps over the finest faces. The exact criterion is a per-split **facing / foldover cone**

@@ -230,8 +230,14 @@ Candidates" section folds in here:
   where `removed` is provably outside every face and asserts non-zero shading — not a `(parent,vl,vr)`
   proxy); the two closest-point helpers merged into one `closestOnTriangle` (barycentric + squared
   distance) with a conservative MAX over equal-distance ties; and a normal-channel test at the
-  production `kVdpmNormalScale`. Then: full TBN tangent metric → material-aware tolerances → persistent
-  front + hysteresis.
+  production `kVdpmNormalScale`.
+  **(5) full TBN tangent metric** *(branch `cr-vdpm-tbn-tangent`)* — the tangent channel compared raw
+  tangent xyz, but the shader samples a normal map in the per-vertex TBN frame (T Gram-Schmidt'd
+  against N, B = cross(N,T)·handedness), so a handedness (`w`) flip read as zero. The simplifier now
+  precomputes the frame axes and the channel measures the MAX of the T- and B-axis deviation (catches
+  roll + handedness flip); unit-tested via `measureCollapseDeviation`. Then: material-aware tolerances
+  (disable channels a material can't see, computed at refine time so the stream stays material-agnostic)
+  → persistent front + hysteresis (stop rebuilding the front from `coarsenAll()` every frame).
   See [`lod.md`](lod.md) § Known limits (Metric fidelity). Render-path only ⇒ golden-neutral.
 - **VDPM exact-visibility cones** — replace the per-frame `repairFoldovers` / `repairCoverage` sweeps
   with precomputed per-split foldover / silhouette / coverage cones. This *is* the `lod.md`
