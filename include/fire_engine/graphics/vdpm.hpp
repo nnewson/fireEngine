@@ -58,6 +58,12 @@ struct VertexSplit
     float uvError{0.0f};
     float normalError{0.0f};
     float tangentError{0.0f};
+    // Spatial support radius (MeshCollapse::supportRadius): the extent of the region this split
+    // covers. refineForView projects it to a screen-space extent (a projected radius, not an area)
+    // and multiplies the angular channels' chord by it, so a shading error refines in proportion to
+    // the projected extent of the region it affects (and scales like the geometry channel — the fix
+    // for the old fixed-length angular projection).
+    float supportRadius{0.0f};
 };
 
 // Sentinel for a missing neighbour (boundary edge) in VertexSplit::vl / vr.
@@ -189,6 +195,31 @@ public:
         return coverageRepaired_;
     }
 
+    // Per-frame metric instrumentation (reset at the top of refineForView). For every budget-driven
+    // over-budget *trigger*, the split is attributed to its **winning** channel — the one whose
+    // score/budget ratio is largest (the dominant reason it triggered). These are TRIGGER counts,
+    // not resulting-refine counts: one metric decision legitimately refines several dependency
+    // splits through forceRefine. `max*Ratio` is the largest score/budget seen on that channel
+    // across ALL splits this frame (including under-budget ones) — how hard the channel is pushing
+    // / how close it is to firing, which the counts alone can't say (a normal count of 0 can't
+    // distinguish "genuinely zero" from "reached 99% of budget"). This exposes the metric itself,
+    // which the foldover/coverage counters do not. See the VDPM metric arc.
+    struct ChannelStats
+    {
+        uint32_t geometryTriggers{0}; // over-budget triggers whose winning channel was geometry
+        uint32_t uvTriggers{0};
+        uint32_t normalTriggers{0};
+        uint32_t tangentTriggers{0};
+        float maxGeometryRatio{0.0f}; // max screenError/budget over all splits this frame
+        float maxUvRatio{0.0f};
+        float maxNormalRatio{0.0f};
+        float maxTangentRatio{0.0f};
+    };
+    [[nodiscard]] const ChannelStats& channelStats() const noexcept
+    {
+        return channelStats_;
+    }
+
 private:
     [[nodiscard]] uint32_t activeAncestor(uint32_t canonicalVertex) const;
     // Refine a split, first (recursively) force-refining any inactive dependency splits. vl/vr
@@ -227,6 +258,8 @@ private:
     // Repair counters for the last refineForView + repair cycle (see the accessors above).
     uint32_t foldoversRepaired_{0};
     uint32_t coverageRepaired_{0};
+    // Per-channel metric attribution for the last refineForView (see channelStats()).
+    ChannelStats channelStats_;
 };
 
 } // namespace fire_engine

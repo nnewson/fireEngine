@@ -10,6 +10,7 @@
 #include <fire_engine/graphics/frame_info.hpp>
 #include <fire_engine/graphics/gpu_handle.hpp>
 #include <fire_engine/graphics/gpu_limits.hpp>
+#include <fire_engine/graphics/renderable_scene.hpp>
 #include <fire_engine/graphics/vdpm.hpp>
 #include <fire_engine/math/mat4.hpp>
 
@@ -65,6 +66,7 @@ public:
     // active fronts to the running totals. Valid after render() this frame; a diagnostic surfaced
     // in the overlay so a repair-count regression is visible.
     void addVdpmRepairCounts(uint32_t& foldovers, uint32_t& coverage) const;
+    void addVdpmChannelStats(VdpmChannelStats& out) const;
 
     // Local-space (bind-pose) AABB over the geometry vertices, cached on first use.
     // Used for frustum culling: a rigid object's world bound is this transformed by its

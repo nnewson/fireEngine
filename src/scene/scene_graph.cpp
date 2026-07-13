@@ -159,8 +159,12 @@ CullStats SceneGraph::buildDrawCommands(const FrameInfo& frame, std::span<const 
         stats.culled = culler_.culledCount();
     }
 
-    const SceneDrawContext ctx{frame, culled, &out, &stats.vdpmFoldoversRepaired,
-                               &stats.vdpmCoverageRepaired};
+    const SceneDrawContext ctx{frame,
+                               culled,
+                               &out,
+                               &stats.vdpmFoldoversRepaired,
+                               &stats.vdpmCoverageRepaired,
+                               &stats.vdpmChannels};
     for (auto& node : nodes_)
     {
         node->render(ctx, rootTransform_);

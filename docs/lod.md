@@ -402,6 +402,49 @@ LOD modes.
 The discrete → VIPM → VDPM ladder is complete; VDPM matches the discrete mesh's silhouette and shading
 at a fraction of the triangles. The remaining residuals and follow-ons, in rough priority:
 
+- **Metric fidelity (active arc).** The four-channel metric is correct in shape but not yet a fully
+  reliable perceptual bound. Progress:
+  - **Step 1 — instrumentation (done).** Per-channel refine attribution (`ActiveFront::channelStats()`
+    + the overlay "VDPM splits" line) exposes which channel drives each split; a `[!shouldfail]`
+    scale-invariance test pins the invariant before the metric changes.
+  - **Step 2 — shading correspondence decoupled (done).** `normalStep`/`tangentStep` used to be
+    computed only when the removed vertex projected *inside* a surviving one-ring face, and unlike the
+    UV channel (which has a post-loop wedge-spread fallback) they had no fallback — so an endpoint
+    collapse whose point lands outside every survivor recorded **zero** shading error (a hole, the
+    likely dominant cause of close-range interior faceting). They now correspond to the **closest point
+    on the nearest surviving triangle** (clamped barycentric, `closestPointBary` in
+    `mesh_simplifier.cpp`), independent of the UV containment rule — the UV channel keeps containment
+    (an affine chart must read exactly 0) + its wedge-spread fallback. Collapse order is unchanged
+    (the shading channels don't steer selection), so only the recorded normal/tangent radii change.
+  - **Step 3 — geometry against the nearest actual triangle (done).** The geometry channel used to be
+    the `min` over *every* one-ring face's *infinite plane* distance, so on a curved neighbourhood an
+    unrelated face whose plane happened to pass near `removed` quieted it below what point-to-plane
+    inherently requires. It now measures point-to-plane against the **nearest actual surviving
+    triangle** (least point-to-triangle distance — the same selection the shading channels use). A flat
+    gap still reads ~0 (the nearest triangle is coplanar); a curved patch can no longer borrow a
+    coincident unrelated plane. VDPM-only, collapse order unchanged.
+  - **Step 4 — per-split support bounds + scale-invariant angular projection (done).** Each collapse
+    now records a **support radius** (`MeshCollapse::supportRadius` → `VertexSplit::supportRadius`): a
+    bounding sphere around `kept` grown to enclose the collapsed subtree (conservative — centred on
+    kept, radius = max(own, edge length + child's), so it can over-estimate the true diameter; a real
+    merged sphere is the tightening follow-up). `refineForView` projects the angular channels as
+    `2·sin(θ/2) · scale · boost · extent`, where `extent = worldSupport · projScaleY · halfViewport /
+    nearDistance` is the same geometric projection the geometry channel uses, so an angular error
+    refines in proportion to the projected **screen extent** of the region it affects, the angle is a
+    dimensionless chord (`2·sin(θ/2)`, ≈θ small-angle, saturating at 2), and the shading score scales
+    **exactly like geometry**. Three details make it robust: (a) the support extent is projected from
+    the **parent** (= kept) near-sphere depth (`parentDistance − worldSupport`), matching the sphere's
+    centre; (b) the object-space deviation + support radii are bounded into world space by
+    **`worldLengthScale`** — the largest singular value of the world matrix's linear part (exact for
+    uniform scale, conservative for non-uniform) — so a mesh **instanced at a non-unit world scale**
+    refines correctly, not just one authored bigger; (c) the accumulated angular radii are **capped at
+    π** (a directional angular error can't exceed it, and the chord is only monotone up to π). The
+    scale-invariance test (formerly `[!shouldfail]`) drives the *same* forest at identity vs a
+    `scale(k)` world with the camera at k× distance and requires an identical front — the production
+    instance-transform path, with no QEM-ordering noise from rebuilding a scaled mesh. Still VDPM-only,
+    collapse order unchanged. *(The discrete `selectLod` still projects object-space error against
+    world distance without the instance scale — the same fix should reach it eventually.)*
+
 - **VDPM repair passes vs. cones.** Foldover and coverage are fixed each frame by monotone repair
   sweeps over the finest faces. The exact criterion is a per-split **facing / foldover cone**
   precomputed in the forest build — it would replace the per-frame sweeps and their CPU cost. The

@@ -395,6 +395,27 @@ void Object::addVdpmRepairCounts(uint32_t& foldovers, uint32_t& coverage) const
     }
 }
 
+void Object::addVdpmChannelStats(VdpmChannelStats& out) const
+{
+    for (const auto& binding : bindings_)
+    {
+        if (binding.vdpmFront)
+        {
+            const ActiveFront::ChannelStats& cs = binding.vdpmFront->channelStats();
+            // Triggers accumulate across instances (a scene total); the max ratios MAX-reduce (the
+            // hardest any single instance pushed the channel — summing them would be meaningless).
+            out.geometryTriggers += cs.geometryTriggers;
+            out.uvTriggers += cs.uvTriggers;
+            out.normalTriggers += cs.normalTriggers;
+            out.tangentTriggers += cs.tangentTriggers;
+            out.maxGeometryRatio = std::max(out.maxGeometryRatio, cs.maxGeometryRatio);
+            out.maxUvRatio = std::max(out.maxUvRatio, cs.maxUvRatio);
+            out.maxNormalRatio = std::max(out.maxNormalRatio, cs.maxNormalRatio);
+            out.maxTangentRatio = std::max(out.maxTangentRatio, cs.maxTangentRatio);
+        }
+    }
+}
+
 void Object::writeForwardUniforms(const FrameInfo& frame, const Mat4& world,
                                   const Mat4& previousWorld, bool hasSkin,
                                   std::span<const Mat4> jointMatrices)

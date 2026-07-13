@@ -5,6 +5,7 @@
 
 #include <fire_engine/graphics/draw_command.hpp>
 #include <fire_engine/graphics/frame_info.hpp>
+#include <fire_engine/graphics/renderable_scene.hpp>
 
 namespace fire_engine
 {
@@ -25,6 +26,8 @@ struct SceneDrawContext
     // instance's repair work so SceneGraph can report a scene total for the overlay diagnostic.
     uint32_t* vdpmFoldoversRepaired{nullptr};
     uint32_t* vdpmCoverageRepaired{nullptr};
+    // Per-frame VDPM per-channel refine attribution (null ⇒ not gathered), same accumulation.
+    VdpmChannelStats* vdpmChannels{nullptr};
 };
 
 } // namespace fire_engine

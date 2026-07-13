@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <numbers>
 #include <queue>
 #include <unordered_map>
 #include <vector>
@@ -174,55 +175,6 @@ struct Quadric
     return std::abs(Vec3::dotProduct(n, p - a));
 }
 
-// Distance from point p to triangle abc, closest point clamped to the triangle (Ericson, Real-Time
-// Collision Detection §5.1.5). Used only to *select* the nearest one-ring face for the deviation
-// channels — it reads 0 for a face p sits in even on a flat region where every plane distance is 0,
-// so the nearest face is the one whose plane the attribute interpolation should extrapolate on.
-[[nodiscard]] float pointTriangleDistance(const Vec3& p, const Vec3& a, const Vec3& b,
-                                          const Vec3& c) noexcept
-{
-    const Vec3 ab = b - a;
-    const Vec3 ac = c - a;
-    const Vec3 ap = p - a;
-    const float d1 = Vec3::dotProduct(ab, ap);
-    const float d2 = Vec3::dotProduct(ac, ap);
-    if (d1 <= 0.0f && d2 <= 0.0f)
-    {
-        return ap.magnitude();
-    }
-    const Vec3 bp = p - b;
-    const float d3 = Vec3::dotProduct(ab, bp);
-    const float d4 = Vec3::dotProduct(ac, bp);
-    if (d3 >= 0.0f && d4 <= d3)
-    {
-        return bp.magnitude();
-    }
-    const float vc = d1 * d4 - d3 * d2;
-    if (vc <= 0.0f && d1 >= 0.0f && d3 <= 0.0f)
-    {
-        return (p - (a + ab * (d1 / (d1 - d3)))).magnitude();
-    }
-    const Vec3 cp = p - c;
-    const float d5 = Vec3::dotProduct(ab, cp);
-    const float d6 = Vec3::dotProduct(ac, cp);
-    if (d6 >= 0.0f && d5 <= d6)
-    {
-        return cp.magnitude();
-    }
-    const float vb = d5 * d2 - d1 * d6;
-    if (vb <= 0.0f && d2 >= 0.0f && d6 <= 0.0f)
-    {
-        return (p - (a + ac * (d2 / (d2 - d6)))).magnitude();
-    }
-    const float va = d3 * d6 - d5 * d4;
-    if (va <= 0.0f && (d4 - d3) >= 0.0f && (d5 - d6) >= 0.0f)
-    {
-        return (p - (b + (c - b) * ((d4 - d3) / ((d4 - d3) + (d5 - d6))))).magnitude();
-    }
-    const float denom = 1.0f / (va + vb + vc);
-    return (p - (a + ab * (vb * denom) + ac * (vc * denom))).magnitude();
-}
-
 // Unclamped barycentric coordinates of p projected onto the plane of triangle abc (x for a, y for
 // b, z for c; they sum to 1 but may fall outside [0,1] when p projects beyond the triangle).
 // Unclamped on purpose: interpolating attributes with these keeps a flat, affine-UV region reading
@@ -249,13 +201,83 @@ struct Quadric
     return Vec3{1.0f - v - w, v, w};
 }
 
+// The closest point ON triangle abc to p (Ericson, Real-Time Collision Detection §5.1.5), returning
+// its CLAMPED barycentric (in [0,1], summing to 1 — snapping to the nearest edge/vertex when p
+// projects outside) AND the squared distance to it, in one pass. Merges what were separate distance
+// + barycentric helpers so the face-selection metric and the interpolation weights can't drift.
+// `distanceSquared` (no sqrt) is only ever compared. The clamped barycentric gives the shading
+// channels a valid correspondence even when `removed` lands outside every surviving one-ring face
+// (an endpoint collapse) — where the unclamped plane barycentric would extrapolate wildly and the
+// old containment gate simply skipped, silently recording zero shading error.
+struct ClosestTrianglePoint
+{
+    Vec3 barycentric;
+    float distanceSquared;
+};
+
+[[nodiscard]] ClosestTrianglePoint closestOnTriangle(const Vec3& p, const Vec3& a, const Vec3& b,
+                                                     const Vec3& c) noexcept
+{
+    const auto at = [&](const Vec3& bary)
+    {
+        const Vec3 q = (a * bary.x()) + (b * bary.y()) + (c * bary.z());
+        return ClosestTrianglePoint{bary, (p - q).magnitudeSquared()};
+    };
+
+    const Vec3 ab = b - a;
+    const Vec3 ac = c - a;
+    const Vec3 ap = p - a;
+    const float d1 = Vec3::dotProduct(ab, ap);
+    const float d2 = Vec3::dotProduct(ac, ap);
+    if (d1 <= 0.0f && d2 <= 0.0f)
+    {
+        return at(Vec3{1.0f, 0.0f, 0.0f}); // vertex a
+    }
+    const Vec3 bp = p - b;
+    const float d3 = Vec3::dotProduct(ab, bp);
+    const float d4 = Vec3::dotProduct(ac, bp);
+    if (d3 >= 0.0f && d4 <= d3)
+    {
+        return at(Vec3{0.0f, 1.0f, 0.0f}); // vertex b
+    }
+    const float vc = d1 * d4 - d3 * d2;
+    if (vc <= 0.0f && d1 >= 0.0f && d3 <= 0.0f)
+    {
+        const float t = d1 / (d1 - d3);
+        return at(Vec3{1.0f - t, t, 0.0f}); // edge ab
+    }
+    const Vec3 cp = p - c;
+    const float d5 = Vec3::dotProduct(ab, cp);
+    const float d6 = Vec3::dotProduct(ac, cp);
+    if (d6 >= 0.0f && d5 <= d6)
+    {
+        return at(Vec3{0.0f, 0.0f, 1.0f}); // vertex c
+    }
+    const float vb = d5 * d2 - d1 * d6;
+    if (vb <= 0.0f && d2 >= 0.0f && d6 <= 0.0f)
+    {
+        const float t = d2 / (d2 - d6);
+        return at(Vec3{1.0f - t, 0.0f, t}); // edge ac
+    }
+    const float va = d3 * d6 - d5 * d4;
+    if (va <= 0.0f && (d4 - d3) >= 0.0f && (d5 - d6) >= 0.0f)
+    {
+        const float t = (d4 - d3) / ((d4 - d3) + (d5 - d6));
+        return at(Vec3{0.0f, 1.0f - t, t}); // edge bc
+    }
+    const float denom = 1.0f / (va + vb + vc);
+    const float v = vb * denom;
+    const float w = vc * denom;
+    return at(Vec3{1.0f - v - w, v, w}); // interior face
+}
+
 // Angular deviation (radians) between attr[removed] and the barycentric interpolation of
 // attr[a],attr[b],attr[c] at removed's spot on the covering face, renormalised (matching how the
 // shader interpolates a per-vertex direction across a triangle). 0 when the field is locally
 // consistent (a flat region with equal directions); the fan angle when it swings. Zero-length
 // inputs — an unpopulated attribute, e.g. a mesh without tangents — read 0. Shared by the
 // shading-normal and tangent VDPM channels.
-[[nodiscard]] float angularInterpDeviation(const std::vector<Vec3>& attr, std::uint32_t removed,
+[[nodiscard]] float angularInterpDeviation(std::span<const Vec3> attr, std::uint32_t removed,
                                            std::uint32_t a, std::uint32_t b, std::uint32_t c,
                                            const Vec3& bc) noexcept
 {
@@ -323,6 +345,7 @@ public:
         uvDeviation_.assign(vertexCount, 0.0f);
         normalDeviation_.assign(vertexCount, 0.0f);
         tangentDeviation_.assign(vertexCount, 0.0f);
+        support_.assign(vertexCount, 0.0f);
         uv_.resize(vertexCount);
         nrm_.resize(vertexCount);
         tan_.resize(vertexCount);
@@ -850,114 +873,53 @@ private:
         // width on one — what makes a seam-crossing collapse read its true cost so VDPM refines it
         // under magnification instead of warping the texture). MeshCollapse::error (R⁵ RMS) stays
         // as-is for discrete/VIPM.
-        float dev = 0.0f;
-        float uvStep = 0.0f;
-        float normalStep = 0.0f;
-        float tangentStep = 0.0f;
-        float nearestPlane = std::numeric_limits<float>::max();
-        float nearestCoverTri = std::numeric_limits<float>::max();
+        // Gather this collapse's live one-ring faces (canonical vertex-id triples) and `removed`'s
+        // render-wedge UVs, then measure the per-collapse deviation through the shared,
+        // unit-testable helper (geometry + shading vs the nearest surviving triangle; UV smooth
+        // stretch + atlas wedge spread). Local scratch — build-time, offline of the frame, so the
+        // per-collapse allocation is in the noise next to the neighbour re-cost below.
+        std::vector<std::array<std::uint32_t, 3>> oneRing;
         for (const std::uint32_t t : keptTris)
         {
             if (triAlive_[t] == 0)
             {
                 continue;
             }
-            const std::uint32_t a = resolve(tris_[t][0]);
-            const std::uint32_t b = resolve(tris_[t][1]);
-            const std::uint32_t c = resolve(tris_[t][2]);
-            if (a == b || b == c || a == c)
-            {
-                continue;
-            }
-            // Skip a geometrically degenerate (collinear / zero-area) face: it has distinct indices
-            // but a zero normal, so its plane and barycentric are undefined. barycentricOnPlane
-            // returns {1,0,0} for it, which snaps the UV interpolation to vertex a and manufactures
-            // a spurious step on an otherwise affine (uvStep==0) flat region.
-            if (triangleNormal(pos_[a], pos_[b], pos_[c]).magnitudeSquared() < 0.5f)
-            {
-                continue;
-            }
-            // Geometry: distance to the nearest one-ring face plane. Point-to-plane, so a flat
-            // region reads ~0 across the collapse's in-plane gap and only genuine curvature
-            // accumulates.
-            nearestPlane = std::min(nearestPlane,
-                                    pointPlaneDistance(pos_[removed], pos_[a], pos_[b], pos_[c]));
-            // Smooth-stretch UV term: interpolate on the nearest face that actually *contains*
-            // removed (barycentric in [0,1]), unclamped on its plane so an affine parameterisation
-            // reads exactly 0. We require containment rather than extrapolating on the nearest
-            // face: a one-ring often has thin sliver faces, and unclamped barycentric FAR outside a
-            // sliver overshoots wildly (measured: a helmet collapse read a UV step of ~70 in a 0..1
-            // space). The seam/gap error a containment requirement would miss is recovered by the
-            // bounded wedge-spread term after the loop, so we lose nothing and stay
-            // well-conditioned.
-            const float triDist = pointTriangleDistance(pos_[removed], pos_[a], pos_[b], pos_[c]);
-            if (triDist >= nearestCoverTri)
-            {
-                continue;
-            }
-            const Vec3 bc = barycentricOnPlane(pos_[removed], pos_[a], pos_[b], pos_[c]);
-            constexpr float kInsideEps = 0.01f;
-            if (bc.x() < -kInsideEps || bc.y() < -kInsideEps || bc.z() < -kInsideEps)
-            {
-                continue; // removed is outside this face — don't extrapolate here
-            }
-            nearestCoverTri = triDist;
-            const float ui = (uv_[a].s() * bc.x()) + (uv_[b].s() * bc.y()) + (uv_[c].s() * bc.z());
-            const float vi = (uv_[a].t() * bc.x()) + (uv_[b].t() * bc.y()) + (uv_[c].t() * bc.z());
-            const float du = uv_[removed].s() - ui;
-            const float dv = uv_[removed].t() - vi;
-            uvStep = std::sqrt((du * du) + (dv * dv));
-
-            // Shading channels: the same covering face interpolates its three vertex normals — and
-            // tangents — to removed's spot; the angle to removed's own direction is the shading
-            // error the collapse introduces. A flat region with a consistent frame reads 0; a
-            // smooth-shaded curve whose normals/tangents fan reads the fan angle even where the
-            // geometry stays coplanar. The tangent frame drives normal-map sampling, so it is a
-            // distinct error source from the shading normal (and reads 0 on meshes without
-            // tangents).
-            normalStep = angularInterpDeviation(nrm_, removed, a, b, c, bc);
-            tangentStep = angularInterpDeviation(tan_, removed, a, b, c, bc);
+            oneRing.push_back({resolve(tris_[t][0]), resolve(tris_[t][1]), resolve(tris_[t][2])});
         }
-        // Seam/wedge UV term (bounded, interpolation-free): the render restores each corner to its
-        // own wedge at emit, so collapsing a position welded from several UV-seam wedges loses up
-        // to the spread between those wedges — invisible to the single-representative smooth term
-        // above, and the DOMINANT VDPM under-refinement on atlased meshes (a seam-crossing collapse
-        // reads "cheap" and warps the texture over a few triangles at full magnification). The max
-        // pairwise wedge-UV distance is exactly that lost spread, capped at the atlas's own scale
-        // (no extrapolation), so a seam collapse reports its true cost and VDPM refines it once it
-        // projects large; a non-seam vertex has one wedge and contributes nothing.
-        const std::vector<std::uint32_t>& wedges = canonicalWedges_[removed];
-        for (std::size_t i = 0; i < wedges.size(); ++i)
+        std::vector<Vec2> removedWedgeUv;
+        for (const std::uint32_t w : canonicalWedges_[removed])
         {
-            for (std::size_t j = i + 1; j < wedges.size(); ++j)
-            {
-                const float du = uv_[wedges[i]].s() - uv_[wedges[j]].s();
-                const float dv = uv_[wedges[i]].t() - uv_[wedges[j]].t();
-                uvStep = std::max(uvStep, std::sqrt((du * du) + (dv * dv)));
-            }
+            removedWedgeUv.push_back(uv_[w]);
         }
-        if (nearestPlane != std::numeric_limits<float>::max())
-        {
-            dev = nearestPlane;
-        }
-        deviation_[kept] = std::max(deviation_[kept], deviation_[removed]) + dev;
-        // UV accumulates by MAX, not max+add: unlike the geometric deviation (a spatial envelope
-        // that genuinely compounds up the tree, so the conservative bound is the running sum), a UV
-        // error is a screen-space texture discontinuity — what the eye sees is the single WORST
-        // jump in the region, not the sum of every collapse's stretch. Summing per-wedge seam steps
-        // (~1.0 each on an atlas) would blow the radius to 100+ in a 0..1 UV space and swamp the
-        // budget; the max keeps it in UV's natural range, cleanly separates a seam (~1) from smooth
-        // stretch (~0.01), and stays monotone (kept >= removed) for the VDPM front. So a seam
-        // region stays refined until its jump is sub-pixel while flat charts coarsen freely.
-        uvDeviation_[kept] = std::max({uvDeviation_[kept], uvDeviation_[removed], uvStep});
+        const detail::CollapseDeviation step = detail::measureCollapseDeviation(
+            removed, oneRing, pos_, nrm_, tan_, uv_, removedWedgeUv);
+        // Accumulate the per-collapse step up the tree. Geometry accumulates by running sum (a
+        // spatial envelope that genuinely compounds). UV accumulates by MAX: it is a screen-space
+        // texture discontinuity — the eye sees the single WORST jump in the region, not a
+        // compounding envelope (summing per-wedge seam steps ~1.0 each would blow it to 100+ in a
+        // 0..1 UV space). The angular channels accumulate by running sum but are CAPPED at π: a
+        // directional angular error cannot exceed it, and the projection chord 2·sin(θ/2) is only
+        // monotone up to π (an uncapped sum could exceed the limit and read a large error as small
+        // — a normal cone is the tight replacement, a later step). All stay monotone (kept >=
+        // removed) for the VDPM front.
+        deviation_[kept] = std::max(deviation_[kept], deviation_[removed]) + step.geometry;
+        uvDeviation_[kept] = std::max({uvDeviation_[kept], uvDeviation_[removed], step.uv});
+        constexpr float pi = std::numbers::pi_v<float>;
         normalDeviation_[kept] =
-            std::max(normalDeviation_[kept], normalDeviation_[removed]) + normalStep;
-        tangentDeviation_[kept] =
-            std::max(tangentDeviation_[kept], tangentDeviation_[removed]) + tangentStep;
+            std::min(pi, std::max(normalDeviation_[kept], normalDeviation_[removed]) + step.normal);
+        tangentDeviation_[kept] = std::min(
+            pi, std::max(tangentDeviation_[kept], tangentDeviation_[removed]) + step.tangent);
+        // Support radius: grow kept's bounding sphere to enclose removed's (conservative — centred
+        // on kept, so radius = max(own, edge length + removed's radius)). Scales with the mesh, so
+        // the angular channels' footprint projection is scale-invariant.
+        support_[kept] =
+            std::max(support_[kept], (pos_[kept] - pos_[removed]).magnitude() + support_[removed]);
         sequence_.back().deviationRadius = deviation_[kept];
         sequence_.back().uvDeviationRadius = uvDeviation_[kept];
         sequence_.back().normalDeviationRadius = normalDeviation_[kept];
         sequence_.back().tangentDeviationRadius = tangentDeviation_[kept];
+        sequence_.back().supportRadius = support_[kept];
 
         // Re-cost every edge from kept to its current neighbours.
         std::unordered_map<std::uint32_t, std::uint8_t> neighbours;
@@ -1015,6 +977,7 @@ private:
     std::vector<float> uvDeviation_;     // cumulative UV deviation radius per vertex (VDPM)
     std::vector<float> normalDeviation_; // cumulative shading-normal deviation (radians) per vertex
     std::vector<float> tangentDeviation_; // cumulative tangent deviation (radians) per vertex
+    std::vector<float> support_; // support-sphere radius per vertex (VDPM angular footprint)
     std::vector<std::vector<std::uint32_t>> vertexTris_;
     std::priority_queue<Edge, std::vector<Edge>, EdgeGreater> queue_;
     std::vector<MeshCollapse> sequence_;
@@ -1025,6 +988,102 @@ private:
 };
 
 } // namespace
+
+namespace detail
+{
+
+CollapseDeviation measureCollapseDeviation(std::uint32_t removed,
+                                           std::span<const std::array<std::uint32_t, 3>> faces,
+                                           std::span<const Vec3> pos, std::span<const Vec3> nrm,
+                                           std::span<const Vec3> tan, std::span<const Vec2> uv,
+                                           std::span<const Vec2> removedWedgeUv) noexcept
+{
+    CollapseDeviation out;
+    float nearestPlane = std::numeric_limits<float>::max();
+    float nearestTriSq = std::numeric_limits<float>::max();
+    float nearestCoverTriSq = std::numeric_limits<float>::max();
+    const Vec3 p = pos[removed];
+    for (const std::array<std::uint32_t, 3>& f : faces)
+    {
+        const std::uint32_t a = f[0];
+        const std::uint32_t b = f[1];
+        const std::uint32_t c = f[2];
+        if (a == b || b == c || a == c)
+        {
+            continue;
+        }
+        // Degenerate (zero-area) face: its plane + barycentric are undefined; skip so it can't
+        // manufacture a spurious step.
+        if (triangleNormal(pos[a], pos[b], pos[c]).magnitudeSquared() < 0.5f)
+        {
+            continue;
+        }
+        const ClosestTrianglePoint cp = closestOnTriangle(p, pos[a], pos[b], pos[c]);
+        // Geometry + shading vs the NEAREST actual surviving triangle (not the min over infinite
+        // planes); on an equal-distance TIE take the conservative MAX so iteration order can't
+        // decide the bound. Shading clamps to the closest point, so it measures even when `removed`
+        // lands outside every face (the no-containing-face case), where the geometry is a plane
+        // distance and the UV term below (which requires containment) correctly falls back to the
+        // wedge spread.
+        constexpr float kTieRel = 1e-5f;
+        if (cp.distanceSquared < nearestTriSq * (1.0f - kTieRel))
+        {
+            nearestTriSq = cp.distanceSquared;
+            nearestPlane = pointPlaneDistance(p, pos[a], pos[b], pos[c]);
+            out.normal = angularInterpDeviation(nrm, removed, a, b, c, cp.barycentric);
+            out.tangent = angularInterpDeviation(tan, removed, a, b, c, cp.barycentric);
+        }
+        else if (cp.distanceSquared <= nearestTriSq * (1.0f + kTieRel))
+        {
+            nearestPlane = std::max(nearestPlane, pointPlaneDistance(p, pos[a], pos[b], pos[c]));
+            out.normal =
+                std::max(out.normal, angularInterpDeviation(nrm, removed, a, b, c, cp.barycentric));
+            out.tangent = std::max(out.tangent,
+                                   angularInterpDeviation(tan, removed, a, b, c, cp.barycentric));
+        }
+
+        // UV smooth-stretch term keeps its own CONTAINMENT rule (unclamped plane barycentric on the
+        // nearest containing face — an affine chart must read exactly 0; unclamped far outside a
+        // sliver overshoots wildly). `hadContainingFace` records whether any face contained
+        // `removed`.
+        if (cp.distanceSquared >= nearestCoverTriSq)
+        {
+            continue;
+        }
+        const Vec3 bc = barycentricOnPlane(p, pos[a], pos[b], pos[c]);
+        constexpr float kInsideEps = 0.01f;
+        if (bc.x() < -kInsideEps || bc.y() < -kInsideEps || bc.z() < -kInsideEps)
+        {
+            continue;
+        }
+        nearestCoverTriSq = cp.distanceSquared;
+        out.hadContainingFace = true;
+        const float ui = (uv[a].s() * bc.x()) + (uv[b].s() * bc.y()) + (uv[c].s() * bc.z());
+        const float vi = (uv[a].t() * bc.x()) + (uv[b].t() * bc.y()) + (uv[c].t() * bc.z());
+        const float du = uv[removed].s() - ui;
+        const float dv = uv[removed].t() - vi;
+        out.uv = std::sqrt((du * du) + (dv * dv));
+    }
+    // Seam/wedge UV spread: the render restores each corner to its own wedge, so collapsing a
+    // welded multi-wedge position loses up to the max pairwise wedge-UV distance — invisible to the
+    // smooth term and the dominant under-refinement on atlases. MAX with the smooth stretch.
+    for (std::size_t i = 0; i < removedWedgeUv.size(); ++i)
+    {
+        for (std::size_t j = i + 1; j < removedWedgeUv.size(); ++j)
+        {
+            const float du = removedWedgeUv[i].s() - removedWedgeUv[j].s();
+            const float dv = removedWedgeUv[i].t() - removedWedgeUv[j].t();
+            out.uv = std::max(out.uv, std::sqrt((du * du) + (dv * dv)));
+        }
+    }
+    if (nearestPlane != std::numeric_limits<float>::max())
+    {
+        out.geometry = nearestPlane;
+    }
+    return out;
+}
+
+} // namespace detail
 
 SimplifiedMesh QuadricSimplifier::simplify(std::span<const Vertex> vertices,
                                            std::span<const uint32_t> indices,
