@@ -678,9 +678,11 @@ per-region refinement. One recorded collapse stream feeds all three. The authori
   The shader morphs only vertices whose removal level equals `MorphUBO::vipmTargetLevel`.
 - **Refine (per draw, `object.cpp` + `graphics/vdpm`):** View-dependent mode builds a per-instance
   `ActiveFront` over a `VertexForest` (the collapse stream promoted to Hoppe vertex-splits with
-  dependencies) at load. Each frame `refineForView` resets to coarsest and refines by **four
-  screen-space channels** (geometry δ / UV-seam / shading-normal / tangent, each with a `kVdpm*Scale`
-  dial) + silhouette boost + a conservative multi-witness back-face gate; then two **monotone repair
+  dependencies) at load. Each frame `refineForView` updates a **persistent** front (refine/coarsen
+  with a hysteresis dead band) by **four screen-space channels** (geometry δ / UV-seam / shading-normal
+  / tangent, each with a `kVdpm*Scale`
+  dial) + a **normal-cone** silhouette boost + back-face gate (`detail::coneVisibility`, an exact
+  evaluation of a conservative orientation bound); then two **monotone repair
   passes** — `repairFoldovers` (backward-wound faces) and `repairCoverage` (silhouette/degenerate
   coverage holes, on the **jitter-free** `currentViewProj`) — close the holes a selective (non-prefix)
   front introduces that `wouldFlip` and the deviation metrics can't see. `emitActiveIndices` restores

@@ -4,6 +4,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <vector>
 
 #include <fire_engine/graphics/lod.hpp>
@@ -63,6 +64,52 @@ canonicalFaces(std::span<const std::uint32_t> weld, std::span<const std::uint32_
 }
 
 } // namespace
+
+namespace detail
+{
+
+ConeVisibility coneVisibility(const Vec3& coneAxis, float coneCos, float supportRadius,
+                              const Vec3& regionCenter, const Vec3& cameraObj, float facingSign,
+                              bool cullEnabled) noexcept
+{
+    const Vec3 toCam = cameraObj - regionCenter;
+    const float d = toCam.magnitude();
+    if (d <= supportRadius || d < 1e-6f)
+    {
+        return {false, 1.0f}; // camera within the support sphere ⇒ potential silhouette, never cull
+    }
+    // Combined half-angle θn + θv via the cosine sum identity — no acos/asin/sin (GPU-friendly).
+    // cosN is the stored cone cosine (≤ 0 is the no-cull sentinel: θn ≥ 90° ⇒ cosSum ≤ 0 below, so
+    // it falls through to "never cull, max straddle" uniformly); sinV = r/d is the sphere's view
+    // spread.
+    const float cosN = std::clamp(coneCos, -1.0f, 1.0f);
+    const float sinN = std::sqrt(std::max(0.0f, 1.0f - (cosN * cosN)));
+    const float sinV = std::clamp(supportRadius / d, 0.0f, 1.0f);
+    const float cosV = std::sqrt(std::max(0.0f, 1.0f - (sinV * sinV)));
+    const float cosSum = (cosN * cosV) - (sinN * sinV); // cos(θn + θv)
+    const float sinSum = (sinN * cosV) + (cosN * sinV); // sin(θn + θv)
+    if (cosSum <= 0.0f)
+    {
+        return {false, 1.0f}; // θn + θv ≥ 90° ⇒ cone + spread straddles edge-on, never cull
+    }
+    // facingSign folds in a reflection (negative-determinant world flips winding ⇒ the
+    // raster-culled side is the object-space FRONT); +1 for a normal transform. The cone + sphere
+    // are already conservative bounds, so the cull needs only a float-safety margin (NOT the old
+    // smooth-normal era's 0.5 heuristic): cosAC and sinSum each carry O(few·ε) rounding, so 16·ε
+    // safely dominates that while never widening the cull materially.
+    constexpr float safety = 16.0f * std::numeric_limits<float>::epsilon();
+    const float cosAC = facingSign * Vec3::dotProduct(coneAxis, toCam * (1.0f / d));
+    const bool backFacing = cullEnabled && cosAC < -sinSum - safety;
+    // straddle = how centrally edge-on sits in the cone+spread. When the cone+spread has zero width
+    // (sinSum ≈ 0: a flat cone with no view spread), the region is a silhouette iff it is itself
+    // exactly edge-on (|cosAC| ≈ 0) — otherwise fully one-sided.
+    const float straddle = sinSum > safety
+                               ? std::clamp((sinSum - std::abs(cosAC)) / sinSum, 0.0f, 1.0f)
+                               : (std::abs(cosAC) <= safety ? 1.0f : 0.0f);
+    return {backFacing, straddle};
+}
+
+} // namespace detail
 
 VertexForest buildVertexForest(std::span<const Vertex> vertices,
                                std::span<const MeshCollapse> collapses)
@@ -243,8 +290,9 @@ bool ActiveFront::forceRefine(std::uint32_t splitIndex)
 
 void ActiveFront::refineForView(std::span<const Vertex> vertices, const Mat4& world,
                                 const Vec3& cameraPos, float projScaleY, float viewportHeight,
-                                float pixelBudget, float silhouetteBoost, float backfaceThreshold,
-                                float uvScale, float normalScale, float tangentScale)
+                                float pixelBudget, float silhouetteBoost,
+                                bool rasterBackfaceCulling, float uvScale, float normalScale,
+                                float tangentScale)
 {
     // The active front PERSISTS across frames — no coarsenAll(). The score pass below tags every
     // split for this view; a refine pass then pulls in splits over the pixel budget, and a coarsen
@@ -259,14 +307,9 @@ void ActiveFront::refineForView(std::span<const Vertex> vertices, const Mat4& wo
     splitBackface_.assign(forest_.splits.size(), 0);
     const float halfViewport = viewportHeight * 0.5f;
 
-    // Normal matrix = inverse-transpose of the world's linear part, so normals stay perpendicular
-    // to the surface under NON-uniform scale / shear (`world · vec4(n,0)` skews them, flipping
-    // facing and silhouette decisions). For a rigid / uniform-scale world this reduces to the
-    // world's rotation.
     const Mat3 linear = Mat3::fromColumns({world[0, 0], world[1, 0], world[2, 0]},
                                           {world[0, 1], world[1, 1], world[2, 1]},
                                           {world[0, 2], world[1, 2], world[2, 2]});
-    const Mat3 normalMatrix = linear.inverse().transpose();
 
     // The deviation + support radii are OBJECT-space lengths, but the split is projected against a
     // WORLD-space distance, so a mesh instanced at a non-unit world scale must have its radii
@@ -276,32 +319,34 @@ void ActiveFront::refineForView(std::span<const Vertex> vertices, const Mat4& wo
     // scaled.)
     const float worldLengthScale = largestSingularValue(linear);
 
-    // Signed facing of one canonical vertex's world normal vs its own view direction: +1 toward the
-    // camera, 0 edge-on, -1 away. Each vertex uses its own world position for the view direction. A
-    // missing normal returns +1 (front-facing) so it never contributes to a back-face suppression.
-    // Memoised per canonical vertex for this call: a vertex is a witness (child/parent/vl/vr) of
-    // many splits, so it would otherwise be recomputed repeatedly. facingOf is a pure function of
-    // the per-frame-constant world/cameraPos/normalMatrix, so the cache is behaviour-identical.
-    facingCache_.assign(vertices.size(), 0.0f);
-    facingValid_.assign(vertices.size(), 0);
-    auto facingOf = [&](std::uint32_t v) -> float
+    // Per-split visibility from the precomputed normal cone (built from FACE normals — what the
+    // rasteriser back-face-culls on) runs in OBJECT space: the SIGN of dot(worldNormal,
+    // worldViewDir) equals the sign of dot(objNormal, objViewDir) for any linear world transform
+    // (the normal's M⁻ᵀ and the view direction's M cancel), so back-facing is exact under
+    // non-uniform scale / shear AND the stored cone stays circular (a world-space test would shear
+    // it). Transform the camera into object space once. A near-singular world has no reliable
+    // inverse — then the cone is unusable, so disable culling and treat every split as a potential
+    // silhouette. The conditioning test is SCALE-INVARIANT: |det| = σ₁σ₂σ₃, so |det|/σ_max³ ∈ [0,1]
+    // is a pure shape measure (≈1 well-conditioned, →0 as an axis collapses) — unlike an absolute
+    // |det| threshold, which would wrongly reject a tiny-but-uniform instance (e.g. scale 1e-4).
+    // Otherwise fold the determinant SIGN into the facing (a reflection flips winding, so the
+    // raster-culled side is the object-space front) — `coneVisibility` handles it exactly.
+    const float det = linear.determinant();
+    const float sigmaMax = worldLengthScale;
+    const bool coneUsable = std::abs(det) > 1e-6f * sigmaMax * sigmaMax * sigmaMax;
+    const bool coneCullEnabled = rasterBackfaceCulling && coneUsable;
+    const float facingSign = det >= 0.0f ? 1.0f : -1.0f;
+    const Vec3 worldTranslation{world[0, 3], world[1, 3], world[2, 3]};
+    const Vec3 cameraObj = coneUsable ? linear.inverse() * (cameraPos - worldTranslation) : Vec3{};
+    auto visibilityOf = [&](const VertexSplit& s) -> detail::ConeVisibility
     {
-        if (facingValid_[v] != 0)
+        if (!coneUsable)
         {
-            return facingCache_[v];
+            return {false, 1.0f}; // singular world: never cull, max potential silhouette
         }
-        const Vec3 lp = vertices[v].position();
-        const Vec4 wp = world * Vec4{lp.x(), lp.y(), lp.z(), 1.0f};
-        const Vec3 wpos{wp.x(), wp.y(), wp.z()};
-        const float d = std::max(1e-3f, (wpos - cameraPos).magnitude());
-        const Vec3 wnrm = normalMatrix * vertices[v].normal();
-        const float nlen = wnrm.magnitude();
-        const float facing =
-            nlen <= 1e-6f ? 1.0f
-                          : Vec3::dotProduct(wnrm * (1.0f / nlen), (cameraPos - wpos) * (1.0f / d));
-        facingCache_[v] = facing;
-        facingValid_[v] = 1;
-        return facing;
+        return detail::coneVisibility(s.normalConeAxis, s.normalConeCos, s.supportRadius,
+                                      vertices[s.parent].position(), cameraObj, facingSign,
+                                      coneCullEnabled);
     };
 
     // Score pass: tag every split with its max screen-space channel score + back-face flag for this
@@ -323,42 +368,21 @@ void ActiveFront::refineForView(std::span<const Vertex> vertices, const Mat4& wo
         const float parentDistance =
             std::max(1e-3f, (Vec3{pw4.x(), pw4.y(), pw4.z()} - cameraPos).magnitude());
 
-        // Signed facing of the child rep's world normal vs the view direction: +1 toward the
-        // camera, 0 edge-on (silhouette), -1 away (back). Drives the silhouette boost below.
-        const float signedFacing = facingOf(s.child);
-
         // Back-face gate: skip *budget-driven* refinement of a split whose whole support region is
-        // clearly back-facing — it is raster back-face-culled, so refining it is vertex work for no
-        // visible pixels. This suppresses only discretionary refinement; forceRefine can still pull
-        // a back-facing split in as the dependency of a visible/silhouette split.
-        //
-        // CONSERVATIVE multi-witness: a single smooth vertex normal is a poor stand-in for raster
-        // back-face culling (which uses the geometric triangle winding), so one back-pointing child
-        // normal must NOT suppress a split whose triangles are actually front-facing — that punched
-        // a visible triangle out to the skybox. Test the child AND its dependency vertices (parent,
-        // vl, vr — the split's support neighbourhood) and suppress only if EVERY witness is clearly
-        // back-facing; if any faces the camera the split may protect a visible triangle, so keep it
-        // eligible. (The exact test is a per-split facing cone; this 4-witness bound is the cheap
-        // conservative version, and the threshold keeps near-edge-on reps silhouette-refined.)
-        float maxFacing = signedFacing;
-        maxFacing = std::max(maxFacing, facingOf(s.parent));
-        if (s.vl != kInvalidVertex)
-        {
-            maxFacing = std::max(maxFacing, facingOf(s.vl));
-        }
-        if (s.vr != kInvalidVertex)
-        {
-            maxFacing = std::max(maxFacing, facingOf(s.vr));
-        }
-        if (maxFacing < -backfaceThreshold)
+        // PROVABLY raster back-face-culled (refining it is vertex work for no visible pixels).
+        // Suppresses only discretionary refinement; forceRefine can still pull a back-facing split
+        // in as the dependency of a visible/silhouette split. This is an exact evaluation of a
+        // conservative bound (the cone + support sphere over-bound the surface), so `backFacing` is
+        // a one-sided proof of hiddenness — never a claim that a non-back-facing split is visible.
+        const detail::ConeVisibility vis = visibilityOf(s);
+        if (vis.backFacing)
         {
             splitBackface_[i] = 1; // culled: score 0, skip refine, eligible to coarsen
             continue;
         }
 
-        // Silhouette: near edge-on (|signedFacing| ~ 0) gets a tighter budget so contours stay
-        // dense.
-        const float boost = 1.0f + silhouetteBoost * (1.0f - std::abs(signedFacing));
+        // Silhouette: a cone straddling edge-on gets a tighter budget so contours stay dense.
+        const float boost = 1.0f + silhouetteBoost * vis.straddle;
 
         // Four independent channels in screen pixels; any one over budget refines the split. The
         // GEOMETRIC channels are world-length deviations projected e·projScaleY·(vh/2)/d: geometry

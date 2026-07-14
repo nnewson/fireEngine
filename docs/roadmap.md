@@ -96,9 +96,10 @@ severity tier, so titles are the stable reference, not a global number.)
   CPU-only, no-GPU-rewrite subset of codereview.md "VDPM per-frame work is correct but expensive")*.
   Three pieces: **(a)** `emitActiveIndices` now fills a caller-owned reused buffer (`object.cpp` passes
   a per-binding scratch vector) — no per-frame heap allocation; a vector-returning overload is kept for
-  tests. **(b)** `refineForView` memoises `facingOf(v)` per canonical vertex (a vertex is a witness of
-  many splits) and `emit` precomputes `activeAncestor` once per frame (the front is settled there);
-  both are pure per-frame functions, so behaviour is byte-identical to the inline computation. **(c)**
+  tests. **(b)** `refineForView` memoised `facingOf(v)` per canonical vertex and `emit` precomputes
+  `activeAncestor` once per frame (the front is settled there); both are pure per-frame functions, so
+  behaviour is byte-identical to the inline computation. (The `facingOf` cache was later removed by the
+  visibility-cone arc, which replaced the smooth-normal facing with the per-split normal cone.) **(c)**
   `ActiveFront` exposes per-frame repair counters (vertices each pass pulled back in, `active_==0`-guard
   dedup'd), plumbed `Object → SceneDrawContext → CullStats → FrameStats` into the overlay's LOD panel
   ("VDPM repairs (verts): foldover X, coverage Y", shown in View-dependent mode) so a repair-count
@@ -248,32 +249,35 @@ Candidates" section folds in here:
   under small camera moves / TAA jitter (a static camera now yields an identical front every frame).
   Repairs still run each frame, and steady-state does *less* work than the old full rebuild. Tests:
   static-view stability + sub-band hold. **This completes the VDPM metric-fidelity arc.** Parked
-  next-steps if it's ever revisited: exact-visibility cones (retire the per-frame repair sweeps),
-  GPU-driven active front, texel-density UV budget.
+  next-steps if it's ever revisited: a GPU-driven active front (also the only path to retiring the
+  per-frame repair sweeps — the visibility cones below could NOT), texel-density UV budget.
   See [`lod.md`](lod.md) § Known limits (Metric fidelity). Render-path only ⇒ golden-neutral.
-- 🔨 **VDPM visibility cones** *(branch `cr-vdpm-visibility-cones`; in progress)* — replace the
-  per-frame `repairCoverage` sweep with a precomputed per-split **normal cone**, so the back-face /
-  silhouette decision is made *conservatively at refine time* instead of fixed up afterwards (and
-  GPU-drivable). (A bounding cone is a conservative cap, not an exact visibility oracle — a grazing
-  intersection means a silhouette *may* exist; per Hoppe §4 anchoring the cone at the vertex rather
-  than the region's bounding volume is a parallel-projection approximation, and screen-space error
-  stays a separate criterion. Hoppe, *View-Dependent Refinement of Progressive Meshes*, §4.) Steps:
-  **(1) measure the repair cost** *(done)* — the retained hidden benchmark `[.][RepairBench]`
-  (`test_vdpm.cpp`) times the per-frame cycle on a dense (~24.6k-face) silhouette-heavy sphere: on an
-  Apple-arm64 `vcpkg` Dev build `repairCoverage` is ~1.0 ms / ~36% of the ~2.8 ms cycle (~2,280
-  repairs) — so the cone is worth it. (Figures are machine/build dependent; the benchmark is the
-  reproducible artifact, not a pass/fail test.) **(2) precompute the cone** *(done)* —
-  `MeshCollapse`/`VertexSplit` gain a **conservative** normal cone `{axis, cosHalfAngle}` accumulated
-  bottom-up like `supportRadius` (`mergeCones`). Numerically conservative *by construction* (double
-  math; the union axis is re-checked against both children so rounding can only widen; a one-ULP
-  outward round — no magic margin); a cone wider than a hemisphere becomes the `cosHalfAngle <= 0`
-  no-cull sentinel. A headless test replays the raw collapse stream and proves the cone bounds *every*
-  finest-face normal in each subtree (not just a child's incident faces). **(3) wire it into
-  `refineForView`** *(next)* — a **conservative** back-face / silhouette test combining the normal cone
-  with the support sphere's view-direction spread (perspective: the view varies across the region;
-  camera inside the sphere ⇒ never cull), in object space; keep the repairs running with a counter
-  asserting coverage repairs drop to ~0 on the test meshes/views. Retiring `repairCoverage` + the
-  foldover-legality question are the follow-on (out of this deliverable).
+- ✅ **VDPM visibility cones** *(branch `cr-vdpm-visibility-cones`)* — a precomputed per-split
+  **conservative normal cone** replaces the unreliable smooth-vertex-normal visibility proxy with a
+  GPU-compatible, conservative face-**orientation** bound. Outcome, narrower than first hoped: it
+  **improves back-face suppression and silhouette targeting but CANNOT replace screen-space coverage
+  or topological foldover repair** — both remain. **(1) measure** *(done)* — the retained hidden
+  benchmark `[.][RepairBench]` (`test_vdpm.cpp`) times the per-frame cycle on a dense (~24.6k-face)
+  silhouette-heavy sphere. **(2) precompute the cone** *(done)* — `MeshCollapse`/`VertexSplit` carry a
+  normal cone `{axis, cosHalfAngle}` accumulated bottom-up like `supportRadius` (`mergeCones`),
+  conservative *by construction* (double math with re-normalised axes; the union axis is re-checked
+  against both children so rounding can only widen; a one-ULP outward round — no magic margin); a cone
+  wider than a hemisphere is the `cosHalfAngle <= 0` no-cull sentinel. A headless test replays the raw
+  collapse stream and proves the cone bounds *every* finest-face normal in each subtree. **(3) wire it
+  into `refineForView`** *(done)* — `detail::coneVisibility` does an **exact evaluation of the
+  conservative bound**: the region is back-face-culled only if its whole cone provably faces away over
+  the support-sphere view-direction spread (a one-sided proof of hiddenness — never a claim of
+  visibility); a straddle of edge-on drives the silhouette boost. Done in **object space** (the facing
+  sign is invariant under any linear transform, so it's exact under non-uniform scale and keeps the
+  cone circular), trig-free (cosine sum identity, GPU-friendly), reflection-exact via the determinant
+  sign, and singular-transform-safe. Gated by `rasterBackfaceCulling` (a double-sided or blended
+  material culls nothing, so its refinement must NOT be suppressed). The cone HALVED `refineForView`
+  (~1.45 → ~0.69 ms on the bench), which now makes `repairCoverage` the dominant ~50% of the ~2.0 ms
+  cycle. **Coverage is a screen-space property, not orientation** — a force-refine-on-straddle
+  experiment reduced but could not zero coverage repairs (10/19/85), so `repairCoverage` (and
+  `repairFoldovers`, topological) STAY and step 4 is dropped. Retiring them eventually needs a GPU
+  worklist/fixpoint or a representation-level guarantee — not this cone. (Bounding-cone caveats per
+  Hoppe, *View-Dependent Refinement of Progressive Meshes*, SIGGRAPH 97, §4.)
 - **GPU-driven active front** — drive `refineForView` + emission on the GPU (the forest + errors are
   already just buffers). The indirect-draw direction #3 opened. (The CPU-side reusable-scratch-emit +
   repair-counters piece is split out as its own near-term item under "Could" above — do that first;

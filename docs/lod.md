@@ -63,9 +63,9 @@ Object::writeForwardUniforms()            [per draw, per frame]
   → MorphUBO { morphFactor, vipmTargetLevel }
 
   ViewDependent mode (per instance):
-    ActiveFront::refineForView(...)         reset to coarsest, refine by screen-space error
-                                            (geometry / UV-seam / normal / tangent), silhouette
-                                            boost, multi-witness back-face gate
+    ActiveFront::refineForView(...)         persistent front, refine by screen-space error
+                                            (geometry / UV-seam / normal / tangent), cone
+                                            silhouette boost + back-face gate
       → repairFoldovers(...)                (inside refineForView) un-flip any backward-wound face
     ActiveFront::repairCoverage(...)        un-recede any front-facing face that leaks the background
     ActiveFront::emitActiveIndices(...)     → a per-frame dynamic index buffer (wedge-restored)
@@ -88,9 +88,9 @@ Object::writeForwardUniforms()            [per draw, per frame]
   `writeForwardUniforms` runs `refineForView` + `repairCoverage` per frame, emitting the active index
   set into a per-`currentFrame` dynamic buffer. `buildDrawCommands` points the draw at it, taking
   precedence over discrete/VIPM. The per-frame path is **allocation-free steady-state**: `emit` fills a
-  reused per-binding scratch vector (not a fresh `std::vector` each frame), `refineForView` memoises
-  `facingOf(v)` per canonical vertex, and `emit` precomputes `activeAncestor` once (the front is
-  settled by then) — all pure per-frame functions, so behaviour is identical to the inline compute.
+  reused per-binding scratch vector (not a fresh `std::vector` each frame), and `emit` precomputes
+  `activeAncestor` once (the front is settled by then) — pure per-frame functions, so behaviour is
+  identical to the inline compute.
   `ActiveFront` also exposes **per-frame repair counters** (vertices each pass pulled back in), summed
   over instances and shown in the overlay LOD panel as a regression watch. Vulkan-free +
   headless-testable; see the VDPM section.
@@ -298,14 +298,15 @@ region, not a compounding envelope), and its per-collapse value is `max(smooth s
 face, spread between the removed position's atlas wedges)` — the wedge-spread term is what makes an
 atlas seam-crossing collapse read its true cost. Two view modifiers on top:
 
-- **Silhouette boost** — near edge-on reps (`|dot(worldNormal, viewDir)| ≈ 0`) get a tighter budget
-  (`1 + silhouetteBoost·(1−|facing|)`), so contours stay dense.
-- **Back-face gate (conservative, multi-witness)** — a split whose *whole support neighbourhood*
-  (child + parent + vl + vr) is clearly back-facing skips *discretionary* refinement (it's
-  back-face-culled — wasted detail); `forceRefine` can still pull it in as a visible split's
-  dependency. It's a **multi-witness** test because a single smooth vertex normal is a poor proxy for
-  the rasteriser's geometric back-face cull — one back-pointing normal must not suppress a split whose
-  triangles are front-facing.
+Both come from the split's precomputed **conservative normal cone** (`detail::coneVisibility`, an
+**exact evaluation of a conservative bound** — see § Visibility cones):
+
+- **Silhouette boost** — a cone straddling edge-on gets a tighter budget (`1 + silhouetteBoost·straddle`,
+  `straddle ∈ [0,1]`), so contours stay dense.
+- **Back-face gate** — a split whose *whole cone* provably faces away (over the support-sphere view
+  spread) skips *discretionary* refinement (raster back-face-culled — wasted detail); `forceRefine` can
+  still pull it in as a visible split's dependency. Only applied when the draw actually culls back-faces
+  (`rasterBackfaceCulling` — false for double-sided/blended materials, whose back-faces are visible).
 
 ### The two repair passes — why a correct emit still needs them
 
@@ -330,17 +331,50 @@ projected to screen. So two failure classes survive an otherwise-correct front, 
    the coverage test ±½px each frame and thrashes the front (a borderline hole flickering with the
    camera still).
 
-These repairs are the pragmatic version of the exact criterion — a per-split **facing / foldover cone**
-precomputed in the forest build, which would avoid the per-frame sweep. CPU-first accepts the sweep
-cost for now.
+**These repairs cannot be replaced by the normal cone** (§ Visibility cones): coverage is a
+*screen-space* property and foldover is *topological*, while the cone is a face-*orientation* bound.
+A force-refine-on-straddle experiment reduced but could not zero coverage repairs, so both sweeps
+stay. Retiring them eventually needs a GPU worklist/fixpoint or a representation-level guarantee.
+
+### Visibility cones (`detail::coneVisibility`)
+
+Each split carries a **conservative normal cone** (`{normalConeAxis, normalConeCos}`, built in the
+simplifier — § below) bounding every finest face normal in its subtree. `refineForView` turns it into
+the two view modifiers above via `detail::coneVisibility`, which is an **exact evaluation of a
+conservative bound**, not an exact visibility oracle: the cone and the support sphere both *over*-bound
+the real surface, so a `backFacing` result is a one-sided **proof of hiddenness**, while `!backFacing`
+and any straddle only mean "not provably hidden / a silhouette *may* exist".
+
+- **Object space, exact under any linear transform.** The sign of `dot(worldNormal, worldViewDir)`
+  equals the sign of `dot(objNormal, objViewDir)` for any linear world matrix (the normal's `M⁻ᵀ` and
+  the view direction's `M` cancel), so the whole test runs in object space with the camera inverse-
+  transformed once — exact under non-uniform scale/shear, and the circular cone stays circular (a
+  world-space test would shear it).
+- **View-direction spread.** The camera subtends a half-angle `asin(r/d)` over the support sphere
+  (radius `r`, object-space distance `d`), so a merely back-*centred* region near the camera is not
+  provably hidden. Back-facing needs `dot(axis, dirToCam) < −sin(θn+θv)`; the straddle weight measures
+  how centrally edge-on sits in `θn+θv`. Formed **trig-free** via the cosine sum identity (GPU-friendly).
+- **Reflections & degeneracies.** A negative-determinant (mirrored) world flips winding — folded in
+  exactly by multiplying the facing by `sign(det)`. A near-singular world (no reliable inverse) →
+  never cull, max silhouette. `coneCos ≤ 0` (cone wider than a hemisphere) and a camera inside the
+  support sphere are both no-cull / max-silhouette sentinels.
+- **Material-gated.** Suppression is applied only when the draw actually culls back-faces
+  (`rasterBackfaceCulling`); a double-sided or blended material renders its back-faces, so their
+  refinement must not be suppressed.
+
+This replaced the old smooth-vertex-normal 4-witness proxy and roughly **halved** `refineForView`
+(it's a closed-form per-split test, no fixpoint — also the shape a GPU-driven front wants). It does
+**not** retire the repair sweeps (above).
 
 ### Dials (`graphics/lod.hpp`)
 
-`kVdpmSilhouetteBoost` (2.0), `kVdpmBackfaceThreshold` (0.5), and the four channel scales
-`kVdpmUvScale` / `kVdpmNormalScale` / `kVdpmTangentScale` (1.0 / 0.5 / 0.5 — the geometry channel is
-unscaled). Raising a scale refines that channel sooner (more fidelity, more triangles). The coverage
-repair's screen-area gate (`kMinNdcArea` in `repairCoverage`) trades residual sub-pixel holes against
-extra triangles; lower it to catch smaller holes.
+`kVdpmSilhouetteBoost` (2.0) and the four channel scales `kVdpmUvScale` / `kVdpmNormalScale` /
+`kVdpmTangentScale` (1.0 / 0.5 / 0.5 — the geometry channel is unscaled). Raising a scale refines that
+channel sooner (more fidelity, more triangles). The back-face cull takes no threshold dial — the cone
+bound is exact bar a tiny float-safety margin; whether it applies at all is the `rasterBackfaceCulling`
+flag `refineForView` is passed (from the material's cull mode). The coverage repair's screen-area gate
+(`kMinNdcArea` in `repairCoverage`) trades residual sub-pixel holes against extra triangles; lower it
+to catch smaller holes.
 
 ---
 
@@ -473,28 +507,23 @@ at a fraction of the triangles. The remaining residuals and follow-ons, in rough
     or TAA jitter. A static camera now yields an identical front every frame; the repair passes still
     run each frame so correctness is unchanged. Steady-state also does *less* work than the old rebuild
     (only the sub-band splits coarsen, vs coarsenAll's full collapse). *(This is the last metric-arc
-    step. Still parked: texel-density UV budget; the exact-visibility cones that would retire the
-    per-frame repair sweeps.)*
+    step.)*
 
-- 🔨 **VDPM repair passes vs. cones (in progress).** Foldover and coverage are fixed each frame by
-  monotone repair sweeps over the finest faces (the retained `[.][RepairBench]` benchmark measures
-  `repairCoverage` ≈ 1.0 ms / ~36% of the ~2.8 ms per-instance cycle on a dense sphere, Apple-arm64
-  Dev build). Each split now carries a precomputed **conservative normal cone** (`MeshCollapse` /
-  `VertexSplit` `{normalConeAxis, normalConeCos}`, accumulated bottom-up like `supportRadius` via
-  `mergeCones` — conservative *by construction*: double math, the union axis re-checked against both
-  children so rounding can only widen, a one-ULP outward round, and `normalConeCos <= 0` as the
-  "wider than a hemisphere ⇒ never cull" sentinel). `refineForView` will use it for a **conservative**
-  back-face / silhouette test — combined with the support sphere's view-direction spread (a
-  perspective camera's view varies across the region; camera inside the sphere ⇒ never cull), in
-  object space so non-uniform scale doesn't distort the circular cone — to retire the per-frame
-  `repairCoverage` sweep (and move the front toward GPU-drivable). The cone is a bounding cap, so a
-  grazing intersection means a silhouette *may* exist, not that one does; zero coverage repairs across
-  the test meshes/views is strong evidence, not a general proof. Per Hoppe (*View-Dependent Refinement
-  of Progressive Meshes*, SIGGRAPH 97, §4) the correct cone anchor is the collapse's geometric bounding
-  volume; anchoring it at the vertex is a parallel-projection approximation, which is exactly why the
-  runtime must fold in the support-sphere view spread and why screen-space error remains its own
-  criterion. Foldovers are view-independent and topological — the cone doesn't cover them, so
-  `repairFoldovers` stays unless tighter vsplit legality can be shown to make a legal front fold-free.
+- ✅ **VDPM visibility cones.** The precomputed conservative normal cone (§ Visibility cones) now
+  drives the back-face gate + silhouette boost, replacing the smooth-normal proxy. **It does NOT retire
+  the repair sweeps**, which was the original hope: coverage is a screen-space property and foldover is
+  topological, while the cone is a face-orientation bound. A force-refine-on-straddle experiment reduced
+  but could not zero coverage repairs (10/19/85 on the coverage test), confirming the categories differ.
+  The win is real but narrower: the cone halved `refineForView` and is GPU-shaped, but `repairCoverage`
+  (now ~50% of the cycle) and `repairFoldovers` stay. (Bounding-cone caveats per Hoppe, *View-Dependent
+  Refinement of Progressive Meshes*, SIGGRAPH 97, §4.)
+- **`repairCoverage` is front-face-only.** It protects only front-facing finest faces, which is
+  correct for a normal back-face-culling draw but leaves a **double-sided / blended** material's
+  *back*-faces (which the rasteriser DOES draw) without coverage protection. Pre-existing, orthogonal
+  to the cone work (the cone gate now correctly skips suppression for those materials); the clean fix
+  is to make `repairCoverage` cover both windings when the draw doesn't cull.
+- **Parked:** texel-density UV budget; a GPU worklist/fixpoint (or representation-level guarantee) for
+  the repair sweeps, which the cone cannot subsume.
 - **GPU-driven active front.** `refineForView` + the repairs are CPU today (the module is Vulkan-free
   by design). Driving the front on the GPU (the forest + errors are already just buffers) is the
   scalability follow-on for heavy scenes.

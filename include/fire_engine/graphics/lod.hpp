@@ -46,15 +46,9 @@ inline constexpr float kLodPixelErrorBudget = 2.0f;
 // shadow), so their pixel budget is scaled up by this factor.
 inline constexpr float kShadowLodBias = 3.0f;
 
-// VDPM silhouette boost: how much tighter the pixel budget is where a vertex's world normal is
-// edge-on to the view (0 = uniform screen-space error). Keeps contours dense.
+// VDPM silhouette boost: how much tighter the pixel budget is where a split's precomputed normal
+// cone straddles the edge-on direction (0 = uniform screen-space error). Keeps contours dense.
 inline constexpr float kVdpmSilhouetteBoost = 2.0f;
-
-// VDPM back-face gate: reps whose signed facing (world normal · view direction) is below -this are
-// treated as clearly back-facing and skip discretionary refinement (they're back-face-culled, so
-// the detail is wasted). Conservative (not plain 0) since a per-vertex normal stands in for a
-// region; near edge-on stays silhouette-refined.
-inline constexpr float kVdpmBackfaceThreshold = 0.5f;
 
 // VDPM UV channel scale: turns a collapse's cumulative UV-deviation radius into pixel-equivalent
 // screen error against the same pixel budget (a texel-density stand-in — per-material texture
