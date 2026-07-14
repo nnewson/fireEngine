@@ -2,8 +2,10 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <vector>
 
 #include <fire_engine/graphics/lod.hpp>
@@ -923,4 +925,178 @@ TEST_CASE("refineForView: the shading front is scale-invariant under a matched m
 
     CHECK(unit == big);
     CHECK(unit.size() > 2); // the shading channel actually fired (a non-trivial front)
+}
+
+TEST_CASE("simplifier: the normal cone conservatively bounds EVERY finest-face normal in a "
+          "collapse's subtree",
+          "[vdpm]")
+{
+    // Step 2 correctness — the strong form: replay the RAW collapse stream, maintaining for each
+    // canonical vertex the full set of finest-face normals in the subtree it currently represents
+    // (both endpoints of a collapse may already subsume many earlier collapses). After each
+    // collapse verify the recorded cone against the COMPLETE merged set — not merely the child's
+    // incident faces, which a too-tight cone could pass while missing most of the subtree.
+    const Mesh m = makeUvSphere(24, 32);
+    const std::vector<MeshCollapse> seq = collapsesOf(m);
+    const std::vector<uint32_t> weld = mesh_topology::weldByPosition(m.verts);
+
+    // Seed each canonical vertex with its incident finest-face normals, reproducing the
+    // simplifier's triangleNormal EXACTLY — same cross product, same `len > 1e-12f` accept
+    // threshold — so the test includes precisely the faces production seeds (a looser threshold
+    // would silently drop seeded normals and stop the proof from covering them). Positions are
+    // welded-by-position, so an original and its canonical share a position and thus the same face
+    // normal.
+    auto faceNormal = [&](uint32_t i0, uint32_t i1, uint32_t i2) -> Vec3
+    {
+        const Vec3 cr = Vec3::crossProduct(m.verts[i1].position() - m.verts[i0].position(),
+                                           m.verts[i2].position() - m.verts[i0].position());
+        const float len = cr.magnitude();
+        return len > 1e-12f ? cr * (1.0f / len) : Vec3{};
+    };
+    std::vector<std::vector<Vec3>> desc(m.verts.size());
+    for (std::size_t i = 0; i + 2 < m.indices.size(); i += 3)
+    {
+        const uint32_t a = m.indices[i];
+        const uint32_t b = m.indices[i + 1];
+        const uint32_t c = m.indices[i + 2];
+        const Vec3 n = faceNormal(a, b, c);
+        if (n.magnitudeSquared() < 0.5f)
+        {
+            continue; // zero normal (a UV-sphere pole sliver) — the cone seed skips it too
+        }
+        for (const uint32_t v : {a, b, c})
+        {
+            desc[weld[v]].push_back(n);
+        }
+    }
+
+    // Conservative means "never under-bounds by more than float rounding". Acceptance is scaled to
+    // float epsilon, not a hand-picked tolerance: a genuine under-bound is orders of magnitude
+    // larger.
+    constexpr float eps = std::numeric_limits<float>::epsilon();
+    int outside = 0;
+    float worstOver = 0.0f; // largest cosine under-bound seen (0 = perfectly conservative)
+    bool anyWide = false;
+    for (const MeshCollapse& col : seq)
+    {
+        // Merge `removed`'s subtree normals into `kept` (canonical ids), mirroring the simplifier's
+        // bottom-up cone accumulation.
+        std::vector<Vec3>& kept = desc[col.kept];
+        std::vector<Vec3>& removed = desc[col.removed];
+        kept.insert(kept.end(), removed.begin(), removed.end());
+        removed.clear();
+        for (const Vec3& n : kept)
+        {
+            const float under = col.normalConeCos - Vec3::dotProduct(n, col.normalConeAxis);
+            if (under > 0.0f)
+            {
+                worstOver = std::max(worstOver, under);
+                if (under > 8.0f * eps) // beyond float rounding ⇒ a real under-bound
+                {
+                    ++outside;
+                }
+            }
+        }
+        if (col.normalConeCos < 0.99f)
+        {
+            anyWide = true;
+        }
+    }
+    CHECK(outside == 0);            // the cone never under-bounds a normal in its subtree
+    CHECK(worstOver <= 8.0f * eps); // and only within float rounding (observed ~0.004 * eps)
+    CHECK(anyWide);                 // a curved sphere ⇒ coarse collapses span real curvature
+}
+
+TEST_CASE("simplifier: a flat mesh has degenerate (tight) normal cones", "[vdpm]")
+{
+    // A constant-normal surface: every collapse cone is a single direction (half-angle ~0) about
+    // it.
+    for (const MeshCollapse& c : collapsesOf(makeGrid(17)))
+    {
+        CHECK(c.normalConeCos > 0.999f);
+        CHECK(c.normalConeAxis.z() > 0.999f); // the constant (0,0,1) normal
+    }
+}
+
+TEST_CASE("simplifier: a TILTED planar mesh has tight normal cones (no phantom curvature)",
+          "[vdpm]")
+{
+    // A genuinely planar surface whose constant normal is NOT axis-aligned or exactly float-
+    // representable (z = x + y). Every face shares one normal, so the cone must stay a single
+    // direction — this pins the fix where near-unit float axes were treated as exactly unit and a
+    // planar mesh grew ~0.08°-per-merge phantom cones. (makeGrid's (0,0,1) plane can't catch it.)
+    Mesh m = makeGrid(17);
+    for (Vertex& v : m.verts)
+    {
+        const Vec3 p = v.position();
+        v.position(Vec3{p.x(), p.y(), p.x() + p.y()});
+    }
+    constexpr float eps = std::numeric_limits<float>::epsilon();
+    float worst = 1.0f;
+    for (const MeshCollapse& c : collapsesOf(m))
+    {
+        worst = std::min(worst, c.normalConeCos);
+    }
+    // A single direction to within float rounding — no invented curvature (observed exactly 1.0).
+    CHECK(worst > 1.0f - 16.0f * eps);
+}
+
+// Hidden ([.]) benchmark — the reproducible artifact behind the roadmap's step-1 repair-cost
+// figure, retained so step 3 can make a like-for-like before/after when the cone starts retiring
+// the COVERAGE sweep (this arc's scope; foldover repair stays). Runs the per-frame VDPM cycle on a
+// dense (~24.6k-face) sphere at a close, silhouette-heavy view and reports each phase's wall time +
+// repair work. It is NOT a pass/fail test (timings are machine/build dependent): the recorded
+// figure — refineForView (incl. foldover repair) ~1.45 ms, repairCoverage ~1.0 ms / ~36% of the
+// ~2.8 ms cycle (~2,280 repairs), emit ~0.33 ms — was captured here on an Apple-arm64 `vcpkg` Dev
+// build
+// (`-O2 -g`, no NDEBUG). Foldover repair is bundled inside refineForView and not isolated here,
+// which is sufficient because this arc retires coverage only. Run with `./test_fire_engine
+// [RepairBench]`.
+TEST_CASE("VDPM per-frame phase timings (dense sphere, close view)", "[.][vdpm][RepairBench]")
+{
+    using clock = std::chrono::steady_clock;
+    const Mesh m = makeUvSphere(96, 128); // ~24,576 finest faces
+    ActiveFront front = ActiveFront::build(m.verts, m.indices, collapsesOf(m));
+
+    const Vec3 cam{0.0f, 0.0f, 2.2f}; // just outside the unit sphere → a large silhouette
+    const Mat4 world = Mat4::identity();
+    const Mat4 proj = Mat4::perspective(1.0f, 1.0f, 0.1f, 100.0f);
+    const Mat4 viewProj = proj * Mat4::lookAt(cam, {0, 0, 0}, {0, 1, 0});
+    const float projScaleY = std::abs(proj[1, 1]);
+    constexpr float budget = 2.0f;
+
+    constexpr int iterations = 200;
+    double refineUs = 0.0;
+    double coverageUs = 0.0;
+    double emitUs = 0.0;
+    std::uint32_t lastFold = 0;
+    std::uint32_t lastCoverage = 0;
+    std::size_t lastEmitted = 0;
+    std::vector<uint32_t> scratch;
+    for (int i = 0; i < iterations; ++i)
+    {
+        auto t0 = clock::now();
+        front.refineForView(m.verts, world, cam, projScaleY, 1000.0f, budget, 2.0f, 0.5f, 2.0f,
+                            0.0f, 0.0f);
+        auto t1 = clock::now();
+        front.repairCoverage(m.verts, world, cam, viewProj, 1000.0f, 1000.0f);
+        auto t2 = clock::now();
+        front.emitActiveIndices(m.verts, m.indices, scratch);
+        auto t3 = clock::now();
+        using us = std::chrono::duration<double, std::micro>;
+        refineUs += us(t1 - t0).count();
+        coverageUs += us(t2 - t1).count();
+        emitUs += us(t3 - t2).count();
+        lastFold = front.foldoversRepaired();
+        lastCoverage = front.coverageRepaired();
+        lastEmitted = scratch.size() / 3;
+    }
+    const double n = iterations;
+    WARN("VDPM phase timings over "
+         << iterations << " iters (" << lastEmitted
+         << " emitted tris):\n  refineForView (incl. foldover repair) = " << (refineUs / n)
+         << " us\n  repairCoverage                = " << (coverageUs / n) << " us (" << lastCoverage
+         << " repairs)\n  emitActiveIndices             = " << (emitUs / n)
+         << " us\n  foldoversRepaired (last)      = " << lastFold);
+    CHECK(lastEmitted > 0);
 }

@@ -161,6 +161,109 @@ struct Quadric
     return len > 1e-12f ? n * (1.0f / len) : Vec3{};
 }
 
+// A CONSERVATIVE bounding cone of unit normals: every bounded normal lies within acos(cosHalfAngle)
+// of the unit `axis`. A zero axis marks an EMPTY cone. RUNTIME CONTRACT: `cosHalfAngle <= 0` (half-
+// angle >= 90°, wider than a hemisphere) is the "no useful cone" sentinel — such a region can never
+// be fully back-facing and always potentially straddles a silhouette, so the runtime must treat it
+// as always-potentially-visible / always-potentially-silhouette and NEVER cull (do not feed it to a
+// sin(halfAngle) test, where sin(π) = 0 would read as highly cullable). Per collapse the simplifier
+// accumulates the cone of the finest face normals in the region the collapse subsumes.
+struct NormalCone
+{
+    Vec3 axis{};              // unit; zero = empty cone
+    float cosHalfAngle{1.0f}; // 1 = a single direction; <= 0 = the no-cull sentinel (see above)
+};
+
+// A cone CONSERVATIVELY enclosing both inputs (a bounding-cone union; merging only ever widens, so
+// accumulating up the collapse tree stays monotone). Numerically conservative BY CONSTRUCTION
+// rather than a magic margin: the union axis is formed + normalised in double, stored as float, and
+// the half-angle is then RE-DERIVED as the exact angle THAT stored axis needs to enclose both child
+// cones — so slerp/rounding error can only widen it — with a final one-ULP outward round on the
+// cosine.
+[[nodiscard]] NormalCone mergeCones(const NormalCone& a, const NormalCone& b) noexcept
+{
+    if (a.axis.magnitudeSquared() < 0.5f)
+    {
+        return b; // a empty
+    }
+    if (b.axis.magnitudeSquared() < 0.5f)
+    {
+        return a; // b empty
+    }
+    // Re-normalise the stored float axes in double: a float axis is only near-unit, so a raw dot of
+    // two IDENTICAL axes lands slightly below 1 and acos reads phantom curvature (a planar mesh
+    // would grow non-trivial cones). Normalising first makes coincident axes read exactly
+    // coincident.
+    auto normed = [](const Vec3& v)
+    {
+        const double x = v.x();
+        const double y = v.y();
+        const double z = v.z();
+        const double len = std::sqrt((x * x) + (y * y) + (z * z));
+        const double inv = len > 1e-12 ? 1.0 / len : 0.0;
+        return std::array<double, 3>{x * inv, y * inv, z * inv};
+    };
+    const std::array<double, 3> an = normed(a.axis);
+    const std::array<double, 3> bn = normed(b.axis);
+    const double ax = an[0];
+    const double ay = an[1];
+    const double az = an[2];
+    const double bx = bn[0];
+    const double by = bn[1];
+    const double bz = bn[2];
+    const double angA = std::acos(std::clamp(static_cast<double>(a.cosHalfAngle), -1.0, 1.0));
+    const double angB = std::acos(std::clamp(static_cast<double>(b.cosHalfAngle), -1.0, 1.0));
+    const double between = std::acos(std::clamp((ax * bx) + (ay * by) + (az * bz), -1.0, 1.0));
+    if (between < 1e-6)
+    {
+        return angA >= angB ? a : b; // axes coincide → the wider cone already contains the other
+    }
+    // Clearly-contained shortcut (with a small margin so a marginal case falls to the safe
+    // recompute below rather than risk an under-bound).
+    if (between + angB + 1e-6 <= angA)
+    {
+        return a;
+    }
+    if (between + angA + 1e-6 <= angB)
+    {
+        return b;
+    }
+    constexpr double pi = std::numbers::pi_v<double>;
+    const double sinB = std::sin(between);
+    if (sinB < 1e-9)
+    {
+        return NormalCone{a.axis, -1.0f}; // axes opposite (between ≈ π) → whole sphere
+    }
+    // Union axis: slerp a→b to the point that centres the enclosing cone.
+    const double newHalf = 0.5 * (between + angA + angB);
+    const double t = std::clamp((newHalf - angA) / between, 0.0, 1.0);
+    const double wa = std::sin((1.0 - t) * between) / sinB;
+    const double wb = std::sin(t * between) / sinB;
+    double nx = (ax * wa) + (bx * wb);
+    double ny = (ay * wa) + (by * wb);
+    double nz = (az * wa) + (bz * wb);
+    const double nlen = std::sqrt((nx * nx) + (ny * ny) + (nz * nz));
+    if (nlen < 1e-9)
+    {
+        return NormalCone{a.axis, -1.0f};
+    }
+    nx /= nlen;
+    ny /= nlen;
+    nz /= nlen;
+    const Vec3 axis{static_cast<float>(nx), static_cast<float>(ny), static_cast<float>(nz)};
+    // Re-derive the required half-angle for the FINAL (float-rounded, re-normalised) axis against
+    // both children, so slerp + float rounding can only widen the stored cone.
+    const std::array<double, 3> fn = normed(axis);
+    const double toA =
+        std::acos(std::clamp((fn[0] * ax) + (fn[1] * ay) + (fn[2] * az), -1.0, 1.0)) + angA;
+    const double toB =
+        std::acos(std::clamp((fn[0] * bx) + (fn[1] * by) + (fn[2] * bz), -1.0, 1.0)) + angB;
+    const double reqHalf = std::min(pi, std::max(toA, toB));
+    // Outward-round the cosine (toward −1) for one-ULP conservatism. reqHalf >= π/2 yields cos <=
+    // 0, the no-cull sentinel above.
+    return NormalCone{axis, std::nextafter(static_cast<float>(std::cos(reqHalf)), -1.0f)};
+}
+
 // Perpendicular distance from p to the plane of triangle abc (0 for a degenerate face). We use
 // point-to-*plane*, not point-to-triangle: a collapse retires the two triangles on its edge,
 // leaving a small in-plane topological gap, and on a FLAT region the removed vertex sits at the rim
@@ -346,6 +449,7 @@ public:
         normalDeviation_.assign(vertexCount, 0.0f);
         tangentDeviation_.assign(vertexCount, 0.0f);
         support_.assign(vertexCount, 0.0f);
+        normalCone_.assign(vertexCount, NormalCone{});
         uv_.resize(vertexCount);
         nrm_.resize(vertexCount);
         tanFrameT_.assign(vertexCount, Vec3{});
@@ -652,6 +756,23 @@ private:
             }
         }
 
+        // Seed each canonical vertex's normal cone from its incident finest-face normals
+        // (geometric, for back-face / silhouette). Collapses then merge these bottom-up so each
+        // recorded collapse carries the cone of the finest normals in the region it subsumes. One
+        // pass over faces (each normal computed once, merged into all three canonical corners).
+        for (const std::array<std::uint32_t, 3>& t : tris_)
+        {
+            const Vec3 n = triangleNormal(pos_[t[0]], pos_[t[1]], pos_[t[2]]);
+            if (n.magnitudeSquared() > 0.5f)
+            {
+                const NormalCone seed{n, 1.0f};
+                for (const std::uint32_t c : t)
+                {
+                    normalCone_[c] = mergeCones(normalCone_[c], seed);
+                }
+            }
+        }
+
         // Boundary preservation: an edge in exactly one triangle is a border. Add a heavy
         // (position- only) plane perpendicular to that triangle through the edge, so its endpoints
         // resist leaving the border. (Render-attribute seams are NOT preserved here — a quadric
@@ -939,11 +1060,16 @@ private:
         // the angular channels' footprint projection is scale-invariant.
         support_[kept] =
             std::max(support_[kept], (pos_[kept] - pos_[removed]).magnitude() + support_[removed]);
+        // Normal cone: union kept's + removed's finest-normal cones — the region the collapse now
+        // subsumes. Monotone (merging only widens), so it stays valid up the tree.
+        normalCone_[kept] = mergeCones(normalCone_[kept], normalCone_[removed]);
         sequence_.back().deviationRadius = deviation_[kept];
         sequence_.back().uvDeviationRadius = uvDeviation_[kept];
         sequence_.back().normalDeviationRadius = normalDeviation_[kept];
         sequence_.back().tangentDeviationRadius = tangentDeviation_[kept];
         sequence_.back().supportRadius = support_[kept];
+        sequence_.back().normalConeAxis = normalCone_[kept].axis;
+        sequence_.back().normalConeCos = normalCone_[kept].cosHalfAngle;
 
         // Re-cost every edge from kept to its current neighbours.
         std::unordered_map<std::uint32_t, std::uint8_t> neighbours;
@@ -1006,6 +1132,8 @@ private:
     std::vector<float> normalDeviation_; // cumulative shading-normal deviation (radians) per vertex
     std::vector<float> tangentDeviation_; // cumulative tangent deviation (radians) per vertex
     std::vector<float> support_; // support-sphere radius per vertex (VDPM angular footprint)
+    std::vector<NormalCone>
+        normalCone_; // finest-face-normal cone per vertex (VDPM back-face/silh.)
     std::vector<std::vector<std::uint32_t>> vertexTris_;
     std::priority_queue<Edge, std::vector<Edge>, EdgeGreater> queue_;
     std::vector<MeshCollapse> sequence_;

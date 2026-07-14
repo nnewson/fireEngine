@@ -64,6 +64,14 @@ struct VertexSplit
     // the projected extent of the region it affects (and scales like the geometry channel — the fix
     // for the old fixed-length angular projection).
     float supportRadius{0.0f};
+    // CONSERVATIVE normal cone of the region this split covers (MeshCollapse::normalCone*):
+    // `normalConeAxis` (unit) bounds every finest face normal in the subtree within
+    // acos(`normalConeCos`) — a bounding cap, not the exact set. refineForView uses it for a
+    // conservative per-split back-face / silhouette test, combined with the support sphere's view-
+    // direction spread. `normalConeCos <= 0` is the no-cull sentinel (never cull; see
+    // mesh_simplifier).
+    Vec3 normalConeAxis{0.0f, 0.0f, 1.0f};
+    float normalConeCos{1.0f};
 };
 
 // Sentinel for a missing neighbour (boundary edge) in VertexSplit::vl / vr.

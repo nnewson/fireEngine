@@ -476,10 +476,25 @@ at a fraction of the triangles. The remaining residuals and follow-ons, in rough
     step. Still parked: texel-density UV budget; the exact-visibility cones that would retire the
     per-frame repair sweeps.)*
 
-- **VDPM repair passes vs. cones.** Foldover and coverage are fixed each frame by monotone repair
-  sweeps over the finest faces. The exact criterion is a per-split **facing / foldover cone**
-  precomputed in the forest build — it would replace the per-frame sweeps and their CPU cost. The
-  right next step if VDPM ever moves off the CPU.
+- 🔨 **VDPM repair passes vs. cones (in progress).** Foldover and coverage are fixed each frame by
+  monotone repair sweeps over the finest faces (the retained `[.][RepairBench]` benchmark measures
+  `repairCoverage` ≈ 1.0 ms / ~36% of the ~2.8 ms per-instance cycle on a dense sphere, Apple-arm64
+  Dev build). Each split now carries a precomputed **conservative normal cone** (`MeshCollapse` /
+  `VertexSplit` `{normalConeAxis, normalConeCos}`, accumulated bottom-up like `supportRadius` via
+  `mergeCones` — conservative *by construction*: double math, the union axis re-checked against both
+  children so rounding can only widen, a one-ULP outward round, and `normalConeCos <= 0` as the
+  "wider than a hemisphere ⇒ never cull" sentinel). `refineForView` will use it for a **conservative**
+  back-face / silhouette test — combined with the support sphere's view-direction spread (a
+  perspective camera's view varies across the region; camera inside the sphere ⇒ never cull), in
+  object space so non-uniform scale doesn't distort the circular cone — to retire the per-frame
+  `repairCoverage` sweep (and move the front toward GPU-drivable). The cone is a bounding cap, so a
+  grazing intersection means a silhouette *may* exist, not that one does; zero coverage repairs across
+  the test meshes/views is strong evidence, not a general proof. Per Hoppe (*View-Dependent Refinement
+  of Progressive Meshes*, SIGGRAPH 97, §4) the correct cone anchor is the collapse's geometric bounding
+  volume; anchoring it at the vertex is a parallel-projection approximation, which is exactly why the
+  runtime must fold in the support-sphere view spread and why screen-space error remains its own
+  criterion. Foldovers are view-independent and topological — the cone doesn't cover them, so
+  `repairFoldovers` stays unless tighter vsplit legality can be shown to make a legal front fold-free.
 - **GPU-driven active front.** `refineForView` + the repairs are CPU today (the module is Vulkan-free
   by design). Driving the front on the GPU (the forest + errors are already just buffers) is the
   scalability follow-on for heavy scenes.

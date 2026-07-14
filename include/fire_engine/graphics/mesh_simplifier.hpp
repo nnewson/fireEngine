@@ -66,6 +66,19 @@ struct MeshCollapse
     // enclose-the-child bound, so it can over-estimate the region's true diameter — a real bounding
     // sphere would tighten it); never under-bounds.
     float supportRadius{0.0f};
+    // CONSERVATIVE normal cone of the region this collapse subsumes: `normalConeAxis` (unit) bounds
+    // every finest face normal in the collapse subtree within acos(`normalConeCos`) — a bounding
+    // cap, NOT the exact normal set (intersecting its grazing band means a silhouette *may* exist,
+    // not that one does). Accumulated bottom-up like supportRadius. Lets VDPM's refineForView do a
+    // conservative per-split back-face / silhouette test — combined at runtime with the support
+    // sphere's view-angle spread (a perspective camera's view direction varies across the region),
+    // in object space so non-uniform world scale doesn't distort the circular cone — instead of the
+    // per-frame coverage-repair sweep. RUNTIME CONTRACT: `normalConeCos <= 0` (half-angle >= 90°)
+    // is the no-cull sentinel — treat the region as always-potentially-visible / -silhouette, never
+    // cull (never feed it to a sin(halfAngle) test). `normalConeCos` 1 = flat region; lower = more
+    // curved.
+    Vec3 normalConeAxis{0.0f, 0.0f, 1.0f};
+    float normalConeCos{1.0f};
     // The vsplit apexes for the VDPM vertex forest: the third vertices of the one (boundary) or two
     // (interior) live faces on the collapsing edge, recorded here on the true canonical topology
     // the simplifier collapses so the forest need not re-derive them by replaying the stream. `vr`

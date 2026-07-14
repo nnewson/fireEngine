@@ -91,7 +91,8 @@ VertexForest buildVertexForest(std::span<const Vertex> vertices,
         const std::uint32_t vr = c.vr == kNoCollapseApex ? kInvalidVertex : c.vr;
         forest.splits.push_back(VertexSplit{c.kept, c.removed, c.vl, vr, c.deviationRadius,
                                             c.uvDeviationRadius, c.normalDeviationRadius,
-                                            c.tangentDeviationRadius, c.supportRadius});
+                                            c.tangentDeviationRadius, c.supportRadius,
+                                            c.normalConeAxis, c.normalConeCos});
         forest.removingSplit[c.removed] = splitIndex;
     }
 
