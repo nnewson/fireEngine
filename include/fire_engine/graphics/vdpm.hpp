@@ -187,17 +187,21 @@ public:
 
     // Post-refinement COVERAGE repair (call after refineForView with the frame's proj*view). A
     // closed, non-folded front can still leak the background: at a silhouette the coarse
-    // replacement recedes inside a fine FRONT-FACING triangle's projected footprint, so the
-    // rasterised surface no longer covers it. Deviation/foldover criteria are blind to this — it is
-    // purely a screen-space coverage property. For each front-facing finest face whose projected
-    // centroid falls OUTSIDE its active-ancestor replacement in NDC, force-refine the collapsed
-    // corner with the largest screen-space displacement; repeat to a fixed point. Monotone (only
-    // force-refines), so it converges — at worst to full detail, which covers exactly. `viewProj`
-    // is proj*view (world is applied separately, matching refineForView). `viewportWidth/Height`
-    // turn the area gate into pixels (resolution-independent). A face straddling the near plane
-    // can't be projected, so it is refined conservatively (see the .cpp).
+    // replacement recedes inside a VISIBLE finest triangle's projected footprint, so the rasterised
+    // surface no longer covers it. Deviation/foldover criteria are blind to this — it is purely a
+    // screen-space coverage property. For each visible finest face whose projected centroid falls
+    // OUTSIDE its active-ancestor replacement in NDC, force-refine the collapsed corner with the
+    // largest screen-space displacement; repeat to a fixed point. Monotone (only force-refines), so
+    // it converges — at worst to full detail, which covers exactly. `viewProj` is proj*view (world
+    // is applied separately, matching refineForView). `viewportWidth/Height` turn the area gate
+    // into pixels (resolution-independent). A face straddling the near plane can't be projected, so
+    // it is refined conservatively (see the .cpp). `rasterBackfaceCulling` MUST reflect the draw's
+    // cull mode (as refineForView): with culling ON only front-facing faces are visible; with it
+    // OFF (a double-sided or blended material) BACK-facing faces render too and equally need
+    // coverage, so they are not skipped.
     void repairCoverage(std::span<const Vertex> vertices, const Mat4& world, const Vec3& cameraPos,
-                        const Mat4& viewProj, float viewportWidth, float viewportHeight);
+                        const Mat4& viewProj, float viewportWidth, float viewportHeight,
+                        bool rasterBackfaceCulling);
 
     [[nodiscard]] bool active(uint32_t canonicalVertex) const
     {
