@@ -67,7 +67,7 @@ Object::writeForwardUniforms()            [per draw, per frame]
                                             (geometry / UV-seam / normal / tangent), cone
                                             silhouette boost + back-face gate
       → repairFoldovers(...)                (inside refineForView) un-flip any backward-wound face
-    ActiveFront::repairCoverage(...)        un-recede any front-facing face that leaks the background
+    ActiveFront::repairCoverage(...)        un-recede any visible face that leaks the background
     ActiveFront::emitActiveIndices(...)     → a per-frame dynamic index buffer (wedge-restored)
 ```
 
@@ -321,12 +321,16 @@ projected to screen. So two failure classes survive an otherwise-correct front, 
    collapsed corners.
 2. **Coverage / silhouette holes** (`repairCoverage`, called from `object.cpp` after `refineForView`
    with the **jitter-free** `currentViewProj`). A *closed, non-folded* front can still leak the
-   background: at a silhouette a coarse replacement recedes inside a fine front-facing triangle's
+   background: at a silhouette a coarse replacement recedes inside a fine visible triangle's
    *projected footprint*. This is purely a screen-space property — boundary/foldover/manifold checks
-   are all blind to it. For each front-facing finest face above a small projected-area gate: if its
+   are all blind to it. For each **visible** finest face above a small projected-area gate: if its
    replacement is **degenerate** (the face collapsed to a sliver and was dropped — *not* safe to skip
    at a contour, only at an interior), force-refine its corners; else if its projected centroid falls
    outside the replacement in NDC, force-refine the corner with the largest screen displacement.
+   "Visible" follows the draw's cull mode via a `rasterBackfaceCulling` arg (same as `refineForView`):
+   with culling on only front-facing faces are visible; with it off (double-sided / blended material)
+   back-faces render too and are covered as well (`gn` is the WORLD winding, so this is correct under a
+   reflected world).
    **It must use the jitter-free view-projection** — feeding it the TAA-jittered `frame.proj` shifts
    the coverage test ±½px each frame and thrashes the front (a borderline hole flickering with the
    camera still).
@@ -422,7 +426,9 @@ green → yellow → red and the triangle count should drop.
   far.
 - **Foldover repair** — no emitted triangle winds against the original (verified against a version
   with the repair disabled, so it's non-vacuous).
-- **Coverage repair** — every front-facing triangle stays covered by its replacement, *including* the
+- **Coverage repair** — every visible triangle stays covered by its replacement, following the draw's
+  cull policy (front-face-only when culling; both windings for a no-cull double-sided/blend material,
+  verified against the pre-fix back-face gap; correct under a reflected world), *including* the
   degenerate-replacement case (again verified non-vacuous).
 
 `selectLod` is header-only and directly unit-testable. Beyond the headless tests, the render smoke
@@ -517,11 +523,6 @@ at a fraction of the triangles. The remaining residuals and follow-ons, in rough
   The win is real but narrower: the cone halved `refineForView` and is GPU-shaped, but `repairCoverage`
   (now ~50% of the cycle) and `repairFoldovers` stay. (Bounding-cone caveats per Hoppe, *View-Dependent
   Refinement of Progressive Meshes*, SIGGRAPH 97, §4.)
-- **`repairCoverage` is front-face-only.** It protects only front-facing finest faces, which is
-  correct for a normal back-face-culling draw but leaves a **double-sided / blended** material's
-  *back*-faces (which the rasteriser DOES draw) without coverage protection. Pre-existing, orthogonal
-  to the cone work (the cone gate now correctly skips suppression for those materials); the clean fix
-  is to make `repairCoverage` cover both windings when the draw doesn't cull.
 - **Parked:** texel-density UV budget; a GPU worklist/fixpoint (or representation-level guarantee) for
   the repair sweeps, which the cone cannot subsume.
 - **GPU-driven active front.** `refineForView` + the repairs are CPU today (the module is Vulkan-free

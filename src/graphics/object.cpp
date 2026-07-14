@@ -526,14 +526,17 @@ void Object::writeForwardUniforms(const FrameInfo& frame, const Mat4& world,
                                              static_cast<float>(frame.viewportHeight),
                                              frame.lodPixelErrorBudget, kVdpmSilhouetteBoost,
                                              rasterBackfaceCulling, vs.uv, vs.normal, vs.tangent);
-            // Screen-space coverage repair: refine any front-facing face whose coarse replacement
+            // Screen-space coverage repair: refine any VISIBLE face whose coarse replacement
             // recedes inside its projected footprint (a silhouette hole to the background that the
             // deviation/foldover criteria can't see). Uses the JITTER-FREE currentViewProj, not the
             // TAA-jittered frame.proj — the sub-pixel jitter would shift the coverage test ±0.5px
             // each frame and thrash the front (a borderline hole flickering with no camera motion).
+            // Same cull policy as refineForView: a double-sided/blended draw shows its back-faces,
+            // so they need coverage too.
             binding.vdpmFront->repairCoverage(
                 binding.geometry->vertices(), world, frame.cameraPosition, frame.currentViewProj,
-                static_cast<float>(frame.viewportWidth), static_cast<float>(frame.viewportHeight));
+                static_cast<float>(frame.viewportWidth), static_cast<float>(frame.viewportHeight),
+                rasterBackfaceCulling);
             binding.vdpmFront->emitActiveIndices(
                 binding.geometry->vertices(), binding.geometry->indices(), binding.vdpmEmitScratch);
             const std::vector<uint32_t>& idx = binding.vdpmEmitScratch;

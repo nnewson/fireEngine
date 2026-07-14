@@ -539,7 +539,7 @@ void ActiveFront::repairFoldovers(std::span<const Vertex> vertices, const Mat4& 
 
 void ActiveFront::repairCoverage(std::span<const Vertex> vertices, const Mat4& world,
                                  const Vec3& cameraPos, const Mat4& viewProj, float viewportWidth,
-                                 float viewportHeight)
+                                 float viewportHeight, bool rasterBackfaceCulling)
 {
     auto worldPos = [&](std::uint32_t v)
     {
@@ -604,9 +604,14 @@ void ActiveFront::repairCoverage(std::span<const Vertex> vertices, const Mat4& w
             const Vec3 w2 = worldPos(fc[2]);
             const Vec3 centroid = (w0 + w1 + w2) * (1.0f / 3.0f);
             const Vec3 gn = Vec3::crossProduct(w1 - w0, w2 - w0);
-            if (Vec3::dotProduct(gn, cameraPos - centroid) <= 0.0f)
+            if (rasterBackfaceCulling && Vec3::dotProduct(gn, cameraPos - centroid) <= 0.0f)
             {
-                continue; // back-facing original: never a visible-coverage hole
+                // Back-facing original AND the draw culls back-faces ⇒ the rasteriser never shows
+                // it, so it can't leak. A double-sided / blended draw (rasterBackfaceCulling false)
+                // renders this face, so it still needs coverage — fall through. `gn` is the WORLD
+                // winding (built from world positions), so this stays correct under a reflected
+                // (negative-determinant) world, which flips which side faces the camera.
+                continue;
             }
             // The ORIGINAL triangle's projected area gates whether a coverage miss is worth fixing.
             // A face straddling the near plane (some corners behind the camera) can't be projected
@@ -640,7 +645,7 @@ void ActiveFront::repairCoverage(std::span<const Vertex> vertices, const Mat4& w
             {
                 // DEGENERATE replacement: the face collapsed to a sliver and was dropped from the
                 // emit. At a silhouette / high-curvature contour no neighbour covers its footprint,
-                // so a front-facing non-trivial-area face here is a real hole — refine it back
+                // so a visible non-trivial-area face here is a real hole — refine it back
                 // (the earlier "a neighbour covers it" assumption is exactly wrong on a contour).
                 if (refineCorners(fc))
                 {

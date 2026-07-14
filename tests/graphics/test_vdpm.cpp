@@ -216,11 +216,14 @@ std::size_t foldoverCount(const ActiveFront& front, const Mesh& m,
     return folds;
 }
 
-// Count front-facing original triangles whose projected centroid is NOT covered by their active-
-// ancestor replacement in NDC — a silhouette coverage hole (closed + non-folded, yet leaks the
-// background). Same screen-space test repairCoverage uses.
+// Count VISIBLE original triangles whose projected centroid is NOT covered by their active-ancestor
+// replacement in NDC — a silhouette coverage hole (closed + non-folded, yet leaks the background).
+// Mirrors repairCoverage exactly, including its `rasterBackfaceCulling` policy: with culling ON
+// only front-facing faces are visible; with it OFF (double-sided/blend) back-faces render too and
+// count. `world` places the mesh (identity for the common case; a non-identity/reflected world
+// exercises the world-winding path).
 std::size_t coverageFailures(const ActiveFront& front, const Mesh& m, const Mat4& viewProj,
-                             const Vec3& cameraPos)
+                             const Vec3& cameraPos, const Mat4& world, bool rasterBackfaceCulling)
 {
     const VertexForest& f = front.forest();
     const std::vector<uint32_t> weld = mesh_topology::weldByPosition(m.verts);
@@ -231,6 +234,12 @@ std::size_t coverageFailures(const ActiveFront& front, const Mesh& m, const Mat4
             v = f.splits[f.removingSplit[v]].parent;
         }
         return v;
+    };
+    auto wp = [&](uint32_t v)
+    {
+        const Vec3 p = m.verts[v].position();
+        const Vec4 w = world * Vec4{p.x(), p.y(), p.z(), 1.0f};
+        return Vec3{w.x(), w.y(), w.z()};
     };
     auto ndc = [&](const Vec3& p, Vec2& out)
     {
@@ -252,13 +261,14 @@ std::size_t coverageFailures(const ActiveFront& front, const Mesh& m, const Mat4
     std::size_t fails = 0;
     for (std::size_t i = 0; i + 2 < m.indices.size(); i += 3)
     {
-        const Vec3 p0 = m.verts[m.indices[i]].position();
-        const Vec3 p1 = m.verts[m.indices[i + 1]].position();
-        const Vec3 p2 = m.verts[m.indices[i + 2]].position();
+        const Vec3 p0 = wp(m.indices[i]);
+        const Vec3 p1 = wp(m.indices[i + 1]);
+        const Vec3 p2 = wp(m.indices[i + 2]);
         const Vec3 ctr = (p0 + p1 + p2) * (1.0f / 3.0f);
-        if (Vec3::dotProduct(Vec3::crossProduct(p1 - p0, p2 - p0), cameraPos - ctr) <= 0.0f)
+        if (rasterBackfaceCulling &&
+            Vec3::dotProduct(Vec3::crossProduct(p1 - p0, p2 - p0), cameraPos - ctr) <= 0.0f)
         {
-            continue;
+            continue; // culled back-face — not visible
         }
         // Gate on projected area so sub-pixel slivers don't count (matches repairCoverage).
         Vec2 s0, s1, s2;
@@ -275,12 +285,11 @@ std::size_t coverageFailures(const ActiveFront& front, const Mesh& m, const Mat4
                        a2 = ancestor(weld[m.indices[i + 2]]);
         if (a0 == a1 || a1 == a2 || a0 == a2)
         {
-            ++fails; // degenerate replacement of a non-trivial front-facing face — a dropped hole
+            ++fails; // degenerate replacement of a non-trivial visible face — a dropped hole
             continue;
         }
         Vec2 sc, sa0, sa1, sa2;
-        if (!ndc(ctr, sc) || !ndc(m.verts[a0].position(), sa0) ||
-            !ndc(m.verts[a1].position(), sa1) || !ndc(m.verts[a2].position(), sa2))
+        if (!ndc(ctr, sc) || !ndc(wp(a0), sa0) || !ndc(wp(a1), sa1) || !ndc(wp(a2), sa2))
         {
             continue;
         }
@@ -666,25 +675,72 @@ TEST_CASE("refineForView repairs foldovers: no emitted triangle winds against th
     }
 }
 
-TEST_CASE("repairCoverage: every front-facing triangle stays covered by its replacement", "[vdpm]")
+TEST_CASE("repairCoverage: coverage follows the draw's cull policy", "[vdpm]")
 {
     // A closed, non-folded selective front can still leak the background: at a silhouette a coarse
-    // replacement recedes inside a fine front-facing triangle's projected footprint. repairCoverage
-    // (called after refineForView with the frame's proj*view) must drive that screen-space coverage
-    // failure to zero. A UV sphere has strong silhouettes — the coverage-prone case.
+    // replacement recedes inside a fine VISIBLE triangle's projected footprint. repairCoverage must
+    // drive that to zero over exactly the faces the rasteriser actually draws — which depends on
+    // the material's cull mode. A UV sphere has strong silhouettes (the coverage-prone case).
     const Mesh m = makeUvSphere(24, 32);
-    const Mat4 world = Mat4::identity();
     const Vec3 cam{0.0f, 0.0f, 4.0f};
-    const Mat4 viewProj =
-        Mat4::perspective(1.0f, 1.0f, 0.1f, 100.0f) * Mat4::lookAt(cam, {0, 0, 0}, {0, 1, 0});
-    const float projScaleY = Mat4::perspective(1.0f, 1.0f, 0.1f, 100.0f)[1, 1];
-    ActiveFront front = ActiveFront::build(m.verts, m.indices, collapsesOf(m));
-    for (const float budget : {1.0f, 2.0f, 4.0f})
+    const Mat4 proj = Mat4::perspective(1.0f, 1.0f, 0.1f, 100.0f);
+    const Mat4 viewProj = proj * Mat4::lookAt(cam, {0, 0, 0}, {0, 1, 0});
+    const float projScaleY = std::abs(proj[1, 1]);
+    auto refine = [&](ActiveFront& f, const Mat4& world, float budget, bool cull)
     {
-        front.refineForView(m.verts, world, cam, std::abs(projScaleY), 1000.0f, budget, 2.0f, true,
-                            1.0f, 0.5f, 0.5f);
-        front.repairCoverage(m.verts, world, cam, viewProj, 1000.0f, 1000.0f);
-        CHECK(coverageFailures(front, m, viewProj, cam) == 0);
+        f.refineForView(m.verts, world, cam, projScaleY, 1000.0f, budget, 2.0f, cull, 1.0f, 0.5f,
+                        0.5f);
+    };
+
+    SECTION("culled opaque: front-facing faces are covered")
+    {
+        const Mat4 world = Mat4::identity();
+        ActiveFront front = ActiveFront::build(m.verts, m.indices, collapsesOf(m));
+        for (const float budget : {1.0f, 2.0f, 4.0f})
+        {
+            refine(front, world, budget, true);
+            front.repairCoverage(m.verts, world, cam, viewProj, 1000.0f, 1000.0f, true);
+            CHECK(coverageFailures(front, m, viewProj, cam, world, true) == 0);
+        }
+    }
+
+    SECTION("no-cull (double-sided / blend both map to cull=false): BACK faces are covered too")
+    {
+        // The far hemisphere renders, so its coverage holes are real. The old front-face-only
+        // repair (cull=true) left them; the no-cull repair (cull=false) closes them and does
+        // strictly more work. Same geometry for a blended material — both are the
+        // rasterBackfaceCulling=false path.
+        const Mat4 world = Mat4::identity();
+        for (const float budget : {1.0f, 2.0f})
+        {
+            ActiveFront oldWay = ActiveFront::build(m.verts, m.indices, collapsesOf(m));
+            refine(oldWay, world, budget, false);
+            oldWay.repairCoverage(m.verts, world, cam, viewProj, 1000.0f, 1000.0f,
+                                  true); // front-only
+            const std::size_t oldRepairs = oldWay.coverageRepaired();
+            CHECK(coverageFailures(oldWay, m, viewProj, cam, world, false) >
+                  0); // real back-face holes
+
+            ActiveFront noCull = ActiveFront::build(m.verts, m.indices, collapsesOf(m));
+            refine(noCull, world, budget, false);
+            noCull.repairCoverage(m.verts, world, cam, viewProj, 1000.0f, 1000.0f, false);
+            CHECK(coverageFailures(noCull, m, viewProj, cam, world, false) == 0); // holes closed
+            CHECK(noCull.coverageRepaired() >= oldRepairs); // repaired the extra
+        }
+    }
+
+    SECTION("reflected (negative-determinant) world stays covered")
+    {
+        // A mirror flips triangle winding; `gn` is built from WORLD positions, so repairCoverage's
+        // visibility test stays correct and the monotone fixpoint still converges.
+        const Mat4 world = Mat4::scale(Vec3{-1.0f, 1.0f, 1.0f});
+        ActiveFront front = ActiveFront::build(m.verts, m.indices, collapsesOf(m));
+        for (const float budget : {1.0f, 2.0f})
+        {
+            refine(front, world, budget, true);
+            front.repairCoverage(m.verts, world, cam, viewProj, 1000.0f, 1000.0f, true);
+            CHECK(coverageFailures(front, m, viewProj, cam, world, true) == 0);
+        }
     }
 }
 
@@ -1194,7 +1250,7 @@ TEST_CASE("VDPM per-frame phase timings (dense sphere, close view)", "[.][vdpm][
         front.refineForView(m.verts, world, cam, projScaleY, 1000.0f, budget, 2.0f, true, 2.0f,
                             0.0f, 0.0f);
         auto t1 = clock::now();
-        front.repairCoverage(m.verts, world, cam, viewProj, 1000.0f, 1000.0f);
+        front.repairCoverage(m.verts, world, cam, viewProj, 1000.0f, 1000.0f, true);
         auto t2 = clock::now();
         front.emitActiveIndices(m.verts, m.indices, scratch);
         auto t3 = clock::now();
