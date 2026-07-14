@@ -2,8 +2,10 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <vector>
 
 #include <fire_engine/graphics/lod.hpp>
@@ -431,11 +433,11 @@ TEST_CASE("ActiveFront: refineForView refines nearer views more than distant one
     const float noSilhouette = 0.0f;
 
     front.refineForView(m.verts, world, Vec3{8.0f, 8.0f, 6.0f}, projScaleY, viewportHeight, budget,
-                        noSilhouette, 2.0f, 0.0f, 0.0f, 0.0f);
+                        noSilhouette, false, 0.0f, 0.0f, 0.0f);
     const std::size_t nearCount = front.emitActiveCanonical().size();
 
     front.refineForView(m.verts, world, Vec3{8.0f, 8.0f, 400.0f}, projScaleY, viewportHeight,
-                        budget, noSilhouette, 2.0f, 0.0f, 0.0f, 0.0f);
+                        budget, noSilhouette, false, 0.0f, 0.0f, 0.0f);
     const std::size_t farCount = front.emitActiveCanonical().size();
 
     CHECK(nearCount > farCount); // closer view resolves more triangles
@@ -451,7 +453,7 @@ TEST_CASE("refineForView: the persistent front is stable under a repeated identi
     const Vec3 cam{8.0f, 8.0f, 6.0f};
     auto refineHere = [&]
     {
-        front.refineForView(m.verts, Mat4::identity(), cam, 1.0f, 1000.0f, 2.0f, 0.0f, 2.0f, 0.0f,
+        front.refineForView(m.verts, Mat4::identity(), cam, 1.0f, 1000.0f, 2.0f, 0.0f, false, 0.0f,
                             0.0f, 0.0f);
         return normalize(front.emitActiveCanonical());
     };
@@ -474,7 +476,7 @@ TEST_CASE("refineForView: hysteresis holds sub-budget detail a from-scratch fron
     auto refine = [&](ActiveFront& f, float camZ)
     {
         f.refineForView(m.verts, Mat4::identity(), Vec3{8.0f, 8.0f, camZ}, 1.0f, 1000.0f, budget,
-                        0.0f, 2.0f, 0.0f, 0.0f, 0.0f);
+                        0.0f, false, 0.0f, 0.0f, 0.0f);
     };
 
     // Persistent: refine near, then recede — the front relaxes but keeps in-band detail.
@@ -491,36 +493,151 @@ TEST_CASE("refineForView: hysteresis holds sub-budget detail a from-scratch fron
     CHECK(persistentCount > scratchCount); // the dead band held detail the scratch front dropped
 }
 
-TEST_CASE("refineForView: back-face suppression coarsens the hidden hemisphere", "[vdpm]")
+TEST_CASE("refineForView: cone back-face suppression coarsens the hidden hemisphere", "[vdpm]")
 {
     const Mesh m = makeUvSphere(24, 32);
-    ActiveFront front = ActiveFront::build(m.verts, m.indices, collapsesOf(m));
-    const Mat4 world = Mat4::identity();
     const float projScaleY = 1.0f;
     const float viewportHeight = 1000.0f;
     const float budget = 2.0f;
     const float noSilhouette = 0.0f;
     const Vec3 cam{0.0f, 0.0f, 4.0f};
 
-    // Threshold 2.0 never trips (facing >= -1); 0.5 suppresses the clearly back-facing hemisphere.
-    front.refineForView(m.verts, world, cam, projScaleY, viewportHeight, budget, noSilhouette, 2.0f,
-                        0.0f, 0.0f, 0.0f);
-    const std::size_t off = front.emitActiveCanonical().size();
-    front.refineForView(m.verts, world, cam, projScaleY, viewportHeight, budget, noSilhouette, 0.5f,
-                        0.0f, 0.0f, 0.0f);
-    const std::size_t on = front.emitActiveCanonical().size();
-    CHECK(on < off); // the hidden hemisphere's discretionary detail is dropped
-    CHECK(on >= 2);
+    // Under a NON-uniform scale too: the exact cone gate runs in OBJECT space, where the facing
+    // sign equals the world-space raster facing for ANY linear transform — so a squashed instance
+    // must still suppress exactly the hidden hemisphere, not mis-cull a visible face.
+    for (const Mat4& world : {Mat4::identity(), Mat4::scale(Vec3{1.6f, 0.6f, 1.3f})})
+    {
+        ActiveFront front = ActiveFront::build(m.verts, m.indices, collapsesOf(m));
 
-    // Suppression must not break the distance criterion: a near view still resolves more than a
-    // far.
-    front.refineForView(m.verts, world, Vec3{0.0f, 0.0f, 2.5f}, projScaleY, viewportHeight, budget,
-                        noSilhouette, 0.5f, 0.0f, 0.0f, 0.0f);
-    const std::size_t nearCount = front.emitActiveCanonical().size();
-    front.refineForView(m.verts, world, Vec3{0.0f, 0.0f, 60.0f}, projScaleY, viewportHeight, budget,
-                        noSilhouette, 0.5f, 0.0f, 0.0f, 0.0f);
-    const std::size_t farCount = front.emitActiveCanonical().size();
-    CHECK(nearCount > farCount);
+        // rasterBackfaceCulling=false never suppresses; true drops the clearly hidden hemisphere.
+        front.refineForView(m.verts, world, cam, projScaleY, viewportHeight, budget, noSilhouette,
+                            false, 0.0f, 0.0f, 0.0f);
+        const std::size_t off = front.emitActiveCanonical().size();
+        front.refineForView(m.verts, world, cam, projScaleY, viewportHeight, budget, noSilhouette,
+                            true, 0.0f, 0.0f, 0.0f);
+        const std::size_t on = front.emitActiveCanonical().size();
+        CHECK(on < off); // the hidden hemisphere's discretionary detail is dropped
+        CHECK(on >= 2);
+
+        // Suppression must not break the distance criterion: a near view still resolves more than a
+        // far.
+        front.refineForView(m.verts, world, Vec3{0.0f, 0.0f, 2.5f}, projScaleY, viewportHeight,
+                            budget, noSilhouette, true, 0.0f, 0.0f, 0.0f);
+        const std::size_t nearCount = front.emitActiveCanonical().size();
+        front.refineForView(m.verts, world, Vec3{0.0f, 0.0f, 60.0f}, projScaleY, viewportHeight,
+                            budget, noSilhouette, true, 0.0f, 0.0f, 0.0f);
+        const std::size_t farCount = front.emitActiveCanonical().size();
+        CHECK(nearCount > farCount);
+    }
+}
+
+TEST_CASE("coneVisibility: the conservative back-face/silhouette predicate is correct", "[vdpm]")
+{
+    // Direct, headless coverage of the visibility oracle (object space). Region centred at the
+    // origin; camera on +z; a cone axis of +z faces the camera, −z faces away.
+    const Vec3 center{0.0f, 0.0f, 0.0f};
+    const Vec3 cam{0.0f, 0.0f, 10.0f};
+    const float narrow = 0.99f;   // ~8° half-angle
+    const float smallR = 0.1f;    // negligible view spread at d = 10
+    constexpr float front = 1.0f; // no reflection
+    constexpr float mirror = -1.0f;
+
+    using detail::coneVisibility;
+
+    SECTION("fully front-facing: not culled, not a silhouette")
+    {
+        const auto v = coneVisibility(Vec3{0, 0, 1}, narrow, smallR, center, cam, front, true);
+        CHECK_FALSE(v.backFacing);
+        CHECK(v.straddle == 0.0f);
+    }
+    SECTION("fully back-facing: culled when the material culls")
+    {
+        const auto v = coneVisibility(Vec3{0, 0, -1}, narrow, smallR, center, cam, front, true);
+        CHECK(v.backFacing);
+        CHECK(v.straddle == 0.0f);
+    }
+    SECTION("grazing (axis ⟂ view): a silhouette, never culled")
+    {
+        const auto v = coneVisibility(Vec3{1, 0, 0}, narrow, smallR, center, cam, front, true);
+        CHECK_FALSE(v.backFacing);
+        CHECK(v.straddle > 0.99f);
+    }
+    SECTION("view spread turns a back-facing centre into possibly-visible")
+    {
+        // Axis 100° from the view direction (slightly past edge-on). Negligible sphere ⇒ culled;
+        // a large support sphere (big view-direction spread) ⇒ the far edge may face the camera, so
+        // NOT provably hidden.
+        const Vec3 axis{std::sin(1.745f), 0.0f, std::cos(1.745f)}; // 100°, so z ≈ −0.17
+        const Vec3 near{0.0f, 0.0f, 1.0f};
+        CHECK(coneVisibility(axis, narrow, 0.01f, center, near, front, true).backFacing);
+        CHECK_FALSE(coneVisibility(axis, narrow, 0.5f, center, near, front, true).backFacing);
+    }
+    SECTION("camera inside the support sphere: never cull, max silhouette")
+    {
+        const auto v =
+            coneVisibility(Vec3{0, 0, -1}, narrow, 2.0f, center, Vec3{0, 0, 1}, front, true);
+        CHECK_FALSE(v.backFacing);
+        CHECK(v.straddle == 1.0f);
+    }
+    SECTION("no-cull material: a back-facing region is not suppressed")
+    {
+        const auto v = coneVisibility(Vec3{0, 0, -1}, narrow, smallR, center, cam, front, false);
+        CHECK_FALSE(v.backFacing);
+    }
+    SECTION("reflection (negative determinant) flips which side is culled")
+    {
+        // A geometrically FRONT-facing cone raster-culls under a mirror, and vice-versa.
+        CHECK(coneVisibility(Vec3{0, 0, 1}, narrow, smallR, center, cam, mirror, true).backFacing);
+        CHECK_FALSE(
+            coneVisibility(Vec3{0, 0, -1}, narrow, smallR, center, cam, mirror, true).backFacing);
+    }
+    SECTION("no-cull sentinel (coneCos <= 0, wider than a hemisphere): never cull, max silhouette")
+    {
+        const auto v = coneVisibility(Vec3{0, 0, -1}, -1.0f, smallR, center, cam, front, true);
+        CHECK_FALSE(v.backFacing);
+        CHECK(v.straddle == 1.0f);
+    }
+    SECTION("exactly edge-on with zero cone width and zero spread is a full silhouette")
+    {
+        // Flat cone (coneCos 1) + zero support radius ⇒ sinSum ≈ 0; axis ⟂ view ⇒ exactly edge-on.
+        // The degenerate-division branch must read this as max straddle, not 0.
+        const auto v = coneVisibility(Vec3{1, 0, 0}, 1.0f, 0.0f, center, cam, front, true);
+        CHECK_FALSE(v.backFacing);
+        CHECK(v.straddle == 1.0f);
+    }
+    SECTION("the back-face cull boundary is exclusive (a grazing cone edge is not culled)")
+    {
+        // Zero spread (r = 0) ⇒ sinSum = sin(θn). An axis at 90°+θn from the view puts the cone
+        // EDGE exactly at edge-on (cosAC = −sin(θn) = −sinSum): the float-safety margin keeps it
+        // uncalled, while a few degrees further back is unambiguously hidden.
+        constexpr float pi = 3.14159265f;
+        const float thetaN = std::acos(narrow);
+        const float a = (0.5f * pi) + thetaN;
+        const Vec3 edge{std::sin(a), 0.0f, std::cos(a)};
+        const Vec3 back{std::sin(a + 0.05f), 0.0f, std::cos(a + 0.05f)};
+        CHECK_FALSE(coneVisibility(edge, narrow, 0.0f, center, cam, front, true).backFacing);
+        CHECK(coneVisibility(back, narrow, 0.0f, center, cam, front, true).backFacing);
+    }
+}
+
+TEST_CASE("refineForView: a singular world transform never back-face-culls", "[vdpm]")
+{
+    // A degenerate (zero-scale) world has no reliable inverse, so the cone is unusable:
+    // refineForView must fall back to never-cull rather than read a garbage object-space camera.
+    // Pin the fallback by requiring the rasterBackfaceCulling flag to make NO difference — culling
+    // truly disabled (a weaker "≥ 2 faces" check would pass even if it wrongly culled most of the
+    // sphere).
+    const Mesh m = makeUvSphere(24, 32);
+    const Mat4 singular = Mat4::scale(Vec3{1.0f, 1.0f, 0.0f}); // flattens z ⇒ det 0
+    auto emitWith = [&](bool cull)
+    {
+        ActiveFront f = ActiveFront::build(m.verts, m.indices, collapsesOf(m));
+        f.refineForView(m.verts, singular, Vec3{0.0f, 0.0f, 4.0f}, 1.0f, 1000.0f, 2.0f, 0.0f, cull,
+                        0.0f, 0.0f, 0.0f);
+        return normalize(f.emitActiveCanonical());
+    };
+    CHECK(emitWith(true) == emitWith(false)); // cull flag is inert ⇒ culling disabled
+    CHECK(emitWith(true).size() >= 2);        // and a valid front, not collapsed to nothing
 }
 
 TEST_CASE("refineForView repairs foldovers: no emitted triangle winds against the original",
@@ -542,7 +659,7 @@ TEST_CASE("refineForView repairs foldovers: no emitted triangle winds against th
             for (const float budget : {0.5f, 1.0f, 2.0f, 4.0f, 8.0f})
             {
                 front.refineForView(m.verts, world, Vec3{0.0f, 0.0f, 4.0f}, 1.7f, 1000.0f, budget,
-                                    2.0f, 0.5f, 1.0f, 0.5f, 0.5f);
+                                    2.0f, true, 1.0f, 0.5f, 0.5f);
                 CHECK(foldoverCount(front, m, world) == 0);
             }
         }
@@ -564,7 +681,7 @@ TEST_CASE("repairCoverage: every front-facing triangle stays covered by its repl
     ActiveFront front = ActiveFront::build(m.verts, m.indices, collapsesOf(m));
     for (const float budget : {1.0f, 2.0f, 4.0f})
     {
-        front.refineForView(m.verts, world, cam, std::abs(projScaleY), 1000.0f, budget, 2.0f, 0.5f,
+        front.refineForView(m.verts, world, cam, std::abs(projScaleY), 1000.0f, budget, 2.0f, true,
                             1.0f, 0.5f, 0.5f);
         front.repairCoverage(m.verts, world, cam, viewProj, 1000.0f, 1000.0f);
         CHECK(coverageFailures(front, m, viewProj, cam) == 0);
@@ -768,7 +885,7 @@ TEST_CASE("refineForView: channel stats attribute a budget-driven refine to its 
     // Geometry only (uv/normal/tangent scale 0), near view: a bumpy grid must refine on geometry,
     // and the instrumentation must now see it (invisible before this step).
     front.refineForView(m.verts, Mat4::identity(), Vec3{8.0f, 8.0f, 6.0f}, 1.0f, 1000.0f, 2.0f,
-                        0.0f, 2.0f, 0.0f, 0.0f, 0.0f);
+                        0.0f, false, 0.0f, 0.0f, 0.0f);
     const ActiveFront::ChannelStats& cs = front.channelStats();
     CHECK(cs.geometryTriggers > 0);
     CHECK(cs.maxGeometryRatio > 1.0f); // at least one split projected over budget
@@ -787,11 +904,11 @@ TEST_CASE("refineForView: the shading-normal channel drives refinement on flat, 
     const Vec3 cam{8.0f, 8.0f, 6.0f};
 
     // Geometry + UV are flat, so with the normal channel OFF nothing distance-dependent fires.
-    front.refineForView(m.verts, world, cam, 1.0f, 1000.0f, 2.0f, 0.0f, 2.0f, 0.0f, 0.0f, 0.0f);
+    front.refineForView(m.verts, world, cam, 1.0f, 1000.0f, 2.0f, 0.0f, false, 0.0f, 0.0f, 0.0f);
     const std::size_t normalOff = front.emitActiveCanonical().size();
 
     // Turn the normal channel on: the fanned normals must now drive refinement.
-    front.refineForView(m.verts, world, cam, 1.0f, 1000.0f, 2.0f, 0.0f, 2.0f, 0.0f, 4.0f, 0.0f);
+    front.refineForView(m.verts, world, cam, 1.0f, 1000.0f, 2.0f, 0.0f, false, 0.0f, 4.0f, 0.0f);
     const std::size_t normalOn = front.emitActiveCanonical().size();
 
     CHECK(normalOn > normalOff);
@@ -812,11 +929,11 @@ TEST_CASE("refineForView: the shading-normal channel fires at the production sca
     const Vec3 cam{8.0f, 8.0f, 2.5f};
     constexpr float budget = 0.5f;
 
-    front.refineForView(m.verts, Mat4::identity(), cam, 1.0f, 1000.0f, budget, 0.0f, 2.0f, 0.0f,
+    front.refineForView(m.verts, Mat4::identity(), cam, 1.0f, 1000.0f, budget, 0.0f, false, 0.0f,
                         0.0f, 0.0f);
     const std::size_t off = front.emitActiveCanonical().size();
 
-    front.refineForView(m.verts, Mat4::identity(), cam, 1.0f, 1000.0f, budget, 0.0f, 2.0f, 0.0f,
+    front.refineForView(m.verts, Mat4::identity(), cam, 1.0f, 1000.0f, budget, 0.0f, false, 0.0f,
                         kVdpmNormalScale, 0.0f);
     const std::size_t on = front.emitActiveCanonical().size();
 
@@ -911,7 +1028,8 @@ TEST_CASE("refineForView: the shading front is scale-invariant under a matched m
     ActiveFront front = ActiveFront::build(m.verts, m.indices, collapsesOf(m));
     auto faces = [&](const Mat4& world, const Vec3& cam)
     {
-        front.refineForView(m.verts, world, cam, 1.0f, 1000.0f, 2.0f, 0.0f, 2.0f, 0.0f, 4.0f, 0.0f);
+        front.refineForView(m.verts, world, cam, 1.0f, 1000.0f, 2.0f, 0.0f, false, 0.0f, 4.0f,
+                            0.0f);
         return normalize(front.emitActiveCanonical());
     };
 
@@ -923,4 +1041,177 @@ TEST_CASE("refineForView: the shading front is scale-invariant under a matched m
 
     CHECK(unit == big);
     CHECK(unit.size() > 2); // the shading channel actually fired (a non-trivial front)
+}
+
+TEST_CASE("simplifier: the normal cone conservatively bounds EVERY finest-face normal in a "
+          "collapse's subtree",
+          "[vdpm]")
+{
+    // Step 2 correctness — the strong form: replay the RAW collapse stream, maintaining for each
+    // canonical vertex the full set of finest-face normals in the subtree it currently represents
+    // (both endpoints of a collapse may already subsume many earlier collapses). After each
+    // collapse verify the recorded cone against the COMPLETE merged set — not merely the child's
+    // incident faces, which a too-tight cone could pass while missing most of the subtree.
+    const Mesh m = makeUvSphere(24, 32);
+    const std::vector<MeshCollapse> seq = collapsesOf(m);
+    const std::vector<uint32_t> weld = mesh_topology::weldByPosition(m.verts);
+
+    // Seed each canonical vertex with its incident finest-face normals, reproducing the
+    // simplifier's triangleNormal EXACTLY — same cross product, same `len > 1e-12f` accept
+    // threshold — so the test includes precisely the faces production seeds (a looser threshold
+    // would silently drop seeded normals and stop the proof from covering them). Positions are
+    // welded-by-position, so an original and its canonical share a position and thus the same face
+    // normal.
+    auto faceNormal = [&](uint32_t i0, uint32_t i1, uint32_t i2) -> Vec3
+    {
+        const Vec3 cr = Vec3::crossProduct(m.verts[i1].position() - m.verts[i0].position(),
+                                           m.verts[i2].position() - m.verts[i0].position());
+        const float len = cr.magnitude();
+        return len > 1e-12f ? cr * (1.0f / len) : Vec3{};
+    };
+    std::vector<std::vector<Vec3>> desc(m.verts.size());
+    for (std::size_t i = 0; i + 2 < m.indices.size(); i += 3)
+    {
+        const uint32_t a = m.indices[i];
+        const uint32_t b = m.indices[i + 1];
+        const uint32_t c = m.indices[i + 2];
+        const Vec3 n = faceNormal(a, b, c);
+        if (n.magnitudeSquared() < 0.5f)
+        {
+            continue; // zero normal (a UV-sphere pole sliver) — the cone seed skips it too
+        }
+        for (const uint32_t v : {a, b, c})
+        {
+            desc[weld[v]].push_back(n);
+        }
+    }
+
+    // Conservative means "never under-bounds by more than float rounding". Acceptance is scaled to
+    // float epsilon, not a hand-picked tolerance: a genuine under-bound is orders of magnitude
+    // larger.
+    constexpr float eps = std::numeric_limits<float>::epsilon();
+    int outside = 0;
+    float worstOver = 0.0f; // largest cosine under-bound seen (0 = perfectly conservative)
+    bool anyWide = false;
+    for (const MeshCollapse& col : seq)
+    {
+        // Merge `removed`'s subtree normals into `kept` (canonical ids), mirroring the simplifier's
+        // bottom-up cone accumulation.
+        std::vector<Vec3>& kept = desc[col.kept];
+        std::vector<Vec3>& removed = desc[col.removed];
+        kept.insert(kept.end(), removed.begin(), removed.end());
+        removed.clear();
+        for (const Vec3& n : kept)
+        {
+            const float under = col.normalConeCos - Vec3::dotProduct(n, col.normalConeAxis);
+            if (under > 0.0f)
+            {
+                worstOver = std::max(worstOver, under);
+                if (under > 8.0f * eps) // beyond float rounding ⇒ a real under-bound
+                {
+                    ++outside;
+                }
+            }
+        }
+        if (col.normalConeCos < 0.99f)
+        {
+            anyWide = true;
+        }
+    }
+    CHECK(outside == 0);            // the cone never under-bounds a normal in its subtree
+    CHECK(worstOver <= 8.0f * eps); // and only within float rounding (observed ~0.004 * eps)
+    CHECK(anyWide);                 // a curved sphere ⇒ coarse collapses span real curvature
+}
+
+TEST_CASE("simplifier: a flat mesh has degenerate (tight) normal cones", "[vdpm]")
+{
+    // A constant-normal surface: every collapse cone is a single direction (half-angle ~0) about
+    // it.
+    for (const MeshCollapse& c : collapsesOf(makeGrid(17)))
+    {
+        CHECK(c.normalConeCos > 0.999f);
+        CHECK(c.normalConeAxis.z() > 0.999f); // the constant (0,0,1) normal
+    }
+}
+
+TEST_CASE("simplifier: a TILTED planar mesh has tight normal cones (no phantom curvature)",
+          "[vdpm]")
+{
+    // A genuinely planar surface whose constant normal is NOT axis-aligned or exactly float-
+    // representable (z = x + y). Every face shares one normal, so the cone must stay a single
+    // direction — this pins the fix where near-unit float axes were treated as exactly unit and a
+    // planar mesh grew ~0.08°-per-merge phantom cones. (makeGrid's (0,0,1) plane can't catch it.)
+    Mesh m = makeGrid(17);
+    for (Vertex& v : m.verts)
+    {
+        const Vec3 p = v.position();
+        v.position(Vec3{p.x(), p.y(), p.x() + p.y()});
+    }
+    constexpr float eps = std::numeric_limits<float>::epsilon();
+    float worst = 1.0f;
+    for (const MeshCollapse& c : collapsesOf(m))
+    {
+        worst = std::min(worst, c.normalConeCos);
+    }
+    // A single direction to within float rounding — no invented curvature (observed exactly 1.0).
+    CHECK(worst > 1.0f - 16.0f * eps);
+}
+
+// Hidden ([.]) benchmark — a reproducible per-phase timing of the VDPM cycle on a dense
+// (~24.6k-face) sphere at a close, silhouette-heavy view. It is NOT a pass/fail test (timings are
+// machine/build dependent); the figures below were captured on an Apple-arm64 `vcpkg` Dev build
+// (`-O2 -g`, no NDEBUG). With the normal-cone back-face test (vs the old smooth-normal 4-witness
+// proxy), refineForView roughly HALVED — refineForView (incl. foldover repair) ~0.69 ms,
+// repairCoverage ~0.98 ms (~2,320 repairs), emit ~0.31 ms — so `repairCoverage` is now ~50% of the
+// ~2.0 ms cycle and the clear remaining cost. It CANNOT be retired by the cone (screen-space
+// coverage ≠ orientation; see the roadmap), so it stays; this benchmark tracks that cost for
+// whatever eventually addresses it (a GPU worklist, a cheaper coverage test). Foldover repair is
+// bundled inside refineForView and not isolated here. Run with `./test_fire_engine [RepairBench]`.
+TEST_CASE("VDPM per-frame phase timings (dense sphere, close view)", "[.][vdpm][RepairBench]")
+{
+    using clock = std::chrono::steady_clock;
+    const Mesh m = makeUvSphere(96, 128); // ~24,576 finest faces
+    ActiveFront front = ActiveFront::build(m.verts, m.indices, collapsesOf(m));
+
+    const Vec3 cam{0.0f, 0.0f, 2.2f}; // just outside the unit sphere → a large silhouette
+    const Mat4 world = Mat4::identity();
+    const Mat4 proj = Mat4::perspective(1.0f, 1.0f, 0.1f, 100.0f);
+    const Mat4 viewProj = proj * Mat4::lookAt(cam, {0, 0, 0}, {0, 1, 0});
+    const float projScaleY = std::abs(proj[1, 1]);
+    constexpr float budget = 2.0f;
+
+    constexpr int iterations = 200;
+    double refineUs = 0.0;
+    double coverageUs = 0.0;
+    double emitUs = 0.0;
+    std::uint32_t lastFold = 0;
+    std::uint32_t lastCoverage = 0;
+    std::size_t lastEmitted = 0;
+    std::vector<uint32_t> scratch;
+    for (int i = 0; i < iterations; ++i)
+    {
+        auto t0 = clock::now();
+        front.refineForView(m.verts, world, cam, projScaleY, 1000.0f, budget, 2.0f, true, 2.0f,
+                            0.0f, 0.0f);
+        auto t1 = clock::now();
+        front.repairCoverage(m.verts, world, cam, viewProj, 1000.0f, 1000.0f);
+        auto t2 = clock::now();
+        front.emitActiveIndices(m.verts, m.indices, scratch);
+        auto t3 = clock::now();
+        using us = std::chrono::duration<double, std::micro>;
+        refineUs += us(t1 - t0).count();
+        coverageUs += us(t2 - t1).count();
+        emitUs += us(t3 - t2).count();
+        lastFold = front.foldoversRepaired();
+        lastCoverage = front.coverageRepaired();
+        lastEmitted = scratch.size() / 3;
+    }
+    const double n = iterations;
+    WARN("VDPM phase timings over "
+         << iterations << " iters (" << lastEmitted
+         << " emitted tris):\n  refineForView (incl. foldover repair) = " << (refineUs / n)
+         << " us\n  repairCoverage                = " << (coverageUs / n) << " us (" << lastCoverage
+         << " repairs)\n  emitActiveIndices             = " << (emitUs / n)
+         << " us\n  foldoversRepaired (last)      = " << lastFold);
+    CHECK(lastEmitted > 0);
 }

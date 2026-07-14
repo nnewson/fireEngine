@@ -514,11 +514,18 @@ void Object::writeForwardUniforms(const FrameInfo& frame, const Mat4& world,
             // collapse stream stays material-agnostic (activeMaterial is always set — see
             // createForwardBindings).
             const VdpmChannelScales vs = vdpmChannelScales(*binding.activeMaterial);
+            // Back-face cone suppression is only valid when the draw actually culls back-faces: a
+            // double-sided or blended material renders its back-faces, so their refinement must NOT
+            // be suppressed (matches the renderer's cull state — blend pipeline is CullMode::eNone,
+            // opaque double-sided sets dynamic cull none).
+            const Material& mat = *binding.activeMaterial;
+            const bool rasterBackfaceCulling =
+                mat.alphaMode() != AlphaMode::Blend && !mat.doubleSided();
             binding.vdpmFront->refineForView(binding.geometry->vertices(), world,
                                              frame.cameraPosition, std::abs(frame.proj[1, 1]),
                                              static_cast<float>(frame.viewportHeight),
                                              frame.lodPixelErrorBudget, kVdpmSilhouetteBoost,
-                                             kVdpmBackfaceThreshold, vs.uv, vs.normal, vs.tangent);
+                                             rasterBackfaceCulling, vs.uv, vs.normal, vs.tangent);
             // Screen-space coverage repair: refine any front-facing face whose coarse replacement
             // recedes inside its projected footprint (a silhouette hole to the background that the
             // deviation/foldover criteria can't see). Uses the JITTER-FREE currentViewProj, not the

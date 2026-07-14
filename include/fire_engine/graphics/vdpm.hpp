@@ -64,6 +64,14 @@ struct VertexSplit
     // the projected extent of the region it affects (and scales like the geometry channel — the fix
     // for the old fixed-length angular projection).
     float supportRadius{0.0f};
+    // CONSERVATIVE normal cone of the region this split covers (MeshCollapse::normalCone*):
+    // `normalConeAxis` (unit) bounds every finest face normal in the subtree within
+    // acos(`normalConeCos`) — a bounding cap, not the exact set. refineForView uses it for a
+    // conservative per-split back-face / silhouette test, combined with the support sphere's view-
+    // direction spread. `normalConeCos <= 0` is the no-cull sentinel (never cull; see
+    // mesh_simplifier).
+    Vec3 normalConeAxis{0.0f, 0.0f, 1.0f};
+    float normalConeCos{1.0f};
 };
 
 // Sentinel for a missing neighbour (boundary edge) in VertexSplit::vl / vr.
@@ -92,6 +100,39 @@ inline constexpr uint32_t kNoSplit = 0xFFFFFFFFu;
 // a root. `vertices` supplies only the canonical vertex count. Vulkan-free + deterministic.
 [[nodiscard]] VertexForest buildVertexForest(std::span<const Vertex> vertices,
                                              std::span<const MeshCollapse> collapses);
+
+namespace detail
+{
+
+// Result of the per-split visibility test: whether the split's whole region is provably raster
+// back- face-culled, and a [0,1] silhouette-straddle weight (1 = the cone is centred on edge-on).
+struct ConeVisibility
+{
+    bool backFacing{false};
+    float straddle{0.0f};
+};
+
+// EXACT evaluation of a CONSERVATIVE visibility bound, factored out of refineForView so it is unit-
+// testable in isolation (all args OBJECT-space). The split's finest face normals are bounded by a
+// cone (`coneAxis`, half-angle acos `coneCos`) and its region by a support sphere (`regionCenter`,
+// `supportRadius`); the camera subtends a view-direction half-angle asin(r/d) over that sphere. The
+// combined spread θn+θv is formed WITHOUT trig via the cosine sum identity (GPU-friendly). Results:
+//   backFacing — the whole bounded surface faces away from every view direction (safe to skip:
+//   raster
+//     back-face-culled). Only ever true when `cullEnabled` (the material actually culls back-faces)
+//     AND the transform is orientation-valid; it is a one-sided PROOF — false means "not provably
+//     hidden", never "provably visible".
+//   straddle — how centrally the edge-on direction sits inside the cone+spread (a boost heuristic,
+//     not a guarantee a silhouette exists). 1 when the cone straddles edge-on or is wider than a
+//     hemisphere (the `coneCos <= 0` no-cull sentinel) or the camera is inside the support sphere.
+// `facingSign` folds a reflection (negative-determinant world flips winding ⇒ the culled side is
+// the object-space FRONT) into the test exactly: pass sign(det), or +1 for a normal transform.
+[[nodiscard]] ConeVisibility coneVisibility(const Vec3& coneAxis, float coneCos,
+                                            float supportRadius, const Vec3& regionCenter,
+                                            const Vec3& cameraObj, float facingSign,
+                                            bool cullEnabled) noexcept;
+
+} // namespace detail
 
 // A selectively-refinable active front over the vertex forest. Holds the current
 // per-canonical-vertex active state and per-split refined state, exposes legal refine/coarsen
@@ -130,14 +171,18 @@ public:
     // budget doesn't pop in and out under small camera moves / sub-pixel jitter. The four channels
     // are geometry (`error`), UV-stretch (`uvError · uvScale`), shading normal (`normalError ·
     // normalScale`) and tangent frame (`tangentError · tangentScale`), so texture-, shading-, and
-    // normal-map-frame-costly-but-flat regions all stay dense. Silhouette regions (world normal
-    // near edge-on) get a tighter budget via `silhouetteBoost` (0 disables it); clearly back-facing
-    // reps (signed facing < -`backfaceThreshold`) skip discretionary refinement (back-face-culled)
-    // but can still be pulled in as a visible split's dependency. `world` places the mesh;
-    // `projScaleY = proj[1][1]`. Vulkan-free + headless-testable.
+    // normal-map-frame-costly-but-flat regions all stay dense. Visibility comes from each split's
+    // precomputed CONSERVATIVE normal cone (see `detail::coneVisibility`): a split whose whole cone
+    // provably faces away (over the support-sphere view spread) skips discretionary refinement
+    // (raster back-face-culled) but can still be pulled in as a visible split's dependency; a cone
+    // straddling edge-on is silhouette-boosted (`silhouetteBoost`; 0 disables).
+    // `rasterBackfaceCulling` MUST reflect whether the draw actually culls back-faces — pass FALSE
+    // for a double-sided or blended material (whose back-faces are visible), or refinement of
+    // visible geometry would be wrongly suppressed. `world` places the mesh; `projScaleY =
+    // proj[1][1]`. Vulkan-free + headless.
     void refineForView(std::span<const Vertex> vertices, const Mat4& world, const Vec3& cameraPos,
                        float projScaleY, float viewportHeight, float pixelBudget,
-                       float silhouetteBoost, float backfaceThreshold, float uvScale,
+                       float silhouetteBoost, bool rasterBackfaceCulling, float uvScale,
                        float normalScale, float tangentScale);
 
     // Post-refinement COVERAGE repair (call after refineForView with the frame's proj*view). A
@@ -248,14 +293,10 @@ private:
     std::vector<std::vector<uint32_t>> canonicalWedges_; // canonical -> original render wedges
 
     // Per-frame scratch, reused across frames so the per-frame path allocates nothing steady-state.
-    // `facingCache_` memoises facingOf(v) within a refineForView call (a vertex is a witness of
-    // many splits, so it is otherwise recomputed repeatedly); `ancestorCache_` memoises
-    // activeAncestor(v) for emit (the front is settled by then, so it is stable). Both are pure
-    // per-frame functions, so the cache is behaviour-identical to the inline computation. `mutable`
-    // because they are filled by logically-const query methods.
-    mutable std::vector<float> facingCache_;        // per canonical vertex (refineForView)
-    mutable std::vector<std::uint8_t> facingValid_; // per canonical vertex: facingCache_ populated?
-    mutable std::vector<uint32_t> ancestorCache_;   // per canonical vertex (emit)
+    // `ancestorCache_` memoises activeAncestor(v) for emit (the front is settled by then, so it is
+    // stable) — a pure per-frame function, so the cache is behaviour-identical to the inline
+    // computation. `mutable` because it is filled by a logically-const query method.
+    mutable std::vector<uint32_t> ancestorCache_; // per canonical vertex (emit)
 
     // Persistent-front hysteresis scratch (per split), filled by refineForView's score pass and
     // read by its refine + coarsen passes. `splitScore_` is the split's max screen-space channel
