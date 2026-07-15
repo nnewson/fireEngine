@@ -157,6 +157,13 @@ public:
     bool refine(uint32_t splitIndex);
     bool coarsen(uint32_t splitIndex);
 
+    // Refine a split, first (recursively) force-refining any inactive dependency splits. vl/vr
+    // errors are not monotone (see the [vdpm] probe), so a legal coarse-first refine can require a
+    // lower-error neighbour split the budget alone wouldn't bring in. This is the recursive
+    // operation the GPU-shaped `ParallelFront` (vdpm_parallel.hpp) reproduces as rank-ordered
+    // parallel passes.
+    bool forceRefine(uint32_t splitIndex);
+
     // Drive the whole front to the finest / coarsest extreme.
     void refineAll();
     void coarsenAll();
@@ -273,10 +280,6 @@ public:
 
 private:
     [[nodiscard]] uint32_t activeAncestor(uint32_t canonicalVertex) const;
-    // Refine a split, first (recursively) force-refining any inactive dependency splits. vl/vr
-    // errors are not monotone (see the [vdpm] probe), so a legal coarse-first refine can require a
-    // lower-error neighbour split the budget alone wouldn't bring in.
-    bool forceRefine(uint32_t splitIndex);
     // Post-refinement repair: force-refine any finest face whose active-ancestor replacement winds
     // AGAINST its original winding (a foldover). refineForView's per-vertex screen-space budget is
     // a linear-collapse criterion; a *selective* front is a non-prefix cut, so it can flip a

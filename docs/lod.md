@@ -525,9 +525,19 @@ at a fraction of the triangles. The remaining residuals and follow-ons, in rough
   Refinement of Progressive Meshes*, SIGGRAPH 97, §4.)
 - **Parked:** texel-density UV budget; a GPU worklist/fixpoint (or representation-level guarantee) for
   the repair sweeps, which the cone cannot subsume.
-- **GPU-driven active front.** `refineForView` + the repairs are CPU today (the module is Vulkan-free
-  by design). Driving the front on the GPU (the forest + errors are already just buffers) is the
-  scalability follow-on for heavy scenes.
+- 🔨 **GPU-driven active front (in progress).** `refineForView` + the repairs are CPU today. The whole
+  per-frame front lifecycle (score → refine/coarsen → both repairs → emit) has to move to the GPU as a
+  unit — a partial move round-trips the shared front state and erases the win — with an indirect draw
+  (the CPU no longer knows the index count). The CPU `vdpm` stays the headless-tested oracle + fallback
+  (the `cloth` CPU-ref ↔ `render/` GPU-impl pattern). **Stage 0 (`graphics/vdpm_parallel`, in progress —
+  scheduling core complete):** a GPU-shaped CPU model — the refine-dependency DAG with topological
+  **ranks** (CSR by-rank layout), and
+  `ParallelFront`, which reproduces the recursive front by **rank-ordered data-parallel passes**
+  (requirement-closure → ascending-rank refine → descending-rank coarsen) instead of recursion, proven
+  byte-for-byte against the oracle. This is the arc's stop/go gate: it proves the parallel scheduling
+  and gathers the dispatch-depth evidence (curved meshes ~30 ranks; flat grids scale linearly) before
+  any GLSL. Still ahead: the parallel repairs (a monotone snapshot fixpoint), deterministic
+  seam-preserving emit, the GPU port + harness, and the indirect-draw plumbing.
 - **7 forest skips.** `buildVertexForest` skips collapses whose edge diverged from its adjacency
   replay (7 of ~6800 on the helmet); past the first skip the forest is slightly unfaithful. The repairs
   cover the visible symptoms; truncating the stream at the first skip would be the clean structural fix.
