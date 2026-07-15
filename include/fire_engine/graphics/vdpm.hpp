@@ -192,23 +192,25 @@ public:
                        float silhouetteBoost, bool rasterBackfaceCulling, float uvScale,
                        float normalScale, float tangentScale);
 
-    // Post-refinement COVERAGE repair (call after refineForView with the frame's proj*view). A
-    // closed, non-folded front can still leak the background: at a silhouette the coarse
-    // replacement recedes inside a VISIBLE finest triangle's projected footprint, so the rasterised
-    // surface no longer covers it. Deviation/foldover criteria are blind to this — it is purely a
-    // screen-space coverage property. For each visible finest face whose projected centroid falls
-    // OUTSIDE its active-ancestor replacement in NDC, force-refine the collapsed corner with the
-    // largest screen-space displacement; repeat to a fixed point. Monotone (only force-refines), so
-    // it converges — at worst to full detail, which covers exactly. `viewProj` is proj*view (world
-    // is applied separately, matching refineForView). `viewportWidth/Height` turn the area gate
-    // into pixels (resolution-independent). A face straddling the near plane can't be projected, so
-    // it is refined conservatively (see the .cpp). `rasterBackfaceCulling` MUST reflect the draw's
-    // cull mode (as refineForView): with culling ON only front-facing faces are visible; with it
-    // OFF (a double-sided or blended material) BACK-facing faces render too and equally need
-    // coverage, so they are not skipped.
-    void repairCoverage(std::span<const Vertex> vertices, const Mat4& world, const Vec3& cameraPos,
-                        const Mat4& viewProj, float viewportWidth, float viewportHeight,
-                        bool rasterBackfaceCulling);
+    // JOINT post-refinement repair (call after refineForView, MANDATORY before emission). Closes
+    // both failure classes a *selective* (non-prefix) front leaves: FOLDOVERS (a replacement
+    // triangle wound against the original — the rasteriser back-face-culls it into a hole) and
+    // COVERAGE holes (at a silhouette the coarse replacement recedes inside a VISIBLE finest face's
+    // projected footprint). Neither the deviation nor the collapse-order criteria see either. The
+    // two are fixed TOGETHER, to a JOINT fixed point: a coverage force-refine can re-fold a
+    // neighbour and a foldover force-refine can open a coverage hole, so they must iterate until a
+    // complete cycle changes NOTHING — a single foldover-then-coverage phase order does not leave
+    // the front foldover-free (that was a real bug). The two sweeps are private so a caller cannot
+    // run them separately or misorder them. `viewProj` is proj*view (world applied separately,
+    // matching refineForView); pass the JITTER-FREE proj*view. `rasterBackfaceCulling` MUST reflect
+    // the draw's cull mode (as refineForView) — with culling OFF a double-sided/blended material's
+    // back-faces render too and need coverage. The result is the deterministic fixed point reached
+    // by THIS sequential repair schedule (not a least/unique one). Refinement-only (each sweep only
+    // ACTIVATES splits, never coarsens ⇒ inflationary) ⇒
+    // terminates; `jointRepairSweeps()` reports the sweep count.
+    void repairFront(std::span<const Vertex> vertices, const Mat4& world, const Vec3& cameraPos,
+                     const Mat4& viewProj, float viewportWidth, float viewportHeight,
+                     bool rasterBackfaceCulling);
 
     [[nodiscard]] bool active(uint32_t canonicalVertex) const
     {
@@ -240,10 +242,11 @@ public:
     void emitActiveIndices(std::span<const Vertex> vertices, std::span<const uint32_t> indices,
                            std::vector<uint32_t>& out) const;
 
-    // Per-frame repair diagnostics (overlay/regression watch): vertices each repair pass pulled
-    // back in (successful force-refines) during the last refineForView + repair cycle — the
-    // `active_==0` guard makes it a dedup'd per-frame work count. Reset at the top of
-    // refineForView.
+    // Per-frame repair diagnostics (overlay/regression watch): vertices each repair sweep pulled
+    // back in (successful force-refines) during the last `repairFront`, and the number of joint
+    // foldover+coverage sweep cycles it took to converge (<= initially-unrefined splits + 1; the +1
+    // is the final cycle that proves convergence). All reset at the top of `repairFront` — the
+    // repair API owns its own diagnostics, so an independent call never reports stale counts.
     [[nodiscard]] uint32_t foldoversRepaired() const noexcept
     {
         return foldoversRepaired_;
@@ -251,6 +254,10 @@ public:
     [[nodiscard]] uint32_t coverageRepaired() const noexcept
     {
         return coverageRepaired_;
+    }
+    [[nodiscard]] uint32_t jointRepairSweeps() const noexcept
+    {
+        return jointRepairSweeps_;
     }
 
     // Per-frame metric instrumentation (reset at the top of refineForView). For every budget-driven
@@ -280,14 +287,29 @@ public:
 
 private:
     [[nodiscard]] uint32_t activeAncestor(uint32_t canonicalVertex) const;
-    // Post-refinement repair: force-refine any finest face whose active-ancestor replacement winds
-    // AGAINST its original winding (a foldover). refineForView's per-vertex screen-space budget is
-    // a linear-collapse criterion; a *selective* front is a non-prefix cut, so it can flip a
-    // triangle the simplifier's linear wouldFlip() never saw — the rasteriser back-face-culls the
-    // flipped replacement and punches a hole to the background. This drives such faces back toward
-    // the original geometry (monotone: only force-refines, so it converges, at worst to full
-    // detail).
-    void repairFoldovers(std::span<const Vertex> vertices, const Mat4& world);
+
+    // Outcome of one repair sweep, for the joint `repairFront` loop. `changed` — a force-refine
+    // succeeded (the loop must run another cycle). `failedToProgress` — a REPAIRABLE violation (a
+    // finest face with an INACTIVE corner) could not be advanced because that corner's valid
+    // removing split failed to force-refine: a forest/logic inconsistency, so `repairFront` throws.
+    // (A face that no-ops because it is already at full detail — e.g. the coverage near-plane
+    // conservative case — is CLEAN termination, NOT a failure.)
+    struct RepairSweepResult
+    {
+        bool changed{false};
+        bool failedToProgress{false};
+    };
+    // ONE sweep over the finest faces (the joint loop in repairFront repeats them). These MUTATE
+    // the front as they walk (deterministic sequential sweeps — the later parallel detector will
+    // instead detect against a settled snapshot). Foldover: force-refine any face whose
+    // active-ancestor replacement winds against the original (the rasteriser would back-face-cull
+    // it into a hole). Coverage: force-refine any VISIBLE face whose projected centroid escapes its
+    // replacement in NDC.
+    RepairSweepResult repairFoldoversSweep(std::span<const Vertex> vertices, const Mat4& world);
+    RepairSweepResult repairCoverageSweep(std::span<const Vertex> vertices, const Mat4& world,
+                                          const Vec3& cameraPos, const Mat4& viewProj,
+                                          float viewportWidth, float viewportHeight,
+                                          bool rasterBackfaceCulling);
 
     VertexForest forest_;
     // uint8_t, not vector<bool>: this is per-frame mutation-heavy state, and the bit-proxy is
@@ -313,9 +335,10 @@ private:
     std::vector<float> splitScore_;
     std::vector<std::uint8_t> splitBackface_;
 
-    // Repair counters for the last refineForView + repair cycle (see the accessors above).
+    // Repair diagnostics for the last repairFront (see the accessors above).
     uint32_t foldoversRepaired_{0};
     uint32_t coverageRepaired_{0};
+    uint32_t jointRepairSweeps_{0};
     // Per-channel metric attribution for the last refineForView (see channelStats()).
     ChannelStats channelStats_;
 };

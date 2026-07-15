@@ -682,11 +682,13 @@ per-region refinement. One recorded collapse stream feeds all three. The authori
   with a hysteresis dead band) by **four screen-space channels** (geometry δ / UV-seam / shading-normal
   / tangent, each with a `kVdpm*Scale`
   dial) + a **normal-cone** silhouette boost + back-face gate (`detail::coneVisibility`, an exact
-  evaluation of a conservative orientation bound); then two **monotone repair
-  passes** — `repairFoldovers` (backward-wound faces) and `repairCoverage` (silhouette/degenerate
-  coverage holes, on the **jitter-free** `currentViewProj`) — close the holes a selective (non-prefix)
-  front introduces that `wouldFlip` and the deviation metrics can't see. `emitActiveIndices` restores
-  render wedges into a per-frame dynamic index buffer.
+  evaluation of a conservative orientation bound); then the **joint** `repairFront` — an inflationary
+  (refinement-only) fixed point alternating a foldover sweep (backward-wound faces) and a coverage sweep
+  (silhouette/degenerate holes, on the **jitter-free** `currentViewProj`) until a full cycle changes
+  nothing — closes the holes a selective (non-prefix) front introduces that `wouldFlip` and the
+  deviation metrics can't see. (Running them as separate sequential phases left foldovers: a coverage
+  refine can re-fold after the foldover fixpoint finished.) `emitActiveIndices` restores render wedges
+  into a per-frame dynamic index buffer.
 - **Two dials** live in `mesh_simplifier.cpp`: `kUvWeightFactor` (UV fidelity vs simplification) and
   `kErrorCeilingFactor` (must only refuse *geometrically* un-simplifiable shapes — the cube via its
   boundary weight — not UV-costly seams). `kLodRatios` / `kLodPixelErrorBudget` / the `kVdpm*` dials
@@ -808,8 +810,8 @@ the same change — most have a test or guard that will catch you, but not all.
   simplifier records each collapse's `vl`/`vr` apexes as it coarsens (`kNoCollapseApex` where a
   non-manifold welded edge can't be encoded), and `buildVertexForest` transcribes them — so keep the
   weld shared and keep `vl`/`vr` recorded on `MeshCollapse` (don't reintroduce a replay).
-  `refineForView`/`repairCoverage` are
-  screen-space: `repairCoverage` **must** be fed the **jitter-free** `FrameInfo::currentViewProj`, not
+  `refineForView`/`repairFront` are
+  screen-space: `repairFront` **must** be fed the **jitter-free** `FrameInfo::currentViewProj`, not
   the TAA-jittered `FrameInfo::proj` (the sub-pixel jitter would thrash the front frame-to-frame). The
   two repair passes exist because a *selective* front is a non-prefix cut of the stream, so the
   simplifier's linear `wouldFlip` and the deviation metrics don't cover its foldover / coverage holes —

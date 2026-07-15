@@ -649,17 +649,20 @@ TEST_CASE("refineForView: a singular world transform never back-face-culls", "[v
     CHECK(emitWith(true).size() >= 2);        // and a valid front, not collapsed to nothing
 }
 
-TEST_CASE("refineForView repairs foldovers: no emitted triangle winds against the original",
+TEST_CASE("repairFront leaves no foldover: no emitted triangle winds against the original",
           "[vdpm]")
 {
     // A selective front is a non-prefix cut of the collapse stream, so it can wind a replacement
     // triangle backwards even though every collapse was flip-free in linear order (the simplifier's
     // wouldFlip only certifies the prefix). A curved sphere and a bumpy grid, refined from a front
     // camera at a spread of budgets, exercise mixed near/far refinement — the foldover-prone case.
-    // refineForView's repair pass must leave ZERO foldovers, or the rasteriser back-face-culls the
-    // flipped triangles and punches holes to the background. Run under identity AND a NON-uniform
-    // scale — facing (normal matrix) and foldover winding (world-space) must both be correct there,
-    // and winding is checked in the same world space the rasteriser culls on.
+    // repairFront must leave ZERO foldovers, or the rasteriser back-face-culls the flipped
+    // triangles and punches holes to the background. Run under identity AND a NON-uniform scale —
+    // foldover winding (world-space) must be correct there, checked in the same world space the
+    // rasteriser culls on.
+    const Vec3 cam{0.0f, 0.0f, 4.0f};
+    const Mat4 viewProj =
+        Mat4::perspective(1.0f, 1.0f, 0.1f, 100.0f) * Mat4::lookAt(cam, {0, 0, 0}, {0, 1, 0});
     for (const Mat4& world : {Mat4::identity(), Mat4::scale(Vec3{2.0f, 0.5f, 1.5f})})
     {
         for (const Mesh& m : {makeUvSphere(24, 32), makeBumpyGrid(17)})
@@ -667,20 +670,23 @@ TEST_CASE("refineForView repairs foldovers: no emitted triangle winds against th
             ActiveFront front = ActiveFront::build(m.verts, m.indices, collapsesOf(m));
             for (const float budget : {0.5f, 1.0f, 2.0f, 4.0f, 8.0f})
             {
-                front.refineForView(m.verts, world, Vec3{0.0f, 0.0f, 4.0f}, 1.7f, 1000.0f, budget,
-                                    2.0f, true, 1.0f, 0.5f, 0.5f);
+                front.refineForView(m.verts, world, cam, 1.7f, 1000.0f, budget, 2.0f, true, 1.0f,
+                                    0.5f, 0.5f);
+                front.repairFront(m.verts, world, cam, viewProj, 1000.0f, 1000.0f, true);
                 CHECK(foldoverCount(front, m, world) == 0);
             }
         }
     }
 }
 
-TEST_CASE("repairCoverage: coverage follows the draw's cull policy", "[vdpm]")
+TEST_CASE("repairFront: BOTH invariants hold jointly, following the draw's cull policy", "[vdpm]")
 {
-    // A closed, non-folded selective front can still leak the background: at a silhouette a coarse
-    // replacement recedes inside a fine VISIBLE triangle's projected footprint. repairCoverage must
-    // drive that to zero over exactly the faces the rasteriser actually draws — which depends on
-    // the material's cull mode. A UV sphere has strong silhouettes (the coverage-prone case).
+    // A selective front leaks two ways: FOLDOVERS (a replacement wound against the original) and
+    // COVERAGE holes (a coarse replacement recedes inside a VISIBLE finest face's footprint). The
+    // two must be fixed to a JOINT fixed point — a coverage repair can re-fold, a foldover repair
+    // can re-open coverage — so after refineForView + repairFront, BOTH must be zero, over exactly
+    // the faces the rasteriser draws (the material's cull mode). A UV sphere has strong
+    // silhouettes.
     const Mesh m = makeUvSphere(24, 32);
     const Vec3 cam{0.0f, 0.0f, 4.0f};
     const Mat4 proj = Mat4::perspective(1.0f, 1.0f, 0.1f, 100.0f);
@@ -691,57 +697,105 @@ TEST_CASE("repairCoverage: coverage follows the draw's cull policy", "[vdpm]")
         f.refineForView(m.verts, world, cam, projScaleY, 1000.0f, budget, 2.0f, cull, 1.0f, 0.5f,
                         0.5f);
     };
-
-    SECTION("culled opaque: front-facing faces are covered")
+    auto bothClean = [&](ActiveFront& f, const Mat4& world, bool cull)
     {
-        const Mat4 world = Mat4::identity();
-        ActiveFront front = ActiveFront::build(m.verts, m.indices, collapsesOf(m));
-        for (const float budget : {1.0f, 2.0f, 4.0f})
+        f.repairFront(m.verts, world, cam, viewProj, 1000.0f, 1000.0f, cull);
+        CHECK(coverageFailures(f, m, viewProj, cam, world, cull) == 0);
+        CHECK(foldoverCount(f, m, world) == 0);
+    };
+
+    SECTION("culled opaque, identity + non-uniform scale, over budgets")
+    {
+        for (const Mat4& world : {Mat4::identity(), Mat4::scale(Vec3{1.6f, 0.7f, 1.3f})})
         {
-            refine(front, world, budget, true);
-            front.repairCoverage(m.verts, world, cam, viewProj, 1000.0f, 1000.0f, true);
-            CHECK(coverageFailures(front, m, viewProj, cam, world, true) == 0);
+            ActiveFront front = ActiveFront::build(m.verts, m.indices, collapsesOf(m));
+            for (const float budget : {1.0f, 2.0f, 4.0f}) // persistent front, budget changes
+            {
+                refine(front, world, budget, true);
+                bothClean(front, world, true);
+            }
         }
     }
 
-    SECTION("no-cull (double-sided / blend both map to cull=false): BACK faces are covered too")
+    SECTION("no-cull (double-sided / blend map to cull=false): BACK faces covered too")
     {
-        // The far hemisphere renders, so its coverage holes are real. The old front-face-only
-        // repair (cull=true) left them; the no-cull repair (cull=false) closes them and does
-        // strictly more work. Same geometry for a blended material — both are the
-        // rasterBackfaceCulling=false path.
+        // The far hemisphere renders, so its coverage holes are real. cull=true (front-only) leaves
+        // them; cull=false closes them and does strictly more work.
         const Mat4 world = Mat4::identity();
         for (const float budget : {1.0f, 2.0f})
         {
-            ActiveFront oldWay = ActiveFront::build(m.verts, m.indices, collapsesOf(m));
-            refine(oldWay, world, budget, false);
-            oldWay.repairCoverage(m.verts, world, cam, viewProj, 1000.0f, 1000.0f,
-                                  true); // front-only
-            const std::size_t oldRepairs = oldWay.coverageRepaired();
-            CHECK(coverageFailures(oldWay, m, viewProj, cam, world, false) >
-                  0); // real back-face holes
+            ActiveFront culled = ActiveFront::build(m.verts, m.indices, collapsesOf(m));
+            refine(culled, world, budget, false);
+            culled.repairFront(m.verts, world, cam, viewProj, 1000.0f, 1000.0f, true); // front-only
+            CHECK(coverageFailures(culled, m, viewProj, cam, world, false) > 0); // back-face holes
+            const std::size_t culledRepairs = culled.coverageRepaired();
 
             ActiveFront noCull = ActiveFront::build(m.verts, m.indices, collapsesOf(m));
             refine(noCull, world, budget, false);
-            noCull.repairCoverage(m.verts, world, cam, viewProj, 1000.0f, 1000.0f, false);
-            CHECK(coverageFailures(noCull, m, viewProj, cam, world, false) == 0); // holes closed
-            CHECK(noCull.coverageRepaired() >= oldRepairs); // repaired the extra
+            bothClean(noCull, world, false); // closes both, both windings
+            CHECK(noCull.coverageRepaired() >= culledRepairs);
         }
     }
 
-    SECTION("reflected (negative-determinant) world stays covered")
+    SECTION("reflected (negative-determinant) world")
     {
-        // A mirror flips triangle winding; `gn` is built from WORLD positions, so repairCoverage's
-        // visibility test stays correct and the monotone fixpoint still converges.
         const Mat4 world = Mat4::scale(Vec3{-1.0f, 1.0f, 1.0f});
         ActiveFront front = ActiveFront::build(m.verts, m.indices, collapsesOf(m));
         for (const float budget : {1.0f, 2.0f})
         {
             refine(front, world, budget, true);
-            front.repairCoverage(m.verts, world, cam, viewProj, 1000.0f, 1000.0f, true);
-            CHECK(coverageFailures(front, m, viewProj, cam, world, true) == 0);
+            bothClean(front, world, true);
         }
     }
+}
+
+TEST_CASE("repairFront regression: the six sphere cases that leaked foldovers after coverage",
+          "[vdpm]")
+{
+    // These exact cases (identity + one non-uniform scale × budgets 1/2/4, culled) all failed the
+    // foldover invariant when foldover and coverage repair ran as SEPARATE sequential phases:
+    // coverage force-refined faces that re-folded neighbours after the foldover fixpoint had
+    // finished. Pinned as a named regression so a future simplifier change can't quietly stop
+    // exercising the bug.
+    const Mesh m = makeUvSphere(24, 32);
+    const Vec3 cam{0.0f, 0.0f, 4.0f};
+    const Mat4 proj = Mat4::perspective(1.0f, 1.0f, 0.1f, 100.0f);
+    const Mat4 viewProj = proj * Mat4::lookAt(cam, {0, 0, 0}, {0, 1, 0});
+    const float projScaleY = std::abs(proj[1, 1]);
+    for (const Mat4& world : {Mat4::identity(), Mat4::scale(Vec3{1.6f, 0.7f, 1.3f})})
+    {
+        ActiveFront front = ActiveFront::build(m.verts, m.indices, collapsesOf(m));
+        for (const float budget : {1.0f, 2.0f, 4.0f})
+        {
+            front.refineForView(m.verts, world, cam, projScaleY, 1000.0f, budget, 2.0f, true, 1.0f,
+                                0.5f, 0.5f);
+            front.repairFront(m.verts, world, cam, viewProj, 1000.0f, 1000.0f, true);
+            CHECK(foldoverCount(front, m, world) == 0);
+            CHECK(coverageFailures(front, m, viewProj, cam, world, true) == 0);
+            CHECK(front.jointRepairSweeps() >= 1); // it actually ran the joint loop
+        }
+    }
+}
+
+TEST_CASE("repairFront: coverageRepaired counts the main worst-displacement path", "[vdpm]")
+{
+    // A close, strong-silhouette view where the coverage holes are the ordinary "centroid escaped
+    // the replacement" kind, fixed via the worst-displaced-corner path. That path used to
+    // force-refine WITHOUT incrementing coverageRepaired_, so the counter under-reported. Pin it:
+    // real coverage work must move the counter (else the benchmark + future CPU/GPU comparison are
+    // wrong).
+    const Mesh m = makeUvSphere(24, 32);
+    const Vec3 cam{0.0f, 0.0f, 2.2f}; // just outside the unit sphere → a large silhouette
+    const Mat4 proj = Mat4::perspective(1.0f, 1.0f, 0.1f, 100.0f);
+    const Mat4 viewProj = proj * Mat4::lookAt(cam, {0, 0, 0}, {0, 1, 0});
+    ActiveFront front = ActiveFront::build(m.verts, m.indices, collapsesOf(m));
+    front.refineForView(m.verts, Mat4::identity(), cam, std::abs(proj[1, 1]), 1000.0f, 2.0f, 2.0f,
+                        true, 1.0f, 0.5f, 0.5f);
+    // Coverage holes exist before the repair, and the repair closes them...
+    REQUIRE(coverageFailures(front, m, viewProj, cam, Mat4::identity(), true) > 0);
+    front.repairFront(m.verts, Mat4::identity(), cam, viewProj, 1000.0f, 1000.0f, true);
+    CHECK(coverageFailures(front, m, viewProj, cam, Mat4::identity(), true) == 0);
+    CHECK(front.coverageRepaired() > 0); // ...so the coverage counter must have moved
 }
 
 TEST_CASE("Deviation radius is ~0 on a flat mesh and accumulates on a curved one", "[vdpm]")
@@ -1214,15 +1268,10 @@ TEST_CASE("simplifier: a TILTED planar mesh has tight normal cones (no phantom c
 }
 
 // Hidden ([.]) benchmark — a reproducible per-phase timing of the VDPM cycle on a dense
-// (~24.6k-face) sphere at a close, silhouette-heavy view. It is NOT a pass/fail test (timings are
-// machine/build dependent); the figures below were captured on an Apple-arm64 `vcpkg` Dev build
-// (`-O2 -g`, no NDEBUG). With the normal-cone back-face test (vs the old smooth-normal 4-witness
-// proxy), refineForView roughly HALVED — refineForView (incl. foldover repair) ~0.69 ms,
-// repairCoverage ~0.98 ms (~2,320 repairs), emit ~0.31 ms — so `repairCoverage` is now ~50% of the
-// ~2.0 ms cycle and the clear remaining cost. It CANNOT be retired by the cone (screen-space
-// coverage ≠ orientation; see the roadmap), so it stays; this benchmark tracks that cost for
-// whatever eventually addresses it (a GPU worklist, a cheaper coverage test). Foldover repair is
-// bundled inside refineForView and not isolated here. Run with `./test_fire_engine [RepairBench]`.
+// (~24.6k-face) sphere at a close, silhouette-heavy view. NOT a pass/fail test (timings are
+// machine/build dependent). Three phases: refineForView (score + refine/coarsen only now),
+// repairFront (the JOINT foldover+coverage fixpoint — the new CPU baseline the GPU move must beat;
+// reports its sweep count), and emit. Run with `./test_fire_engine [RepairBench]`.
 TEST_CASE("VDPM per-frame phase timings (dense sphere, close view)", "[.][vdpm][RepairBench]")
 {
     using clock = std::chrono::steady_clock;
@@ -1238,10 +1287,11 @@ TEST_CASE("VDPM per-frame phase timings (dense sphere, close view)", "[.][vdpm][
 
     constexpr int iterations = 200;
     double refineUs = 0.0;
-    double coverageUs = 0.0;
+    double repairUs = 0.0;
     double emitUs = 0.0;
     std::uint32_t lastFold = 0;
     std::uint32_t lastCoverage = 0;
+    std::uint32_t lastSweeps = 0;
     std::size_t lastEmitted = 0;
     std::vector<uint32_t> scratch;
     for (int i = 0; i < iterations; ++i)
@@ -1250,24 +1300,26 @@ TEST_CASE("VDPM per-frame phase timings (dense sphere, close view)", "[.][vdpm][
         front.refineForView(m.verts, world, cam, projScaleY, 1000.0f, budget, 2.0f, true, 2.0f,
                             0.0f, 0.0f);
         auto t1 = clock::now();
-        front.repairCoverage(m.verts, world, cam, viewProj, 1000.0f, 1000.0f, true);
+        front.repairFront(m.verts, world, cam, viewProj, 1000.0f, 1000.0f, true);
         auto t2 = clock::now();
         front.emitActiveIndices(m.verts, m.indices, scratch);
         auto t3 = clock::now();
         using us = std::chrono::duration<double, std::micro>;
         refineUs += us(t1 - t0).count();
-        coverageUs += us(t2 - t1).count();
+        repairUs += us(t2 - t1).count();
         emitUs += us(t3 - t2).count();
         lastFold = front.foldoversRepaired();
         lastCoverage = front.coverageRepaired();
+        lastSweeps = front.jointRepairSweeps();
         lastEmitted = scratch.size() / 3;
     }
     const double n = iterations;
     WARN("VDPM phase timings over "
          << iterations << " iters (" << lastEmitted
-         << " emitted tris):\n  refineForView (incl. foldover repair) = " << (refineUs / n)
-         << " us\n  repairCoverage                = " << (coverageUs / n) << " us (" << lastCoverage
-         << " repairs)\n  emitActiveIndices             = " << (emitUs / n)
-         << " us\n  foldoversRepaired (last)      = " << lastFold);
+         << " emitted tris):\n  refineForView (score+refine/coarsen) = " << (refineUs / n)
+         << " us\n  repairFront (joint foldover+coverage) = " << (repairUs / n) << " us ("
+         << lastSweeps << " sweeps, " << lastFold << " foldover + " << lastCoverage
+         << " coverage repairs)\n  emitActiveIndices                    = " << (emitUs / n)
+         << " us");
     CHECK(lastEmitted > 0);
 }
