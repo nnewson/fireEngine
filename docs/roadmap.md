@@ -278,10 +278,17 @@ Candidates" section folds in here:
   `repairFoldovers`, topological) STAY and step 4 is dropped. Retiring them eventually needs a GPU
   worklist/fixpoint or a representation-level guarantee — not this cone. (Bounding-cone caveats per
   Hoppe, *View-Dependent Refinement of Progressive Meshes*, SIGGRAPH 97, §4.)
-- **GPU-driven active front** — drive `refineForView` + emission on the GPU (the forest + errors are
-  already just buffers). The indirect-draw direction #3 opened. (The CPU-side reusable-scratch-emit +
-  repair-counters piece is split out as its own near-term item under "Could" above — do that first;
-  this arc is the full GPU move.)
+- 🔨 **GPU-driven active front (in progress)** — drive the whole per-frame front lifecycle (score →
+  refine/coarsen → repair → emit) + indirect draw on the GPU; the CPU `vdpm` stays the tested oracle +
+  fallback. **Stage 0** (`graphics/vdpm_parallel`, merged) proved the parallel rank-ordered scheduling
+  byte-for-byte against the oracle. Two oracle prerequisites landed on the way: the no-cull coverage gap
+  (P1), and the **joint foldover+coverage repair** *(branch `cr-vdpm-joint-repair`)* — the two repairs
+  were sequential (`refineForView`'s foldover fixpoint, then `repairCoverage`), so a coverage
+  force-refine could re-fold a neighbour *after* the foldover fixpoint finished, leaving foldovers (a
+  real shipped silhouette-hole bug). Now one public `repairFront` alternates the two private sweeps to a
+  JOINT fixed point (≈2 sweeps in practice); `Object` can't misorder them; a named regression pins the
+  six cases. Still ahead: parallel repairs (the joint operator on the GPU-shaped model), deterministic
+  seam-preserving emit, the GPU port + harness, and indirect-draw plumbing.
 - ✅ **Static GPU residency** — device-local static asset upload split from dynamic mapped buffers.
   Landed in block B (`createDeviceLocalBuffer` for static vertices/indices/LODs/VIPM), and the batching
   follow-up is now done too *(branch `cr-static-residency-batch`)*: when a load-time `uploadBatch_` is

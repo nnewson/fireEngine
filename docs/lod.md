@@ -66,8 +66,8 @@ Object::writeForwardUniforms()            [per draw, per frame]
     ActiveFront::refineForView(...)         persistent front, refine by screen-space error
                                             (geometry / UV-seam / normal / tangent), cone
                                             silhouette boost + back-face gate
-      → repairFoldovers(...)                (inside refineForView) un-flip any backward-wound face
-    ActiveFront::repairCoverage(...)        un-recede any visible face that leaks the background
+    ActiveFront::repairFront(...)           JOINT fixpoint: un-flip foldovers + un-recede coverage
+                                            holes together, until a full cycle changes nothing
     ActiveFront::emitActiveIndices(...)     → a per-frame dynamic index buffer (wedge-restored)
 ```
 
@@ -85,7 +85,7 @@ Object::writeForwardUniforms()            [per draw, per frame]
   shader morphs only vertices whose `collapseLevel` equals that target level.
 - **Refine (VDPM)** — for a mesh with a collapse stream, `Geometry::load` also stores the raw
   collapses; `Object` builds a per-instance `ActiveFront` (over a `VertexForest`) at load, and in
-  `writeForwardUniforms` runs `refineForView` + `repairCoverage` per frame, emitting the active index
+  `writeForwardUniforms` runs `refineForView` + `repairFront` per frame, emitting the active index
   set into a per-`currentFrame` dynamic buffer. `buildDrawCommands` points the draw at it, taking
   precedence over discrete/VIPM. The per-frame path is **allocation-free steady-state**: `emit` fills a
   reused per-binding scratch vector (not a fresh `std::vector` each frame), and `emit` precomputes
@@ -308,32 +308,36 @@ Both come from the split's precomputed **conservative normal cone** (`detail::co
   still pull it in as a visible split's dependency. Only applied when the draw actually culls back-faces
   (`rasterBackfaceCulling` — false for double-sided/blended materials, whose back-faces are visible).
 
-### The two repair passes — why a correct emit still needs them
+### The joint repair (`repairFront`) — why a correct emit still needs it
 
 A selective front is a **non-prefix** cut of the collapse stream. The simplifier's `wouldFlip` only
 certifies the *linear prefix* is flip-free, and the deviation channels are all *topological* — never
-projected to screen. So two failure classes survive an otherwise-correct front, and each is fixed by a
-**monotone** repair (force-refine only → converges, at worst to full detail):
+projected to screen. So two failure classes survive an otherwise-correct front, each detected by a
+**refinement-only sweep** (only activates splits — inflationary):
 
-1. **Foldovers** (`repairFoldovers`, run at the end of `refineForView`). A finest face whose
-   active-ancestor replacement winds *against* the original is back-face-culled by the rasteriser → a
-   hole. Sweep the finest faces; where replacement winding opposes original winding, force-refine the
-   collapsed corners.
-2. **Coverage / silhouette holes** (`repairCoverage`, called from `object.cpp` after `refineForView`
-   with the **jitter-free** `currentViewProj`). A *closed, non-folded* front can still leak the
-   background: at a silhouette a coarse replacement recedes inside a fine visible triangle's
-   *projected footprint*. This is purely a screen-space property — boundary/foldover/manifold checks
-   are all blind to it. For each **visible** finest face above a small projected-area gate: if its
-   replacement is **degenerate** (the face collapsed to a sliver and was dropped — *not* safe to skip
-   at a contour, only at an interior), force-refine its corners; else if its projected centroid falls
-   outside the replacement in NDC, force-refine the corner with the largest screen displacement.
-   "Visible" follows the draw's cull mode via a `rasterBackfaceCulling` arg (same as `refineForView`):
-   with culling on only front-facing faces are visible; with it off (double-sided / blended material)
-   back-faces render too and are covered as well (`gn` is the WORLD winding, so this is correct under a
-   reflected world).
-   **It must use the jitter-free view-projection** — feeding it the TAA-jittered `frame.proj` shifts
-   the coverage test ±½px each frame and thrashes the front (a borderline hole flickering with the
-   camera still).
+1. **Foldovers** (`repairFoldoversSweep`). A finest face whose active-ancestor replacement winds
+   *against* the original is back-face-culled by the rasteriser → a hole. Where replacement winding
+   opposes original winding, force-refine the collapsed corners (world-space winding, so correct under
+   non-uniform / reflected transforms).
+2. **Coverage / silhouette holes** (`repairCoverageSweep`, on the **jitter-free** `currentViewProj` —
+   the TAA-jittered `frame.proj` would shift the test ±½px each frame and thrash the front). A *closed,
+   non-folded* front can still leak the background: at a silhouette a coarse replacement recedes inside
+   a fine visible face's *projected footprint*. Purely screen-space (boundary/foldover checks are blind
+   to it). For each **visible** finest face above a small projected-area gate: a degenerate replacement
+   (dropped sliver — a real hole at a contour), a near-plane straddle (can't project — refine
+   conservatively), or a centroid outside the replacement in NDC → force-refine. "Visible" follows the
+   draw's cull mode (`rasterBackfaceCulling`): culling on ⇒ front faces only; off (double-sided/blend)
+   ⇒ back faces too.
+
+**They must run as a JOINT fixed point, not two sequential phases** — `repairFront` alternates the two
+sweeps until a complete cycle refines nothing. A coverage force-refine can re-fold a neighbour and a
+foldover force-refine can open a coverage hole, so running the foldover fixpoint and *then* coverage
+leaves foldovers (a real bug that shipped before this). Inflationary ⇒ terminates in
+`jointRepairSweeps() ≤ initially-unrefined-splits + 1` (≈2 in practice). The result is the deterministic
+fixed point of *this* schedule (not a least/unique one). `repairFront` is the ONLY public repair
+(`Object` calls it, mandatory before emission); the two sweeps are private so no caller can misorder
+them. If a repairable violation has an inactive target whose valid removing split fails to force-refine,
+`repairFront` throws (a forest inconsistency) rather than spin.
 
 **These repairs cannot be replaced by the normal cone** (§ Visibility cones): coverage is a
 *screen-space* property and foldover is *topological*, while the cone is a face-*orientation* bound.
@@ -376,9 +380,9 @@ This replaced the old smooth-vertex-normal 4-witness proxy and roughly **halved*
 `kVdpmTangentScale` (1.0 / 0.5 / 0.5 — the geometry channel is unscaled). Raising a scale refines that
 channel sooner (more fidelity, more triangles). The back-face cull takes no threshold dial — the cone
 bound is exact bar a tiny float-safety margin; whether it applies at all is the `rasterBackfaceCulling`
-flag `refineForView` is passed (from the material's cull mode). The coverage repair's screen-area gate
-(`kMinNdcArea` in `repairCoverage`) trades residual sub-pixel holes against extra triangles; lower it
-to catch smaller holes.
+flag `refineForView` is passed (from the material's cull mode). The coverage sweep's screen-area gate
+(`kMinScreenAreaPx` in `repairCoverageSweep`) trades residual sub-pixel holes against extra triangles;
+lower it to catch smaller holes.
 
 ---
 
@@ -424,12 +428,12 @@ green → yellow → red and the triangle count should drop.
   skewed UVs / fanned normals / fanned tangents).
 - **Back-face suppression** — the hidden hemisphere of a sphere coarsens; near view resolves more than
   far.
-- **Foldover repair** — no emitted triangle winds against the original (verified against a version
-  with the repair disabled, so it's non-vacuous).
-- **Coverage repair** — every visible triangle stays covered by its replacement, following the draw's
-  cull policy (front-face-only when culling; both windings for a no-cull double-sided/blend material,
-  verified against the pre-fix back-face gap; correct under a reflected world), *including* the
-  degenerate-replacement case (again verified non-vacuous).
+- **Joint repair (`repairFront`)** — after refine + `repairFront`, BOTH invariants hold together: no
+  emitted triangle winds against the original (foldover) AND every visible triangle stays covered by
+  its replacement (coverage), following the draw's cull policy (front-face-only when culling; both
+  windings for a no-cull double-sided/blend material; correct under a reflected world). A **named
+  regression** pins the six sphere cases where the old sequential foldover-then-coverage order left
+  foldovers (coverage re-folded after the foldover fixpoint finished).
 
 `selectLod` is header-only and directly unit-testable. Beyond the headless tests, the render smoke
 (validation on) must stay 0-VUID with LODs active across static / skinned / cloth meshes and all three
@@ -520,8 +524,8 @@ at a fraction of the triangles. The remaining residuals and follow-ons, in rough
   the repair sweeps**, which was the original hope: coverage is a screen-space property and foldover is
   topological, while the cone is a face-orientation bound. A force-refine-on-straddle experiment reduced
   but could not zero coverage repairs (10/19/85 on the coverage test), confirming the categories differ.
-  The win is real but narrower: the cone halved `refineForView` and is GPU-shaped, but `repairCoverage`
-  (now ~50% of the cycle) and `repairFoldovers` stay. (Bounding-cone caveats per Hoppe, *View-Dependent
+  The win is real but narrower: the cone halved `refineForView` and is GPU-shaped, but the joint
+  `repairFront` (now the dominant cost) stays. (Bounding-cone caveats per Hoppe, *View-Dependent
   Refinement of Progressive Meshes*, SIGGRAPH 97, §4.)
 - **Parked:** texel-density UV budget; a GPU worklist/fixpoint (or representation-level guarantee) for
   the repair sweeps, which the cone cannot subsume.
@@ -536,7 +540,7 @@ at a fraction of the triangles. The remaining residuals and follow-ons, in rough
   (requirement-closure → ascending-rank refine → descending-rank coarsen) instead of recursion, proven
   byte-for-byte against the oracle. This is the arc's stop/go gate: it proves the parallel scheduling
   and gathers the dispatch-depth evidence (curved meshes ~30 ranks; flat grids scale linearly) before
-  any GLSL. Still ahead: the parallel repairs (a monotone snapshot fixpoint), deterministic
+  any GLSL. Still ahead: the parallel repairs (an inflationary snapshot iteration), deterministic
   seam-preserving emit, the GPU port + harness, and the indirect-draw plumbing.
 - **7 forest skips.** `buildVertexForest` skips collapses whose edge diverged from its adjacency
   replay (7 of ~6800 on the helmet); past the first skip the forest is slightly unfaithful. The repairs
@@ -559,10 +563,10 @@ at a fraction of the triangles. The remaining residuals and follow-ons, in rough
 | `include/fire_engine/graphics/lod.hpp` | `GeometryLod`, ratios/thresholds, `selectLod` (header-only) |
 | `include/fire_engine/graphics/mesh_simplifier.hpp` | `MeshSimplifier` interface, `QuadricSimplifier`, `MeshCollapse`, `SimplifiedMesh`, `ProgressiveMesh` |
 | `include/fire_engine/graphics/vipm.hpp`, `src/graphics/vipm.cpp` | VIPM morph payload, exact-cut morph-data build, `selectVipm` |
-| `include/fire_engine/graphics/vdpm.hpp`, `src/graphics/vdpm.cpp` | VDPM: `VertexForest`/`buildVertexForest`, `ActiveFront` (`refineForView`, `repairFoldovers`, `repairCoverage`, `emitActiveIndices`) |
+| `include/fire_engine/graphics/vdpm.hpp`, `src/graphics/vdpm.cpp` | VDPM: `VertexForest`/`buildVertexForest`, `ActiveFront` (`refineForView`, the joint `repairFront` over private `repairFoldoversSweep`/`repairCoverageSweep`, `emitActiveIndices`) |
 | `src/graphics/mesh_simplifier.cpp` | The QEM engine (`QemRun`): R⁵ quadric, welding, wedge emit, chart veto, the four VDPM deviation channels, the two dials |
 | `src/graphics/geometry.cpp` | `Geometry::load()` builds `lods_` + VIPM morph buffers + stores the VDPM collapse stream from one progressive artifact |
-| `src/graphics/object.cpp` | Per-draw `selectLod` (forward + shadow), Continuous `selectVipm` uniforms, and per-instance VDPM `refineForView`/`repairCoverage` → dynamic index buffer |
+| `src/graphics/object.cpp` | Per-draw `selectLod` (forward + shadow), Continuous `selectVipm` uniforms, and per-instance VDPM `refineForView` + joint `repairFront` → dynamic index buffer |
 | `graphics/frame_info.hpp`, `render/render_tunables.hpp`, `render/renderer.cpp` | `lodEnabled`/`lodMode`/`lodPixelErrorBudget` plumbing + jitter-free `currentViewProj` + triangles-drawn stat |
 | `graphics/draw_command.hpp`, `render/ubo.hpp`, `shaders/shader.vert`, `shaders/shader.frag`, `render/debug_overlay.cpp` | VIPM morph binding/uniforms + per-draw `lodLevel` → push constant → LOD-tint debug view + overlay panel (3-mode selector) |
 | `tests/graphics/test_mesh_simplifier.cpp`, `tests/graphics/test_vipm.cpp`, `tests/graphics/test_vdpm.cpp` | Headless correctness tests |
