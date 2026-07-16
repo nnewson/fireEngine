@@ -2,11 +2,14 @@
 #include <fire_engine/render/resources.hpp>
 
 #include <algorithm>
+#include <cstddef>
 #include <cstring>
 #include <limits>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 
+#include <fire_engine/graphics/draw_command.hpp>
 #include <fire_engine/graphics/image.hpp>
 #include <fire_engine/graphics/ktx_image.hpp>
 #include <fire_engine/graphics/material_binding.hpp>
@@ -1240,6 +1243,32 @@ Resources::MappedBufferSet Resources::createMappedIndexBuffers(std::size_t size)
     // Per-frame, persistently-mapped host-visible index buffers for VDPM's dynamic, view-dependent
     // index set (rebuilt each frame from the active front).
     return createMappedHostVisibleBuffers(size, vk::BufferUsageFlagBits::eIndexBuffer);
+}
+
+// The Vulkan-free DrawIndexedIndirectCommand (graphics/draw_command.hpp) is written CPU-side and
+// read by the GPU as a VkDrawIndexedIndirectCommand, so its layout MUST match bit-for-bit. This is
+// the one place the Vulkan type appears; the mirror stays Vulkan-free. Trivially-copyable +
+// standard-layout so writeMapped(memcpy) is well-defined.
+static_assert(sizeof(DrawIndexedIndirectCommand) == sizeof(VkDrawIndexedIndirectCommand));
+static_assert(alignof(DrawIndexedIndirectCommand) == alignof(VkDrawIndexedIndirectCommand));
+static_assert(std::is_standard_layout_v<DrawIndexedIndirectCommand>);
+static_assert(std::is_trivially_copyable_v<DrawIndexedIndirectCommand>);
+static_assert(offsetof(DrawIndexedIndirectCommand, indexCount) ==
+              offsetof(VkDrawIndexedIndirectCommand, indexCount));
+static_assert(offsetof(DrawIndexedIndirectCommand, instanceCount) ==
+              offsetof(VkDrawIndexedIndirectCommand, instanceCount));
+static_assert(offsetof(DrawIndexedIndirectCommand, firstIndex) ==
+              offsetof(VkDrawIndexedIndirectCommand, firstIndex));
+static_assert(offsetof(DrawIndexedIndirectCommand, vertexOffset) ==
+              offsetof(VkDrawIndexedIndirectCommand, vertexOffset));
+static_assert(offsetof(DrawIndexedIndirectCommand, firstInstance) ==
+              offsetof(VkDrawIndexedIndirectCommand, firstInstance));
+
+Resources::MappedBufferSet Resources::createMappedIndirectBuffers(std::size_t size)
+{
+    // Per-frame, persistently-mapped host-visible indirect-command buffers for VDPM's indirect
+    // draws (CPU-written from the emit count this stage; compute-written in Stage B5).
+    return createMappedHostVisibleBuffers(size, vk::BufferUsageFlagBits::eIndirectBuffer);
 }
 
 BufferHandle Resources::createSharedStorageBuffer(std::size_t size, const void* initialData)

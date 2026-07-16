@@ -95,6 +95,10 @@ public:
     // Per-frame, persistently-mapped host-visible index buffers for VDPM's dynamic, view-dependent
     // index set (rebuilt each frame from the active front).
     [[nodiscard]] MappedBufferSet createMappedIndexBuffers(std::size_t size);
+    // Per-frame, persistently-mapped host-visible INDIRECT-command buffers for VDPM's indirect
+    // draws (one DrawIndexedIndirectCommand per instance, CPU-written from the emit count). The
+    // subsequent queue submission makes the host write available to the draw; no explicit barrier.
+    [[nodiscard]] MappedBufferSet createMappedIndirectBuffers(std::size_t size);
     // Single host-visible storage buffer (eStorageBuffer | eTransferDst) shared across all
     // frames-in-flight — the GPU serialises frames on the graphics queue, so no per-frame copies
     // are needed. eTransferDst lets callers clear/upload via vkCmdFillBuffer/copy. (Distinct from

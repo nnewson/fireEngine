@@ -58,6 +58,10 @@ struct RendererDebug
     // collider shapes, and contacts. Off by default; toggled per-category in the
     // overlay's "Physics debug" panel.
     bool physicsDebug{false};
+    // Initial LOD mode (--lod-mode discrete|continuous|view-dependent). Default Discrete matches
+    // RenderTunables; the overlay's LOD combo still switches at runtime. `view-dependent` activates
+    // VDPM (and its indirect draws) at launch, so that path is exercisable without the overlay.
+    LodMode lodMode{LodMode::Discrete};
 };
 
 class Renderer

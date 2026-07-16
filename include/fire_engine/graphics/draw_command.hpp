@@ -15,6 +15,22 @@ enum class DrawIndexType : uint8_t
     UInt32,
 };
 
+// Vulkan-free mirror of VkDrawIndexedIndirectCommand — the 5-word record a `drawIndexedIndirect`
+// reads from a GPU buffer. Kept in `graphics/` (Vulkan-free) so `object.cpp` can write it via
+// `writeMapped` without a Vulkan type crossing the layering boundary, exactly the host↔GPU struct
+// discipline `ubo.hpp` uses. `render/` static_asserts this matches VkDrawIndexedIndirectCommand
+// (size, per-field offset, alignment) so a silent layout drift can't corrupt the draw. Today the
+// CPU fills it from the VDPM emit's index count; when the front moves to the GPU (Stage B5) a
+// compute shader writes the identical record and the draw is unchanged.
+struct DrawIndexedIndirectCommand
+{
+    uint32_t indexCount{0};
+    uint32_t instanceCount{0};
+    uint32_t firstIndex{0};
+    int32_t vertexOffset{0};
+    uint32_t firstInstance{0};
+};
+
 struct DrawCommand
 {
     constexpr DrawCommand() = default;
@@ -77,6 +93,15 @@ struct DrawCommand
     uint32_t lodLevel{0};
     Bounds3 shadowBounds{};
     Mat4 selfShadowViewProj{Mat4::identity()};
+    // Indirect draw (rendering-spine #3, GPU-driven-front Stage A). When `indirectBuffer` is not
+    // NullBuffer the renderer records `drawIndexedIndirect` from the `DrawIndexedIndirectCommand`
+    // at `indirectOffset` in that buffer, instead of `drawIndexed(indexCount, ...)`. Only the VDPM
+    // (view-dependent LOD) draws set it; every other path (static / discrete LOD / VIPM / skybox /
+    // shadow) leaves it null and draws directly. `indexCount` stays populated for the triangle
+    // overlay even on indirect draws. `indirectOffset` is a Vulkan-free byte offset (no Vulkan type
+    // in this layer).
+    BufferHandle indirectBuffer{NullBuffer};
+    uint64_t indirectOffset{0};
 };
 
 } // namespace fire_engine

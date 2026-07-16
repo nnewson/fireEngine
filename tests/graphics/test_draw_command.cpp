@@ -199,3 +199,25 @@ TEST_CASE("DrawCommand.MaterialIndexDefaultsToZero", "[DrawCommand]")
     DrawCommand cmd;
     CHECK(cmd.materialIndex == 0u);
 }
+
+TEST_CASE("DrawCommand.IndirectDefaultsToDirect", "[DrawCommand]")
+{
+    // The sentinel that selects the draw path: a default DrawCommand has no indirect buffer, so the
+    // renderer records a direct drawIndexed. Only VDPM draws set indirectBuffer.
+    DrawCommand cmd;
+    CHECK(cmd.indirectBuffer == NullBuffer);
+    CHECK(cmd.indirectOffset == 0u);
+}
+
+TEST_CASE("DrawIndexedIndirectCommand.DefaultsAreZero", "[DrawCommand]")
+{
+    // The Vulkan-free mirror of VkDrawIndexedIndirectCommand (layout asserted against the Vk type
+    // in render/resources.cpp). Every field defaults to zero so a partially-filled command can't
+    // draw stale geometry.
+    const DrawIndexedIndirectCommand c;
+    CHECK(c.indexCount == 0u);
+    CHECK(c.instanceCount == 0u);
+    CHECK(c.firstIndex == 0u);
+    CHECK(c.vertexOffset == 0);
+    CHECK(c.firstInstance == 0u);
+}

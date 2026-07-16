@@ -6,6 +6,7 @@
 #include <limits>
 
 #include <fire_engine/render/descriptors.hpp>
+#include <fire_engine/render/draw_record.hpp>
 #include <fire_engine/render/render_target.hpp>
 #include <fire_engine/render/ubo.hpp>
 #include <fire_engine/render/viewport.hpp>
@@ -59,7 +60,7 @@ void recordTransmissionDrawBucket(vk::CommandBuffer cmd, std::span<const DrawCom
         pc.materialIndex = dc.materialIndex;
         cmd.pushConstants<ForwardPushConstants>(resources.vulkanPipelineLayout(dc.pipeline),
                                                 vk::ShaderStageFlagBits::eFragment, 0, pc);
-        cmd.drawIndexed(dc.indexCount, 1, 0, 0, 0);
+        recordIndexedDraw(cmd, dc, resources);
     }
 }
 

@@ -694,6 +694,12 @@ per-region refinement. One recorded collapse stream feeds all three. The authori
   dynamic index buffer; the `vdpm_parallel` model reproduces it byte-identically as a GPU-shaped
   compaction (survival flag → prefix sum → stable scatter) over a CSR wedge adjacency
   (`mesh_topology::canonicalWedgesCsr`) — with that, Stage 0 of the GPU-driven front is complete.
+  **Stage A** then routes VDPM draws through `drawIndexedIndirect`: `object.cpp` writes a per-instance
+  per-frame `DrawIndexedIndirectCommand` (Vulkan-free mirror in `draw_command.hpp`) from the emit count,
+  and `DrawCommand::indirectBuffer != NullBuffer` makes the shared `render/draw_record.hpp` helper record
+  indirect at the three VDPM sites (forward / prepass / transmission). **Cross-file invariant:** a
+  non-null `indirectBuffer` selects the indirect path, so any DrawCommand *copied* for a different draw
+  (the shadow copy) must reset it — shadows keep discrete LOD + direct draw.
 - **Two dials** live in `mesh_simplifier.cpp`: `kUvWeightFactor` (UV fidelity vs simplification) and
   `kErrorCeilingFactor` (must only refuse *geometrically* un-simplifiable shapes — the cube via its
   boundary weight — not UV-costly seams). `kLodRatios` / `kLodPixelErrorBudget` / the `kVdpm*` dials

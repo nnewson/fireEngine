@@ -14,6 +14,7 @@
 #include <fire_engine/math/constants.hpp>
 #include <fire_engine/math/view_basis.hpp>
 #include <fire_engine/render/cubemap_basis.hpp>
+#include <fire_engine/render/draw_record.hpp>
 #include <fire_engine/render/environment_precompute.hpp>
 #include <fire_engine/render/render_target.hpp>
 #include <fire_engine/render/swapchain.hpp>
@@ -174,6 +175,7 @@ Renderer::Renderer(const Window& window, std::string environmentPath, RendererDe
     // overlay's initial state; everything else defaults from constants.hpp.
     tunables_.taaEnabled = debug.taa;
     tunables_.debugView = debug.view;
+    tunables_.lodMode = debug.lodMode;
     tunables_.noShadows = debug.noShadows;
     tunables_.debugDrawAabbs = debug.physicsDebug;
     tunables_.debugDrawColliders = debug.physicsDebug;
@@ -657,7 +659,7 @@ void Renderer::recordDrawBucket(vk::CommandBuffer cmd, std::span<const DrawComma
             cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
                                    resources_.vulkanPipelineLayout(dc.pipeline), 0, ds, {});
         }
-        cmd.drawIndexed(dc.indexCount, 1, 0, 0, 0);
+        recordIndexedDraw(cmd, dc, resources_);
     }
 }
 
@@ -709,7 +711,7 @@ void Renderer::recordDepthPrepass(vk::CommandBuffer cmd, const DrawBuckets& buck
             dc.indexType == DrawIndexType::UInt32 ? vk::IndexType::eUint32 : vk::IndexType::eUint16;
         cmd.bindIndexBuffer(resources_.vulkanBuffer(dc.indexBuffer), 0, indexType);
         pushForwardObjectDescriptors(cmd, resources_, layout, dc);
-        cmd.drawIndexed(dc.indexCount, 1, 0, 0, 0);
+        recordIndexedDraw(cmd, dc, resources_);
     }
     cmd.endRendering();
 }
