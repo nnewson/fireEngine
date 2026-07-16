@@ -215,10 +215,16 @@ void Object::createForwardBindings(Resources& resources)
                                    binding.geometry->collapses());
             const std::size_t maxBytes = binding.geometry->indices().size() * sizeof(uint32_t);
             auto indexSet = resources.createMappedIndexBuffers(maxBytes);
+            // One indirect command per instance per frame, CPU-written from the emit count (Stage
+            // A).
+            auto indirectSet =
+                resources.createMappedIndirectBuffers(sizeof(DrawIndexedIndirectCommand));
             for (int i = 0; i < kMaxFramesInFlight; ++i)
             {
                 binding.vdpmIndexBufs[i] = indexSet.buffers[i];
                 binding.vdpmIndexMapped[i] = indexSet.mapped[i];
+                binding.vdpmIndirectBufs[i] = indirectSet.buffers[i];
+                binding.vdpmIndirectMapped[i] = indirectSet.mapped[i];
             }
         }
     }
@@ -543,6 +549,18 @@ void Object::writeForwardUniforms(const FrameInfo& frame, const Mat4& world,
             binding.vdpmIndexCount = static_cast<uint32_t>(idx.size());
             writeMapped(binding.vdpmIndexMapped[frame.currentFrame], idx.data(),
                         idx.size() * sizeof(uint32_t));
+            // Record the indirect draw command from the freshly-emitted count. EVERY field is set
+            // (no stale carry-over): one instance, from the start of the index buffer. Written
+            // after the fence has freed this frame slot (persistent mapping) and before submission,
+            // so the submit makes the host write available to the draw — no explicit barrier (the
+            // dynamic index buffer above relies on the identical guarantee). Stage B5 replaces this
+            // CPU write with a compute shader + a compute→indirect-read barrier.
+            const DrawIndexedIndirectCommand indirectCmd{.indexCount = binding.vdpmIndexCount,
+                                                         .instanceCount = 1,
+                                                         .firstIndex = 0,
+                                                         .vertexOffset = 0,
+                                                         .firstInstance = 0};
+            writeMapped(binding.vdpmIndirectMapped[frame.currentFrame], indirectCmd);
         }
         writeMapped(binding.morphUboMapped[frame.currentFrame], morphUbo);
     }
@@ -600,6 +618,10 @@ std::vector<DrawCommand> Object::buildDrawCommands(const FrameInfo& frame, const
         {
             cmd.indexBuffer = binding.vdpmIndexBufs[frame.currentFrame];
             cmd.indexCount = binding.vdpmIndexCount;
+            // Draw indirect: the renderer reads the count from the GPU buffer (Stage A). indexCount
+            // stays set above for the triangle overlay. Offset 0 — one command per instance buffer.
+            cmd.indirectBuffer = binding.vdpmIndirectBufs[frame.currentFrame];
+            cmd.indirectOffset = 0;
         }
         // Discrete LOD: swap in a coarser index set (same vertex buffer) for distant/small static
         // meshes, chosen so the level's geometric error stays within the pixel budget.
@@ -650,6 +672,11 @@ std::vector<DrawCommand> Object::buildDrawCommands(const FrameInfo& frame, const
             shadowCmd.indexBuffer = shadowGeometry->indexBuffer();
             shadowCmd.indexCount = shadowGeometry->indexCount();
             shadowCmd.indexType = shadowGeometry->indexType();
+            // Shadows keep discrete LOD and draw directly — clear the VDPM indirect handle the copy
+            // inherited from the forward command, or the "non-null selects indirect" invariant
+            // would point the shadow draw at the forward index count.
+            shadowCmd.indirectBuffer = NullBuffer;
+            shadowCmd.indirectOffset = 0;
             // Shadows tolerate a coarser LOD than the main view (silhouette detail matters less).
             if (frame.lodEnabled && shadowGeometry->lods().size() > 1)
             {

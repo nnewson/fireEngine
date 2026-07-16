@@ -442,3 +442,15 @@ budget near default:
   Discrete/VIPM should show **no background leaking through** (no missing front-facing triangles), no
   silhouette holes, and no flicker with the camera still. This is the case the VDPM foldover +
   coverage repair passes exist to guarantee — see [`lod.md`](lod.md).
+
+#### VDPM indirect draw (Stage A of the GPU-driven front)
+VDPM draws are issued with `drawIndexedIndirect`. Launch straight into it (no overlay toggle needed):
+```bash
+./fireEngineApp DamagedHelmet/DamagedHelmet.gltf skybox.hdr --lod-mode view-dependent
+./fireEngineApp TransmissionTest/TransmissionTest.gltf skybox.hdr --lod-mode view-dependent
+```
+The image must be **identical** to the overlay-selected VDPM (the indirect command carries the same
+index count the direct path used), and the validation layers must stay **silent** — the smoke check
+`grep -icE 'VUID|validation error'` on the backgrounded run's stderr should print `0`. DamagedHelmet
+exercises the forward + depth-prepass sites; TransmissionTest's dense transmissive meshes exercise the
+transmission site. This is the MoltenVK `drawIndexedIndirect` de-risk.

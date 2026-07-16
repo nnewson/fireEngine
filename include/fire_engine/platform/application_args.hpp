@@ -146,6 +146,37 @@ struct ApplicationArgs
             args.debug.physicsDebug = true;
             continue;
         }
+        if (arg == "--lod-mode")
+        {
+            // Select the initial LOD mode. `view-dependent` launches straight into VDPM (indirect
+            // draws) so the path is reachable without the overlay — handy for the render smoke
+            // test. Consume the following token as the value ONLY when it is present and not itself
+            // a flag: a trailing `--lod-mode` or one followed by another flag (`--lod-mode
+            // --overlay`) must NOT swallow that flag or fall through to become a positional — it
+            // just defaults. An unrecognised value defaults to Discrete but is still consumed (not
+            // left positional).
+            if (i + 1 < argc)
+            {
+                const std::string_view value = argv[i + 1];
+                if (!value.empty() && value.front() != '-')
+                {
+                    ++i;
+                    if (value == "view-dependent")
+                    {
+                        args.debug.lodMode = LodMode::ViewDependent;
+                    }
+                    else if (value == "continuous")
+                    {
+                        args.debug.lodMode = LodMode::Continuous;
+                    }
+                    else
+                    {
+                        args.debug.lodMode = LodMode::Discrete;
+                    }
+                }
+            }
+            continue;
+        }
         if (positionalCount < 2)
         {
             positional[positionalCount++] = arg;

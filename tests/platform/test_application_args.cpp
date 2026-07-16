@@ -11,6 +11,7 @@
 
 using fire_engine::ApplicationArgs;
 using fire_engine::DebugView;
+using fire_engine::LodMode;
 using fire_engine::parseApplicationArgs;
 
 namespace
@@ -60,6 +61,55 @@ TEST_CASE("ApplicationArgs.EmptyArgsUseDefaults", "[ApplicationArgs]")
     CHECK_FALSE(args.addParticles);
     CHECK_FALSE(args.addCloth);
     CHECK_FALSE(args.startMaximized);
+    CHECK(args.debug.lodMode == LodMode::Discrete); // default matches RenderTunables
+}
+
+TEST_CASE("ApplicationArgs.LodModeFlagSelectsMode", "[ApplicationArgs]")
+{
+    struct LodModeCase
+    {
+        std::string_view value;
+        LodMode mode;
+    };
+    const auto testCase = GENERATE(values<LodModeCase>({
+        {"discrete", LodMode::Discrete},
+        {"continuous", LodMode::Continuous},
+        {"view-dependent", LodMode::ViewDependent},
+        {"nonsense", LodMode::Discrete}, // unknown value falls back to Discrete
+    }));
+    CAPTURE(testCase.value);
+
+    const auto parsed = parseArgs({"fireEngineApp", "--lod-mode", testCase.value});
+    CHECK(parsed.args.debug.lodMode == testCase.mode);
+}
+
+TEST_CASE("ApplicationArgs.LodModeTrailingLeavesPositionalsEmpty", "[ApplicationArgs]")
+{
+    // A trailing --lod-mode must default AND not read past argv or become a scene path.
+    const auto parsed = parseArgs({"fireEngineApp", "--lod-mode"});
+    CHECK(parsed.args.debug.lodMode == LodMode::Discrete);
+    CHECK(parsed.args.scenePath.empty());
+    CHECK(parsed.args.skyboxPath.empty());
+}
+
+TEST_CASE("ApplicationArgs.LodModeDoesNotSwallowAFollowingFlag", "[ApplicationArgs]")
+{
+    // --lod-mode --overlay must default the mode and STILL process --overlay (a flag is never a
+    // mode value).
+    const auto parsed = parseArgs({"fireEngineApp", "--lod-mode", "--overlay"});
+    CHECK(parsed.args.debug.lodMode == LodMode::Discrete);
+    CHECK(parsed.args.debug.overlayVisible);
+    CHECK(parsed.args.scenePath.empty());
+}
+
+TEST_CASE("ApplicationArgs.LodModeInvalidValueIsConsumedNotPositional", "[ApplicationArgs]")
+{
+    // An unrecognised (non-flag) value defaults to Discrete but is consumed, so it never leaks into
+    // the scene/skybox positionals; a real scene path after it still lands.
+    const auto parsed =
+        parseArgs({"fireEngineApp", "--lod-mode", "nonsense", "DamagedHelmet/DamagedHelmet.gltf"});
+    CHECK(parsed.args.debug.lodMode == LodMode::Discrete);
+    CHECK(parsed.args.scenePath == "DamagedHelmet/DamagedHelmet.gltf");
 }
 
 TEST_CASE("ApplicationArgs.SingleSceneArgumentSetsScenePath", "[ApplicationArgs]")

@@ -298,10 +298,17 @@ Candidates" section folds in here:
   `ParallelFront::emitActiveIndices` is the GPU-shaped compaction — per-face survival flag → exclusive
   prefix sum → stable scatter (no atomic append, so triangle order is preserved) with `nearestWedge`
   restoration via a CSR wedge adjacency (`mesh_topology::canonicalWedgesCsr`) — proven **byte-identical**
-  to the oracle's emit (indices, order, wedges). **Stage 0 is now complete**: scheduling, repair
+  to the oracle's emit (indices, order, wedges). **Stage 0 is complete**: scheduling, repair
   convergence + overhead, and emit are all proven on CPU in CI, with the rank-depth and wedge-ABI
-  evidence reported. Still ahead: Stage A (indirect-draw plumbing), then the GPU port + headless compute
-  harness.
+  evidence reported. **Stage A — indirect draw** *(branch `cr-vdpm-indirect-draw`)* is done too: a
+  Vulkan-free `DrawIndexedIndirectCommand` mirror + `DrawCommand::indirectBuffer`/`indirectOffset`
+  sentinel, a per-instance per-frame host-visible indirect-command buffer CPU-written from the emit
+  count, and the three VDPM draw sites (forward / depth prepass / transmission) routed through
+  `recordIndexedDraw` — shadows keep discrete LOD + direct draw. Mechanical, no behaviour change; it
+  de-risks `drawIndexedIndirect` on MoltenVK (smoke-tested 0 VUID on DamagedHelmet + TransmissionTest
+  via the new `--lod-mode view-dependent` launch flag) before any compute writes that buffer. Still
+  ahead: the GPU port + headless compute harness (B1 upload/scoring → B2 emit → B3 refine/coarsen → B4
+  repairs → B5 end-to-end, where compute writes the indirect buffer + a compute→indirect-read barrier).
 - ✅ **Static GPU residency** — device-local static asset upload split from dynamic mapped buffers.
   Landed in block B (`createDeviceLocalBuffer` for static vertices/indices/LODs/VIPM), and the batching
   follow-up is now done too *(branch `cr-static-residency-batch`)*: when a load-time `uploadBatch_` is

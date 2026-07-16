@@ -113,6 +113,11 @@ private:
         std::array<BufferHandle, kMaxFramesInFlight> vdpmIndexBufs{NullBuffer, NullBuffer};
         std::array<std::span<std::byte>, kMaxFramesInFlight> vdpmIndexMapped{};
         uint32_t vdpmIndexCount{0};
+        // Per-frame host-visible indirect-command buffers (one DrawIndexedIndirectCommand each),
+        // CPU-written from vdpmIndexCount so the VDPM draw records drawIndexedIndirect (Stage A of
+        // the GPU-driven front; a compute shader writes them in Stage B5).
+        std::array<BufferHandle, kMaxFramesInFlight> vdpmIndirectBufs{NullBuffer, NullBuffer};
+        std::array<std::span<std::byte>, kMaxFramesInFlight> vdpmIndirectMapped{};
         // Reused emit buffer so the per-frame VDPM emission allocates nothing steady-state.
         std::vector<uint32_t> vdpmEmitScratch;
         // Per-object ShadowUBO buffer handles (shadow set-0 binding 0, pushed
