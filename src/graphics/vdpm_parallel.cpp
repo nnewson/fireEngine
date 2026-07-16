@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstddef>
 #include <limits>
 #include <stdexcept>
 
@@ -170,7 +171,7 @@ ParallelFront ParallelFront::build(std::span<const Vertex> vertices,
     // the identical topology.
     front.weld_ = mesh_topology::weldByPosition(vertices);
     front.finestFaces_ = mesh_topology::canonicalFaces(front.weld_, indices);
-    front.canonicalWedges_ = mesh_topology::canonicalWedges(front.weld_);
+    front.wedgesCsr_ = mesh_topology::canonicalWedgesCsr(front.weld_);
     front.hasMeshContext_ = true;
     front.finishBuild();
     return front;
@@ -463,6 +464,115 @@ void ParallelFront::repairFront(std::span<const Vertex> vertices, const Mat4& wo
         repairRefinedSplits_ += refined;
         ++repairApplyRounds_;
     }
+}
+
+void ParallelFront::emitActiveIndices(std::span<const Vertex> vertices,
+                                      std::span<const std::uint32_t> indices,
+                                      std::vector<std::uint32_t>& out) const
+{
+    if (!hasMeshContext_)
+    {
+        throw std::logic_error("VDPM ParallelFront::emitActiveIndices: front has no mesh context");
+    }
+    if (vertices.size() != forest_.vertexCount)
+    {
+        throw std::runtime_error(
+            "VDPM ParallelFront::emitActiveIndices: vertex span size != vertexCount");
+    }
+    if (indices.size() % 3 != 0)
+    {
+        // A malformed index stream (trailing 1-2 dangling values) is rejected, not silently
+        // truncated — dropping vertices would emit a subtly wrong mesh.
+        throw std::runtime_error(
+            "VDPM ParallelFront::emitActiveIndices: index count is not a multiple of 3");
+    }
+    // GPU-sized arithmetic: face survival offsets and the output index count are uint32 on the GPU,
+    // and the output count is bounded by the input (survivors * 3 <= indices.size()), so requiring
+    // the index count to fit uint32 pins every count in the emit to 32 bits.
+    if (indices.size() > std::numeric_limits<std::uint32_t>::max())
+    {
+        throw std::runtime_error(
+            "VDPM ParallelFront::emitActiveIndices: index count exceeds 32-bit indexing");
+    }
+    // Every index must reference a real vertex — it is used to read weld_[idx] and vertices[idx],
+    // so an out-of-range corner would be undefined behaviour. The API accepts a caller-supplied
+    // stream (not only the guaranteed-valid stored one), so validate it; on the GPU this is the
+    // upload-time gate on the static index buffer, analogous to validateForest.
+    for (const std::uint32_t idx : indices)
+    {
+        if (idx >= vertices.size())
+        {
+            throw std::runtime_error(
+                "VDPM ParallelFront::emitActiveIndices: index references an out-of-range vertex");
+        }
+    }
+    const auto faceCount = static_cast<std::uint32_t>(indices.size() / 3);
+
+    // Phase 1 — memoise activeAncestor(c) per canonical vertex. The front is settled at emit, so it
+    // is stable; a vertex is a corner of many faces, so this avoids re-walking the parent chain per
+    // corner. A parallel map on the GPU.
+    ancestorCache_.assign(active_.size(), 0);
+    for (std::uint32_t c = 0; c < ancestorCache_.size(); ++c)
+    {
+        ancestorCache_[c] = activeAncestor(c);
+    }
+
+    // Phase 2 — a SURVIVAL FLAG per original face: its three welded corners' active ancestors are
+    // all distinct (else the face collapsed to a degenerate at this front and is dropped). Parallel
+    // map — each face independent, reading only the ancestor cache.
+    faceSurvive_.assign(faceCount, 0);
+    for (std::uint32_t f = 0; f < faceCount; ++f)
+    {
+        const std::uint32_t a0 = ancestorCache_[weld_[indices[(3 * f) + 0]]];
+        const std::uint32_t a1 = ancestorCache_[weld_[indices[(3 * f) + 1]]];
+        const std::uint32_t a2 = ancestorCache_[weld_[indices[(3 * f) + 2]]];
+        faceSurvive_[f] = (a0 != a1 && a1 != a2 && a0 != a2) ? 1u : 0u;
+    }
+
+    // Phase 3 — EXCLUSIVE PREFIX SUM of the flags → each surviving face's output slot (= survivors
+    // before it = where a sequential append would place it, so the result is byte-identical to the
+    // oracle's push_back order). A serial scan here; a work-efficient parallel scan on the GPU. The
+    // running total after the last face is the surviving-face count — computed WITHOUT a
+    // last-element read, so an empty face stream (faceCount == 0) yields zero cleanly.
+    faceOutSlot_.assign(faceCount, 0);
+    std::uint32_t running = 0;
+    for (std::uint32_t f = 0; f < faceCount; ++f)
+    {
+        faceOutSlot_[f] = running;
+        running += faceSurvive_[f];
+    }
+    const std::uint32_t survivingFaces = running;
+
+    // Phase 4 — allocate the output ONCE, then STABLE SCATTER each surviving face's three corners
+    // at out[3 * slot] (no atomic append; original face order preserved — blend/transmission need
+    // it). Each corner is restored to the nearestWedge at its active ancestor's CSR bucket, so a
+    // seam corner keeps its own chart/shading identity instead of snapping to one canonical. Every
+    // slot in [0, survivingFaces*3) is written exactly once, so resize (no fill) suffices.
+    out.resize(static_cast<std::size_t>(survivingFaces) * 3);
+    for (std::uint32_t f = 0; f < faceCount; ++f)
+    {
+        if (faceSurvive_[f] == 0)
+        {
+            continue;
+        }
+        const std::size_t base = static_cast<std::size_t>(faceOutSlot_[f]) * 3;
+        for (std::uint32_t k = 0; k < 3; ++k)
+        {
+            const std::uint32_t oc = indices[(3 * f) + k];
+            const std::uint32_t anc = ancestorCache_[weld_[oc]];
+            out[base + k] =
+                mesh_topology::nearestWedge(vertices, wedgesCsr_.forCanonical(anc), vertices[oc]);
+        }
+    }
+}
+
+std::vector<std::uint32_t>
+ParallelFront::emitActiveIndices(std::span<const Vertex> vertices,
+                                 std::span<const std::uint32_t> indices) const
+{
+    std::vector<std::uint32_t> out;
+    emitActiveIndices(vertices, indices, out);
+    return out;
 }
 
 void ParallelFront::validateInvariants() const

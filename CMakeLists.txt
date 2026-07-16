@@ -313,6 +313,7 @@ add_executable(test_fire_engine
     tests/graphics/test_vipm.cpp
     tests/graphics/test_vdpm.cpp
     tests/graphics/test_vdpm_parallel.cpp
+    tests/graphics/test_mesh_topology.cpp
     tests/graphics/test_bounds.cpp
     tests/graphics/test_draw_command.cpp
     tests/graphics/test_frame_info.cpp

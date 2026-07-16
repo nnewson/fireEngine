@@ -1,6 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -96,6 +97,26 @@ VertexForest forestOf(const Mesh& m)
 {
     const QuadricSimplifier simp;
     return buildVertexForest(m.verts, simp.collapseSequence(m.verts, m.indices));
+}
+
+// Per-corner-duplicated grid: every triangle carries its OWN three vertices at shared positions, so
+// weldByPosition recovers a canonical carrying several render wedges (a position shared by k
+// triangles → k wedges). Each duplicate gets a distinct UV so nearestWedge has a genuine choice —
+// the multi-wedge seam-restoration path the emit must match the oracle on.
+Mesh makeSeamedGrid(int n)
+{
+    const Mesh shared = makeGrid(n);
+    Mesh dup;
+    for (std::size_t t = 0; t < shared.indices.size(); ++t)
+    {
+        const Vertex& src = shared.verts[shared.indices[t]];
+        Vertex v = src;
+        v.texCoord(Vec2{src.texCoord().s() + (0.125f * static_cast<float>(t % 5)),
+                        src.texCoord().t()}); // distinct, exactly-representable per-duplicate UV
+        dup.indices.push_back(static_cast<std::uint32_t>(dup.verts.size()));
+        dup.verts.push_back(v);
+    }
+    return dup;
 }
 
 // The recursive oracle's refine/coarsen passes, replicated on an ActiveFront from GIVEN per-split
@@ -476,6 +497,275 @@ TEST_CASE("ParallelFront::repairFront honours the mesh-context contract", "[vdpm
         REQUIRE_THROWS_AS(
             full.repairFront(truncated, Mat4::identity(), cam, viewProj, 1000.0f, 1000.0f, true),
             std::runtime_error);
+    }
+}
+
+TEST_CASE("ParallelFront::emitActiveIndices is byte-identical to the oracle", "[vdpm]")
+{
+    // The Stage-0 emit contract: for the SAME front, the GPU-shaped compaction (survival flag →
+    // prefix sum → stable scatter, CSR wedge restoration) produces the EXACT index buffer the
+    // recursive oracle's emitActiveIndices does — indices, triangle order, AND restored wedges.
+    // Both fronts are driven identically (applyView == oracleUpdate, no repair — the repairs
+    // legitimately diverge, so emit is compared on identical state), and their front state is
+    // asserted identical immediately before each emit so a future SCHEDULER regression surfaces as
+    // a front mismatch, never as a spurious emitter failure.
+    constexpr float budget = 1.0f;
+    constexpr float coarsenBudget = 0.6f;
+    for (const Mesh& m :
+         {makeGrid(9), makeUvSphere(12, 16), makeUvSphere(24, 32), makeSeamedGrid(9)})
+    {
+        const QuadricSimplifier simp;
+        const auto collapses = simp.collapseSequence(m.verts, m.indices);
+        const VertexForest forest = buildVertexForest(m.verts, collapses);
+        const auto n = static_cast<std::uint32_t>(forest.splits.size());
+
+        ActiveFront oracle = ActiveFront::build(m.verts, m.indices, collapses);
+        ParallelFront parallel = ParallelFront::build(m.verts, m.indices, collapses);
+
+        auto assertIdenticalFrontThenEmit = [&]()
+        {
+            for (std::uint32_t v = 0; v < forest.vertexCount; ++v)
+            {
+                REQUIRE(oracle.active(v) == parallel.active(v)); // scheduler parity guard
+            }
+            for (std::uint32_t s = 0; s < n; ++s)
+            {
+                REQUIRE(oracle.refined(s) == parallel.refined(s));
+            }
+            const std::vector<std::uint32_t> par = parallel.emitActiveIndices(m.verts, m.indices);
+            const std::vector<std::uint32_t> ora = oracle.emitActiveIndices(m.verts, m.indices);
+            CHECK(par == ora); // indices, order, and wedges
+            CHECK(par.size() % 3 == 0);
+        };
+
+        // Coarsest front (as built).
+        assertIdenticalFrontThenEmit();
+
+        // A sequence of pseudo-random views (a moving front).
+        std::mt19937 rng(0xE312Du);
+        std::uniform_real_distribution<float> scoreDist(0.0f, 2.0f);
+        std::size_t emittedSomething = 0;
+        for (int frame = 0; frame < 6; ++frame)
+        {
+            std::vector<float> score(n);
+            std::vector<std::uint8_t> backface(n);
+            for (std::uint32_t i = 0; i < n; ++i)
+            {
+                score[i] = scoreDist(rng);
+                backface[i] = (rng() & 7u) == 0u ? 1 : 0;
+            }
+            oracleUpdate(oracle, score, backface, budget, coarsenBudget);
+            parallel.applyView(score, backface, budget, coarsenBudget);
+            assertIdenticalFrontThenEmit();
+            emittedSomething += parallel.emitActiveIndices(m.verts, m.indices).size();
+        }
+        CHECK(emittedSomething > 0); // the views actually produced geometry
+
+        // Full detail (over-budget everywhere ⇒ every split refined).
+        oracle.refineAll();
+        parallel.applyView(std::vector<float>(n, 9.0f), std::vector<std::uint8_t>(n, 0), budget,
+                           coarsenBudget);
+        assertIdenticalFrontThenEmit();
+        // At full detail the emit reproduces the finest index stream (welded, degenerate-free).
+        CHECK(parallel.emitActiveIndices(m.verts, m.indices).size() ==
+              parallel.finestFaces().size() * 3);
+    }
+}
+
+TEST_CASE("ParallelFront::emitActiveIndices: empty / all-degenerate / malformed", "[vdpm]")
+{
+    const Mesh m = makeUvSphere(10, 14);
+    const QuadricSimplifier simp;
+    const auto collapses = simp.collapseSequence(m.verts, m.indices);
+
+    SECTION("empty-mesh full build emits nothing (the zero-face prefix-sum path)")
+    {
+        ParallelFront empty = ParallelFront::build({}, {}, {});
+        const auto out = empty.emitActiveIndices({}, {});
+        CHECK(out.empty());
+    }
+    SECTION("an all-degenerate index stream emits nothing (faces drop, no last-element read)")
+    {
+        ParallelFront full = ParallelFront::build(m.verts, m.indices, collapses);
+        // Every triangle repeats a corner ⇒ two welded corners share an ancestor ⇒ all dropped.
+        std::vector<std::uint32_t> degenerate;
+        for (std::uint32_t v = 0; v + 1 < static_cast<std::uint32_t>(m.verts.size()); ++v)
+        {
+            degenerate.insert(degenerate.end(), {v, v, v + 1});
+        }
+        const auto out = full.emitActiveIndices(m.verts, degenerate);
+        CHECK(out.empty());
+    }
+    SECTION("a malformed (non-multiple-of-3) index stream is rejected")
+    {
+        ParallelFront full = ParallelFront::build(m.verts, m.indices, collapses);
+        std::vector<std::uint32_t> bad{0, 1, 2, 3}; // 4 indices
+        REQUIRE_THROWS_AS(full.emitActiveIndices(m.verts, bad), std::runtime_error);
+    }
+    SECTION("an out-of-range index is rejected")
+    {
+        ParallelFront full = ParallelFront::build(m.verts, m.indices, collapses);
+        std::vector<std::uint32_t> bad{0, 1, static_cast<std::uint32_t>(m.verts.size())}; // == size
+        REQUIRE_THROWS_AS(full.emitActiveIndices(m.verts, bad), std::runtime_error);
+    }
+    SECTION("a wrong-sized vertex span is rejected")
+    {
+        ParallelFront full = ParallelFront::build(m.verts, m.indices, collapses);
+        std::vector<Vertex> truncated(m.verts.begin(), m.verts.end() - 1);
+        REQUIRE_THROWS_AS(full.emitActiveIndices(truncated, m.indices), std::runtime_error);
+    }
+    SECTION("a scheduling-only front has no mesh context ⇒ emit throws")
+    {
+        ParallelFront sched = ParallelFront::build(buildVertexForest(m.verts, collapses));
+        REQUIRE_THROWS_AS(sched.emitActiveIndices(m.verts, m.indices), std::logic_error);
+    }
+}
+
+TEST_CASE("ParallelFront: applyView → repairFront → emitActiveIndices is self-consistent", "[vdpm]")
+{
+    // The REAL per-frame lifecycle. The parallel repair reaches a different valid front than the
+    // oracle, so this can't compare to the oracle emit — instead it checks the emit against an
+    // INDEPENDENT recomputation from the settled front: the surviving faces are exactly the
+    // non-degenerate ones, IN ORIGINAL ORDER, and each emitted corner is the nearestWedge of its
+    // original corner into its active ancestor's CSR bucket (and hence a member of that bucket).
+    constexpr float budget = 1.0f;
+    constexpr float coarsenBudget = 0.6f;
+    constexpr float vw = 1000.0f;
+    constexpr float vh = 1000.0f;
+    const Vec3 cam{0.0f, 0.0f, 2.4f};
+    const Mat4 world = Mat4::identity();
+    const Mat4 viewProj =
+        Mat4::perspective(1.0f, 1.0f, 0.05f, 100.0f) * Mat4::lookAt(cam, {0, 0, 0}, {0, 1, 0});
+
+    for (const bool cull : {true, false})
+    {
+        for (const Mesh& m : {makeUvSphere(20, 28), makeSeamedGrid(9)})
+        {
+            const QuadricSimplifier simp;
+            const auto collapses = simp.collapseSequence(m.verts, m.indices);
+            const VertexForest forest = buildVertexForest(m.verts, collapses);
+            const auto n = static_cast<std::uint32_t>(forest.splits.size());
+            const std::vector<std::uint32_t> weld = mesh_topology::weldByPosition(m.verts);
+
+            ParallelFront front = ParallelFront::build(m.verts, m.indices, collapses);
+            auto ancestor = [&](std::uint32_t v)
+            {
+                while (!front.active(v))
+                {
+                    v = front.forest().splits[front.forest().removingSplit[v]].parent;
+                }
+                return v;
+            };
+
+            std::mt19937 rng(0x11CEu);
+            std::uniform_real_distribution<float> scoreDist(0.0f, 2.0f);
+            std::size_t totalEmitted = 0;
+            for (int frame = 0; frame < 4; ++frame)
+            {
+                std::vector<float> score(n);
+                const std::vector<std::uint8_t> backface(n, 0);
+                for (std::uint32_t i = 0; i < n; ++i)
+                {
+                    score[i] = scoreDist(rng);
+                }
+                front.applyView(score, backface, budget, coarsenBudget);
+                front.repairFront(m.verts, world, cam, viewProj, vw, vh, cull);
+                front.validateInvariants();
+
+                const std::vector<std::uint32_t> out = front.emitActiveIndices(m.verts, m.indices);
+
+                // Walk the original faces in order; each survivor must occupy the next output slot
+                // (proves the compaction is stable + in original order), with wedge-restored
+                // corners.
+                std::size_t slot = 0;
+                for (std::size_t i = 0; i + 2 < m.indices.size(); i += 3)
+                {
+                    const std::array<std::uint32_t, 3> oc{m.indices[i], m.indices[i + 1],
+                                                          m.indices[i + 2]};
+                    const std::array<std::uint32_t, 3> anc{
+                        ancestor(weld[oc[0]]), ancestor(weld[oc[1]]), ancestor(weld[oc[2]])};
+                    if (anc[0] == anc[1] || anc[1] == anc[2] || anc[0] == anc[2])
+                    {
+                        continue; // degenerate at this front — dropped
+                    }
+                    REQUIRE((slot * 3) + 2 < out.size());
+                    for (std::uint32_t k = 0; k < 3; ++k)
+                    {
+                        const std::uint32_t emitted = out[(slot * 3) + k];
+                        const std::span<const std::uint32_t> bucket =
+                            front.wedgesCsr().forCanonical(anc[k]);
+                        // Belongs to the active ancestor's wedge bucket, and is exactly the wedge
+                        // nearestWedge would restore for this original corner.
+                        CHECK(weld[emitted] == anc[k]);
+                        CHECK(std::ranges::find(bucket, emitted) != bucket.end());
+                        CHECK(emitted ==
+                              mesh_topology::nearestWedge(m.verts, bucket, m.verts[oc[k]]));
+                    }
+                    ++slot;
+                }
+                CHECK(out.size() == slot * 3); // no trailing/extra output beyond the survivors
+                totalEmitted += out.size();
+            }
+            CHECK(totalEmitted > 0); // the lifecycle actually produced geometry
+        }
+    }
+}
+
+TEST_CASE("ParallelFront wedge-ABI evidence (CSR vs a precomputed corner→wedge map)", "[vdpm]")
+{
+    // Evidence for the Stage-0 gate: the CSR wedge memory (the chosen ABI) vs an upper bound on the
+    // ALTERNATIVE precomputed corner→wedge map (one entry per finest-face corner per possible
+    // active ancestor up its removal chain — it can grow ~Σ chain lengths and dwarf the CSR).
+    // Reported so "CSR-first" is evidence-based, not assumed.
+    for (const Mesh& m : {makeUvSphere(24, 32), makeSeamedGrid(17)})
+    {
+        const QuadricSimplifier simp;
+        const auto collapses = simp.collapseSequence(m.verts, m.indices);
+        const ParallelFront front = ParallelFront::build(m.verts, m.indices, collapses);
+        const VertexForest& forest = front.forest();
+        const mesh_topology::CanonicalWedgesCsr& csr = front.wedgesCsr();
+
+        std::size_t maxWedges = 0;
+        std::size_t multiWedgeCanonicals = 0;
+        for (std::uint32_t c = 0; c < forest.vertexCount; ++c)
+        {
+            const std::size_t w = csr.forCanonical(c).size();
+            maxWedges = std::max(maxWedges, w);
+            multiWedgeCanonicals += w > 1 ? 1 : 0;
+        }
+        const std::size_t csrBytes =
+            (csr.wedges.size() + csr.offsets.size()) * sizeof(std::uint32_t);
+
+        // Upper bound on the precomputed map: for each finest-face corner, one wedge entry per
+        // ancestor along its removal chain (its possible active ancestors across all fronts).
+        auto chainLength = [&](std::uint32_t v)
+        {
+            std::size_t len = 1;
+            while (forest.removingSplit[v] != kNoSplit)
+            {
+                v = forest.splits[forest.removingSplit[v]].parent;
+                ++len;
+            }
+            return len;
+        };
+        std::size_t precomputedEntries = 0;
+        for (const std::array<std::uint32_t, 3>& f : front.finestFaces())
+        {
+            for (const std::uint32_t c : f)
+            {
+                precomputedEntries += chainLength(c);
+            }
+        }
+        const std::size_t precomputedBytes = precomputedEntries * sizeof(std::uint32_t);
+
+        WARN("wedges: total " << csr.wedges.size() << ", max/canonical " << maxWedges
+                              << ", multi-wedge canonicals " << multiWedgeCanonicals << "; CSR "
+                              << csrBytes << " B vs precomputed-map upper bound "
+                              << precomputedBytes << " B ("
+                              << (static_cast<double>(precomputedBytes) /
+                                  static_cast<double>(std::max<std::size_t>(1, csrBytes)))
+                              << "x the CSR)");
+        CHECK(csrBytes > 0);
     }
 }
 

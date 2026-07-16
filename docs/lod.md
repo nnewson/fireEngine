@@ -548,21 +548,28 @@ at a fraction of the triangles. The remaining residuals and follow-ons, in rough
   per-frame front lifecycle (score → refine/coarsen → both repairs → emit) has to move to the GPU as a
   unit — a partial move round-trips the shared front state and erases the win — with an indirect draw
   (the CPU no longer knows the index count). The CPU `vdpm` stays the headless-tested oracle + fallback
-  (the `cloth` CPU-ref ↔ `render/` GPU-impl pattern). **Stage 0 (`graphics/vdpm_parallel`, in progress —
-  scheduling core + parallel repairs complete):** a GPU-shaped CPU model — the refine-dependency DAG
+  (the `cloth` CPU-ref ↔ `render/` GPU-impl pattern). **Stage 0 (`graphics/vdpm_parallel`, COMPLETE):**
+  a GPU-shaped CPU model — the refine-dependency DAG
   with topological **ranks** (CSR by-rank layout), and
   `ParallelFront`, which reproduces the recursive front by **rank-ordered data-parallel passes**
   (requirement-closure → ascending-rank refine → descending-rank coarsen) instead of recursion, proven
-  byte-for-byte against the oracle. The **parallel repairs** are now in too: `ParallelFront::repairFront`
+  byte-for-byte against the oracle. The **parallel repairs**: `ParallelFront::repairFront`
   reuses the shared `detail::` classifiers to detect every foldover ∪ coverage violation against a
   **settled** front, closes + applies the targets in rank order (`closeAndApplyRequired`), and iterates
   to an inflationary fixed point — sharing P2's per-face policy + final invariants (zero foldover, zero
   coverage) but not its sequential schedule, so it may reach a different valid front. Evidence on a
   curved sphere: it converges in **2 detection passes / 1 apply round** and over-refines the sequential
-  joint repair by only **1–3 triangles** (≤0.2%), under the hard bound (the full finest detail). This is the arc's
-  stop/go gate: it proves the parallel scheduling + repair convergence and gathers the dispatch-depth
-  evidence (curved meshes ~30 ranks; flat grids scale linearly) before any GLSL. Still ahead:
-  deterministic seam-preserving emit, the GPU port + harness, and the indirect-draw plumbing.
+  joint repair by only **1–3 triangles** (≤0.2%), under the hard bound (the full finest detail). And the
+  **deterministic seam-preserving emit**: `ParallelFront::emitActiveIndices` is the GPU-shaped compaction
+  — memoise each vertex's active ancestor → a per-face **survival flag** → an exclusive **prefix sum** →
+  a stable **scatter** of three wedge-restored corners at `out[3·slot]` (no atomic append, so triangle
+  order matches the original faces — blend/transmission need that), restoring each corner to the
+  `nearestWedge` at its ancestor via a **CSR** wedge adjacency (`mesh_topology::canonicalWedgesCsr`, the
+  GPU uploader's shape). It is **byte-identical** to the oracle's emit (indices, order, wedges) for a
+  given front. This was the arc's stop/go gate — it proved the parallel scheduling, repair convergence,
+  AND emit on CPU in CI, plus the dispatch-depth (curved ~30 ranks; flat grids scale linearly) and
+  wedge-ABI evidence (CSR vs a precomputed corner→wedge map) — before any GLSL. Next: Stage A
+  (indirect-draw plumbing), then the GPU port + headless compute harness.
 - **7 forest skips.** `buildVertexForest` skips collapses whose edge diverged from its adjacency
   replay (7 of ~6800 on the helmet); past the first skip the forest is slightly unfaithful. The repairs
   cover the visible symptoms; truncating the stream at the first skip would be the clean structural fix.

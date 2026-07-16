@@ -294,8 +294,14 @@ Candidates" section folds in here:
   settled front, close + apply targets in rank order, re-detect — an inflationary fixed point sharing
   the per-face policy + final invariants but not the sequential schedule (may reach a different valid
   front). Evidence: converges in 2 detection passes / 1 apply round, over-refines the sequential by
-  1–3 tris (≤0.2%). Still ahead:
-  deterministic seam-preserving emit, the GPU port + harness, and indirect-draw plumbing.
+  1–3 tris (≤0.2%). Finally the **deterministic seam-preserving emit** *(branch `cr-vdpm-parallel-emit`)*:
+  `ParallelFront::emitActiveIndices` is the GPU-shaped compaction — per-face survival flag → exclusive
+  prefix sum → stable scatter (no atomic append, so triangle order is preserved) with `nearestWedge`
+  restoration via a CSR wedge adjacency (`mesh_topology::canonicalWedgesCsr`) — proven **byte-identical**
+  to the oracle's emit (indices, order, wedges). **Stage 0 is now complete**: scheduling, repair
+  convergence + overhead, and emit are all proven on CPU in CI, with the rank-depth and wedge-ABI
+  evidence reported. Still ahead: Stage A (indirect-draw plumbing), then the GPU port + headless compute
+  harness.
 - ✅ **Static GPU residency** — device-local static asset upload split from dynamic mapped buffers.
   Landed in block B (`createDeviceLocalBuffer` for static vertices/indices/LODs/VIPM), and the batching
   follow-up is now done too *(branch `cr-static-residency-batch`)*: when a load-time `uploadBatch_` is

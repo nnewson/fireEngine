@@ -95,6 +95,32 @@ std::vector<std::vector<std::uint32_t>> canonicalWedges(std::span<const std::uin
     return wedges;
 }
 
+CanonicalWedgesCsr canonicalWedgesCsr(std::span<const std::uint32_t> weld)
+{
+    const auto n = static_cast<std::uint32_t>(weld.size());
+    CanonicalWedgesCsr csr;
+    // Counting sort by canonical id, in ascending original-vertex order — so each bucket ends up in
+    // the SAME order as canonicalWedges' push_back, and a nearestWedge tie picks the identical
+    // lowest-index wedge. Every original vertex belongs to exactly one canonical bucket, so the
+    // flat array is exactly `n` long.
+    csr.offsets.assign(n + 1, 0);
+    for (std::uint32_t v = 0; v < n; ++v)
+    {
+        ++csr.offsets[weld[v] + 1]; // count into the NEXT slot, so the prefix sum yields starts
+    }
+    for (std::uint32_t c = 0; c < n; ++c)
+    {
+        csr.offsets[c + 1] += csr.offsets[c];
+    }
+    csr.wedges.resize(n);
+    std::vector<std::uint32_t> cursor(csr.offsets.begin(), csr.offsets.end() - 1);
+    for (std::uint32_t v = 0; v < n; ++v)
+    {
+        csr.wedges[cursor[weld[v]]++] = v;
+    }
+    return csr;
+}
+
 std::vector<std::array<std::uint32_t, 3>> canonicalFaces(std::span<const std::uint32_t> weld,
                                                          std::span<const std::uint32_t> indices)
 {
