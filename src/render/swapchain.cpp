@@ -73,8 +73,10 @@ void Swapchain::createSwapchain(const Device& device, const Window& window)
         imgCount = std::min(imgCount, caps.maxImageCount);
     }
 
-    uint32_t families[] = {device.graphicsFamily(), device.presentFamily()};
-    bool concurrent = device.graphicsFamily() != device.presentFamily();
+    // The swapchain is windowed-only, so the present family is always present here.
+    const uint32_t presentFamily = *device.presentFamily();
+    uint32_t families[] = {device.graphicsFamily(), presentFamily};
+    bool concurrent = device.graphicsFamily() != presentFamily;
 
     vk::SwapchainCreateInfoKHR ci{
         .surface = *device.surface(),

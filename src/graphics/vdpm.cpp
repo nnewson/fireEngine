@@ -19,29 +19,45 @@ namespace fire_engine
 namespace
 {
 
-// Largest singular value of a 3x3 (its spectral norm): the greatest factor by which the matrix
-// stretches any direction. Power iteration on mᵀm (symmetric PSD) converges to its largest
-// eigenvalue; σ_max is its square root. EXACT for a uniform scale (mᵀm = s²I ⇒ σ = s); a
-// CONSERVATIVE upper bound over all directions for non-uniform scale / shear. Lets an instance
-// transform's object-space deviation/support radii be bounded into world space by one scalar, so a
-// scaled instance refines correctly instead of using the unscaled object-space radius.
+// A CONSERVATIVE bound on the largest singular value of a 3x3 (its spectral norm): the greatest
+// factor by which the matrix stretches any direction. σ_max(m) = sqrt(λ_max(mᵀm)); bound
+// λ_max(mᵀm) by the Gershgorin / induced-∞-norm bound ‖mᵀm‖∞ (the max absolute row sum of the
+// symmetric Gram matrix), which for any symmetric PSD matrix is a GUARANTEED upper bound on its
+// spectral radius. So σ_max is never UNDER-estimated — the object-space deviation/support radii
+// bounded into world space stay conservative (an instance never under-refines) and the conditioning
+// test never wrongly trusts a near-singular transform. EXACT for orthogonal (mᵀm = I) and diagonal
+// (scale) transforms; a modest over-estimate for a sheared/rotated mix (off-diagonal mass inflates
+// the row sum), which only over-refines — the safe direction.
+//
+// The Gram matrix + row sums are computed in DOUBLE and the float result is outward-rounded one ULP
+// toward +∞, so float rounding of the products can't push the answer below the true bound (the
+// bound is only conservative in exact arithmetic otherwise).
+//
+// A finite power iteration is NOT usable here: a fixed start vector orthogonal to the dominant
+// eigenvector converges to the WRONG (smaller) eigenvalue no matter how many iterations run — e.g.
+// the in-plane shear [[5.5,-4.5,0],[-4.5,5.5,0],[0,0,1]] has σ_max = 10 but its dominant mᵀm
+// eigenvector (1,-1,0) is orthogonal to (1,1,1), so power iteration returns 1 (a 10×
+// under-estimate).
 [[nodiscard]] float largestSingularValue(const Mat3& m) noexcept
 {
-    const Mat3 ata = m.transpose() * m;
-    Vec3 v{1.0f, 1.0f, 1.0f};
-    float lambda = 0.0f;
-    for (int iter = 0; iter < 24; ++iter)
+    double maxRowSum = 0.0;
+    for (int i = 0; i < 3; ++i)
     {
-        const Vec3 av = ata * v;
-        const float len = av.magnitude();
-        if (len <= 1e-20f)
+        double rowSum = 0.0;
+        for (int j = 0; j < 3; ++j)
         {
-            return 0.0f;
+            double gram = 0.0; // (mᵀm)_ij = Σ_k m_ki · m_kj
+            for (int k = 0; k < 3; ++k)
+            {
+                gram += static_cast<double>(m[k, i]) * static_cast<double>(m[k, j]);
+            }
+            rowSum += std::abs(gram);
         }
-        v = av * (1.0f / len);
-        lambda = Vec3::dotProduct(v, ata * v);
+        maxRowSum = std::max(maxRowSum, rowSum);
     }
-    return std::sqrt(std::max(0.0f, lambda));
+    const double sigma = std::sqrt(std::max(0.0, maxRowSum));
+    // Outward round: the returned float is the smallest float >= the double bound >= true σ_max.
+    return std::nextafter(static_cast<float>(sigma), std::numeric_limits<float>::infinity());
 }
 
 } // namespace
@@ -410,6 +426,92 @@ bool ActiveFront::forceRefine(std::uint32_t splitIndex)
     return refine(splitIndex);
 }
 
+VdpmViewParams makeVdpmViewParams(const Mat4& world, const Vec3& cameraPos, float projScaleY,
+                                  float viewportHeight, float silhouetteBoost,
+                                  bool rasterBackfaceCulling, float uvScale, float normalScale,
+                                  float tangentScale)
+{
+    const Mat3 linear = Mat3::fromColumns({world[0, 0], world[1, 0], world[2, 0]},
+                                          {world[0, 1], world[1, 1], world[2, 1]},
+                                          {world[0, 2], world[1, 2], world[2, 2]});
+    // Object-space deviation/support radii are projected against a WORLD distance, so they must be
+    // bounded into world space by σ_max (exact for uniform scale, conservative otherwise) or a
+    // scaled instance would under-refine. (UV error is texture-space, so NOT scaled — see below.)
+    const float worldLengthScale = largestSingularValue(linear);
+
+    // The cone predicate runs in OBJECT space (sign of dot(normal, viewDir) is
+    // transform-invariant), so the camera is inverse-transformed once. A near-singular world has no
+    // reliable inverse — the cone is then unusable (never cull, treat every split as a potential
+    // silhouette). The conditioning test |det|/σ_max³ ∈ [0,1] is a pure SHAPE measure
+    // (scale-invariant), unlike an absolute |det| which would wrongly reject a tiny-but-uniform
+    // instance. A reflection's determinant sign folds into the cone facing.
+    const float det = linear.determinant();
+    const float sigmaMax = worldLengthScale;
+    const bool coneUsable = std::abs(det) > 1e-6f * sigmaMax * sigmaMax * sigmaMax;
+    const Vec3 worldTranslation{world[0, 3], world[1, 3], world[2, 3]};
+
+    VdpmViewParams p;
+    p.worldLinear = linear;
+    p.worldTranslationMinusCamera = worldTranslation - cameraPos;
+    p.cameraObj = coneUsable ? linear.inverse() * (cameraPos - worldTranslation) : Vec3{};
+    p.worldLengthScale = worldLengthScale;
+    p.facingSign = det >= 0.0f ? 1.0f : -1.0f;
+    p.projScaleY = projScaleY;
+    p.halfViewport = viewportHeight * 0.5f;
+    p.silhouetteBoost = silhouetteBoost;
+    p.uvScale = uvScale;
+    p.normalScale = normalScale;
+    p.tangentScale = tangentScale;
+    p.coneUsable = coneUsable;
+    p.coneCullEnabled = rasterBackfaceCulling && coneUsable;
+    return p;
+}
+
+VdpmSplitScore scoreVdpmSplit(const VdpmViewParams& params, const VertexSplit& s,
+                              const Vec3& parentPos, const Vec3& childPos)
+{
+    // Camera-relative affine: worldLinear·local + (worldTranslation − camera) = world·local −
+    // camera, so this is EXACTLY the world-space offset from the camera under any linear transform
+    // (incl. singular). The support sphere is centred on the PARENT (= kept), so the footprint
+    // projects from the parent's distance, not the child's.
+    auto worldDelta = [&](const Vec3& local)
+    { return (params.worldLinear * local) + params.worldTranslationMinusCamera; };
+    const float distance = std::max(1e-3f, worldDelta(childPos).magnitude());
+    const float parentDistance = std::max(1e-3f, worldDelta(parentPos).magnitude());
+
+    // Object-space cone visibility (region centre = the parent). Singular world ⇒ never cull, max
+    // potential silhouette.
+    const detail::ConeVisibility vis =
+        params.coneUsable
+            ? detail::coneVisibility(s.normalConeAxis, s.normalConeCos, s.supportRadius, parentPos,
+                                     params.cameraObj, params.facingSign, params.coneCullEnabled)
+            : detail::ConeVisibility{false, 1.0f};
+
+    VdpmSplitScore r;
+    r.straddle = vis.straddle;
+    if (vis.backFacing)
+    {
+        r.backface = 1; // provably raster back-face-culled: score 0, skip discretionary refine
+        return r;
+    }
+
+    // Silhouette boost tightens the budget for a cone straddling edge-on so contours stay dense.
+    const float boost = 1.0f + (params.silhouetteBoost * vis.straddle);
+    // Four channels in screen pixels. GEOMETRIC (geometry silhouette-boosted + world-scaled; UV
+    // texture-space, NOT world-scaled) project e·projScaleY·(vh/2)/d. ANGULAR (normal/tangent,
+    // radians) project the support radius as a screen EXTENT and multiply by the chord 2·sin(θ/2) —
+    // dimensionless, so shading scales like geometry. Both angular channels are silhouette-boosted.
+    const float worldSupport = s.supportRadius * params.worldLengthScale;
+    r.geometry = s.error * params.worldLengthScale * boost * params.projScaleY *
+                 params.halfViewport / distance;
+    r.uv = s.uvError * params.uvScale * params.projScaleY * params.halfViewport / distance;
+    const float nearDistance = std::max(1e-3f, parentDistance - worldSupport);
+    const float extent = worldSupport * params.projScaleY * params.halfViewport / nearDistance;
+    r.normal = 2.0f * std::sin(0.5f * s.normalError) * params.normalScale * boost * extent;
+    r.tangent = 2.0f * std::sin(0.5f * s.tangentError) * params.tangentScale * boost * extent;
+    return r;
+}
+
 void ActiveFront::refineForView(std::span<const Vertex> vertices, const Mat4& world,
                                 const Vec3& cameraPos, float projScaleY, float viewportHeight,
                                 float pixelBudget, float silhouetteBoost,
@@ -425,143 +527,55 @@ void ActiveFront::refineForView(std::span<const Vertex> vertices, const Mat4& wo
     channelStats_ = ChannelStats{};
     splitScore_.assign(forest_.splits.size(), 0.0f);
     splitBackface_.assign(forest_.splits.size(), 0);
-    const float halfViewport = viewportHeight * 0.5f;
 
-    const Mat3 linear = Mat3::fromColumns({world[0, 0], world[1, 0], world[2, 0]},
-                                          {world[0, 1], world[1, 1], world[2, 1]},
-                                          {world[0, 2], world[1, 2], world[2, 2]});
-
-    // The deviation + support radii are OBJECT-space lengths, but the split is projected against a
-    // WORLD-space distance, so a mesh instanced at a non-unit world scale must have its radii
-    // bounded into world space or it would refine as if unscaled (a 10× instance under-refining).
-    // The largest singular value of the linear part is that bound — exact for uniform scale,
-    // conservative for non-uniform. (UV error is texture-space, not a world length, so it is NOT
-    // scaled.)
-    const float worldLengthScale = largestSingularValue(linear);
-
-    // Per-split visibility from the precomputed normal cone (built from FACE normals — what the
-    // rasteriser back-face-culls on) runs in OBJECT space: the SIGN of dot(worldNormal,
-    // worldViewDir) equals the sign of dot(objNormal, objViewDir) for any linear world transform
-    // (the normal's M⁻ᵀ and the view direction's M cancel), so back-facing is exact under
-    // non-uniform scale / shear AND the stored cone stays circular (a world-space test would shear
-    // it). Transform the camera into object space once. A near-singular world has no reliable
-    // inverse — then the cone is unusable, so disable culling and treat every split as a potential
-    // silhouette. The conditioning test is SCALE-INVARIANT: |det| = σ₁σ₂σ₃, so |det|/σ_max³ ∈ [0,1]
-    // is a pure shape measure (≈1 well-conditioned, →0 as an axis collapses) — unlike an absolute
-    // |det| threshold, which would wrongly reject a tiny-but-uniform instance (e.g. scale 1e-4).
-    // Otherwise fold the determinant SIGN into the facing (a reflection flips winding, so the
-    // raster-culled side is the object-space front) — `coneVisibility` handles it exactly.
-    const float det = linear.determinant();
-    const float sigmaMax = worldLengthScale;
-    const bool coneUsable = std::abs(det) > 1e-6f * sigmaMax * sigmaMax * sigmaMax;
-    const bool coneCullEnabled = rasterBackfaceCulling && coneUsable;
-    const float facingSign = det >= 0.0f ? 1.0f : -1.0f;
-    const Vec3 worldTranslation{world[0, 3], world[1, 3], world[2, 3]};
-    const Vec3 cameraObj = coneUsable ? linear.inverse() * (cameraPos - worldTranslation) : Vec3{};
-    auto visibilityOf = [&](const VertexSplit& s) -> detail::ConeVisibility
-    {
-        if (!coneUsable)
-        {
-            return {false, 1.0f}; // singular world: never cull, max potential silhouette
-        }
-        return detail::coneVisibility(s.normalConeAxis, s.normalConeCos, s.supportRadius,
-                                      vertices[s.parent].position(), cameraObj, facingSign,
-                                      coneCullEnabled);
-    };
+    // Derive the per-instance view params ONCE (σ_max, the determinant conditioning, the
+    // object-space camera), then score every split through the shared Vulkan-free authority — the
+    // exact derivation + math the GPU port (render/vdpm_gpu) uploads and reproduces.
+    const VdpmViewParams params =
+        makeVdpmViewParams(world, cameraPos, projScaleY, viewportHeight, silhouetteBoost,
+                           rasterBackfaceCulling, uvScale, normalScale, tangentScale);
+    const float invBudget = pixelBudget > 0.0f ? 1.0f / pixelBudget : 0.0f;
 
     // Score pass: tag every split with its max screen-space channel score + back-face flag for this
     // view (order-independent — no front mutation here).
     for (std::uint32_t i = 0; i < forest_.splits.size(); ++i)
     {
         const VertexSplit& s = forest_.splits[i];
-
-        const Vec3 local = vertices[s.child].position();
-        const Vec4 wp4 = world * Vec4{local.x(), local.y(), local.z(), 1.0f};
-        const Vec3 worldPos{wp4.x(), wp4.y(), wp4.z()};
-        const float distance = std::max(1e-3f, (worldPos - cameraPos).magnitude());
-
-        // The support sphere is centred on `kept` (= s.parent), so its footprint must project from
-        // the PARENT's world position, not the child's — otherwise the radius and the projection
-        // centre describe different spheres and a large collapse mis-estimates its footprint.
-        const Vec3 parentLocal = vertices[s.parent].position();
-        const Vec4 pw4 = world * Vec4{parentLocal.x(), parentLocal.y(), parentLocal.z(), 1.0f};
-        const float parentDistance =
-            std::max(1e-3f, (Vec3{pw4.x(), pw4.y(), pw4.z()} - cameraPos).magnitude());
-
-        // Back-face gate: skip *budget-driven* refinement of a split whose whole support region is
-        // PROVABLY raster back-face-culled (refining it is vertex work for no visible pixels).
-        // Suppresses only discretionary refinement; forceRefine can still pull a back-facing split
-        // in as the dependency of a visible/silhouette split. This is an exact evaluation of a
-        // conservative bound (the cone + support sphere over-bound the surface), so `backFacing` is
-        // a one-sided proof of hiddenness — never a claim that a non-back-facing split is visible.
-        const detail::ConeVisibility vis = visibilityOf(s);
-        if (vis.backFacing)
+        const VdpmSplitScore r =
+            scoreVdpmSplit(params, s, vertices[s.parent].position(), vertices[s.child].position());
+        if (r.backface != 0)
         {
             splitBackface_[i] = 1; // culled: score 0, skip refine, eligible to coarsen
             continue;
         }
 
-        // Silhouette: a cone straddling edge-on gets a tighter budget so contours stay dense.
-        const float boost = 1.0f + silhouetteBoost * vis.straddle;
-
-        // Four independent channels in screen pixels; any one over budget refines the split. The
-        // GEOMETRIC channels are world-length deviations projected e·projScaleY·(vh/2)/d: geometry
-        // (silhouette-boosted; its object-space radius bounded into world space by worldLengthScale
-        // so a scaled instance refines correctly) and UV (texture-space, so NOT world-scaled). The
-        // ANGULAR channels (normal/tangent, radians) matter in proportion to the projected SCREEN
-        // EXTENT of the region they affect, so they project the split's world-space support radius
-        // as that same geometric extent and multiply by the chord 2·sin(θ/2) — the dimensionless
-        // angular magnitude (≈θ small-angle, saturating at 2 for a flipped normal). This makes the
-        // shading score scale exactly like geometry (angle dimensionless, extent scales with the
-        // mesh), unlike the old fixed-length projection which shrank the shading score when model +
-        // camera scaled together. The support extent uses the PARENT-centred near-sphere depth
-        // (parentDistance − worldSupport), a conservative projection of a sphere centred on kept.
-        // Both angular channels are silhouette-boosted (a lighting error at a grazing contour is
-        // the most visible).
-        const float worldSupport = s.supportRadius * worldLengthScale;
-        const float geomScreenError =
-            s.error * worldLengthScale * boost * projScaleY * halfViewport / distance;
-        const float uvScreenError = s.uvError * uvScale * projScaleY * halfViewport / distance;
-        const float nearDistance = std::max(1e-3f, parentDistance - worldSupport);
-        const float extent = worldSupport * projScaleY * halfViewport / nearDistance;
-        const float normalScreenError =
-            2.0f * std::sin(0.5f * s.normalError) * normalScale * boost * extent;
-        const float tangentScreenError =
-            2.0f * std::sin(0.5f * s.tangentError) * tangentScale * boost * extent;
-
         // Metric instrumentation: track how hard each channel is pushing (max ratio over all
-        // splits) regardless of whether this split refines, so an under-firing channel is still
-        // visible.
-        const float invBudget = pixelBudget > 0.0f ? 1.0f / pixelBudget : 0.0f;
+        // front-facing splits) regardless of whether this split refines, so an under-firing channel
+        // is still visible.
         channelStats_.maxGeometryRatio =
-            std::max(channelStats_.maxGeometryRatio, geomScreenError * invBudget);
-        channelStats_.maxUvRatio = std::max(channelStats_.maxUvRatio, uvScreenError * invBudget);
-        channelStats_.maxNormalRatio =
-            std::max(channelStats_.maxNormalRatio, normalScreenError * invBudget);
+            std::max(channelStats_.maxGeometryRatio, r.geometry * invBudget);
+        channelStats_.maxUvRatio = std::max(channelStats_.maxUvRatio, r.uv * invBudget);
+        channelStats_.maxNormalRatio = std::max(channelStats_.maxNormalRatio, r.normal * invBudget);
         channelStats_.maxTangentRatio =
-            std::max(channelStats_.maxTangentRatio, tangentScreenError * invBudget);
+            std::max(channelStats_.maxTangentRatio, r.tangent * invBudget);
 
-        splitScore_[i] =
-            std::max({geomScreenError, uvScreenError, normalScreenError, tangentScreenError});
+        splitScore_[i] = r.score();
 
         // A split that is NOT yet refined and is over the budget will be pulled in by the refine
-        // pass below — attribute that new *trigger* to its winning channel (the one furthest over
-        // budget), so the counts read as "which channel is driving new detail this frame".
-        // Already-refined splits that merely stay refined are not re-counted (steady-state ⇒ few
-        // triggers, which is the point of persistence). The max ratios above track every split,
-        // refined or not.
+        // pass below — attribute that new *trigger* to its winning channel. Already-refined splits
+        // that merely stay refined are not re-counted (steady-state ⇒ few triggers).
         if (refined_[i] == 0 && splitScore_[i] > pixelBudget)
         {
             const float winner = splitScore_[i];
-            if (winner == geomScreenError)
+            if (winner == r.geometry)
             {
                 ++channelStats_.geometryTriggers;
             }
-            else if (winner == uvScreenError)
+            else if (winner == r.uv)
             {
                 ++channelStats_.uvTriggers;
             }
-            else if (winner == normalScreenError)
+            else if (winner == r.normal)
             {
                 ++channelStats_.normalTriggers;
             }

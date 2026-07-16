@@ -109,6 +109,7 @@ add_library(fireengine SHARED
     src/render/swapchain.cpp
     src/render/taa.cpp
     src/render/transmission.cpp
+    src/render/vdpm_gpu.cpp
     src/scene/animator.cpp
     src/scene/controllable.cpp
     src/scene/camera.cpp
@@ -321,6 +322,7 @@ add_executable(test_fire_engine
     tests/graphics/test_sampler_settings.cpp
     tests/render/test_ubo.cpp
     tests/render/test_pipeline_config.cpp
+    tests/render/test_vdpm_gpu.cpp
     tests/graphics/test_generational_slot_pool.cpp
     tests/scene/test_particle_emitter.cpp
     tests/core/test_shader_loader.cpp

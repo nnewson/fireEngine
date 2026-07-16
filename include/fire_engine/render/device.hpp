@@ -1,7 +1,9 @@
 #pragma once
 
+#include <cstdint>
 #include <optional>
 #include <utility>
+#include <vector>
 
 #include <vulkan/vulkan_raii.hpp>
 
@@ -15,6 +17,12 @@ class Device
 {
 public:
     explicit Device(const Window& window);
+    // Surface-free, compute-only device: no WSI/GLFW instance extensions, no surface, no swapchain
+    // — it requires a single graphics+compute queue family (the same-queue path the renderer
+    // already dispatches compute on) and keeps the production feature set (BDA, sync2, …). For
+    // headless offscreen compute (the VDPM GPU harness). A production mode of Device, not a
+    // test-only shim.
+    [[nodiscard]] static Device headlessCompute();
     ~Device(); // persists the pipeline cache to disk
 
     Device(const Device&) = delete;
@@ -57,7 +65,9 @@ public:
     {
         return graphicsFamily_;
     }
-    [[nodiscard]] uint32_t presentFamily() const noexcept
+    // Absent (nullopt) for a headless compute device — it has no surface, so no present family.
+    // Windowed callers (the swapchain) deref it directly.
+    [[nodiscard]] std::optional<uint32_t> presentFamily() const noexcept
     {
         return presentFamily_;
     }
@@ -76,6 +86,13 @@ public:
                                                vk::MemoryPropertyFlags props) const;
 
 private:
+    enum class Mode : std::uint8_t
+    {
+        Windowed,       // surface + swapchain + present queue (the app)
+        HeadlessCompute // no surface/swapchain, one graphics+compute queue (offscreen)
+    };
+    explicit Device(Mode mode); // shared init for the surface-free path
+
     void createInstance();
     void createSurface(const Window& window);
     void pickPhysicalDevice();
@@ -84,11 +101,18 @@ private:
     void createPipelineCache();
     void savePipelineCache() const noexcept;
 
+    [[nodiscard]] bool headless() const noexcept
+    {
+        return mode_ == Mode::HeadlessCompute;
+    }
+    // The device extensions required for the current mode (swapchain only when windowed).
+    [[nodiscard]] std::vector<const char*> requiredDeviceExtensions() const;
     [[nodiscard]] bool isDeviceSuitable(const vk::raii::PhysicalDevice& d);
     [[nodiscard]] std::pair<std::optional<uint32_t>, std::optional<uint32_t>>
     findQueueFamilies(const vk::raii::PhysicalDevice& d);
     void printValidationInfo() const;
 
+    Mode mode_{Mode::Windowed};
     vk::raii::Context context_;
     vk::raii::Instance instance_{nullptr};
     vk::raii::SurfaceKHR surface_{nullptr};
@@ -98,7 +122,7 @@ private:
     vk::raii::Queue graphicsQueue_{nullptr};
     vk::raii::Queue presentQueue_{nullptr};
     uint32_t graphicsFamily_{0};
-    uint32_t presentFamily_{0};
+    std::optional<uint32_t> presentFamily_; // nullopt when headless (no surface)
     // Declared last so it is destroyed first — before device_/instance_, which it was built
     // from and which must outlive it.
     VmaAllocatorHandle allocator_;
