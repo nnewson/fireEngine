@@ -19,26 +19,6 @@ namespace fire_engine
 namespace
 {
 
-// The finest triangle set in canonical space: each input triangle welded, degenerate (post-weld
-// duplicate-vertex) triangles dropped.
-[[nodiscard]] std::vector<std::array<std::uint32_t, 3>>
-canonicalFaces(std::span<const std::uint32_t> weld, std::span<const std::uint32_t> indices)
-{
-    std::vector<std::array<std::uint32_t, 3>> faces;
-    faces.reserve(indices.size() / 3);
-    for (std::size_t i = 0; i + 2 < indices.size(); i += 3)
-    {
-        const std::array<std::uint32_t, 3> f{weld[indices[i]], weld[indices[i + 1]],
-                                             weld[indices[i + 2]]};
-        if (f[0] == f[1] || f[1] == f[2] || f[0] == f[2])
-        {
-            continue;
-        }
-        faces.push_back(f);
-    }
-    return faces;
-}
-
 // Largest singular value of a 3x3 (its spectral norm): the greatest factor by which the matrix
 // stretches any direction. Power iteration on mᵀm (symmetric PSD) converges to its largest
 // eigenvalue; σ_max is its square root. EXACT for a uniform scale (mᵀm = s²I ⇒ σ = s); a
@@ -110,6 +90,147 @@ ConeVisibility coneVisibility(const Vec3& coneAxis, float coneCos, float support
     return {backFacing, straddle};
 }
 
+bool isFoldover(const std::array<Vec3, 3>& original, const std::array<Vec3, 3>& replacement,
+                bool replacementDegenerate) noexcept
+{
+    if (replacementDegenerate)
+    {
+        return false; // legitimately collapsed to a degenerate — a neighbour covers it
+    }
+    // Winding compared in WORLD space: the rasteriser culls on the post-world winding, and a
+    // non-uniform-scale / mirroring world can flip the relative orientation of the original vs
+    // replacement triangle, so an object-space test would mis-classify foldovers there.
+    const Vec3 orig = Vec3::crossProduct(original[1] - original[0], original[2] - original[0]);
+    const Vec3 repl =
+        Vec3::crossProduct(replacement[1] - replacement[0], replacement[2] - replacement[0]);
+    return Vec3::dotProduct(orig, repl) < 0.0f;
+}
+
+CoverageRepair
+classifyCoverageRepair(const std::array<Vec3, 3>& original, const std::array<Vec3, 3>& replacement,
+                       bool replacementDegenerate, const std::array<bool, 3>& cornerInactive,
+                       const Vec3& cameraPos, const Mat4& viewProj, float viewportWidth,
+                       float viewportHeight, bool rasterBackfaceCulling) noexcept
+{
+    // NDC xy of a world point; false if behind the camera (w <= 0).
+    auto toNdc = [&](const Vec3& wp, Vec2& out)
+    {
+        const Vec4 c = viewProj * Vec4{wp.x(), wp.y(), wp.z(), 1.0f};
+        if (c.w() <= 1e-6f)
+        {
+            return false;
+        }
+        out = Vec2{c.x() / c.w(), c.y() / c.w()};
+        return true;
+    };
+    // Is p inside triangle (a,b,c)? (same-sign edge functions; on-edge counts as inside).
+    auto edge = [](const Vec2& a, const Vec2& b, const Vec2& p)
+    { return ((p.s() - a.s()) * (b.t() - a.t())) - ((p.t() - a.t()) * (b.s() - a.s())); };
+    auto inside = [&](const Vec2& p, const Vec2& a, const Vec2& b, const Vec2& cc)
+    {
+        const float d0 = edge(a, b, p);
+        const float d1 = edge(b, cc, p);
+        const float d2 = edge(cc, a, p);
+        return !((d0 < 0.0f || d1 < 0.0f || d2 < 0.0f) && (d0 > 0.0f || d1 > 0.0f || d2 > 0.0f));
+    };
+
+    // When no corner is inactive, the face is already at full detail here: the conservative
+    // "refine every inactive corner" outcomes have no target and collapse to a clean None no-op.
+    const bool anyInactive = cornerInactive[0] || cornerInactive[1] || cornerInactive[2];
+    const CoverageRepair allInactive =
+        anyInactive ? CoverageRepair{CoverageRepairKind::AllInactiveCorners, kInvalidCorner}
+                    : CoverageRepair{};
+
+    const Vec3 centroid = (original[0] + original[1] + original[2]) * (1.0f / 3.0f);
+    const Vec3 gn = Vec3::crossProduct(original[1] - original[0], original[2] - original[0]);
+    if (rasterBackfaceCulling && Vec3::dotProduct(gn, cameraPos - centroid) <= 0.0f)
+    {
+        // Back-facing original AND the draw culls back-faces ⇒ the rasteriser never shows it, so it
+        // can't leak. A double-sided / blended draw renders it and still needs coverage — fall
+        // through. `gn` is the WORLD winding, so this stays correct under a reflected world.
+        return {};
+    }
+    // The ORIGINAL triangle's projected area gates whether a coverage miss is worth fixing. A face
+    // straddling the near plane (some corners behind the camera) can't be projected to test
+    // coverage, so refine it conservatively; one fully behind the camera isn't visible.
+    Vec2 s0;
+    Vec2 s1;
+    Vec2 s2;
+    const int inFront = static_cast<int>(toNdc(original[0], s0)) +
+                        static_cast<int>(toNdc(original[1], s1)) +
+                        static_cast<int>(toNdc(original[2], s2));
+    if (inFront == 0)
+    {
+        return {}; // fully behind the camera — not visible
+    }
+    if (inFront < 3)
+    {
+        return allInactive; // straddles the near plane — can't test coverage, refine
+    }
+    // Refine below this SCREEN area only when it's worth it: a couple of pixels. Expressed in px²
+    // (resolution-independent), then converted to NDC — a triangle of NDC area A covers
+    // A·(w/2)·(h/2) px², since NDC spans [-1,1].
+    const float minNdcArea =
+        kMinCoverageScreenAreaPx / std::max(1.0f, 0.25f * viewportWidth * viewportHeight);
+    if (std::abs(edge(s0, s1, s2)) * 0.5f < minNdcArea)
+    {
+        return {}; // sub-pixel: not a visible hole
+    }
+    if (replacementDegenerate)
+    {
+        // DEGENERATE replacement: the face collapsed to a sliver and was dropped from the emit. At
+        // a silhouette / high-curvature contour no neighbour covers its footprint, so a visible
+        // non-trivial-area face here is a real hole — refine it back.
+        return allInactive;
+    }
+    Vec2 sc;
+    Vec2 sa0;
+    Vec2 sa1;
+    Vec2 sa2;
+    if (!toNdc(centroid, sc) || !toNdc(replacement[0], sa0) || !toNdc(replacement[1], sa1) ||
+        !toNdc(replacement[2], sa2))
+    {
+        // The replacement (or the centroid) straddles the near plane — can't test coverage, so
+        // refine conservatively rather than silently skipping.
+        return allInactive;
+    }
+    if (inside(sc, sa0, sa1, sa2))
+    {
+        return {}; // the replacement still covers this face's centroid
+    }
+    // Coverage hole: refine the collapsed corner whose active ancestor is displaced furthest on
+    // screen from its finest position — that is the corner whose recession opened the gap.
+    std::uint32_t worst = kInvalidCorner;
+    float worstDisp = -1.0f;
+    for (std::uint32_t k = 0; k < 3; ++k)
+    {
+        if (!cornerInactive[k])
+        {
+            continue; // this corner is already at finest — cannot displace
+        }
+        Vec2 sFine;
+        Vec2 sAnc;
+        if (!toNdc(original[k], sFine) || !toNdc(replacement[k], sAnc))
+        {
+            continue;
+        }
+        const Vec2 d = sFine - sAnc;
+        const float disp = Vec2::dotProduct(d, d);
+        if (disp > worstDisp)
+        {
+            worstDisp = disp;
+            worst = k;
+        }
+    }
+    // worst == kInvalidCorner means every corner is already at finest (the face covers itself), or
+    // every inactive corner was unprojectable — clean None no-op.
+    if (worst == kInvalidCorner)
+    {
+        return {};
+    }
+    return {CoverageRepairKind::WorstInactiveCorner, worst};
+}
+
 } // namespace detail
 
 VertexForest buildVertexForest(std::span<const Vertex> vertices,
@@ -156,7 +277,7 @@ ActiveFront ActiveFront::build(std::span<const Vertex> vertices, std::span<const
     ActiveFront front;
     front.forest_ = buildVertexForest(vertices, collapses);
     front.weld_ = mesh_topology::weldByPosition(vertices);
-    front.finestFaces_ = canonicalFaces(front.weld_, indices);
+    front.finestFaces_ = mesh_topology::canonicalFaces(front.weld_, indices);
 
     const std::size_t n = vertices.size();
     front.canonicalWedges_ =
@@ -509,17 +630,14 @@ ActiveFront::RepairSweepResult ActiveFront::repairFoldoversSweep(std::span<const
         const std::uint32_t a0 = activeAncestor(fc[0]);
         const std::uint32_t a1 = activeAncestor(fc[1]);
         const std::uint32_t a2 = activeAncestor(fc[2]);
-        if (a0 == a1 || a1 == a2 || a0 == a2)
+        const bool degenerate = (a0 == a1 || a1 == a2 || a0 == a2);
+        // Shared classifier owns the winding math (a degenerate replacement is never a foldover —
+        // a neighbour covers it), so the sequential sweep and the parallel snapshot detector agree.
+        const std::array<Vec3, 3> original{worldPos(fc[0]), worldPos(fc[1]), worldPos(fc[2])};
+        const std::array<Vec3, 3> replacement{worldPos(a0), worldPos(a1), worldPos(a2)};
+        if (!detail::isFoldover(original, replacement, degenerate))
         {
-            continue; // legitimately collapsed to a degenerate — a neighbour covers it
-        }
-        const Vec3 p0 = worldPos(fc[0]);
-        const Vec3 orig = Vec3::crossProduct(worldPos(fc[1]) - p0, worldPos(fc[2]) - p0);
-        const Vec3 wa0 = worldPos(a0);
-        const Vec3 repl = Vec3::crossProduct(worldPos(a1) - wa0, worldPos(a2) - wa0);
-        if (Vec3::dotProduct(orig, repl) >= 0.0f)
-        {
-            continue; // replacement keeps the original winding — not a foldover
+            continue;
         }
         // Foldover: pull each collapsed (inactive) corner back toward its finest position. An
         // inactive corner whose valid removing split fails to force-refine is a forest
@@ -556,27 +674,6 @@ ActiveFront::repairCoverageSweep(std::span<const Vertex> vertices, const Mat4& w
         const Vec4 w = world * Vec4{l.x(), l.y(), l.z(), 1.0f};
         return Vec3{w.x(), w.y(), w.z()};
     };
-    // NDC xy of a world point; false if behind the camera (w <= 0).
-    auto toNdc = [&](const Vec3& wp, Vec2& out)
-    {
-        const Vec4 c = viewProj * Vec4{wp.x(), wp.y(), wp.z(), 1.0f};
-        if (c.w() <= 1e-6f)
-        {
-            return false;
-        }
-        out = Vec2{c.x() / c.w(), c.y() / c.w()};
-        return true;
-    };
-    // Is p inside triangle (a,b,c)? (same-sign edge functions; on-edge counts as inside).
-    auto edge = [](const Vec2& a, const Vec2& b, const Vec2& p)
-    { return ((p.s() - a.s()) * (b.t() - a.t())) - ((p.t() - a.t()) * (b.s() - a.s())); };
-    auto inside = [&](const Vec2& p, const Vec2& a, const Vec2& b, const Vec2& cc)
-    {
-        const float d0 = edge(a, b, p);
-        const float d1 = edge(b, cc, p);
-        const float d2 = edge(cc, a, p);
-        return !((d0 < 0.0f || d1 < 0.0f || d2 < 0.0f) && (d0 > 0.0f || d1 > 0.0f || d2 > 0.0f));
-    };
 
     // The ONE place a coverage repair force-refines a corner + accounts for it, so the counter and
     // the sweep result can't diverge between the paths that call it (near-plane / degenerate
@@ -599,118 +696,36 @@ ActiveFront::repairCoverageSweep(std::span<const Vertex> vertices, const Mat4& w
             result.failedToProgress = true;
         }
     };
-    auto refineCorners = [&](const std::array<std::uint32_t, 3>& fc)
-    {
-        for (const std::uint32_t c : fc)
-        {
-            refineCoverageCorner(c);
-        }
-    };
-
-    // Refine below this SCREEN area only when it's worth it: a couple of pixels. Expressed in px²
-    // (resolution-independent), then converted to NDC — a triangle of NDC area A covers
-    // A·(w/2)·(h/2) px², since NDC spans [-1,1]. A fixed NDC constant would mean different pixel
-    // sizes per viewport and could skip visible holes on a high-res view.
-    constexpr float kMinScreenAreaPx = 2.0f;
-    const float minNdcArea =
-        kMinScreenAreaPx / std::max(1.0f, 0.25f * viewportWidth * viewportHeight);
-
     for (const std::array<std::uint32_t, 3>& fc : finestFaces_)
     {
-        const Vec3 w0 = worldPos(fc[0]);
-        const Vec3 w1 = worldPos(fc[1]);
-        const Vec3 w2 = worldPos(fc[2]);
-        const Vec3 centroid = (w0 + w1 + w2) * (1.0f / 3.0f);
-        const Vec3 gn = Vec3::crossProduct(w1 - w0, w2 - w0);
-        if (rasterBackfaceCulling && Vec3::dotProduct(gn, cameraPos - centroid) <= 0.0f)
-        {
-            // Back-facing original AND the draw culls back-faces ⇒ the rasteriser never shows it,
-            // so it can't leak. A double-sided / blended draw (rasterBackfaceCulling false) renders
-            // this face, so it still needs coverage — fall through. `gn` is the WORLD winding
-            // (built from world positions), so this stays correct under a reflected
-            // (negative-determinant) world, which flips which side faces the camera.
-            continue;
-        }
-        // The ORIGINAL triangle's projected area gates whether a coverage miss is worth fixing. A
-        // face straddling the near plane (some corners behind the camera) can't be projected to
-        // test coverage, so refine it conservatively; one fully behind the camera isn't visible.
-        Vec2 s0;
-        Vec2 s1;
-        Vec2 s2;
-        const int inFront = static_cast<int>(toNdc(w0, s0)) + static_cast<int>(toNdc(w1, s1)) +
-                            static_cast<int>(toNdc(w2, s2));
-        if (inFront == 0)
-        {
-            continue; // fully behind the camera — not visible
-        }
-        if (inFront < 3)
-        {
-            refineCorners(fc); // straddles the near plane — can't test coverage, refine
-            continue;
-        }
-        if (std::abs(edge(s0, s1, s2)) * 0.5f < minNdcArea)
-        {
-            continue; // sub-pixel: not a visible hole
-        }
         const std::uint32_t a0 = activeAncestor(fc[0]);
         const std::uint32_t a1 = activeAncestor(fc[1]);
         const std::uint32_t a2 = activeAncestor(fc[2]);
-        if (a0 == a1 || a1 == a2 || a0 == a2)
+        const bool degenerate = (a0 == a1 || a1 == a2 || a0 == a2);
+        const std::array<Vec3, 3> original{worldPos(fc[0]), worldPos(fc[1]), worldPos(fc[2])};
+        const std::array<Vec3, 3> replacement{worldPos(a0), worldPos(a1), worldPos(a2)};
+        const std::array<bool, 3> inactive{active_[fc[0]] == 0, active_[fc[1]] == 0,
+                                           active_[fc[2]] == 0};
+        // The shared classifier decides the per-face outcome (all pure projection math); this sweep
+        // only applies the targets, so it stays byte-identical to the parallel snapshot detector's
+        // per-face policy. Every force-refine still routes through refineCoverageCorner so the
+        // counter and result accounting can't diverge between the target kinds.
+        const detail::CoverageRepair repair = detail::classifyCoverageRepair(
+            original, replacement, degenerate, inactive, cameraPos, viewProj, viewportWidth,
+            viewportHeight, rasterBackfaceCulling);
+        switch (repair.kind)
         {
-            // DEGENERATE replacement: the face collapsed to a sliver and was dropped from the emit.
-            // At a silhouette / high-curvature contour no neighbour covers its footprint, so a
-            // visible non-trivial-area face here is a real hole — refine it back (the earlier "a
-            // neighbour covers it" assumption is exactly wrong on a contour).
-            refineCorners(fc);
-            continue;
-        }
-        Vec2 sc;
-        Vec2 sa0;
-        Vec2 sa1;
-        Vec2 sa2;
-        if (!toNdc(centroid, sc) || !toNdc(worldPos(a0), sa0) || !toNdc(worldPos(a1), sa1) ||
-            !toNdc(worldPos(a2), sa2))
-        {
-            // The replacement (or the centroid) straddles the near plane — can't test coverage, so
-            // refine conservatively rather than silently skipping.
-            refineCorners(fc);
-            continue;
-        }
-        if (inside(sc, sa0, sa1, sa2))
-        {
-            continue; // the replacement still covers this face's centroid
-        }
-        // Coverage hole: refine the collapsed corner whose active ancestor is displaced furthest on
-        // screen from its finest position — that is the corner whose recession opened the gap.
-        std::uint32_t worst = kInvalidVertex;
-        float worstDisp = -1.0f;
-        const std::array<std::uint32_t, 3> anc{a0, a1, a2};
-        for (int k = 0; k < 3; ++k)
-        {
-            if (active_[fc[k]] != 0)
+        case detail::CoverageRepairKind::None:
+            break;
+        case detail::CoverageRepairKind::AllInactiveCorners:
+            for (const std::uint32_t c : fc)
             {
-                continue; // this corner is already at finest — cannot displace
+                refineCoverageCorner(c);
             }
-            Vec2 sFine;
-            Vec2 sAnc;
-            if (!toNdc(worldPos(fc[k]), sFine) || !toNdc(worldPos(anc[k]), sAnc))
-            {
-                continue;
-            }
-            const Vec2 d = sFine - sAnc;
-            const float disp = Vec2::dotProduct(d, d);
-            if (disp > worstDisp)
-            {
-                worstDisp = disp;
-                worst = fc[k];
-            }
-        }
-        // worst == kInvalidVertex means every corner is already at finest (the face covers itself)
-        // — clean. Otherwise refine it through the SAME helper as the other paths (the main
-        // coverage-hole path), so the counter and result accounting can't diverge between branches.
-        if (worst != kInvalidVertex)
-        {
-            refineCoverageCorner(worst);
+            break;
+        case detail::CoverageRepairKind::WorstInactiveCorner:
+            refineCoverageCorner(fc[repair.worstCorner]);
+            break;
         }
     }
     return result;

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <span>
 #include <vector>
@@ -34,5 +35,12 @@ namespace fire_engine::mesh_topology
 // by canonical id; sized to `weld.size()`. Non-canonical slots are empty.
 [[nodiscard]] std::vector<std::vector<std::uint32_t>>
 canonicalWedges(std::span<const std::uint32_t> weld);
+
+// The finest triangle set in canonical space: each input triangle mapped through `weld`, with
+// post-weld degenerate (duplicate-corner) triangles dropped. Input face + corner order preserved
+// (so winding is preserved). Both the CPU `ActiveFront` and the GPU-shaped `ParallelFront` build
+// their finest-face set through this, so they walk identical topology.
+[[nodiscard]] std::vector<std::array<std::uint32_t, 3>>
+canonicalFaces(std::span<const std::uint32_t> weld, std::span<const std::uint32_t> indices);
 
 } // namespace fire_engine::mesh_topology

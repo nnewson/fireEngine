@@ -132,6 +132,55 @@ struct ConeVisibility
                                             const Vec3& cameraObj, float facingSign,
                                             bool cullEnabled) noexcept;
 
+// Shared per-face repair classifiers — pure geometry, so the sequential CPU sweeps AND the parallel
+// snapshot detector run the IDENTICAL projection math and differ only in WHEN they apply the
+// returned targets (the sweep mutates while walking; the snapshot marks a required set against a
+// settled front, closes it, applies, and re-detects). All positions are WORLD-space; `viewProj` is
+// the JITTER-FREE proj*view. This is the single source of truth for the P2 joint-repair per-face
+// policy.
+
+inline constexpr std::uint32_t kInvalidCorner = 0xFFFFFFFFu;
+// Coverage repair below this SCREEN area isn't worth it (a couple of pixels); shared so the runtime
+// and the test validator apply the same policy. Converted to NDC per viewport (area A covers
+// A·(w/2)·(h/2) px²), so a fixed NDC constant would mean different pixel sizes per viewport.
+inline constexpr float kMinCoverageScreenAreaPx = 2.0f;
+
+// A finest face's active-ancestor replacement winds AGAINST the original ⇒ the rasteriser
+// back-face- culls it into a hole. World-space winding (correct under non-uniform / reflected
+// transforms). A degenerate replacement (two ancestors coincident) is NOT a foldover — a neighbour
+// covers it.
+[[nodiscard]] bool isFoldover(const std::array<Vec3, 3>& original,
+                              const std::array<Vec3, 3>& replacement,
+                              bool replacementDegenerate) noexcept;
+
+enum class CoverageRepairKind : std::uint8_t
+{
+    None,               // covered / not visible / sub-pixel / already at full detail here
+    AllInactiveCorners, // force-refine every inactive corner (near-plane / degenerate /
+                        // unprojectable)
+    WorstInactiveCorner // force-refine the single most screen-displaced inactive corner (centroid
+                        // escape)
+};
+struct CoverageRepair
+{
+    CoverageRepairKind kind{CoverageRepairKind::None};
+    std::uint32_t worstCorner{kInvalidCorner}; // LOCAL corner 0..2, only for WorstInactiveCorner
+};
+
+// Classify one finest face's screen-space coverage repair against a settled front. `original` /
+// `replacement` are the corners' world positions and their active-ancestor world positions;
+// `replacementDegenerate` is whether two ancestors coincide (the face dropped from the emit);
+// `cornerInactive[k]` marks a corner not yet at finest (a refinable target). Follows the exact P2
+// policy: back-face-culled / fully behind / sub-pixel / centroid-covered ⇒ None; near-plane
+// straddle / degenerate / unprojectable replacement ⇒ AllInactiveCorners; ordinary centroid escape
+// ⇒ the worst- displaced inactive corner. When there is no inactive corner (full detail here) the
+// conservative AllInactiveCorners cases collapse to None — the clean full-detail no-op.
+[[nodiscard]] CoverageRepair
+classifyCoverageRepair(const std::array<Vec3, 3>& original, const std::array<Vec3, 3>& replacement,
+                       bool replacementDegenerate, const std::array<bool, 3>& cornerInactive,
+                       const Vec3& cameraPos, const Mat4& viewProj, float viewportWidth,
+                       float viewportHeight, bool rasterBackfaceCulling) noexcept;
+
 } // namespace detail
 
 // A selectively-refinable active front over the vertex forest. Holds the current

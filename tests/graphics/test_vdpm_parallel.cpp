@@ -1,14 +1,21 @@
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <random>
 #include <span>
 #include <vector>
 
 #include <fire_engine/graphics/mesh_simplifier.hpp>
+#include <fire_engine/graphics/mesh_topology.hpp>
 #include <fire_engine/graphics/vdpm.hpp>
 #include <fire_engine/graphics/vdpm_parallel.hpp>
+#include <fire_engine/math/mat4.hpp>
+#include <fire_engine/math/vec3.hpp>
+
+#include <support/vdpm.hpp>
 
 using namespace fire_engine;
 
@@ -120,6 +127,37 @@ void oracleUpdate(ActiveFront& f, std::span<const float> score,
     }
 }
 
+// Emitted (non-degenerate) canonical triangle count for a settled front — a finest face survives
+// iff its three active ancestors are distinct. Works on any front exposing forest()/active(), so it
+// measures the sequential and parallel repaired fronts by the same rule.
+template <class Front>
+std::size_t emittedTriangles(const Front& front, std::span<const Vertex> vertices,
+                             std::span<const std::uint32_t> indices)
+{
+    const VertexForest& f = front.forest();
+    const std::vector<std::uint32_t> weld = mesh_topology::weldByPosition(vertices);
+    auto ancestor = [&](std::uint32_t v)
+    {
+        while (!front.active(v))
+        {
+            v = f.splits[f.removingSplit[v]].parent;
+        }
+        return v;
+    };
+    std::size_t tris = 0;
+    for (std::size_t i = 0; i + 2 < indices.size(); i += 3)
+    {
+        const std::uint32_t a0 = ancestor(weld[indices[i]]);
+        const std::uint32_t a1 = ancestor(weld[indices[i + 1]]);
+        const std::uint32_t a2 = ancestor(weld[indices[i + 2]]);
+        if (a0 != a1 && a1 != a2 && a0 != a2)
+        {
+            ++tris;
+        }
+    }
+    return tris;
+}
+
 } // namespace
 
 TEST_CASE("dependency DAG: real forests are acyclic and rank-consistent", "[vdpm]")
@@ -184,6 +222,38 @@ TEST_CASE("dependency DAG: rank depth vs mesh size", "[.][vdpm][RankEvidence]")
     }
 }
 
+TEST_CASE("ParallelFront full build: mesh context matches the ActiveFront oracle", "[vdpm]")
+{
+    // The full build (from a mesh) must produce the SAME finest canonical face set as ActiveFront,
+    // so the parallel repairs + emit walk identical topology. Cross-check against the oracle's
+    // finest set = its emitActiveCanonical() at full refinement (every finest face maps to itself).
+    // Compare DIRECTLY — face order, corner order AND winding must match, so a reversed triangle
+    // (the exact defect foldover repair cares about) would fail, not slip through a vertex sort.
+    for (const Mesh& m : {makeGrid(9), makeUvSphere(12, 16)})
+    {
+        const QuadricSimplifier simp;
+        const auto collapses = simp.collapseSequence(m.verts, m.indices);
+
+        ParallelFront full = ParallelFront::build(m.verts, m.indices, collapses);
+        const ParallelFront sched = ParallelFront::build(buildVertexForest(m.verts, collapses));
+        CHECK(full.forest().splits.size() == sched.forest().splits.size());
+        CHECK(full.dag().maxRank == sched.dag().maxRank);
+        CHECK(full.hasMeshContext());
+        CHECK_FALSE(sched.hasMeshContext()); // scheduling-only build carries no mesh context
+        CHECK(sched.finestFaces().empty());
+
+        ActiveFront oracle = ActiveFront::build(m.verts, m.indices, collapses);
+        oracle.refineAll();
+        CHECK(full.finestFaces() ==
+              oracle.emitActiveCanonical()); // order + winding, not membership
+
+        // The full build's scheduling still works (mesh context doesn't perturb the front state).
+        const auto n = static_cast<std::uint32_t>(full.forest().splits.size());
+        full.applyView(std::vector<float>(n, 9.0f), std::vector<std::uint8_t>(n, 0), 1.0f, 0.6f);
+        full.validateInvariants();
+    }
+}
+
 TEST_CASE("ParallelFront: rank-ordered update reproduces the recursive oracle's front", "[vdpm]")
 {
     // The heart of Stage 0: the parallel refine/coarsen (requirement-closure + rank-ordered apply)
@@ -231,6 +301,181 @@ TEST_CASE("ParallelFront: rank-ordered update reproduces the recursive oracle's 
             }
         }
         CHECK(mismatches == 0);
+    }
+}
+
+TEST_CASE("ParallelFront::repairFront drives the settled front to zero invariant failures",
+          "[vdpm]")
+{
+    // The snapshot repair's correctness contract: starting from an arbitrary settled front, detect
+    // EVERY violation against that snapshot, close + apply in rank order, repeat — and end with
+    // zero foldover AND zero coverage failures (the two independent invariants), measured by the
+    // SHARED first-principles validators, NOT the repair's own accounting. The parallel repair
+    // shares P2's per-face policy but not its sequential schedule, so it may reach a DIFFERENT
+    // valid front — we assert the invariants, never front equality.
+    constexpr float budget = 1.0f;
+    constexpr float coarsenBudget = 0.6f;
+    constexpr float vw = 1000.0f;
+    constexpr float vh = 1000.0f;
+    const Vec3 cam{0.0f, 0.0f, 2.4f};
+    const Mat4 viewProj =
+        Mat4::perspective(1.0f, 1.0f, 0.05f, 100.0f) * Mat4::lookAt(cam, {0, 0, 0}, {0, 1, 0});
+
+    // A curved mesh viewed up close: partial fronts leave real silhouette coverage holes and
+    // recession foldovers. Cull on (opaque) and off (double-sided), and identity / asymmetric
+    // non-uniform / REFLECTED (negative-determinant, asymmetric) worlds — the reflected case flips
+    // world winding, so it exercises the whole snapshot path's world-space foldover + cull
+    // handling, not just the classifier unit tests.
+    for (const bool cull : {true, false})
+    {
+        for (const Mat4& world : {Mat4::identity(), Mat4::scale(Vec3{1.4f, 0.7f, 1.2f}),
+                                  Mat4::scale(Vec3{-1.3f, 0.8f, 1.1f})})
+        {
+            const Mesh m = makeUvSphere(20, 28);
+            const QuadricSimplifier simp;
+            const auto collapses = simp.collapseSequence(m.verts, m.indices);
+            const VertexForest forest = buildVertexForest(m.verts, collapses);
+            const auto n = static_cast<std::uint32_t>(forest.splits.size());
+
+            ParallelFront front = ParallelFront::build(m.verts, m.indices, collapses);
+
+            std::mt19937 rng(0x8E9A17u);
+            std::uniform_real_distribution<float> scoreDist(0.0f, 2.0f);
+            std::size_t preRepairViolations = 0;
+            for (int frame = 0; frame < 6; ++frame)
+            {
+                std::vector<float> score(n);
+                std::vector<std::uint8_t> backface(n);
+                for (std::uint32_t i = 0; i < n; ++i)
+                {
+                    score[i] = scoreDist(rng);
+                    backface[i] = 0; // let the repair, not a score, decide back-face handling
+                }
+                front.applyView(score, backface, budget, coarsenBudget);
+
+                // The settled (pre-repair) front genuinely has violations to fix.
+                preRepairViolations += test::foldoverCount(front, m.verts, m.indices, world) +
+                                       test::coverageFailures(front, m.verts, m.indices, viewProj,
+                                                              cam, world, vw, vh, cull);
+
+                front.repairFront(m.verts, world, cam, viewProj, vw, vh, cull);
+                front.validateInvariants(); // the front stayed structurally consistent
+
+                CHECK(test::foldoverCount(front, m.verts, m.indices, world) == 0);
+                CHECK(test::coverageFailures(front, m.verts, m.indices, viewProj, cam, world, vw,
+                                             vh, cull) == 0);
+                // The inflationary bound held: apply rounds are one fewer than detection passes.
+                CHECK(front.repairDetectionPasses() <= n + 1);
+                CHECK(front.repairApplyRounds() == front.repairDetectionPasses() - 1);
+            }
+            CHECK(preRepairViolations > 0); // the test actually exercised the repair
+        }
+    }
+}
+
+TEST_CASE("ParallelFront::repairFront overhead vs the sequential oracle (evidence)", "[vdpm]")
+{
+    // EVIDENCE, not an assertion: the snapshot repair and P2's sequential joint repair reach
+    // DIFFERENT valid fronts (over-refining a region can dissolve a violation the other repairs via
+    // another corner), and a different schedule can land either side of the other. So this reports
+    // the triangle overhead both ways and only asserts the one hard STRUCTURAL bound — neither
+    // repaired front can exceed the full finest detail. The numbers feed the Stage-0 gate review.
+    constexpr float budget = 1.0f;
+    constexpr float coarsenBudget = 0.6f;
+    constexpr float vw = 1000.0f;
+    constexpr float vh = 1000.0f;
+    const Vec3 cam{0.0f, 0.0f, 2.4f};
+    const Mat4 viewProj =
+        Mat4::perspective(1.0f, 1.0f, 0.05f, 100.0f) * Mat4::lookAt(cam, {0, 0, 0}, {0, 1, 0});
+    const Mat4 world = Mat4::identity();
+    constexpr bool cull = true;
+
+    const Mesh m = makeUvSphere(24, 32);
+    const QuadricSimplifier simp;
+    const auto collapses = simp.collapseSequence(m.verts, m.indices);
+    const VertexForest forest = buildVertexForest(m.verts, collapses);
+    const auto n = static_cast<std::uint32_t>(forest.splits.size());
+    // The finest canonical face set IS the full detail — its size bounds every repaired front.
+    const std::size_t finestTris =
+        ParallelFront::build(m.verts, m.indices, collapses).finestFaces().size();
+
+    std::mt19937 rng(0x5EED1234u);
+    std::uniform_real_distribution<float> scoreDist(0.0f, 2.0f);
+    for (int frame = 0; frame < 4; ++frame)
+    {
+        std::vector<float> score(n);
+        std::vector<std::uint8_t> backface(n, 0);
+        for (std::uint32_t i = 0; i < n; ++i)
+        {
+            score[i] = scoreDist(rng);
+        }
+
+        // Drive BOTH fronts to the identical settled starting front (applyView == oracleUpdate),
+        // then run each side's own repair from there.
+        ActiveFront oracle = ActiveFront::build(m.verts, m.indices, collapses);
+        ParallelFront parallel = ParallelFront::build(m.verts, m.indices, collapses);
+        oracleUpdate(oracle, score, backface, budget, coarsenBudget);
+        parallel.applyView(score, backface, budget, coarsenBudget);
+
+        oracle.repairFront(m.verts, world, cam, viewProj, vw, vh, cull);
+        parallel.repairFront(m.verts, world, cam, viewProj, vw, vh, cull);
+
+        const std::size_t seqTris = emittedTriangles(oracle, m.verts, m.indices);
+        const std::size_t parTris = emittedTriangles(parallel, m.verts, m.indices);
+
+        // The only hard bound: neither repaired front exceeds the full finest detail.
+        CHECK(parTris <= finestTris);
+        CHECK(seqTris <= finestTris);
+
+        const auto diff = static_cast<long long>(parTris) - static_cast<long long>(seqTris);
+        const double ratio =
+            seqTris > 0 ? static_cast<double>(parTris) / static_cast<double>(seqTris) : 0.0;
+        WARN("frame " << frame << ": parallel " << parTris << " tris, sequential " << seqTris
+                      << " tris, diff " << diff << ", ratio " << ratio << ", finest " << finestTris
+                      << " ("
+                      << (100.0 * static_cast<double>(parTris) /
+                          static_cast<double>(std::max<std::size_t>(1, finestTris)))
+                      << "% of finest); parallel detection passes "
+                      << parallel.repairDetectionPasses() << ", apply rounds "
+                      << parallel.repairApplyRounds() << ", splits refined "
+                      << parallel.repairRefinedSplits());
+    }
+}
+
+TEST_CASE("ParallelFront::repairFront honours the mesh-context contract", "[vdpm]")
+{
+    const Mesh m = makeUvSphere(10, 14);
+    const QuadricSimplifier simp;
+    const auto collapses = simp.collapseSequence(m.verts, m.indices);
+    const Vec3 cam{0.0f, 0.0f, 3.0f};
+    const Mat4 viewProj =
+        Mat4::perspective(1.0f, 1.0f, 0.1f, 100.0f) * Mat4::lookAt(cam, {0, 0, 0}, {0, 1, 0});
+
+    SECTION("a scheduling-only front has no mesh context ⇒ repairFront throws")
+    {
+        ParallelFront sched = ParallelFront::build(buildVertexForest(m.verts, collapses));
+        REQUIRE_FALSE(sched.hasMeshContext());
+        REQUIRE_THROWS_AS(
+            sched.repairFront(m.verts, Mat4::identity(), cam, viewProj, 1000.0f, 1000.0f, true),
+            std::logic_error);
+    }
+    SECTION("an empty-mesh full build has context and converges cleanly (no apply rounds)")
+    {
+        ParallelFront empty = ParallelFront::build({}, {}, {});
+        REQUIRE(empty.hasMeshContext());
+        REQUIRE_NOTHROW(
+            empty.repairFront({}, Mat4::identity(), cam, viewProj, 1000.0f, 1000.0f, true));
+        CHECK(empty.repairDetectionPasses() == 1); // one trivial scan of zero faces, then converged
+        CHECK(empty.repairApplyRounds() == 0);
+        CHECK(empty.repairRefinedSplits() == 0);
+    }
+    SECTION("a wrong-sized vertex span is rejected")
+    {
+        ParallelFront full = ParallelFront::build(m.verts, m.indices, collapses);
+        std::vector<Vertex> truncated(m.verts.begin(), m.verts.end() - 1);
+        REQUIRE_THROWS_AS(
+            full.repairFront(truncated, Mat4::identity(), cam, viewProj, 1000.0f, 1000.0f, true),
+            std::runtime_error);
     }
 }
 

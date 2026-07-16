@@ -14,6 +14,8 @@
 #include <fire_engine/graphics/vdpm.hpp>
 #include <fire_engine/math/vec4.hpp>
 
+#include <support/vdpm.hpp>
+
 using namespace fire_engine;
 
 namespace
@@ -173,132 +175,24 @@ std::vector<MeshCollapse> collapsesOf(const Mesh& m)
     return simp.collapseSequence(m.verts, m.indices);
 }
 
-// Count emitted triangles whose active-ancestor replacement winds AGAINST the original triangle — a
-// foldover the rasteriser back-face-culls (a hole to the background). Replicates activeAncestor via
-// the front's public forest()/active(), so it needs no internals. A selective front is a non-prefix
-// cut, so the simplifier's linear wouldFlip() does not cover it; the front's own repair pass must.
+// Thin Mesh-shaped wrappers over the shared span-based validators in tests/support/vdpm.hpp (which
+// judge ActiveFront and ParallelFront by the same first-principles yardstick). The common tests use
+// a 1000×1000 viewport, matching the runtime repairFront calls — so the shared viewport-derived
+// screen-area policy lines up with what the repair applied.
+constexpr float kTestViewportW = 1000.0f;
+constexpr float kTestViewportH = 1000.0f;
+
 std::size_t foldoverCount(const ActiveFront& front, const Mesh& m,
                           const Mat4& world = Mat4::identity())
 {
-    const VertexForest& f = front.forest();
-    const std::vector<uint32_t> weld = mesh_topology::weldByPosition(m.verts);
-    auto ancestor = [&](uint32_t v)
-    {
-        while (!front.active(v))
-        {
-            v = f.splits[f.removingSplit[v]].parent;
-        }
-        return v;
-    };
-    // World space — matches what the rasteriser culls on, and what repairFoldovers now tests.
-    auto wp = [&](uint32_t v)
-    {
-        const Vec3 p = m.verts[v].position();
-        const Vec4 w = world * Vec4{p.x(), p.y(), p.z(), 1.0f};
-        return Vec3{w.x(), w.y(), w.z()};
-    };
-    std::size_t folds = 0;
-    for (std::size_t i = 0; i + 2 < m.indices.size(); i += 3)
-    {
-        const uint32_t o0 = m.indices[i], o1 = m.indices[i + 1], o2 = m.indices[i + 2];
-        const uint32_t a0 = ancestor(weld[o0]), a1 = ancestor(weld[o1]), a2 = ancestor(weld[o2]);
-        if (a0 == a1 || a1 == a2 || a0 == a2)
-        {
-            continue; // legitimately collapsed away
-        }
-        const Vec3 og = Vec3::crossProduct(wp(o1) - wp(o0), wp(o2) - wp(o0));
-        const Vec3 rg = Vec3::crossProduct(wp(a1) - wp(a0), wp(a2) - wp(a0));
-        if (Vec3::dotProduct(og, rg) < 0.0f)
-        {
-            ++folds;
-        }
-    }
-    return folds;
+    return test::foldoverCount(front, m.verts, m.indices, world);
 }
 
-// Count VISIBLE original triangles whose projected centroid is NOT covered by their active-ancestor
-// replacement in NDC — a silhouette coverage hole (closed + non-folded, yet leaks the background).
-// Mirrors repairCoverage exactly, including its `rasterBackfaceCulling` policy: with culling ON
-// only front-facing faces are visible; with it OFF (double-sided/blend) back-faces render too and
-// count. `world` places the mesh (identity for the common case; a non-identity/reflected world
-// exercises the world-winding path).
 std::size_t coverageFailures(const ActiveFront& front, const Mesh& m, const Mat4& viewProj,
                              const Vec3& cameraPos, const Mat4& world, bool rasterBackfaceCulling)
 {
-    const VertexForest& f = front.forest();
-    const std::vector<uint32_t> weld = mesh_topology::weldByPosition(m.verts);
-    auto ancestor = [&](uint32_t v)
-    {
-        while (!front.active(v))
-        {
-            v = f.splits[f.removingSplit[v]].parent;
-        }
-        return v;
-    };
-    auto wp = [&](uint32_t v)
-    {
-        const Vec3 p = m.verts[v].position();
-        const Vec4 w = world * Vec4{p.x(), p.y(), p.z(), 1.0f};
-        return Vec3{w.x(), w.y(), w.z()};
-    };
-    auto ndc = [&](const Vec3& p, Vec2& out)
-    {
-        const Vec4 c = viewProj * Vec4{p.x(), p.y(), p.z(), 1.0f};
-        if (c.w() <= 1e-6f)
-        {
-            return false;
-        }
-        out = Vec2{c.x() / c.w(), c.y() / c.w()};
-        return true;
-    };
-    auto edge = [](const Vec2& a, const Vec2& b, const Vec2& p)
-    { return ((p.s() - a.s()) * (b.t() - a.t())) - ((p.t() - a.t()) * (b.s() - a.s())); };
-    auto inside = [&](const Vec2& p, const Vec2& a, const Vec2& b, const Vec2& c)
-    {
-        const float d0 = edge(a, b, p), d1 = edge(b, c, p), d2 = edge(c, a, p);
-        return !((d0 < 0 || d1 < 0 || d2 < 0) && (d0 > 0 || d1 > 0 || d2 > 0));
-    };
-    std::size_t fails = 0;
-    for (std::size_t i = 0; i + 2 < m.indices.size(); i += 3)
-    {
-        const Vec3 p0 = wp(m.indices[i]);
-        const Vec3 p1 = wp(m.indices[i + 1]);
-        const Vec3 p2 = wp(m.indices[i + 2]);
-        const Vec3 ctr = (p0 + p1 + p2) * (1.0f / 3.0f);
-        if (rasterBackfaceCulling &&
-            Vec3::dotProduct(Vec3::crossProduct(p1 - p0, p2 - p0), cameraPos - ctr) <= 0.0f)
-        {
-            continue; // culled back-face — not visible
-        }
-        // Gate on projected area so sub-pixel slivers don't count (matches repairCoverage).
-        Vec2 s0, s1, s2;
-        if (!ndc(p0, s0) || !ndc(p1, s1) || !ndc(p2, s2))
-        {
-            continue;
-        }
-        constexpr float kMinNdcArea = 1.0e-5f;
-        if (std::abs(edge(s0, s1, s2)) * 0.5f < kMinNdcArea)
-        {
-            continue;
-        }
-        const uint32_t a0 = ancestor(weld[m.indices[i]]), a1 = ancestor(weld[m.indices[i + 1]]),
-                       a2 = ancestor(weld[m.indices[i + 2]]);
-        if (a0 == a1 || a1 == a2 || a0 == a2)
-        {
-            ++fails; // degenerate replacement of a non-trivial visible face — a dropped hole
-            continue;
-        }
-        Vec2 sc, sa0, sa1, sa2;
-        if (!ndc(ctr, sc) || !ndc(wp(a0), sa0) || !ndc(wp(a1), sa1) || !ndc(wp(a2), sa2))
-        {
-            continue;
-        }
-        if (!inside(sc, sa0, sa1, sa2))
-        {
-            ++fails;
-        }
-    }
-    return fails;
+    return test::coverageFailures(front, m.verts, m.indices, viewProj, cameraPos, world,
+                                  kTestViewportW, kTestViewportH, rasterBackfaceCulling);
 }
 
 } // namespace
@@ -626,6 +520,150 @@ TEST_CASE("coneVisibility: the conservative back-face/silhouette predicate is co
         const Vec3 back{std::sin(a + 0.05f), 0.0f, std::cos(a + 0.05f)};
         CHECK_FALSE(coneVisibility(edge, narrow, 0.0f, center, cam, front, true).backFacing);
         CHECK(coneVisibility(back, narrow, 0.0f, center, cam, front, true).backFacing);
+    }
+}
+
+TEST_CASE("isFoldover: world-space winding classifies the active-ancestor replacement", "[vdpm]")
+{
+    using detail::isFoldover;
+    // Original triangle facing +z (CCW seen from +z).
+    const std::array<Vec3, 3> original{Vec3{-1, -1, 0}, Vec3{1, -1, 0}, Vec3{0, 1, 0}};
+
+    SECTION("replacement keeping the winding is not a foldover")
+    {
+        const std::array<Vec3, 3> repl{Vec3{-0.5f, -0.5f, 0}, Vec3{0.5f, -0.5f, 0},
+                                       Vec3{0, 0.5f, 0}};
+        CHECK_FALSE(isFoldover(original, repl, false));
+    }
+    SECTION("replacement wound against the original is a foldover")
+    {
+        // Two corners swapped ⇒ reversed winding (normal flips to −z).
+        const std::array<Vec3, 3> repl{Vec3{0.5f, -0.5f, 0}, Vec3{-0.5f, -0.5f, 0},
+                                       Vec3{0, 0.5f, 0}};
+        CHECK(isFoldover(original, repl, false));
+    }
+    SECTION("a degenerate replacement is never a foldover (a neighbour covers it)")
+    {
+        const std::array<Vec3, 3> folded{Vec3{0.5f, -0.5f, 0}, Vec3{-0.5f, -0.5f, 0},
+                                         Vec3{0, 0.5f, 0}};
+        CHECK_FALSE(isFoldover(original, folded, true)); // degenerate flag wins over the winding
+    }
+}
+
+TEST_CASE("classifyCoverageRepair: each per-face coverage outcome is pinned", "[vdpm]")
+{
+    using detail::classifyCoverageRepair;
+    using detail::CoverageRepairKind;
+    using detail::kInvalidCorner;
+
+    const Vec3 cam{0.0f, 0.0f, 5.0f};
+    const Mat4 viewProj =
+        Mat4::perspective(1.0f, 1.0f, 0.1f, 100.0f) * Mat4::lookAt(cam, {0, 0, 0}, {0, 1, 0});
+    constexpr float vw = 1000.0f;
+    constexpr float vh = 1000.0f;
+    constexpr std::array<bool, 3> allActive{false, false, false};
+    constexpr std::array<bool, 3> allInactive{true, true, true};
+
+    // A generous front-facing (+z normal) original at the origin — clears the cull, near-plane, and
+    // sub-pixel gates so the later branches can be isolated.
+    const std::array<Vec3, 3> front{Vec3{-1, -1, 0}, Vec3{1, -1, 0}, Vec3{0, 1, 0}};
+
+    SECTION("back-facing original + raster culling ⇒ None (the rasteriser hides it)")
+    {
+        // −z normal: wind the front triangle the other way.
+        const std::array<Vec3, 3> back{Vec3{-1, -1, 0}, Vec3{0, 1, 0}, Vec3{1, -1, 0}};
+        const auto r =
+            classifyCoverageRepair(back, back, false, allInactive, cam, viewProj, vw, vh, true);
+        CHECK(r.kind == CoverageRepairKind::None);
+    }
+    SECTION("back-facing original + NO raster culling ⇒ still coverage-checked (double-sided)")
+    {
+        // A double-sided draw shows the back-face, so it is not skipped — this covered replacement
+        // returns None via the coverage test, not the cull short-circuit.
+        const std::array<Vec3, 3> back{Vec3{-1, -1, 0}, Vec3{0, 1, 0}, Vec3{1, -1, 0}};
+        const std::array<Vec3, 3> cover{Vec3{-3, -3, 0}, Vec3{0, 2, 0}, Vec3{3, -3, 0}};
+        const auto r =
+            classifyCoverageRepair(back, cover, false, allInactive, cam, viewProj, vw, vh, false);
+        CHECK(r.kind == CoverageRepairKind::None); // reached the coverage test, centroid covered
+    }
+    SECTION("fully behind the camera ⇒ None (not visible)")
+    {
+        const std::array<Vec3, 3> behind{Vec3{-1, -1, 10}, Vec3{1, -1, 10}, Vec3{0, 1, 10}};
+        const auto r = classifyCoverageRepair(behind, behind, false, allInactive, cam, viewProj, vw,
+                                              vh, false);
+        CHECK(r.kind == CoverageRepairKind::None);
+    }
+    SECTION("near-plane straddle with an inactive corner ⇒ AllInactiveCorners")
+    {
+        // One corner behind the camera ⇒ inFront < 3; cull off so the front-face gate is neutral.
+        const std::array<Vec3, 3> straddle{Vec3{-1, -1, 0}, Vec3{1, -1, 0}, Vec3{0, 1, 10}};
+        const auto r = classifyCoverageRepair(straddle, straddle, false, allInactive, cam, viewProj,
+                                              vw, vh, false);
+        CHECK(r.kind == CoverageRepairKind::AllInactiveCorners);
+        CHECK(r.worstCorner == kInvalidCorner);
+    }
+    SECTION("near-plane straddle at full detail ⇒ None (no inactive target)")
+    {
+        const std::array<Vec3, 3> straddle{Vec3{-1, -1, 0}, Vec3{1, -1, 0}, Vec3{0, 1, 10}};
+        const auto r = classifyCoverageRepair(straddle, straddle, false, allActive, cam, viewProj,
+                                              vw, vh, false);
+        CHECK(r.kind == CoverageRepairKind::None);
+    }
+    SECTION("sub-pixel original ⇒ None")
+    {
+        const std::array<Vec3, 3> tiny{Vec3{-0.0002f, -0.0002f, 0}, Vec3{0.0002f, -0.0002f, 0},
+                                       Vec3{0, 0.0002f, 0}};
+        const auto r =
+            classifyCoverageRepair(tiny, tiny, false, allInactive, cam, viewProj, vw, vh, false);
+        CHECK(r.kind == CoverageRepairKind::None);
+    }
+    SECTION("degenerate replacement over a visible face ⇒ AllInactiveCorners")
+    {
+        const auto r =
+            classifyCoverageRepair(front, front, true, allInactive, cam, viewProj, vw, vh, true);
+        CHECK(r.kind == CoverageRepairKind::AllInactiveCorners);
+    }
+    SECTION("unprojectable replacement ⇒ AllInactiveCorners")
+    {
+        // A replacement corner behind the camera can't be projected to test coverage.
+        const std::array<Vec3, 3> repl{Vec3{-1, -1, 10}, Vec3{1, -1, 0}, Vec3{0, 1, 0}};
+        const auto r =
+            classifyCoverageRepair(front, repl, false, allInactive, cam, viewProj, vw, vh, true);
+        CHECK(r.kind == CoverageRepairKind::AllInactiveCorners);
+    }
+    SECTION("replacement covering the centroid ⇒ None")
+    {
+        const std::array<Vec3, 3> cover{Vec3{-3, -3, 0}, Vec3{3, -3, 0}, Vec3{0, 2, 0}};
+        const auto r =
+            classifyCoverageRepair(front, cover, false, allInactive, cam, viewProj, vw, vh, true);
+        CHECK(r.kind == CoverageRepairKind::None);
+    }
+    SECTION("escaped centroid ⇒ the worst-displaced inactive corner")
+    {
+        // Replacement shifted far in +x so it no longer covers the original centroid; every corner
+        // is displaced equally, so the single INACTIVE corner is the worst by construction.
+        const std::array<Vec3, 3> escaped{Vec3{9, -1, 0}, Vec3{11, -1, 0}, Vec3{10, 1, 0}};
+        {
+            const std::array<bool, 3> only0{true, false, false};
+            const auto r =
+                classifyCoverageRepair(front, escaped, false, only0, cam, viewProj, vw, vh, true);
+            CHECK(r.kind == CoverageRepairKind::WorstInactiveCorner);
+            CHECK(r.worstCorner == 0u);
+        }
+        {
+            const std::array<bool, 3> only2{false, false, true};
+            const auto r =
+                classifyCoverageRepair(front, escaped, false, only2, cam, viewProj, vw, vh, true);
+            CHECK(r.kind == CoverageRepairKind::WorstInactiveCorner);
+            CHECK(r.worstCorner == 2u);
+        }
+    }
+    SECTION("escaped centroid at full detail ⇒ None (no inactive corner to advance)")
+    {
+        const std::array<Vec3, 3> escaped{Vec3{9, -1, 0}, Vec3{11, -1, 0}, Vec3{10, 1, 0}};
+        const auto r =
+            classifyCoverageRepair(front, escaped, false, allActive, cam, viewProj, vw, vh, true);
+        CHECK(r.kind == CoverageRepairKind::None);
     }
 }
 

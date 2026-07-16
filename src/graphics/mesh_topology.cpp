@@ -1,5 +1,6 @@
 #include <fire_engine/graphics/mesh_topology.hpp>
 
+#include <array>
 #include <bit>
 #include <cstddef>
 #include <limits>
@@ -92,6 +93,24 @@ std::vector<std::vector<std::uint32_t>> canonicalWedges(std::span<const std::uin
         wedges[weld[v]].push_back(v);
     }
     return wedges;
+}
+
+std::vector<std::array<std::uint32_t, 3>> canonicalFaces(std::span<const std::uint32_t> weld,
+                                                         std::span<const std::uint32_t> indices)
+{
+    std::vector<std::array<std::uint32_t, 3>> faces;
+    faces.reserve(indices.size() / 3);
+    for (std::size_t i = 0; i + 2 < indices.size(); i += 3)
+    {
+        const std::array<std::uint32_t, 3> f{weld[indices[i]], weld[indices[i + 1]],
+                                             weld[indices[i + 2]]};
+        if (f[0] == f[1] || f[1] == f[2] || f[0] == f[2])
+        {
+            continue;
+        }
+        faces.push_back(f);
+    }
+    return faces;
 }
 
 } // namespace fire_engine::mesh_topology
