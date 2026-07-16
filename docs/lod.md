@@ -312,22 +312,27 @@ Both come from the split's precomputed **conservative normal cone** (`detail::co
 
 A selective front is a **non-prefix** cut of the collapse stream. The simplifier's `wouldFlip` only
 certifies the *linear prefix* is flip-free, and the deviation channels are all *topological* — never
-projected to screen. So two failure classes survive an otherwise-correct front, each detected by a
-**refinement-only sweep** (only activates splits — inflationary):
+projected to screen. So two failure classes survive an otherwise-correct front, each classified by a **pure per-face
+predicate** (in `detail::`, so both the sequential CPU sweeps and the parallel snapshot detector run
+the identical projection math) and repaired by a **refinement-only sweep** (only activates splits —
+inflationary):
 
-1. **Foldovers** (`repairFoldoversSweep`). A finest face whose active-ancestor replacement winds
-   *against* the original is back-face-culled by the rasteriser → a hole. Where replacement winding
-   opposes original winding, force-refine the collapsed corners (world-space winding, so correct under
-   non-uniform / reflected transforms).
-2. **Coverage / silhouette holes** (`repairCoverageSweep`, on the **jitter-free** `currentViewProj` —
-   the TAA-jittered `frame.proj` would shift the test ±½px each frame and thrash the front). A *closed,
-   non-folded* front can still leak the background: at a silhouette a coarse replacement recedes inside
-   a fine visible face's *projected footprint*. Purely screen-space (boundary/foldover checks are blind
-   to it). For each **visible** finest face above a small projected-area gate: a degenerate replacement
-   (dropped sliver — a real hole at a contour), a near-plane straddle (can't project — refine
-   conservatively), or a centroid outside the replacement in NDC → force-refine. "Visible" follows the
-   draw's cull mode (`rasterBackfaceCulling`): culling on ⇒ front faces only; off (double-sided/blend)
-   ⇒ back faces too.
+1. **Foldovers** (`detail::isFoldover`, applied by `repairFoldoversSweep`). A finest face whose
+   active-ancestor replacement winds *against* the original is back-face-culled by the rasteriser → a
+   hole. Where replacement winding opposes original winding, force-refine the collapsed corners
+   (world-space winding, so correct under non-uniform / reflected transforms). A degenerate replacement
+   is not a foldover — a neighbour covers it.
+2. **Coverage / silhouette holes** (`detail::classifyCoverageRepair`, applied by `repairCoverageSweep`,
+   on the **jitter-free** `currentViewProj` — the TAA-jittered `frame.proj` would shift the test ±½px
+   each frame and thrash the front). A *closed, non-folded* front can still leak the background: at a
+   silhouette a coarse replacement recedes inside a fine visible face's *projected footprint*. Purely
+   screen-space (boundary/foldover checks are blind to it). For each **visible** finest face above a
+   small projected-area gate the classifier returns one of: **None** (covered / not visible / sub-pixel
+   / already full-detail), **AllInactiveCorners** (degenerate replacement — a dropped sliver at a
+   contour; a near-plane straddle that can't project; an unprojectable replacement — refine every
+   inactive corner conservatively), or **WorstInactiveCorner** (an escaped centroid — refine the single
+   inactive corner most screen-displaced from its ancestor). "Visible" follows the draw's cull mode
+   (`rasterBackfaceCulling`): culling on ⇒ front faces only; off (double-sided/blend) ⇒ back faces too.
 
 **They must run as a JOINT fixed point, not two sequential phases** — `repairFront` alternates the two
 sweeps until a complete cycle refines nothing. A coverage force-refine can re-fold a neighbour and a
@@ -343,6 +348,15 @@ them. If a repairable violation has an inactive target whose valid removing spli
 *screen-space* property and foldover is *topological*, while the cone is a face-*orientation* bound.
 A force-refine-on-straddle experiment reduced but could not zero coverage repairs, so both sweeps
 stay. Retiring them eventually needs a GPU worklist/fixpoint or a representation-level guarantee.
+
+Because the classifiers are pure `detail::` predicates over world positions, the GPU-shaped
+`ParallelFront` (§ GPU-driven active front) reuses them verbatim — its snapshot repair shares P2's
+**per-face policy and final invariants**, differing only in the *operator*: it detects every violation
+against a **settled** front (no mutation while detecting), marks each target's removing split, closes
++ applies them in rank order, then re-detects. So it may reach a **different valid front** (over-
+refining a region can dissolve a violation the sequential schedule would have repaired via a different
+corner) — never the sequential joint operator's exact front. The `detail::kMinCoverageScreenAreaPx`
+policy is the one shared knob, so a test validator's "worth-fixing" threshold tracks the runtime's.
 
 ### Visibility cones (`detail::coneVisibility`)
 
@@ -381,7 +395,8 @@ This replaced the old smooth-vertex-normal 4-witness proxy and roughly **halved*
 channel sooner (more fidelity, more triangles). The back-face cull takes no threshold dial — the cone
 bound is exact bar a tiny float-safety margin; whether it applies at all is the `rasterBackfaceCulling`
 flag `refineForView` is passed (from the material's cull mode). The coverage sweep's screen-area gate
-(`kMinScreenAreaPx` in `repairCoverageSweep`) trades residual sub-pixel holes against extra triangles;
+(`detail::kMinCoverageScreenAreaPx`, shared by the classifier + test validators) trades residual
+sub-pixel holes against extra triangles;
 lower it to catch smaller holes.
 
 ---
@@ -534,14 +549,20 @@ at a fraction of the triangles. The remaining residuals and follow-ons, in rough
   unit — a partial move round-trips the shared front state and erases the win — with an indirect draw
   (the CPU no longer knows the index count). The CPU `vdpm` stays the headless-tested oracle + fallback
   (the `cloth` CPU-ref ↔ `render/` GPU-impl pattern). **Stage 0 (`graphics/vdpm_parallel`, in progress —
-  scheduling core complete):** a GPU-shaped CPU model — the refine-dependency DAG with topological
-  **ranks** (CSR by-rank layout), and
+  scheduling core + parallel repairs complete):** a GPU-shaped CPU model — the refine-dependency DAG
+  with topological **ranks** (CSR by-rank layout), and
   `ParallelFront`, which reproduces the recursive front by **rank-ordered data-parallel passes**
   (requirement-closure → ascending-rank refine → descending-rank coarsen) instead of recursion, proven
-  byte-for-byte against the oracle. This is the arc's stop/go gate: it proves the parallel scheduling
-  and gathers the dispatch-depth evidence (curved meshes ~30 ranks; flat grids scale linearly) before
-  any GLSL. Still ahead: the parallel repairs (an inflationary snapshot iteration), deterministic
-  seam-preserving emit, the GPU port + harness, and the indirect-draw plumbing.
+  byte-for-byte against the oracle. The **parallel repairs** are now in too: `ParallelFront::repairFront`
+  reuses the shared `detail::` classifiers to detect every foldover ∪ coverage violation against a
+  **settled** front, closes + applies the targets in rank order (`closeAndApplyRequired`), and iterates
+  to an inflationary fixed point — sharing P2's per-face policy + final invariants (zero foldover, zero
+  coverage) but not its sequential schedule, so it may reach a different valid front. Evidence on a
+  curved sphere: it converges in **2 detection passes / 1 apply round** and over-refines the sequential
+  joint repair by only **1–3 triangles** (≤0.2%), under the hard bound (the full finest detail). This is the arc's
+  stop/go gate: it proves the parallel scheduling + repair convergence and gathers the dispatch-depth
+  evidence (curved meshes ~30 ranks; flat grids scale linearly) before any GLSL. Still ahead:
+  deterministic seam-preserving emit, the GPU port + harness, and the indirect-draw plumbing.
 - **7 forest skips.** `buildVertexForest` skips collapses whose edge diverged from its adjacency
   replay (7 of ~6800 on the helmet); past the first skip the forest is slightly unfaithful. The repairs
   cover the visible symptoms; truncating the stream at the first skip would be the clean structural fix.

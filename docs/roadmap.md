@@ -287,8 +287,15 @@ Candidates" section folds in here:
   force-refine could re-fold a neighbour *after* the foldover fixpoint finished, leaving foldovers (a
   real shipped silhouette-hole bug). Now one public `repairFront` alternates the two private sweeps to a
   JOINT fixed point (≈2 sweeps in practice); `Object` can't misorder them; a named regression pins the
-  six cases. Still ahead: parallel repairs (the joint operator on the GPU-shaped model), deterministic
-  seam-preserving emit, the GPU port + harness, and indirect-draw plumbing.
+  six cases. The **parallel repairs** then landed on the GPU-shaped model *(branch
+  `cr-vdpm-parallel-repairs`)*: the joint repair's per-face geometry was extracted into pure `detail::`
+  classifiers (`isFoldover` / `classifyCoverageRepair`) the sequential sweeps now route through, and
+  `ParallelFront::repairFront` reuses them as a **snapshot** detector — detect every violation against a
+  settled front, close + apply targets in rank order, re-detect — an inflationary fixed point sharing
+  the per-face policy + final invariants but not the sequential schedule (may reach a different valid
+  front). Evidence: converges in 2 detection passes / 1 apply round, over-refines the sequential by
+  1–3 tris (≤0.2%). Still ahead:
+  deterministic seam-preserving emit, the GPU port + harness, and indirect-draw plumbing.
 - ✅ **Static GPU residency** — device-local static asset upload split from dynamic mapped buffers.
   Landed in block B (`createDeviceLocalBuffer` for static vertices/indices/LODs/VIPM), and the batching
   follow-up is now done too *(branch `cr-static-residency-batch`)*: when a load-time `uploadBatch_` is

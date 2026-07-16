@@ -687,8 +687,11 @@ per-region refinement. One recorded collapse stream feeds all three. The authori
   (silhouette/degenerate holes, on the **jitter-free** `currentViewProj`) until a full cycle changes
   nothing — closes the holes a selective (non-prefix) front introduces that `wouldFlip` and the
   deviation metrics can't see. (Running them as separate sequential phases left foldovers: a coverage
-  refine can re-fold after the foldover fixpoint finished.) `emitActiveIndices` restores render wedges
-  into a per-frame dynamic index buffer.
+  refine can re-fold after the foldover fixpoint finished.) The per-face geometry is factored into pure
+  `detail::` classifiers (`isFoldover` / `classifyCoverageRepair`) so the GPU-shaped `vdpm_parallel`
+  model's snapshot repair reuses the identical projection math — sharing the per-face policy + final
+  invariants, not the sequential schedule. `emitActiveIndices` restores render wedges into a per-frame
+  dynamic index buffer.
 - **Two dials** live in `mesh_simplifier.cpp`: `kUvWeightFactor` (UV fidelity vs simplification) and
   `kErrorCeilingFactor` (must only refuse *geometrically* un-simplifiable shapes — the cube via its
   boundary weight — not UV-costly seams). `kLodRatios` / `kLodPixelErrorBudget` / the `kVdpm*` dials
