@@ -36,6 +36,27 @@ namespace fire_engine::mesh_topology
 [[nodiscard]] std::vector<std::vector<std::uint32_t>>
 canonicalWedges(std::span<const std::uint32_t> weld);
 
+// The same canonical->wedge adjacency as `canonicalWedges`, but in a single flat CSR layout — the
+// GPU uploader's shape (one storage buffer + one offset buffer, vs a vector-of-vectors that can't
+// cross to a shader). `wedges[offsets[c] .. offsets[c + 1])` are canonical `c`'s wedges, in the
+// SAME ascending-original-index order as `canonicalWedges(weld)[c]`, so a `nearestWedge` tie
+// resolves to the identical (lowest-index) wedge and the two representations emit byte-for-byte the
+// same indices. `offsets` is sized `weld.size() + 1`.
+struct CanonicalWedgesCsr
+{
+    std::vector<std::uint32_t> wedges; // all wedges, grouped by canonical id
+    std::vector<std::uint32_t>
+        offsets; // size weld.size() + 1; canonical c = [offsets[c], offsets[c+1])
+
+    // Canonical `c`'s wedges as a contiguous span (the argument `nearestWedge` wants).
+    [[nodiscard]] std::span<const std::uint32_t> forCanonical(std::uint32_t c) const
+    {
+        return std::span{wedges}.subspan(offsets[c], offsets[c + 1] - offsets[c]);
+    }
+};
+
+[[nodiscard]] CanonicalWedgesCsr canonicalWedgesCsr(std::span<const std::uint32_t> weld);
+
 // The finest triangle set in canonical space: each input triangle mapped through `weld`, with
 // post-weld degenerate (duplicate-corner) triangles dropped. Input face + corner order preserved
 // (so winding is preserved). Both the CPU `ActiveFront` and the GPU-shaped `ParallelFront` build

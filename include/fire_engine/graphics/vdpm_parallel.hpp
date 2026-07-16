@@ -1,10 +1,12 @@
 #pragma once
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <span>
 #include <vector>
 
+#include <fire_engine/graphics/mesh_topology.hpp>
 #include <fire_engine/graphics/vdpm.hpp>
 #include <fire_engine/graphics/vertex.hpp>
 
@@ -178,6 +180,33 @@ public:
         return hasMeshContext_;
     }
 
+    // Emit the settled front's per-frame index buffer into `out`, seam-preserving and
+    // BYTE-IDENTICAL to ActiveFront::emitActiveIndices, but built the GPU-shaped way: (1) memoise
+    // each canonical vertex's active ancestor; (2) a survival FLAG per original face (its three
+    // ancestors distinct); (3) an exclusive PREFIX SUM of the flags → each surviving face's output
+    // slot; (4) a stable SCATTER writing three wedge-restored corners at `out[3 * slot]` — no
+    // atomic append, no push_back, so triangle order matches the original face order exactly
+    // (blend/transmission need that). Each corner is restored to the `nearestWedge` at its active
+    // ancestor (CSR wedge adjacency), so seam corners keep their chart/shading identity. `indices`
+    // is the SAME original index buffer that built the context (mirrors the GPU's static resident
+    // index buffer); it and `vertices` are validated (size, `% 3`, 32-bit index-count bound) or it
+    // throws. Requires the mesh context (throws std::logic_error otherwise). `out` is caller-owned
+    // and reused: resized exactly once, then scattered into.
+    void emitActiveIndices(std::span<const Vertex> vertices, std::span<const std::uint32_t> indices,
+                           std::vector<std::uint32_t>& out) const;
+    [[nodiscard]] std::vector<std::uint32_t>
+    emitActiveIndices(std::span<const Vertex> vertices,
+                      std::span<const std::uint32_t> indices) const;
+
+    // The CSR canonical→render-wedge adjacency the emit restores through (empty without mesh
+    // context) — the GPU uploader's shape. Exposed so the Stage-0 wedge-ABI evidence (max/avg
+    // wedges per canonical, CSR bytes, the alternative precomputed-map size) is derived in the
+    // test, and so an emit test can check a restored corner is a wedge of its active ancestor.
+    [[nodiscard]] const mesh_topology::CanonicalWedgesCsr& wedgesCsr() const noexcept
+    {
+        return wedgesCsr_;
+    }
+
 private:
     void finishBuild(); // DAG + coarsest front state, shared by both build overloads
     bool refineOne(std::uint32_t splitIndex);
@@ -202,7 +231,7 @@ private:
     // weld, and each canonical vertex's original render wedges (for seam-preserving emit).
     std::vector<std::array<std::uint32_t, 3>> finestFaces_;
     std::vector<std::uint32_t> weld_;
-    std::vector<std::vector<std::uint32_t>> canonicalWedges_;
+    mesh_topology::CanonicalWedgesCsr wedgesCsr_; // canonical → render wedges, GPU-shaped CSR
     bool hasMeshContext_{false};
     // active_ / refined_ are SINGLE-writer within a rank (a vertex is activated only by its unique
     // removing split; a split writes only its own refined flag), so they need no atomic — uint8_t
@@ -219,6 +248,14 @@ private:
     std::uint32_t repairDetectionPasses_{0};
     std::uint32_t repairApplyRounds_{0};
     std::uint32_t repairRefinedSplits_{0};
+    // Emit scratch, reused across frames so a steady-state emit allocates nothing: the memoised
+    // active ancestor per canonical vertex, the per-face survival flag, and the per-face exclusive
+    // prefix-sum output slot (the GPU compaction's three working buffers). `mutable` because emit
+    // is const (it reads the settled front, produces the index buffer, and mutates only this
+    // scratch).
+    mutable std::vector<std::uint32_t> ancestorCache_; // per canonical vertex
+    mutable std::vector<std::uint32_t> faceSurvive_;   // per original face (0/1)
+    mutable std::vector<std::uint32_t> faceOutSlot_;   // per original face: exclusive prefix sum
 };
 
 } // namespace fire_engine

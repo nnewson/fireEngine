@@ -691,7 +691,9 @@ per-region refinement. One recorded collapse stream feeds all three. The authori
   `detail::` classifiers (`isFoldover` / `classifyCoverageRepair`) so the GPU-shaped `vdpm_parallel`
   model's snapshot repair reuses the identical projection math — sharing the per-face policy + final
   invariants, not the sequential schedule. `emitActiveIndices` restores render wedges into a per-frame
-  dynamic index buffer.
+  dynamic index buffer; the `vdpm_parallel` model reproduces it byte-identically as a GPU-shaped
+  compaction (survival flag → prefix sum → stable scatter) over a CSR wedge adjacency
+  (`mesh_topology::canonicalWedgesCsr`) — with that, Stage 0 of the GPU-driven front is complete.
 - **Two dials** live in `mesh_simplifier.cpp`: `kUvWeightFactor` (UV fidelity vs simplification) and
   `kErrorCeilingFactor` (must only refuse *geometrically* un-simplifiable shapes — the cube via its
   boundary weight — not UV-costly seams). `kLodRatios` / `kLodPixelErrorBudget` / the `kVdpm*` dials
