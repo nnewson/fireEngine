@@ -667,6 +667,28 @@ TEST_CASE("classifyCoverageRepair: each per-face coverage outcome is pinned", "[
     }
 }
 
+TEST_CASE(
+    "makeVdpmViewParams: worldLengthScale conservatively bounds an orthogonal-shear transform",
+    "[vdpm]")
+{
+    // Regression for the σ_max power-iteration bug: the linear part [[5.5,-4.5,0],[-4.5,5.5,0],
+    // [0,0,1]] has true σ_max = 10 (its dominant mᵀm eigenvector is (1,-1,0)), but a power
+    // iteration seeded at (1,1,1) is ORTHOGONAL to that direction and returns 1 — a 10×
+    // under-estimate that would under-refine and mis-classify the transform's conditioning. The
+    // conservative ∞-norm bound must recover ~10 (here exactly), never 1.
+    Mat4 world = Mat4::identity();
+    world[0, 0] = 5.5f;
+    world[0, 1] = -4.5f;
+    world[1, 0] = -4.5f;
+    world[1, 1] = 5.5f;
+
+    const VdpmViewParams p =
+        makeVdpmViewParams(world, Vec3{0, 0, 10}, 1.0f, 1000.0f, 0.0f, false, 1.0f, 1.0f, 1.0f);
+    CHECK(p.worldLengthScale >=
+          10.0f); // conservative: never below the true σ_max (outward-rounded)
+    CHECK(p.worldLengthScale < 10.01f); // and tight — the bound is exact for this symmetric case
+}
+
 TEST_CASE("refineForView: a singular world transform never back-face-culls", "[vdpm]")
 {
     // A degenerate (zero-scale) world has no reliable inverse, so the cone is unusable:

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -8,6 +9,7 @@
 
 #include <fire_engine/graphics/mesh_simplifier.hpp>
 #include <fire_engine/graphics/vertex.hpp>
+#include <fire_engine/math/mat3.hpp>
 #include <fire_engine/math/mat4.hpp>
 #include <fire_engine/math/vec3.hpp>
 
@@ -100,6 +102,70 @@ inline constexpr uint32_t kNoSplit = 0xFFFFFFFFu;
 // a root. `vertices` supplies only the canonical vertex count. Vulkan-free + deterministic.
 [[nodiscard]] VertexForest buildVertexForest(std::span<const Vertex> vertices,
                                              std::span<const MeshCollapse> collapses);
+
+// ---- VDPM per-split scoring: the single Vulkan-free authority --------------------------------
+// `refineForView` derives these per-instance params once, then scores every split through
+// `scoreVdpmSplit`. The GPU port (render/vdpm_gpu) uploads the SAME params and its shader
+// reproduces `scoreVdpmSplit`, and the GPU harness compares against it directly — so the oracle,
+// the uploader, and the shader can't drift into three subtly different scorings.
+
+// Everything a view contributes to a split's score, derived ONCE per instance per frame. The
+// camera-relative affine (`worldLinear` · local + `worldTranslationMinusCamera`) reproduces the
+// world-space distance `|world·local − camera|` EXACTLY under any linear transform — non-uniform
+// scale, shear, reflection, even a singular world — which an object-space camera + a scalar cannot.
+// The object-space `cameraObj` (+ `facingSign`, cone flags) drives the object-space cone predicate,
+// and is deliberately unusable on a singular world (then `coneUsable` is false: never cull, and
+// positional scoring still runs off the affine).
+struct VdpmViewParams
+{
+    Mat3 worldLinear;                 // the world matrix's linear part (object → world direction)
+    Vec3 worldTranslationMinusCamera; // world translation − camera (the affine's constant term)
+    Vec3 cameraObj;                   // camera in object space (cone predicate; unused if singular)
+    float worldLengthScale{1.0f};     // σ_max of worldLinear: bounds object-space radii into world
+    float facingSign{1.0f};           // sign(det): folds a reflection into the cone facing
+    float projScaleY{1.0f};           // |proj[1][1]|: world length → NDC height
+    float halfViewport{0.0f};         // viewportHeight / 2: NDC → pixels
+    float silhouetteBoost{0.0f};
+    // (No pixelBudget here — scoring produces raw screen-space errors; thresholding against the
+    // budget is the front-DECISION stage's job, in refineForView / applyView.)
+    float uvScale{1.0f};
+    float normalScale{1.0f};
+    float tangentScale{1.0f};
+    bool coneUsable{true};      // false on a near-singular world (no reliable inverse)
+    bool coneCullEnabled{true}; // cone may prove back-facing (material culls AND cone usable)
+};
+
+// Per-split scoring result: the four independent screen-space channel errors (pixels), the cone
+// silhouette straddle, and whether the split is provably raster back-face-culled. `score()` is the
+// value `refineForView`/`applyView` threshold against; a back-facing split scores 0.
+struct VdpmSplitScore
+{
+    float geometry{0.0f};
+    float uv{0.0f};
+    float normal{0.0f};
+    float tangent{0.0f};
+    float straddle{0.0f};
+    std::uint8_t backface{0};
+
+    [[nodiscard]] float score() const noexcept
+    {
+        return backface != 0 ? 0.0f : std::max({geometry, uv, normal, tangent});
+    }
+};
+
+// Derive the per-instance view params (the conservative σ_max bound, the determinant conditioning
+// test, the object-space camera). Pure + Vulkan-free.
+[[nodiscard]] VdpmViewParams makeVdpmViewParams(const Mat4& world, const Vec3& cameraPos,
+                                                float projScaleY, float viewportHeight,
+                                                float silhouetteBoost, bool rasterBackfaceCulling,
+                                                float uvScale, float normalScale,
+                                                float tangentScale);
+
+// Score one split against the params. `parentPos`/`childPos` are the split's OBJECT-space parent
+// (kept, = the support-sphere centre) and child (removed) positions. Pure + Vulkan-free — the exact
+// math the GPU shader reproduces.
+[[nodiscard]] VdpmSplitScore scoreVdpmSplit(const VdpmViewParams& params, const VertexSplit& s,
+                                            const Vec3& parentPos, const Vec3& childPos);
 
 namespace detail
 {

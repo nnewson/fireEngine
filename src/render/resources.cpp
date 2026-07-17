@@ -155,6 +155,20 @@ BufferHandle Resources::createStorageBuffer(std::size_t size, const void* initia
                                    initialData);
 }
 
+BufferHandle Resources::createDeviceLocalStorageBuffer(std::size_t size, const void* initialData,
+                                                       bool allowReadback)
+{
+    // Device-local, buffer_reference-addressable (BDA), staged upload of initialData if any.
+    // eTransferSrc (test-only) lets the harness copy the result back to a host-visible buffer.
+    vk::BufferUsageFlags usage =
+        vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eShaderDeviceAddress;
+    if (allowReadback)
+    {
+        usage |= vk::BufferUsageFlagBits::eTransferSrc;
+    }
+    return createDeviceLocalBuffer(static_cast<vk::DeviceSize>(size), usage, initialData);
+}
+
 BufferHandle Resources::createStaticStorageBuffer(std::size_t size, const void* initialData)
 {
     // Load-time, GPU-read-only SSBO (the VIPM geomorph table): device-local, staged upload. Bound

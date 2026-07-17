@@ -75,14 +75,10 @@ constexpr const char* kPipelineCacheFile = "pipeline_cache.bin";
 } // namespace
 
 constexpr std::array validationLayers{"VK_LAYER_KHRONOS_validation"};
-constexpr std::array deviceExtensions{
-    VK_KHR_SWAPCHAIN_EXTENSION_NAME,
-    "VK_KHR_portability_subset", // required on macOS/MoltenVK
-    // Per-object forward set 0 is pushed inline (vkCmdPushDescriptorSetKHR)
-    // instead of allocating a descriptor set per object/frame. Core in 1.4;
-    // enabled as an extension here. MoltenVK advertises it (pushDescriptor=true).
-    VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME,
-};
+// The device extensions the engine requires are built per-mode by Device::requiredDeviceExtensions
+// (swapchain is windowed-only); portability_subset is mandatory on MoltenVK and push_descriptor is
+// used by the forward path (vkCmdPushDescriptorSetKHR — per-object set 0 pushed inline, no
+// per-frame descriptor set; core in 1.4, enabled as an extension, MoltenVK advertises it).
 
 namespace
 {
@@ -242,6 +238,38 @@ Device::Device(const Window& window)
     createPipelineCache();
 }
 
+Device::Device(Mode mode)
+    : mode_(mode)
+{
+    // Surface-free path: no createSurface, and createInstance / isDeviceSuitable /
+    // findQueueFamilies / createLogicalDevice all branch on headless() to skip WSI extensions,
+    // surface + swapchain checks, and the present queue.
+    createInstance();
+    pickPhysicalDevice();
+    createLogicalDevice();
+    createAllocator();
+    createPipelineCache();
+}
+
+Device Device::headlessCompute()
+{
+    return Device(Mode::HeadlessCompute);
+}
+
+std::vector<const char*> Device::requiredDeviceExtensions() const
+{
+    // portability_subset is mandatory on MoltenVK; push_descriptor is used by the forward path and
+    // harmless elsewhere. The swapchain extension is windowed-only — a headless compute device must
+    // not require or enable it.
+    std::vector<const char*> exts{"VK_KHR_portability_subset",
+                                  VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME};
+    if (!headless())
+    {
+        exts.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
+    }
+    return exts;
+}
+
 void Device::createInstance()
 {
     constexpr vk::ApplicationInfo appInfo{
@@ -252,7 +280,14 @@ void Device::createInstance()
         .apiVersion = vk::ApiVersion14,
     };
 
-    auto exts = Window::requiredVulkanExtensions();
+    // Windowed needs GLFW's WSI instance extensions (surface creation); a headless compute device
+    // creates no surface, so it enables none of them — only the portability enumeration MoltenVK
+    // needs. (This also means the headless path never touches GLFW.)
+    std::vector<const char*> exts;
+    if (!headless())
+    {
+        exts = Window::requiredVulkanExtensions();
+    }
     exts.push_back(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
 
     if (enableValidation && log::enabled(log::Level::Debug, log::category::render))
@@ -315,7 +350,8 @@ void Device::pickPhysicalDevice()
 bool Device::isDeviceSuitable(const vk::raii::PhysicalDevice& d)
 {
     auto [gf, pf] = findQueueFamilies(d);
-    if (!gf.has_value() || !pf.has_value())
+    // Headless requires only a graphics+compute family; windowed needs a present family too.
+    if (!gf.has_value() || (!headless() && !pf.has_value()))
     {
         return false;
     }
@@ -332,7 +368,8 @@ bool Device::isDeviceSuitable(const vk::raii::PhysicalDevice& d)
         log::debug(log::category::render, "{}", deviceExtensionsList);
     }
 
-    std::set<std::string> required(deviceExtensions.begin(), deviceExtensions.end());
+    const std::vector<const char*> wanted = requiredDeviceExtensions();
+    std::set<std::string> required(wanted.begin(), wanted.end());
     for (auto& e : avail)
     {
         required.erase(e.extensionName);
@@ -342,11 +379,15 @@ bool Device::isDeviceSuitable(const vk::raii::PhysicalDevice& d)
         return false;
     }
 
-    auto fmts = d.getSurfaceFormatsKHR(*surface_);
-    auto modes = d.getSurfacePresentModesKHR(*surface_);
-    if (fmts.empty() || modes.empty())
+    // Surface capability is a windowed-only concern; a headless compute device has no surface.
+    if (!headless())
     {
-        return false;
+        auto fmts = d.getSurfaceFormatsKHR(*surface_);
+        auto modes = d.getSurfacePresentModesKHR(*surface_);
+        if (fmts.empty() || modes.empty())
+        {
+            return false;
+        }
     }
 
     // Verify every feature/limit createLogicalDevice enables is actually advertised, so a device
@@ -368,7 +409,23 @@ Device::findQueueFamilies(const vk::raii::PhysicalDevice& d)
     std::optional<uint32_t> gf, pf;
     for (uint32_t i = 0; i < families.size(); ++i)
     {
-        if (families[i].queueFlags & vk::QueueFlagBits::eGraphics)
+        const bool graphics =
+            static_cast<bool>(families[i].queueFlags & vk::QueueFlagBits::eGraphics);
+        if (headless())
+        {
+            // One family that can do BOTH graphics and compute — the same-queue path the renderer
+            // already dispatches compute on. NO present family: a headless device has no surface,
+            // so `pf` stays absent (present is never created or used).
+            const bool compute =
+                static_cast<bool>(families[i].queueFlags & vk::QueueFlagBits::eCompute);
+            if (graphics && compute)
+            {
+                gf = i;
+                break;
+            }
+            continue;
+        }
+        if (graphics)
         {
             gf = i;
         }
@@ -387,14 +444,25 @@ Device::findQueueFamilies(const vk::raii::PhysicalDevice& d)
 void Device::createLogicalDevice()
 {
     auto [gf, pf] = findQueueFamilies(physDevice_);
-    if (!gf.has_value() || !pf.has_value())
+    if (!gf.has_value() || (!headless() && !pf.has_value()))
     {
-        throw std::runtime_error("GPU lacks a required graphics and/or present queue family");
+        throw std::runtime_error(
+            headless() ? "GPU lacks a graphics+compute queue family (headless compute)"
+                       : "GPU lacks a required graphics and/or present queue family");
     }
     graphicsFamily_ = *gf;
-    presentFamily_ = *pf;
 
-    std::set<uint32_t> uniqueFamilies = {graphicsFamily_, presentFamily_};
+    // Headless creates ONLY the graphics+compute queue; there is no present family or queue (they
+    // stay default/null — `presentQueue()` is meaningless and never called headless). Windowed
+    // creates both (deduped when they share a family). `pf` is engaged exactly when windowed (see
+    // findQueueFamilies), so gating on `pf.has_value()` is both equivalent to `!headless()` AND
+    // makes the deref checked for the static analyser.
+    std::set<uint32_t> uniqueFamilies = {graphicsFamily_};
+    if (pf.has_value())
+    {
+        presentFamily_ = pf;
+        uniqueFamilies.insert(*pf);
+    }
     std::vector<vk::DeviceQueueCreateInfo> qcis;
     qcis.reserve(uniqueFamilies.size());
     float prio = 1.0f;
@@ -427,18 +495,24 @@ void Device::createLogicalDevice()
                                                                    kRequiredFeaturesPortability);
     portability.pNext = &features13;
 
+    const std::vector<const char*> enabledExtensions = requiredDeviceExtensions();
     vk::DeviceCreateInfo ci{
         .pNext = &portability,
         .queueCreateInfoCount = static_cast<uint32_t>(qcis.size()),
         .pQueueCreateInfos = qcis.data(),
-        .enabledExtensionCount = static_cast<uint32_t>(deviceExtensions.size()),
-        .ppEnabledExtensionNames = deviceExtensions.data(),
+        .enabledExtensionCount = static_cast<uint32_t>(enabledExtensions.size()),
+        .ppEnabledExtensionNames = enabledExtensions.data(),
         .pEnabledFeatures = &features,
     };
 
     device_ = vk::raii::Device(physDevice_, ci);
     graphicsQueue_ = device_.getQueue(graphicsFamily_, 0);
-    presentQueue_ = device_.getQueue(presentFamily_, 0);
+    // presentFamily_ is engaged exactly when windowed; gating on has_value() (rather than
+    // !headless()) keeps the deref checked for the static analyser.
+    if (presentFamily_.has_value())
+    {
+        presentQueue_ = device_.getQueue(*presentFamily_, 0);
+    }
 }
 
 void Device::createAllocator()

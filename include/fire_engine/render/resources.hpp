@@ -114,6 +114,13 @@ public:
     // createStorageBuffer this is not host-visible and carries no device address — it is bound as a
     // plain SSBO, not chained by buffer_reference.
     [[nodiscard]] BufferHandle createStaticStorageBuffer(std::size_t size, const void* initialData);
+    // Device-local storage buffer WITH a device address (BDA) — like createStaticStorageBuffer but
+    // buffer_reference-addressable, for GPU compute that chains buffers by pointer (the VDPM GPU
+    // front's static per-split metric input + persistent score/backface output). `allowReadback`
+    // adds eTransferSrc so a test can copy it to a host-visible buffer; production leaves it off.
+    [[nodiscard]] BufferHandle createDeviceLocalStorageBuffer(std::size_t size,
+                                                              const void* initialData,
+                                                              bool allowReadback = false);
     // Per-frame, persistently-mapped storage buffers with a device address (for
     // the soft-body solver's per-frame collider buffer, addressed via bDA).
     [[nodiscard]] MappedBufferSet createMappedDeviceAddressBuffers(std::size_t size);

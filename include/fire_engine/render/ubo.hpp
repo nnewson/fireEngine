@@ -1,6 +1,8 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
+#include <type_traits>
 
 #include <fire_engine/graphics/gpu_limits.hpp>
 #include <fire_engine/math/mat4.hpp>
@@ -377,5 +379,150 @@ struct SsaoBlurPushConstants
     alignas(4) float projC{0.0f};
     alignas(4) float projD{0.0f};
 };
+
+// ---- VDPM GPU-front scoring ABI (rendering-spine #3, GPU-driven front Stage B1) --------------
+// std430 SSBO images of the Vulkan-free scoring authority (graphics/vdpm.hpp). The shader
+// `vdpm_score.comp` reads these as GL_EXT_buffer_reference blocks; the CPU pack helpers
+// (render/vdpm_gpu.hpp) fill them from VdpmViewParams / VertexSplit. Every field's offset + each
+// struct's size is asserted so a host↔GPU layout drift fails to compile — the only defence against
+// a silent, expensive ABI mistake. RULES followed: flags are uint32 (never bool/uint8); a GLSL
+// `mat3` under std430 occupies 48 bytes (three 16-byte columns), so worldLinear is three padded
+// vec4 columns; positions + the back-face output write all channels (see the shader contract).
+
+// One canonical vertex's object-space position (parent/child IDs in VdpmSplitGpu index this array).
+// Padded to a std430 vec4 (16B) — shared with the later repair/emit stages, which need the same
+// positions. GLSL: `struct Position { vec4 p; };` (xyz used, w unused).
+struct VdpmPositionGpu
+{
+    alignas(16) float position[4]{0.0f, 0.0f, 0.0f, 0.0f};
+};
+static_assert(offsetof(VdpmPositionGpu, position) == 0);
+static_assert(sizeof(VdpmPositionGpu) == 16, "VdpmPositionGpu std430 vec4");
+static_assert(alignof(VdpmPositionGpu) == 16, "VdpmPositionGpu vec4 alignment");
+static_assert(std::is_standard_layout_v<VdpmPositionGpu>);
+static_assert(std::is_trivially_copyable_v<VdpmPositionGpu>);
+
+// Per-split static metric input. `coneAxisCos` packs the normal cone (xyz = axis, w = cos). GLSL:
+//   struct Split { vec4 coneAxisCos; float supportRadius, error, uvError, normalError,
+//   tangentError;
+//                  uint parentId, childId, _pad; };
+struct VdpmSplitGpu
+{
+    alignas(16) float coneAxisCos[4]{0.0f, 0.0f, 0.0f,
+                                     1.0f}; // 0: normalConeAxis.xyz, normalConeCos
+    float supportRadius{0.0f};              // 16
+    float error{0.0f};                      // 20
+    float uvError{0.0f};                    // 24
+    float normalError{0.0f};                // 28
+    float tangentError{0.0f};               // 32
+    std::uint32_t parentId{0};              // 36
+    std::uint32_t childId{0};               // 40
+    std::uint32_t _pad{0};                  // 44 -> 48
+};
+static_assert(offsetof(VdpmSplitGpu, coneAxisCos) == 0);
+static_assert(offsetof(VdpmSplitGpu, supportRadius) == 16);
+static_assert(offsetof(VdpmSplitGpu, error) == 20);
+static_assert(offsetof(VdpmSplitGpu, uvError) == 24);
+static_assert(offsetof(VdpmSplitGpu, normalError) == 28);
+static_assert(offsetof(VdpmSplitGpu, tangentError) == 32);
+static_assert(offsetof(VdpmSplitGpu, parentId) == 36);
+static_assert(offsetof(VdpmSplitGpu, childId) == 40);
+static_assert(offsetof(VdpmSplitGpu, _pad) == 44);
+static_assert(sizeof(VdpmSplitGpu) == 48, "VdpmSplitGpu std430 size/stride");
+static_assert(alignof(VdpmSplitGpu) == 16, "VdpmSplitGpu vec4 alignment");
+static_assert(std::is_standard_layout_v<VdpmSplitGpu>);
+static_assert(std::is_trivially_copyable_v<VdpmSplitGpu>);
+
+// Per-split scoring output — ALL channels (not just the max), so a broken non-winning channel is
+// visible to the harness. All scalars ⇒ std430 array stride 24. GLSL:
+//   struct ScoreOut { float geometry, uv, normal, tangent, straddle; uint backface; };
+struct VdpmScoreOut
+{
+    float geometry{0.0f}; // 0
+    float uv{0.0f};       // 4
+    float normal{0.0f};   // 8
+    float tangent{0.0f};  // 12
+    float straddle{0.0f}; // 16
+    std::uint32_t backface{0};
+};
+static_assert(offsetof(VdpmScoreOut, geometry) == 0);
+static_assert(offsetof(VdpmScoreOut, uv) == 4);
+static_assert(offsetof(VdpmScoreOut, normal) == 8);
+static_assert(offsetof(VdpmScoreOut, tangent) == 12);
+static_assert(offsetof(VdpmScoreOut, straddle) == 16);
+static_assert(offsetof(VdpmScoreOut, backface) == 20);
+static_assert(sizeof(VdpmScoreOut) == 24, "VdpmScoreOut std430 size/stride");
+static_assert(alignof(VdpmScoreOut) == 4, "VdpmScoreOut scalar alignment");
+static_assert(std::is_standard_layout_v<VdpmScoreOut>);
+static_assert(std::is_trivially_copyable_v<VdpmScoreOut>);
+
+// Per-instance scoring params (the std430 image of VdpmViewParams) + the three buffer_reference
+// device addresses + splitCount. Only THIS struct's address is pushed (8B, well under the 128B push
+// guarantee); the shader dereferences the addresses. `worldLinear` is a GLSL mat3 (three padded
+// vec4 columns, 48B). Flags are uint32. GLSL (buffer_reference, std430):
+//   Params { mat3 worldLinear; vec4 worldTranslationMinusCamera; vec4 cameraObj;
+//            float worldLengthScale, facingSign, projScaleY, halfViewport, silhouetteBoost,
+//                  uvScale, normalScale, tangentScale;
+//            uint coneUsable, coneCullEnabled, splitCount, _pad0;
+//            Splits splits; Positions positions; ScoreOuts outputs; };  // last three are addresses
+struct alignas(16) VdpmScoreParams
+{
+    float worldLinearCol0[4]{0.0f, 0.0f, 0.0f, 0.0f};             // 0  mat3 column 0 (.xyz)
+    float worldLinearCol1[4]{0.0f, 0.0f, 0.0f, 0.0f};             // 16 column 1
+    float worldLinearCol2[4]{0.0f, 0.0f, 0.0f, 0.0f};             // 32 column 2
+    float worldTranslationMinusCamera[4]{0.0f, 0.0f, 0.0f, 0.0f}; // 48 vec4 (.xyz)
+    float cameraObj[4]{0.0f, 0.0f, 0.0f, 0.0f};                   // 64 vec4 (.xyz)
+    float worldLengthScale{1.0f};                                 // 80
+    float facingSign{1.0f};                                       // 84
+    float projScaleY{1.0f};                                       // 88
+    float halfViewport{0.0f};                                     // 92
+    float silhouetteBoost{0.0f};                                  // 96
+    float uvScale{1.0f};                                          // 100
+    float normalScale{1.0f};                                      // 104
+    float tangentScale{1.0f};                                     // 108
+    std::uint32_t coneUsable{1};                                  // 112
+    std::uint32_t coneCullEnabled{1};                             // 116
+    std::uint32_t splitCount{0};                                  // 120
+    std::uint32_t _pad0{0};                                       // 124 (align the uint64s to 128)
+    std::uint64_t splitsAddress{0};                               // 128
+    std::uint64_t positionsAddress{0};                            // 136
+    std::uint64_t outputsAddress{0};                              // 144
+    std::uint64_t _pad1{0};                                       // 152 -> 160
+};
+static_assert(offsetof(VdpmScoreParams, worldLinearCol0) == 0);
+static_assert(offsetof(VdpmScoreParams, worldLinearCol1) == 16);
+static_assert(offsetof(VdpmScoreParams, worldLinearCol2) == 32);
+static_assert(offsetof(VdpmScoreParams, worldTranslationMinusCamera) == 48);
+static_assert(offsetof(VdpmScoreParams, cameraObj) == 64);
+static_assert(offsetof(VdpmScoreParams, worldLengthScale) == 80);
+static_assert(offsetof(VdpmScoreParams, facingSign) == 84);
+static_assert(offsetof(VdpmScoreParams, projScaleY) == 88);
+static_assert(offsetof(VdpmScoreParams, halfViewport) == 92);
+static_assert(offsetof(VdpmScoreParams, silhouetteBoost) == 96);
+static_assert(offsetof(VdpmScoreParams, uvScale) == 100);
+static_assert(offsetof(VdpmScoreParams, normalScale) == 104);
+static_assert(offsetof(VdpmScoreParams, tangentScale) == 108);
+static_assert(offsetof(VdpmScoreParams, coneUsable) == 112);
+static_assert(offsetof(VdpmScoreParams, coneCullEnabled) == 116);
+static_assert(offsetof(VdpmScoreParams, splitCount) == 120);
+static_assert(offsetof(VdpmScoreParams, _pad0) == 124);
+static_assert(offsetof(VdpmScoreParams, splitsAddress) == 128);
+static_assert(offsetof(VdpmScoreParams, positionsAddress) == 136);
+static_assert(offsetof(VdpmScoreParams, outputsAddress) == 144);
+static_assert(offsetof(VdpmScoreParams, _pad1) == 152);
+static_assert(sizeof(VdpmScoreParams) == 160, "VdpmScoreParams std430 size");
+static_assert(alignof(VdpmScoreParams) == 16, "VdpmScoreParams alignment");
+static_assert(std::is_standard_layout_v<VdpmScoreParams>);
+static_assert(std::is_trivially_copyable_v<VdpmScoreParams>);
+
+// Push constant: only the params block's device address (8B, mirroring a GLSL buffer_reference
+// pointer). The shader dereferences it, then the three typed references inside it.
+struct VdpmScorePushConstants
+{
+    std::uint64_t paramsAddress{0};
+};
+static_assert(sizeof(VdpmScorePushConstants) == 8);
+static_assert(std::is_standard_layout_v<VdpmScorePushConstants>);
+static_assert(std::is_trivially_copyable_v<VdpmScorePushConstants>);
 
 } // namespace fire_engine
