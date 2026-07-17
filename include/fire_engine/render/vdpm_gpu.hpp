@@ -41,6 +41,15 @@ namespace fire_engine
 // by buffer_reference); one push-constant range carrying the params block's device address.
 [[nodiscard]] ComputePipelineConfig vdpmScorePipelineConfig();
 
+// The IMMUTABLE GPU binding of a VdpmGpuMesh — device addresses + counts, copied into a front so
+// the front never holds a pointer into a (movable) mesh object.
+struct VdpmGpuMeshBinding
+{
+    std::uint64_t splitsAddress{0};
+    std::uint64_t positionsAddress{0};
+    std::uint32_t splitCount{0};
+};
+
 // STATIC per-geometry GPU data — the per-split metric records + the canonical-vertex positions,
 // device-local and uploaded ONCE. Shared by every instance of the geometry (never duplicated per
 // instance); the later repair/emit stages reuse the same positions. parent/child IDs in the split
@@ -49,10 +58,16 @@ class VdpmGpuMesh
 {
 public:
     // `vertices` is the ORIGINAL vertex array (canonical IDs index into it); `forest` supplies the
-    // splits. Both uploaded device-local via staging.
+    // splits. THE VALIDATION BOUNDARY: runs `validateForest` and checks `vertices.size() ==
+    // forest.vertexCount` (throws std::runtime_error otherwise) before anything is walked or
+    // uploaded — a shader must never see a malformed forest. Both buffers uploaded device-local.
     [[nodiscard]] static VdpmGpuMesh build(Resources& resources, std::span<const Vertex> vertices,
                                            const VertexForest& forest);
 
+    [[nodiscard]] VdpmGpuMeshBinding binding() const noexcept
+    {
+        return {splitsAddress_, positionsAddress_, splitCount_};
+    }
     [[nodiscard]] std::uint64_t splitsAddress() const noexcept
     {
         return splitsAddress_;
@@ -97,11 +112,11 @@ public:
     }
     [[nodiscard]] std::uint32_t splitCount() const noexcept
     {
-        return mesh_ != nullptr ? mesh_->splitCount() : 0u;
+        return binding_.splitCount;
     }
 
 private:
-    const VdpmGpuMesh* mesh_{nullptr};
+    VdpmGpuMeshBinding binding_{}; // copied at build — no pointer into a movable mesh
     BufferHandle output_{NullBuffer};
     std::array<std::span<std::byte>, kMaxFramesInFlight> paramsMapped_{};
     std::array<std::uint64_t, kMaxFramesInFlight> paramsAddress_{};

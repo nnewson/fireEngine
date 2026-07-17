@@ -46,15 +46,8 @@ struct DependencyDag
 // std::runtime_error if the forest is CYCLIC or STRUCTURALLY MALFORMED (out-of-range / inconsistent
 // references, sizes that don't fit the GPU's 32-bit indexing) — this is the gate before the forest
 // is uploaded to the GPU, so it rejects anything a shader would fault on rather than assuming
-// validity. See `validateForest`.
+// validity. Runs `validateForest` (graphics/vdpm.hpp) first.
 [[nodiscard]] DependencyDag buildDependencyDag(const VertexForest& forest);
-
-// Structural validation of a vertex forest, independent of the DAG (called by buildDependencyDag).
-// Throws std::runtime_error on any violation: `removingSplit` sized to `vertexCount`; every
-// parent/child/vl (and vr unless the boundary sentinel) in range; every removing-split reference
-// valid; each split's `child` its own removing split (⇒ children unique); split + vertex counts
-// within 32-bit indexing.
-void validateForest(const VertexForest& forest);
 
 // A GPU-shaped active front: the same state as `ActiveFront` (per-vertex active, per-split refined,
 // per-vertex dependent counts) but updated by RANK-ORDERED DATA-PARALLEL passes over the dependency

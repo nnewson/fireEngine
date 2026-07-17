@@ -103,6 +103,15 @@ inline constexpr uint32_t kNoSplit = 0xFFFFFFFFu;
 [[nodiscard]] VertexForest buildVertexForest(std::span<const Vertex> vertices,
                                              std::span<const MeshCollapse> collapses);
 
+// Structural validation of a vertex forest, independent of the DAG/front. Throws std::runtime_error
+// on any violation: split + vertex counts within 32-bit indexing; `removingSplit` sized to
+// `vertexCount`; every split's parent/child/vl (and vr unless the boundary sentinel) in range;
+// every removing-split reference valid; each split's `child` its own removing split (⇒ children
+// unique) and the reverse. The mandatory gate before a forest is walked or uploaded to the GPU —
+// used by both the parallel `buildDependencyDag` and the GPU `VdpmGpuMesh`. (Does not prove the
+// removal-parent chain is acyclic — walkers additionally cap their steps at `vertexCount`.)
+void validateForest(const VertexForest& forest);
+
 // ---- VDPM per-split scoring: the single Vulkan-free authority --------------------------------
 // `refineForView` derives these per-instance params once, then scores every split through
 // `scoreVdpmSplit`. The GPU port (render/vdpm_gpu) uploads the SAME params and its shader

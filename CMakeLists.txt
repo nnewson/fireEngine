@@ -64,6 +64,7 @@ add_library(fireengine SHARED
     src/graphics/vdpm.cpp
     src/graphics/vdpm_material.cpp
     src/graphics/vdpm_parallel.cpp
+    src/graphics/vdpm_wedge_choices.cpp
     src/graphics/image.cpp
     src/graphics/ktx_image.cpp
     src/graphics/material_binding.cpp
@@ -316,6 +317,7 @@ add_executable(test_fire_engine
     tests/graphics/test_vdpm.cpp
     tests/graphics/test_vdpm_parallel.cpp
     tests/graphics/test_mesh_topology.cpp
+    tests/graphics/test_vdpm_wedge_choices.cpp
     tests/graphics/test_bounds.cpp
     tests/graphics/test_draw_command.cpp
     tests/graphics/test_frame_info.cpp
