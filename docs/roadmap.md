@@ -306,9 +306,20 @@ Candidates" section folds in here:
   count, and the three VDPM draw sites (forward / depth prepass / transmission) routed through
   `recordIndexedDraw` — shadows keep discrete LOD + direct draw. Mechanical, no behaviour change; it
   de-risks `drawIndexedIndirect` on MoltenVK (smoke-tested 0 VUID on DamagedHelmet + TransmissionTest
-  via the new `--lod-mode view-dependent` launch flag) before any compute writes that buffer. Still
-  ahead: the GPU port + headless compute harness (B1 upload/scoring → B2 emit → B3 refine/coarsen → B4
-  repairs → B5 end-to-end, where compute writes the indirect buffer + a compute→indirect-read barrier).
+  via the new `--lod-mode view-dependent` launch flag) before any compute writes that buffer. The GPU
+  port then began. **B1 foundation** *(branch `cr-vdpm-gpu-score`)*: a surface-free `Device`
+  compute mode (no swapchain/present; graphics+compute queue), the per-instance scoring extracted
+  into ONE Vulkan-free authority (`makeVdpmViewParams` / `scoreVdpmSplit`, which `refineForView` now
+  consumes — with a camera-relative affine that reproduces world distance under any linear transform),
+  a corrected conservative σ_max bound (the old power iteration under-estimated an orthogonal shear
+  10×), and the std430 GPU ABI (`ubo.hpp` structs + pack helpers, fully offset-asserted). **B1 GPU
+  scoring** *(branch `cr-vdpm-gpu-score-shader`)*: `shaders/vdpm_score.comp` (typed buffer_reference,
+  reproducing `scoreVdpmSplit`), `VdpmGpuMesh` (shared static splits + positions) + `VdpmGpuFront`
+  (per-instance output + per-frame mapped params), a compute-only `Resources` path, and a `[.][gpu]`
+  readback harness that cross-checks the shader against the CPU authority (scores close, back-face
+  decisions exact) on sphere/synthetic/singular/zero-split cases. **Stage B1 complete.** Still ahead:
+  B2 emit → B3 refine/coarsen → B4 repairs → B5 end-to-end (compute writes the indirect buffer + a
+  compute→indirect-read barrier).
 - ✅ **Static GPU residency** — device-local static asset upload split from dynamic mapped buffers.
   Landed in block B (`createDeviceLocalBuffer` for static vertices/indices/LODs/VIPM), and the batching
   follow-up is now done too *(branch `cr-static-residency-batch`)*: when a load-time `uploadBatch_` is

@@ -1,7 +1,32 @@
 #include <fire_engine/render/vdpm_gpu.hpp>
 
+#include <cstddef>
+#include <stdexcept>
+#include <string>
+#include <vector>
+
+#include <fire_engine/graphics/mapped_buffer.hpp>
+
 namespace fire_engine
 {
+
+namespace
+{
+
+// A buffer_reference block promises its base address is aligned to `buffer_reference_align`; that
+// is the APP's promise, not something Vulkan derives from the C++ struct. Verify it (VMA
+// device-local allocations are 16-aligned in practice, so this only ever fires on a
+// driver/allocator surprise).
+void requireAligned(std::uint64_t address, std::uint64_t alignment, const char* what)
+{
+    if ((address % alignment) != 0)
+    {
+        throw std::runtime_error(std::string("VDPM GPU buffer address for ") + what +
+                                 " is not aligned to the buffer_reference promise");
+    }
+}
+
+} // namespace
 
 VdpmSplitGpu packVdpmSplit(const VertexSplit& split) noexcept
 {
@@ -66,6 +91,108 @@ VdpmScoreParams packVdpmScoreParams(const VdpmViewParams& view, std::uint64_t sp
     p.positionsAddress = positionsAddress;
     p.outputsAddress = outputsAddress;
     return p;
+}
+
+ComputePipelineConfig vdpmScorePipelineConfig()
+{
+    // No descriptor bindings — every buffer reaches the shader as a device-address
+    // (buffer_reference) carried in the params block, whose own address is the only push constant.
+    ComputePipelineConfig config;
+    config.compShaderPath = "vdpm_score.comp.spv";
+    config.pushConstantRanges.emplace_back(
+        vk::ShaderStageFlagBits::eCompute, 0,
+        static_cast<std::uint32_t>(sizeof(VdpmScorePushConstants)));
+    return config;
+}
+
+VdpmGpuMesh VdpmGpuMesh::build(Resources& resources, std::span<const Vertex> vertices,
+                               const VertexForest& forest)
+{
+    VdpmGpuMesh mesh;
+    mesh.splitCount_ = static_cast<std::uint32_t>(forest.splits.size());
+
+    // Per-split metric records (static, device-local, uploaded once).
+    std::vector<VdpmSplitGpu> splits;
+    splits.reserve(forest.splits.size());
+    for (const VertexSplit& s : forest.splits)
+    {
+        splits.push_back(packVdpmSplit(s));
+    }
+    // Canonical positions: one entry per ORIGINAL vertex (canonical IDs index into this array).
+    std::vector<VdpmPositionGpu> positions;
+    positions.reserve(vertices.size());
+    for (const Vertex& v : vertices)
+    {
+        positions.push_back(packVdpmPosition(v.position()));
+    }
+
+    // A zero-byte VMA allocation is invalid, so an empty forest / empty mesh leaves the buffers
+    // null (splitCount_ == 0 ⇒ VdpmGpuFront records no dispatch).
+    if (!splits.empty())
+    {
+        mesh.splits_ = resources.createDeviceLocalStorageBuffer(
+            splits.size() * sizeof(VdpmSplitGpu), splits.data());
+        mesh.splitsAddress_ = resources.bufferAddress(mesh.splits_);
+        requireAligned(mesh.splitsAddress_, 16, "splits");
+    }
+    if (!positions.empty())
+    {
+        mesh.positions_ = resources.createDeviceLocalStorageBuffer(
+            positions.size() * sizeof(VdpmPositionGpu), positions.data());
+        mesh.positionsAddress_ = resources.bufferAddress(mesh.positions_);
+        requireAligned(mesh.positionsAddress_, 16, "positions");
+    }
+    return mesh;
+}
+
+VdpmGpuFront VdpmGpuFront::build(Resources& resources, const VdpmGpuMesh& mesh)
+{
+    VdpmGpuFront front;
+    front.mesh_ = &mesh;
+    if (mesh.splitCount() == 0)
+    {
+        return front; // nothing to score
+    }
+
+    // Device-local score output, readback-enabled (eTransferSrc) so the harness can copy it back.
+    front.output_ = resources.createDeviceLocalStorageBuffer(
+        mesh.splitCount() * sizeof(VdpmScoreOut), nullptr, /*allowReadback=*/true);
+    front.outputAddress_ = resources.bufferAddress(front.output_);
+    requireAligned(front.outputAddress_, 4, "output");
+
+    // Per-frame mapped params (host-visible + BDA). Coherent host writes become visible to the
+    // device at queue submission — the same pattern as the dynamic index/UBO buffers.
+    const MappedBufferSet params =
+        resources.createMappedDeviceAddressBuffers(sizeof(VdpmScoreParams));
+    for (int i = 0; i < kMaxFramesInFlight; ++i)
+    {
+        front.paramsMapped_[i] = params.mapped[i];
+        front.paramsAddress_[i] = resources.bufferAddress(params.buffers[i]);
+        requireAligned(front.paramsAddress_[i], 16, "params");
+    }
+    return front;
+}
+
+void VdpmGpuFront::recordScore(vk::CommandBuffer cmd, const ComputePipeline& pipeline,
+                               std::uint32_t frameIndex, const VdpmViewParams& view)
+{
+    if (mesh_ == nullptr || mesh_->splitCount() == 0)
+    {
+        return; // zero-split: no buffers, no dispatch
+    }
+    // Write this frame slot's params (the three buffer addresses + splitCount + the view image).
+    const VdpmScoreParams params =
+        packVdpmScoreParams(view, mesh_->splitsAddress(), mesh_->positionsAddress(), outputAddress_,
+                            mesh_->splitCount());
+    writeMapped(paramsMapped_[frameIndex], params);
+
+    cmd.bindPipeline(vk::PipelineBindPoint::eCompute, pipeline.pipeline());
+    const VdpmScorePushConstants push{.paramsAddress = paramsAddress_[frameIndex]};
+    cmd.pushConstants<VdpmScorePushConstants>(pipeline.pipelineLayout(),
+                                              vk::ShaderStageFlagBits::eCompute, 0, push);
+    constexpr std::uint32_t kLocalSize = 64;
+    const std::uint32_t groups = (mesh_->splitCount() + kLocalSize - 1) / kLocalSize;
+    cmd.dispatch(groups, 1, 1);
 }
 
 } // namespace fire_engine
