@@ -1,0 +1,161 @@
+#version 450
+#extension GL_EXT_buffer_reference : require
+
+// VDPM GPU-front scoring (rendering-spine #3, Stage B1). One invocation per split: reproduces the
+// Vulkan-free CPU authority `scoreVdpmSplit` (graphics/vdpm.cpp) exactly — the camera-relative affine
+// world distance, the object-space normal-cone visibility (`detail::coneVisibility`), and the four
+// screen-space channels. Typed buffer_reference only (no Int64 arithmetic). The ABI mirror + offsets
+// are pinned in render/ubo.hpp; the pack helpers fill them from the same authority. `sin()` in the
+// angular chord is the one op that isn't bit-portable — the harness compares scores CLOSE and
+// decisions EXACT away from thresholds.
+
+struct Split
+{
+    vec4 coneAxisCos; // xyz = normalConeAxis, w = normalConeCos
+    float supportRadius;
+    float error;
+    float uvError;
+    float normalError;
+    float tangentError;
+    uint parentId;
+    uint childId;
+    uint pad;
+};
+
+struct ScoreOut
+{
+    float geometry;
+    float uv;
+    float normal;
+    float tangent;
+    float straddle;
+    uint backface;
+};
+
+layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer Splits
+{
+    Split s[];
+};
+layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer Positions
+{
+    vec4 p[]; // canonical vertex positions (xyz used)
+};
+layout(buffer_reference, std430, buffer_reference_align = 4) writeonly buffer Outputs
+{
+    ScoreOut o[];
+};
+
+layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer Params
+{
+    mat3 worldLinear;                 // @0   (three 16-byte columns, 48B)
+    vec4 worldTranslationMinusCamera; // @48  (the affine's constant term; xyz used)
+    vec4 cameraObj;                   // @64  (object-space camera for the cone; xyz used)
+    float worldLengthScale;           // @80
+    float facingSign;                 // @84
+    float projScaleY;                 // @88
+    float halfViewport;               // @92
+    float silhouetteBoost;            // @96
+    float uvScale;                    // @100
+    float normalScale;                // @104
+    float tangentScale;               // @108
+    uint coneUsable;                  // @112
+    uint coneCullEnabled;             // @116
+    uint splitCount;                  // @120
+    uint pad0;                        // @124
+    Splits splits;                    // @128
+    Positions positions;              // @136
+    Outputs outputs;                  // @144
+};
+
+layout(push_constant) uniform Push
+{
+    Params params;
+}
+pc;
+
+layout(local_size_x = 64) in;
+
+void main()
+{
+    const uint gid = gl_GlobalInvocationID.x;
+    Params P = pc.params;
+    if (gid >= P.splitCount)
+    {
+        return; // workgroup tail guard
+    }
+
+    const Split sp = P.splits.s[gid];
+    const vec3 parentPos = P.positions.p[sp.parentId].xyz; // support-sphere centre (kept)
+    const vec3 childPos = P.positions.p[sp.childId].xyz;   // removed vertex
+
+    // Camera-relative affine: worldLinear*local + (worldTranslation - camera) == world*local - camera,
+    // exact world distance under any linear transform.
+    const vec3 childDelta = P.worldLinear * childPos + P.worldTranslationMinusCamera.xyz;
+    const vec3 parentDelta = P.worldLinear * parentPos + P.worldTranslationMinusCamera.xyz;
+    const float dist = max(1e-3, length(childDelta));
+    const float parentDist = max(1e-3, length(parentDelta));
+
+    // Object-space normal-cone visibility (detail::coneVisibility). Singular world (coneUsable == 0):
+    // never cull, max potential silhouette.
+    bool backFacing = false;
+    float straddle = 1.0;
+    if (P.coneUsable != 0u)
+    {
+        const vec3 toCam = P.cameraObj.xyz - parentPos;
+        const float dCam = length(toCam);
+        if (dCam <= sp.supportRadius || dCam < 1e-6)
+        {
+            // camera inside the support sphere: potential silhouette, never cull
+            backFacing = false;
+            straddle = 1.0;
+        }
+        else
+        {
+            const float cosN = clamp(sp.coneAxisCos.w, -1.0, 1.0);
+            const float sinN = sqrt(max(0.0, 1.0 - cosN * cosN));
+            const float sinV = clamp(sp.supportRadius / dCam, 0.0, 1.0);
+            const float cosV = sqrt(max(0.0, 1.0 - sinV * sinV));
+            const float cosSum = cosN * cosV - sinN * sinV; // cos(theta_n + theta_v)
+            const float sinSum = sinN * cosV + cosN * sinV; // sin(theta_n + theta_v)
+            if (cosSum <= 0.0)
+            {
+                // cone + spread straddles edge-on: never cull, max silhouette
+                backFacing = false;
+                straddle = 1.0;
+            }
+            else
+            {
+                const float safety = 16.0 * 1.1920929e-7; // 16 * FLT_EPSILON, matching the CPU
+                const float cosAC = P.facingSign * dot(sp.coneAxisCos.xyz, toCam * (1.0 / dCam));
+                backFacing = (P.coneCullEnabled != 0u) && (cosAC < -sinSum - safety);
+                straddle = sinSum > safety ? clamp((sinSum - abs(cosAC)) / sinSum, 0.0, 1.0)
+                                           : (abs(cosAC) <= safety ? 1.0 : 0.0);
+            }
+        }
+    }
+
+    ScoreOut r;
+    r.geometry = 0.0;
+    r.uv = 0.0;
+    r.normal = 0.0;
+    r.tangent = 0.0;
+    r.straddle = straddle;
+    if (backFacing)
+    {
+        // Provably raster back-face-culled: score 0 in ALL channels (matches the CPU early return).
+        r.backface = 1u;
+        P.outputs.o[gid] = r;
+        return;
+    }
+    r.backface = 0u;
+
+    const float boost = 1.0 + P.silhouetteBoost * straddle;
+    const float worldSupport = sp.supportRadius * P.worldLengthScale;
+    r.geometry = sp.error * P.worldLengthScale * boost * P.projScaleY * P.halfViewport / dist;
+    r.uv = sp.uvError * P.uvScale * P.projScaleY * P.halfViewport / dist;
+    const float nearDist = max(1e-3, parentDist - worldSupport);
+    const float extent = worldSupport * P.projScaleY * P.halfViewport / nearDist;
+    r.normal = 2.0 * sin(0.5 * sp.normalError) * P.normalScale * boost * extent;
+    r.tangent = 2.0 * sin(0.5 * sp.tangentError) * P.tangentScale * boost * extent;
+    P.outputs.o[gid] = r;
+}

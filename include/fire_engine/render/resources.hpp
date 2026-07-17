@@ -41,6 +41,12 @@ public:
     };
 
     Resources(const Device& device, const Pipeline& pipeline);
+    // Compute-only construction (no graphics pipeline / bindless / descriptor infrastructure): sets
+    // up ONLY the buffer table + upload command pool. For a headless compute device — the VDPM GPU
+    // harness allocates SSBOs and records compute without any of the descriptor/texture machinery.
+    // Resources still owns every GPU allocation. The descriptor-creating + texture APIs must not be
+    // called on a compute-only Resources.
+    explicit Resources(const Device& device);
     ~Resources() = default;
 
     Resources(const Resources&) = delete;
@@ -99,6 +105,10 @@ public:
     // draws (one DrawIndexedIndirectCommand per instance, CPU-written from the emit count). The
     // subsequent queue submission makes the host write available to the draw; no explicit barrier.
     [[nodiscard]] MappedBufferSet createMappedIndirectBuffers(std::size_t size);
+    // Per-frame, persistently-mapped host-visible buffers that are transfer-copy DESTINATIONS
+    // (eTransferDst) — for reading a device-local buffer back to the CPU after a
+    // transfer-write→host-read barrier + fence. Used by the headless VDPM GPU test harness.
+    [[nodiscard]] MappedBufferSet createMappedReadbackBuffers(std::size_t size);
     // Single host-visible storage buffer (eStorageBuffer | eTransferDst) shared across all
     // frames-in-flight — the GPU serialises frames on the graphics queue, so no per-frame copies
     // are needed. eTransferDst lets callers clear/upload via vkCmdFillBuffer/copy. (Distinct from

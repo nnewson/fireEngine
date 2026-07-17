@@ -66,6 +66,13 @@ Descriptors::Descriptors(const Device& device, const Pipeline& pipeline, const R
 {
 }
 
+Descriptors::Descriptors(const Device& device, const Resources& resources)
+    : device_{&device},
+      resources_{&resources}
+{
+    // pipeline_ stays null: compute-only. The descriptor-creating methods must not be called.
+}
+
 vk::DescriptorPool
 Descriptors::createDescriptorPool(std::span<const vk::DescriptorPoolSize> poolSizes,
                                   uint32_t maxSets)

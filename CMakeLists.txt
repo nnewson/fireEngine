@@ -198,6 +198,7 @@ set(SHADER_SOURCES
     shaders/cloth_solve.comp
     shaders/cloth_collide.comp
     shaders/cloth_finalize.comp
+    shaders/vdpm_score.comp
 )
 
 # glslc from the vcpkg `shaderc` port (installed under <vcpkg-installed>/<triplet>/tools/shaderc via

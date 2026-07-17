@@ -568,8 +568,19 @@ at a fraction of the triangles. The remaining residuals and follow-ons, in rough
   GPU uploader's shape). It is **byte-identical** to the oracle's emit (indices, order, wedges) for a
   given front. This was the arc's stop/go gate — it proved the parallel scheduling, repair convergence,
   AND emit on CPU in CI, plus the dispatch-depth (curved ~30 ranks; flat grids scale linearly) and
-  wedge-ABI evidence (CSR vs a precomputed corner→wedge map) — before any GLSL. Next: Stage A
-  (indirect-draw plumbing), then the GPU port + headless compute harness.
+  wedge-ABI evidence (CSR vs a precomputed corner→wedge map) — before any GLSL. **Stage A** (indirect
+  draw) then landed the `drawIndexedIndirect` plumbing (de-risked on MoltenVK). The **GPU port** is
+  now underway, starting with **B1 — scoring**: `refineForView`'s per-instance derivation + per-split
+  math were extracted into ONE Vulkan-free authority (`makeVdpmViewParams` / `scoreVdpmSplit`); a
+  headless surface-free `Device` compute mode + compute-only `Resources` stand up an offscreen device;
+  `shaders/vdpm_score.comp` (typed buffer_reference, no descriptors) reproduces `scoreVdpmSplit` split
+  by split; `VdpmGpuMesh` (shared static splits + canonical positions) and `VdpmGpuFront` (per-instance
+  score output + per-frame mapped params) own the buffers; and a local `[.][gpu]` readback harness
+  cross-checks the shader against the CPU authority (scores close, back-face decisions exact). The
+  std430 ABI (`render/ubo.hpp` `VdpmSplitGpu`/`VdpmScoreOut`/`VdpmScoreParams`) is fully
+  offset-asserted; `worldLinear` is a padded 3-column mat3, all flags are uint32, and the params block
+  carries the three buffer_reference addresses (only its own address is pushed). Next: B2 emit → B3
+  refine/coarsen → B4 repairs → B5 end-to-end.
 - **7 forest skips.** `buildVertexForest` skips collapses whose edge diverged from its adjacency
   replay (7 of ~6800 on the helmet); past the first skip the forest is slightly unfaithful. The repairs
   cover the visible symptoms; truncating the stream at the first skip would be the clean structural fix.

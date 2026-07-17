@@ -700,6 +700,17 @@ per-region refinement. One recorded collapse stream feeds all three. The authori
   indirect at the three VDPM sites (forward / prepass / transmission). **Cross-file invariant:** a
   non-null `indirectBuffer` selects the indirect path, so any DrawCommand *copied* for a different draw
   (the shadow copy) must reset it — shadows keep discrete LOD + direct draw.
+- **GPU-front scoring (Stage B1)** is the first stage that runs on the GPU. `refineForView`'s
+  per-instance derivation + per-split math were factored into ONE Vulkan-free authority in
+  `graphics/vdpm` — `makeVdpmViewParams` + `scoreVdpmSplit` — so the CPU oracle, the ABI uploader, and
+  the compute shader all reference the SAME scoring (the third preventing drift). `render/vdpm_gpu`
+  packs it into the std430 ABI (`render/ubo.hpp`) and owns `VdpmGpuMesh` (shared static splits +
+  canonical positions) vs `VdpmGpuFront` (per-instance output + params); `shaders/vdpm_score.comp`
+  (typed buffer_reference, no descriptors) reproduces `scoreVdpmSplit`. A headless surface-free
+  `Device::headlessCompute()` + a compute-only `Resources(const Device&)` run it offscreen, validated
+  by the **local-only** `[.][gpu]` harness (`tests/render/test_vdpm_gpu.cpp`) — **run it with
+  `./test_fire_engine "[gpu]"` from `build/`; normal CTest and CI skip it (no ICD).** The pure CPU
+  scoring authority + ABI pack helpers are covered in normal CI (`[vdpm]`).
 - **Two dials** live in `mesh_simplifier.cpp`: `kUvWeightFactor` (UV fidelity vs simplification) and
   `kErrorCeilingFactor` (must only refuse *geometrically* un-simplifiable shapes — the cube via its
   boundary weight — not UV-costly seams). `kLodRatios` / `kLodPixelErrorBudget` / the `kVdpm*` dials

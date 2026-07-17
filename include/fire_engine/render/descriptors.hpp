@@ -50,6 +50,10 @@ class Descriptors
 {
 public:
     Descriptors(const Device& device, const Pipeline& pipeline, const Resources& resources);
+    // Compute-only construction: no graphics pipeline. Only the buffer/allocation paths of
+    // Resources are usable; the descriptor-creating methods (which need the pipeline layouts) must
+    // not be called. For a headless compute device (the VDPM GPU harness).
+    Descriptors(const Device& device, const Resources& resources);
     ~Descriptors() = default;
 
     Descriptors(const Descriptors&) = delete;

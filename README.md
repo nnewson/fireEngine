@@ -317,6 +317,14 @@ The equivalent build-directory command is:
 cmake --build build --target tests-full
 ```
 
+Hidden `[.][gpu]` tests need a real Vulkan device (the VDPM GPU-front compute path, cross-checked
+against the CPU authority on a headless surface-free device). They are excluded from CTest and CI (no
+GPU/ICD on the runners); run them locally from `build/`:
+
+```bash
+cd build && ./test_fire_engine "[gpu]"
+```
+
 Optional local tooling targets:
 
 ```bash

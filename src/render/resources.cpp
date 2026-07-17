@@ -100,6 +100,20 @@ Resources::Resources(const Device& device, const Pipeline& pipeline)
                          });
 }
 
+Resources::Resources(const Device& device)
+    : device_(&device),
+      descriptors_(device, *this) // compute-only: no pipeline, no bindless/descriptor set
+{
+    // ONLY the upload command pool — no bindless materials set, no shadow sampler. Every other
+    // member (bindlessPool_/bindlessSet_/materialBuffer_/shadowDebugSampler_) stays at its null
+    // default; the buffer table + allocator bridge (device_) are all a headless compute path needs.
+    const vk::CommandPoolCreateInfo poolCi{
+        .flags = vk::CommandPoolCreateFlagBits::eResetCommandBuffer,
+        .queueFamilyIndex = device.graphicsFamily(),
+    };
+    cmdPool_ = vk::raii::CommandPool(device.device(), poolCi);
+}
+
 // --- Buffer helpers ---
 
 BufferHandle Resources::storeBuffer(UniqueVmaBuffer buffer)
@@ -1283,6 +1297,12 @@ Resources::MappedBufferSet Resources::createMappedIndirectBuffers(std::size_t si
     // Per-frame, persistently-mapped host-visible indirect-command buffers for VDPM's indirect
     // draws (CPU-written from the emit count this stage; compute-written in Stage B5).
     return createMappedHostVisibleBuffers(size, vk::BufferUsageFlagBits::eIndirectBuffer);
+}
+
+Resources::MappedBufferSet Resources::createMappedReadbackBuffers(std::size_t size)
+{
+    // Host-visible transfer-copy destination for GPU→CPU readback (the VDPM GPU harness).
+    return createMappedHostVisibleBuffers(size, vk::BufferUsageFlagBits::eTransferDst);
 }
 
 BufferHandle Resources::createSharedStorageBuffer(std::size_t size, const void* initialData)
