@@ -79,9 +79,9 @@ TEST_CASE("packVdpmPosition packs xyz into a padded vec4", "[vdpm]")
 
 TEST_CASE("packVdpmScoreParams images VdpmViewParams column-major with flags + addresses", "[vdpm]")
 {
-    // A FULLY NON-SYMMETRIC linear part with nine distinct entries, so a row/column transpose in the
-    // packer would be caught (a symmetric or diagonal matrix could not). Invertible (det = -3) so
-    // the cone stays usable. Translated so the affine term is distinct too.
+    // A FULLY NON-SYMMETRIC linear part with nine distinct entries, so a row/column transpose in
+    // the packer would be caught (a symmetric or diagonal matrix could not). Invertible (det = -3)
+    // so the cone stays usable. Translated so the affine term is distinct too.
     Mat4 world = Mat4::identity();
     world[0, 0] = 1.0f;
     world[0, 1] = 2.0f;

@@ -454,11 +454,13 @@ void Device::createLogicalDevice()
 
     // Headless creates ONLY the graphics+compute queue; there is no present family or queue (they
     // stay default/null — `presentQueue()` is meaningless and never called headless). Windowed
-    // creates both (deduped when they share a family).
+    // creates both (deduped when they share a family). `pf` is engaged exactly when windowed (see
+    // findQueueFamilies), so gating on `pf.has_value()` is both equivalent to `!headless()` AND
+    // makes the deref checked for the static analyser.
     std::set<uint32_t> uniqueFamilies = {graphicsFamily_};
-    if (!headless())
+    if (pf.has_value())
     {
-        presentFamily_ = pf; // optional ← optional (guaranteed engaged when windowed)
+        presentFamily_ = pf;
         uniqueFamilies.insert(*pf);
     }
     std::vector<vk::DeviceQueueCreateInfo> qcis;
@@ -505,7 +507,9 @@ void Device::createLogicalDevice()
 
     device_ = vk::raii::Device(physDevice_, ci);
     graphicsQueue_ = device_.getQueue(graphicsFamily_, 0);
-    if (!headless())
+    // presentFamily_ is engaged exactly when windowed; gating on has_value() (rather than
+    // !headless()) keeps the deref checked for the static analyser.
+    if (presentFamily_.has_value())
     {
         presentQueue_ = device_.getQueue(*presentFamily_, 0);
     }
