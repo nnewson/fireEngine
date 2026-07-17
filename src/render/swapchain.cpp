@@ -1,4 +1,6 @@
 #include <algorithm>
+#include <optional>
+#include <stdexcept>
 
 #include <fire_engine/render/swapchain.hpp>
 
@@ -73,8 +75,16 @@ void Swapchain::createSwapchain(const Device& device, const Window& window)
         imgCount = std::min(imgCount, caps.maxImageCount);
     }
 
-    // The swapchain is windowed-only, so the present family is always present here.
-    const uint32_t presentFamily = *device.presentFamily();
+    // A swapchain requires a present queue family — which a headless (surface-free) device does not
+    // have. In practice the swapchain is only ever built on a windowed device, so this is an
+    // invariant; the explicit check both documents it and keeps the optional access checked for the
+    // static analyser (a bare `*device.presentFamily()` trips bugprone-unchecked-optional-access).
+    const std::optional<uint32_t> presentFamilyOpt = device.presentFamily();
+    if (!presentFamilyOpt.has_value())
+    {
+        throw std::runtime_error("swapchain requires a present queue family (windowed device)");
+    }
+    const uint32_t presentFamily = *presentFamilyOpt;
     uint32_t families[] = {device.graphicsFamily(), presentFamily};
     bool concurrent = device.graphicsFamily() != presentFamily;
 
