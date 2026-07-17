@@ -108,6 +108,16 @@ ComputePipelineConfig vdpmScorePipelineConfig()
 VdpmGpuMesh VdpmGpuMesh::build(Resources& resources, std::span<const Vertex> vertices,
                                const VertexForest& forest)
 {
+    // Validation boundary: a shader must never see a malformed forest. validateForest covers the
+    // 32-bit count limits + all structural references; the vertex-array size must match too (the
+    // positions buffer is one entry per original vertex, indexed by canonical IDs in [0,
+    // vertexCount)).
+    validateForest(forest);
+    if (vertices.size() != forest.vertexCount)
+    {
+        throw std::runtime_error("VdpmGpuMesh::build: vertex count != forest.vertexCount");
+    }
+
     VdpmGpuMesh mesh;
     mesh.splitCount_ = static_cast<std::uint32_t>(forest.splits.size());
 
@@ -148,8 +158,8 @@ VdpmGpuMesh VdpmGpuMesh::build(Resources& resources, std::span<const Vertex> ver
 VdpmGpuFront VdpmGpuFront::build(Resources& resources, const VdpmGpuMesh& mesh)
 {
     VdpmGpuFront front;
-    front.mesh_ = &mesh;
-    if (mesh.splitCount() == 0)
+    front.binding_ = mesh.binding(); // copy the immutable binding — no pointer into the mesh
+    if (front.binding_.splitCount == 0)
     {
         return front; // nothing to score
     }
@@ -176,14 +186,14 @@ VdpmGpuFront VdpmGpuFront::build(Resources& resources, const VdpmGpuMesh& mesh)
 void VdpmGpuFront::recordScore(vk::CommandBuffer cmd, const ComputePipeline& pipeline,
                                std::uint32_t frameIndex, const VdpmViewParams& view)
 {
-    if (mesh_ == nullptr || mesh_->splitCount() == 0)
+    if (binding_.splitCount == 0)
     {
         return; // zero-split: no buffers, no dispatch
     }
     // Write this frame slot's params (the three buffer addresses + splitCount + the view image).
     const VdpmScoreParams params =
-        packVdpmScoreParams(view, mesh_->splitsAddress(), mesh_->positionsAddress(), outputAddress_,
-                            mesh_->splitCount());
+        packVdpmScoreParams(view, binding_.splitsAddress, binding_.positionsAddress, outputAddress_,
+                            binding_.splitCount);
     writeMapped(paramsMapped_[frameIndex], params);
 
     cmd.bindPipeline(vk::PipelineBindPoint::eCompute, pipeline.pipeline());
@@ -191,7 +201,7 @@ void VdpmGpuFront::recordScore(vk::CommandBuffer cmd, const ComputePipeline& pip
     cmd.pushConstants<VdpmScorePushConstants>(pipeline.pipelineLayout(),
                                               vk::ShaderStageFlagBits::eCompute, 0, push);
     constexpr std::uint32_t kLocalSize = 64;
-    const std::uint32_t groups = (mesh_->splitCount() + kLocalSize - 1) / kLocalSize;
+    const std::uint32_t groups = (binding_.splitCount + kLocalSize - 1) / kLocalSize;
     cmd.dispatch(groups, 1, 1);
 }
 

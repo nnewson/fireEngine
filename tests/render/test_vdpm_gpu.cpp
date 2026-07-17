@@ -7,6 +7,7 @@
 #include <cstring>
 #include <limits>
 #include <span>
+#include <stdexcept>
 #include <vector>
 
 #include <fire_engine/graphics/mesh_simplifier.hpp>
@@ -347,7 +348,12 @@ Synthetic syntheticForest()
     // Split 0: geometry + normal set; split 1: UV + tangent set — each channel exercised as a
     // winner.
     s.forest.splits = {mk(0, 1, 0.5f, 0.0f, 0.7f, 0.0f), mk(2, 3, 0.0f, 0.4f, 0.0f, 0.9f)};
+    // Each split removes its child — validateForest (the VdpmGpuMesh boundary) requires the forward
+    // + reverse removingSplit/child consistency, so wire it up (split 0 removes vertex 1, split 1
+    // removes vertex 3).
     s.forest.removingSplit.assign(s.verts.size(), kNoSplit);
+    s.forest.removingSplit[1] = 0;
+    s.forest.removingSplit[3] = 1;
     return s;
 }
 
@@ -441,4 +447,29 @@ TEST_CASE("VDPM GPU score: a zero-split forest dispatches nothing", "[.][gpu]")
                                                 2.0f, true, 1.0f, 1.0f, 1.0f);
     const auto out = scorer.score({}, empty, v);
     CHECK(out.empty());
+}
+
+TEST_CASE("VdpmGpuMesh::build is the validation boundary (rejects malformed forests)", "[.][gpu]")
+{
+    const Device device = Device::headlessCompute();
+    Resources resources(device);
+
+    // Vertex count must match the forest.
+    VertexForest mismatched;
+    mismatched.vertexCount = 3;
+    mismatched.removingSplit.assign(3, kNoSplit);
+    const std::vector<Vertex> twoVerts(2);
+    REQUIRE_THROWS_AS(VdpmGpuMesh::build(resources, twoVerts, mismatched), std::runtime_error);
+
+    // Structural: a split claims to remove vertex 1, but removingSplit[1] doesn't point back.
+    VertexForest bad;
+    bad.vertexCount = 4;
+    bad.removingSplit.assign(4, kNoSplit);
+    VertexSplit s;
+    s.parent = 0;
+    s.child = 1;
+    s.vl = 0;
+    bad.splits = {s};
+    const std::vector<Vertex> fourVerts(4);
+    REQUIRE_THROWS_AS(VdpmGpuMesh::build(resources, fourVerts, bad), std::runtime_error);
 }

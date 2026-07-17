@@ -12,58 +12,6 @@
 namespace fire_engine
 {
 
-void validateForest(const VertexForest& forest)
-{
-    const std::size_t n = forest.splits.size();
-    const std::size_t vc = forest.vertexCount;
-    constexpr std::size_t k32 = std::numeric_limits<std::uint32_t>::max();
-    if (n > k32 || vc > k32)
-    {
-        throw std::runtime_error("VDPM forest exceeds 32-bit indexing");
-    }
-    if (forest.removingSplit.size() != vc)
-    {
-        throw std::runtime_error("VDPM forest: removingSplit size != vertexCount");
-    }
-    auto inRange = [vc](std::uint32_t v) { return static_cast<std::size_t>(v) < vc; };
-    for (std::uint32_t s = 0; s < static_cast<std::uint32_t>(n); ++s)
-    {
-        const VertexSplit& sp = forest.splits[s];
-        // parent/child/vl must be real vertices; vr may be the boundary sentinel.
-        if (!inRange(sp.parent) || !inRange(sp.child) || !inRange(sp.vl) ||
-            (sp.vr != kInvalidVertex && !inRange(sp.vr)))
-        {
-            throw std::runtime_error("VDPM forest: split references an out-of-range vertex");
-        }
-        // Each split must be the removing split of its own child — which also proves children are
-        // unique (two splits can't both be removingSplit[child]).
-        if (forest.removingSplit[sp.child] != s)
-        {
-            throw std::runtime_error("VDPM forest: split/child removing-split inconsistency");
-        }
-    }
-    for (std::uint32_t v = 0; v < static_cast<std::uint32_t>(vc); ++v)
-    {
-        const std::uint32_t rs = forest.removingSplit[v];
-        if (rs == kNoSplit)
-        {
-            continue;
-        }
-        if (static_cast<std::size_t>(rs) >= n)
-        {
-            throw std::runtime_error("VDPM forest: removingSplit references an out-of-range split");
-        }
-        // Reverse of the split-loop check: the split that claims to remove `v` must have `v` as its
-        // child. Without this a spare vertex can alias another's removing split — the DAG would
-        // treat it as activated by that split, but refineOne only activates the split's recorded
-        // child.
-        if (forest.splits[rs].child != v)
-        {
-            throw std::runtime_error("VDPM forest: removingSplit/child reverse inconsistency");
-        }
-    }
-}
-
 DependencyDag buildDependencyDag(const VertexForest& forest)
 {
     validateForest(forest); // reject a malformed forest before it could fault a shader
