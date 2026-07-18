@@ -1,0 +1,46 @@
+#version 450
+#extension GL_EXT_buffer_reference : require
+
+// VDPM GPU emit pass 2 (Stage B2): one invocation per FINEST face writes a 0/1 survival flag. A
+// face survives iff its three corners resolve to THREE DISTINCT active ancestors and NONE failed
+// (the scatter reads only surviving faces). Two corners collapsing to the same ancestor means the
+// face degenerated at this front; a failed ancestor (INVALID) means the corner's chain never
+// reached an active vertex — either way the triangle is dropped. The per-face flags feed the
+// exclusive scan, whose stable prefix sum preserves original face order (no atomic append →
+// deterministic emission).
+
+const uint INVALID = 0xFFFFFFFFu;
+
+layout(buffer_reference, std430, buffer_reference_align = 4) buffer UintBuf
+{
+    uint v[];
+};
+
+layout(push_constant) uniform Push
+{
+    UintBuf indices;    // 3 * faceCount original corner indices
+    UintBuf weld;       // per original vertex: its canonical vertex
+    UintBuf ancestorId; // per canonical: active ancestor id, or INVALID
+    UintBuf survive;    // out per face: 0/1
+    uint faceCount;
+}
+pc;
+
+layout(local_size_x = 64) in;
+
+void main()
+{
+    const uint f = gl_GlobalInvocationID.x;
+    if (f >= pc.faceCount)
+    {
+        return;
+    }
+
+    const uint a0 = pc.ancestorId.v[pc.weld.v[pc.indices.v[3u * f + 0u]]];
+    const uint a1 = pc.ancestorId.v[pc.weld.v[pc.indices.v[3u * f + 1u]]];
+    const uint a2 = pc.ancestorId.v[pc.weld.v[pc.indices.v[3u * f + 2u]]];
+
+    const bool distinct = (a0 != a1) && (a1 != a2) && (a0 != a2);
+    const bool valid = (a0 != INVALID) && (a1 != INVALID) && (a2 != INVALID);
+    pc.survive.v[f] = (distinct && valid) ? 1u : 0u;
+}

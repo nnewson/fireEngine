@@ -170,17 +170,20 @@ BufferHandle Resources::createStorageBuffer(std::size_t size, const void* initia
 }
 
 BufferHandle Resources::createDeviceLocalStorageBuffer(std::size_t size, const void* initialData,
-                                                       bool allowReadback)
+                                                       vk::BufferUsageFlags additionalUsage)
 {
     // Device-local, buffer_reference-addressable (BDA), staged upload of initialData if any.
-    // eTransferSrc (test-only) lets the harness copy the result back to a host-visible buffer.
-    vk::BufferUsageFlags usage =
-        vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eShaderDeviceAddress;
-    if (allowReadback)
-    {
-        usage |= vk::BufferUsageFlagBits::eTransferSrc;
-    }
+    // additionalUsage ORs in the caller's extra needs (eTransferSrc for a readback, eIndexBuffer
+    // for a compute-emitted index stream, etc.) on top of the storage+BDA base.
+    const vk::BufferUsageFlags usage = vk::BufferUsageFlagBits::eStorageBuffer |
+                                       vk::BufferUsageFlagBits::eShaderDeviceAddress |
+                                       additionalUsage;
     return createDeviceLocalBuffer(static_cast<vk::DeviceSize>(size), usage, initialData);
+}
+
+std::uint32_t Resources::maxComputeWorkGroupCountX() const noexcept
+{
+    return device_->physicalDevice().getProperties().limits.maxComputeWorkGroupCount[0];
 }
 
 BufferHandle Resources::createStaticStorageBuffer(std::size_t size, const void* initialData)

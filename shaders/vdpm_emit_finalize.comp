@@ -1,0 +1,26 @@
+#version 450
+#extension GL_EXT_buffer_reference : require
+
+// VDPM GPU emit pass 5 (Stage B2): a SINGLE invocation converts the surviving-face total (written
+// to counters[1] by the scan) into the emitted INDEX count `3 * total` (counters[2]) — the value a
+// later GPU-written indirect draw consumes as `indexCount`. Always dispatched (even when faceCount
+// == 0): with zero faces the scan pre-zeroed counters[1], so this writes counters[2] = 0
+// unconditionally, keeping the index count defined without a CPU readback branch.
+
+layout(buffer_reference, std430, buffer_reference_align = 4) buffer UintBuf
+{
+    uint v[];
+};
+
+layout(push_constant) uniform Push
+{
+    UintBuf counters; // [1] = surviving face total (scan); [2] = emitted index count (out)
+}
+pc;
+
+layout(local_size_x = 1) in;
+
+void main()
+{
+    pc.counters.v[2] = 3u * pc.counters.v[1];
+}

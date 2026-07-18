@@ -317,9 +317,28 @@ Candidates" section folds in here:
   reproducing `scoreVdpmSplit`), `VdpmGpuMesh` (shared static splits + positions) + `VdpmGpuFront`
   (per-instance output + per-frame mapped params), a compute-only `Resources` path, and a `[.][gpu]`
   readback harness that cross-checks the shader against the CPU authority (scores close, back-face
-  decisions exact) on sphere/synthetic/singular/zero-split cases. **Stage B1 complete.** Still ahead:
-  B2 emit → B3 refine/coarsen → B4 repairs → B5 end-to-end (compute writes the indirect buffer + a
-  compute→indirect-read barrier).
+  decisions exact) on sphere/synthetic/singular/zero-split cases. **Stage B1 complete.** **B2 emit**
+  *(prep branches `cr-vdpm-gpu-emit-shaders`/scan; passes on `cr-vdpm-gpu-emit-passes`)*: the GPU
+  reproduces `ParallelFront::emitActiveIndices` **byte-identically** from a CPU-uploaded front. A
+  reusable **exclusive-scan** primitive (`VdpmScan`, recursive Blelloch, 256-element blocks) and
+  precomputed **wedge choices** (`buildWedgeChoices` — the CPU's `nearestWedge` decision per (original
+  vertex, ancestor depth), so restoration is pure integer indexing and byte-identity is *structural*,
+  not float-dependent) plus a collapsed **removal-parent** chain feed four passes: ancestor resolution
+  (bounded removal-parent walk → active ancestor + depth, one atomic failure counter), per-face
+  survival (three distinct, non-failed ancestors), the scan (→ stable per-face output slot + surviving
+  total), and a stable scatter (restored-wedge corners in original face order — no atomic append) +
+  a one-invocation finalize (index count = 3·survivors). `VdpmGpuMesh` gained the static emit data
+  (indices/weld/removal-parent/wedge CSR, index-range-validated); `VdpmGpuFront::recordEmit` clears a
+  single 3-uint counters buffer once and records the passes with compute→compute barriers. The
+  `[.][gpu]` harness proves byte-identity (indices, order, wedges) across coarsest/partial/full/repaired
+  fronts on sphere + per-corner-seamed grid, plus determinism, an empty mesh, an all-faces-collapse
+  front (faceCount > 0), and a deepest-chain fixture pinning the ancestor bound's off-by-one.
+  `VdpmGpuMesh::fitsComputeDispatchLimits` is the B5 backend selector's GPU-eligibility gate (static
+  dispatch counts vs the 1-D group cap, checked BEFORE allocation so the selector can pick the CPU
+  fallback); `build` enforces the same bound. **Stage B2 complete.** Still ahead: B3 refine/coarsen →
+  B4 repairs → B5 end-to-end (compute writes the indirect buffer + a compute→indirect-read barrier;
+  **record the wedge-choice memory for a real loaded asset (helmet) here** — it needs the Vulkan glTF
+  path, so it belongs to render integration, not the Vulkan-free `[vdpm]` evidence test).
 - ✅ **Static GPU residency** — device-local static asset upload split from dynamic mapped buffers.
   Landed in block B (`createDeviceLocalBuffer` for static vertices/indices/LODs/VIPM), and the batching
   follow-up is now done too *(branch `cr-static-residency-batch`)*: when a load-time `uploadBatch_` is

@@ -67,9 +67,11 @@ public:
         inputMapped_ = in.mapped[0];
         inputAddr_ = resources_.bufferAddress(inputBuf_);
 
-        outputBuf_ = resources_.createDeviceLocalStorageBuffer(bytes(maxCount_), nullptr, true);
+        outputBuf_ = resources_.createDeviceLocalStorageBuffer(
+            bytes(maxCount_), nullptr, vk::BufferUsageFlagBits::eTransferSrc);
         outputAddr_ = resources_.bufferAddress(outputBuf_);
-        totalBuf_ = resources_.createDeviceLocalStorageBuffer(sizeof(std::uint32_t), nullptr, true);
+        totalBuf_ = resources_.createDeviceLocalStorageBuffer(
+            sizeof(std::uint32_t), nullptr, vk::BufferUsageFlagBits::eTransferSrc);
         totalAddr_ = resources_.bufferAddress(totalBuf_);
 
         for (const std::uint32_t n : VdpmScan::scratchElementCounts(maxCount_))

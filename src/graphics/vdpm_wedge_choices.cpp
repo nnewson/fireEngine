@@ -70,4 +70,15 @@ WedgeChoices buildWedgeChoices(std::span<const Vertex> vertices, const VertexFor
     return wc;
 }
 
+std::vector<std::uint32_t> buildRemovalParent(const VertexForest& forest)
+{
+    std::vector<std::uint32_t> parent(forest.vertexCount);
+    for (std::uint32_t c = 0; c < forest.vertexCount; ++c)
+    {
+        const std::uint32_t rs = forest.removingSplit[c];
+        parent[c] = (rs == kNoSplit) ? c : forest.splits[rs].parent;
+    }
+    return parent;
+}
+
 } // namespace fire_engine

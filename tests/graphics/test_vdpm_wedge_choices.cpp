@@ -129,34 +129,81 @@ TEST_CASE("buildWedgeChoices: choices equal nearestWedge for every ancestor dept
     }
 }
 
-TEST_CASE("buildWedgeChoices memory evidence (choice bytes vs mesh GPU footprint)", "[vdpm]")
+TEST_CASE("buildWedgeChoices memory evidence (choice bytes vs the complete B2 static allocation)",
+          "[vdpm]")
 {
     // Evidence for the B2 gate: the precomputed-choice memory (absolute, per original vertex, and
-    // as a ratio of the mesh's static GPU footprint — positions + indices + weld), so the FP-safe
-    // wedge restoration's cost is on record, not just relative to the CSR.
-    for (const Mesh& m : {makeGrid(33), makeSeamedGrid(17)})
+    // as a ratio of the COMPLETE static B2 allocation — every buffer VdpmGpuMesh's full build
+    // uploads), so the FP-safe wedge restoration's cost is on record against what it actually adds
+    // to, not a partial footprint. The struct sizes mirror the asserted std430 ABI (render/ubo.hpp:
+    // VdpmSplitGpu 48 B, VdpmPositionGpu 16 B); kept as literals so this graphics-layer test stays
+    // Vulkan-free. (A helmet-scale number belongs to the render-integration stage, where the mesh
+    // is already loaded through the Vulkan glTF path — there is no Vulkan-free full-attribute
+    // loader to exercise it from a [vdpm] CPU test.)
+    constexpr std::size_t kU32 = sizeof(std::uint32_t);
+    constexpr std::size_t kSplitBytes = 48;    // VdpmSplitGpu
+    constexpr std::size_t kPositionBytes = 16; // VdpmPositionGpu (padded vec4)
+    for (const Mesh& m : {makeGrid(33), makeGrid(65), makeSeamedGrid(17)})
     {
         const QuadricSimplifier simp;
         const VertexForest forest =
             buildVertexForest(m.verts, simp.collapseSequence(m.verts, m.indices));
         const std::vector<std::uint32_t> weld = mesh_topology::weldByPosition(m.verts);
-        const mesh_topology::CanonicalWedgesCsr csr = mesh_topology::canonicalWedgesCsr(weld);
         const WedgeChoices wc = buildWedgeChoices(m.verts, forest, weld);
+        const std::vector<std::uint32_t> removalParent = buildRemovalParent(forest);
 
-        const std::size_t choiceBytes =
-            (wc.choices.size() + wc.offsets.size()) * sizeof(std::uint32_t);
-        // Rough static mesh GPU footprint: padded positions (16B) + index stream + weld.
-        const std::size_t meshBytes = (m.verts.size() * 16) +
-                                      (m.indices.size() * sizeof(std::uint32_t)) +
-                                      (weld.size() * sizeof(std::uint32_t));
+        const std::size_t choiceBytes = (wc.choices.size() + wc.offsets.size()) * kU32;
+        // The COMPLETE static emit allocation: splits + positions + indices + weld + removalParent
+        // + wedge choices (choices + offsets) — every buffer the full VdpmGpuMesh build uploads.
+        const std::size_t b2Bytes = (forest.splits.size() * kSplitBytes) +
+                                    (m.verts.size() * kPositionBytes) + (m.indices.size() * kU32) +
+                                    (weld.size() * kU32) + (removalParent.size() * kU32) +
+                                    choiceBytes;
         WARN("wedge choices: " << choiceBytes << " B ("
                                << (static_cast<double>(choiceBytes) /
                                    static_cast<double>(std::max<std::size_t>(1, m.verts.size())))
-                               << " B/vertex), maxDepth " << wc.maxDepth << "; mesh GPU footprint "
-                               << meshBytes << " B ("
-                               << (static_cast<double>(choiceBytes) /
-                                   static_cast<double>(std::max<std::size_t>(1, meshBytes)))
-                               << "x)");
+                               << " B/vertex), maxDepth " << wc.maxDepth
+                               << "; complete B2 static allocation " << b2Bytes
+                               << " B (choices are "
+                               << (100.0 * static_cast<double>(choiceBytes) /
+                                   static_cast<double>(std::max<std::size_t>(1, b2Bytes)))
+                               << "% of it)");
         CHECK(choiceBytes > 0);
+        CHECK(b2Bytes > choiceBytes); // choices are a fraction of the whole static set
+    }
+}
+
+TEST_CASE("buildRemovalParent: one removal-parent step per canonical, self at roots", "[vdpm]")
+{
+    for (const Mesh& m : {makeGrid(17), makeSeamedGrid(9)})
+    {
+        const QuadricSimplifier simp;
+        const VertexForest forest =
+            buildVertexForest(m.verts, simp.collapseSequence(m.verts, m.indices));
+        const std::vector<std::uint32_t> parent = buildRemovalParent(forest);
+
+        REQUIRE(parent.size() == forest.vertexCount);
+        bool sawRoot = false;
+        bool sawNonRoot = false;
+        for (std::uint32_t c = 0; c < forest.vertexCount; ++c)
+        {
+            if (forest.removingSplit[c] == kNoSplit)
+            {
+                // A root is its OWN removal parent — an inactive self-parent then fails the GPU
+                // ancestor walk immediately (a valid front keeps every root active).
+                CHECK(parent[c] == c);
+                sawRoot = true;
+            }
+            else
+            {
+                // Non-root: exactly the removing split's parent — one step toward an active
+                // ancestor, matching the recursive activeAncestor walk.
+                CHECK(parent[c] == forest.splits[forest.removingSplit[c]].parent);
+                CHECK(parent[c] != c); // a split's parent is never the removed child itself
+                sawNonRoot = true;
+            }
+        }
+        CHECK(sawRoot);    // the coarsest vertices survive to the root front
+        CHECK(sawNonRoot); // the mesh actually collapsed
     }
 }
