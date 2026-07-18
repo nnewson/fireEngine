@@ -550,10 +550,20 @@ at a fraction of the triangles. The remaining residuals and follow-ons, in rough
   (the CPU no longer knows the index count). The CPU `vdpm` stays the headless-tested oracle + fallback
   (the `cloth` CPU-ref ↔ `render/` GPU-impl pattern). **Stage 0 (`graphics/vdpm_parallel`, COMPLETE):**
   a GPU-shaped CPU model — the refine-dependency DAG
-  with topological **ranks** (CSR by-rank layout), and
-  `ParallelFront`, which reproduces the recursive front by **rank-ordered data-parallel passes**
-  (requirement-closure → ascending-rank refine → descending-rank coarsen) instead of recursion, proven
-  byte-for-byte against the oracle. The **parallel repairs**: `ParallelFront::repairFront`
+  with topological **ranks** (CSR by-rank layout) plus the per-split **dependency triple**
+  (`dependencies[s]` = a `SplitDependencies{parent, vl, vr}` record = `removingSplit[parent/vl/vr]`,
+  the splits that must fire before `s`) — the ONE authority the closure and the GPU B3 uploader share
+  instead of each re-deriving the edges, mapping 1:1 onto the GPU record. The slots are kept separate
+  (not de-duplicated) so the DAG's per-slot edge correspondence is preserved — a distinct concern from
+  `dependents_`, which the refine increments from the VERTEX slots parent/vl/vr, NOT from these
+  dependency splits. `ParallelFront` reproduces the recursive front by **rank-ordered data-parallel
+  passes** (requirement-closure → ascending-rank refine → descending-rank coarsen) instead of
+  recursion, proven byte-for-byte against the oracle. Front consistency is checked by the shared, pure
+  `validateFrontInvariants` (reconstruct `dependents_` from the refined splits; verify dependency
+  activeness + the active↔refined relation; require every flag to be exactly 0/1) — templated over the
+  flag width with uint8 (CPU) and uint32 (GPU read-back) overloads, so the GPU's 32-bit flags are
+  checked with **no lossy narrowing** (256 → 0 can't slip through). Called by
+  `ParallelFront::validateInvariants` and, later, by the GPU B3 harness on read-back state. The **parallel repairs**: `ParallelFront::repairFront`
   reuses the shared `detail::` classifiers to detect every foldover ∪ coverage violation against a
   **settled** front, closes + applies the targets in rank order (`closeAndApplyRequired`), and iterates
   to an inflationary fixed point — sharing P2's per-face policy + final invariants (zero foldover, zero

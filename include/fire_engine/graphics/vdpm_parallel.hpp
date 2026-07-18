@@ -21,6 +21,21 @@ namespace fire_engine
 // tested in CI against the recursive oracle, and its cost measured, BEFORE any GLSL is written. It
 // is the arc's stop/go gate. Vulkan-free + headless-testable, like `ActiveFront`.
 
+// The three dependency SPLITS of one split — `removingSplit[parent/vl/vr]`, i.e. the splits that
+// must be refined before this split can (they activate its parent/vl/vr). `kNoSplit` when the
+// referenced vertex is a root (always active) or, for `vr`, the boundary sentinel. The slots are
+// kept SEPARATE (not de-duplicated): a split whose parent and vl are the same vertex carries that
+// dependency in both slots, preserving the DAG's per-slot edge correspondence — and this record
+// maps 1:1 onto the GPU B3 `VdpmFrontSplitGpu` dependency fields. (Distinct from `dependents_`,
+// which the refine increments from the VERTEX slots parent/vl/vr, not from these dependency
+// splits.)
+struct SplitDependencies
+{
+    std::uint32_t parent{kNoSplit};
+    std::uint32_t vl{kNoSplit};
+    std::uint32_t vr{kNoSplit};
+};
+
 // The refine-dependency DAG of a vertex forest. Refining split `s` (activating its `child`) needs
 // its `parent`, `vl`, and `vr` active; a non-root vertex `v` becomes active only when the split
 // that removes it (`removingSplit[v]`) is refined. So `s` DEPENDS on
@@ -40,6 +55,11 @@ struct DependencyDag
     std::vector<std::uint32_t> splitsByRank; // all split indices, ordered by ascending rank
     std::vector<std::uint32_t> rankOffsets; // size maxRank + 2; rank r = [offsets[r], offsets[r+1])
     std::uint32_t maxRank{0};               // highest rank ⇒ maxRank + 1 rank-ordered passes
+
+    // Per split (sized to splits.size()): the dependency-split triple — THE ONE AUTHORITY for the
+    // refine edges, read by both the closure (`ParallelFront::closeAndApplyRequired`) and the GPU
+    // B3 uploader instead of each re-deriving `removingSplit[...]`.
+    std::vector<SplitDependencies> dependencies;
 };
 
 // Build the dependency DAG + per-split topological ranks + the CSR rank layout. Throws
@@ -48,6 +68,26 @@ struct DependencyDag
 // is uploaded to the GPU, so it rejects anything a shader would fault on rather than assuming
 // validity. Runs `validateForest` (graphics/vdpm.hpp) first.
 [[nodiscard]] DependencyDag buildDependencyDag(const VertexForest& forest);
+
+// Check an active front's internal consistency from FIRST PRINCIPLES (throws std::logic_error on
+// any violation): every `active`/`refined` entry is exactly 0 or 1, then reconstruct the dependent
+// counts from the refined splits and verify (1) every refined split's parent/vl/vr dependencies are
+// active, (2) `dependents` matches the reconstruction, and (3) a non-root vertex is active exactly
+// when its removing split is refined (a root is always active). The SHARED authority for the front
+// invariants: `ParallelFront::validateInvariants` calls the uint8 overload; the GPU B3 harness
+// calls the uint32 overload on state read back from the device (the GPU stores `active`/`refined`
+// as uint32) — the flag width is a template parameter, so NO lossy narrowing conversion hides a
+// corrupt value (e.g. 256 → 0). The exact-0-or-1 check is what makes that guarantee meaningful.
+// Pure + Vulkan-free. `active`/`refined` are per canonical vertex / per split (sizes == vertexCount
+// / splits.size()); `dependents` is per canonical vertex. PRECONDITION: `forest` is already
+// structurally valid (as built by `buildDependencyDag` / the GPU-mesh boundary) — this validator
+// checks the mutable FRONT STATE, not the static forest, and indexes the forest directly.
+void validateFrontInvariants(const VertexForest& forest, std::span<const std::uint8_t> active,
+                             std::span<const std::uint8_t> refined,
+                             std::span<const std::uint32_t> dependents);
+void validateFrontInvariants(const VertexForest& forest, std::span<const std::uint32_t> active,
+                             std::span<const std::uint32_t> refined,
+                             std::span<const std::uint32_t> dependents);
 
 // A GPU-shaped active front: the same state as `ActiveFront` (per-vertex active, per-split refined,
 // per-vertex dependent counts) but updated by RANK-ORDERED DATA-PARALLEL passes over the dependency
