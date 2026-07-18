@@ -111,6 +111,7 @@ add_library(fireengine SHARED
     src/render/taa.cpp
     src/render/transmission.cpp
     src/render/vdpm_gpu.cpp
+    src/render/vdpm_scan.cpp
     src/scene/animator.cpp
     src/scene/controllable.cpp
     src/scene/camera.cpp
@@ -200,6 +201,8 @@ set(SHADER_SOURCES
     shaders/cloth_collide.comp
     shaders/cloth_finalize.comp
     shaders/vdpm_score.comp
+    shaders/vdpm_scan_block.comp
+    shaders/vdpm_scan_add.comp
 )
 
 # glslc from the vcpkg `shaderc` port (installed under <vcpkg-installed>/<triplet>/tools/shaderc via
@@ -326,6 +329,7 @@ add_executable(test_fire_engine
     tests/render/test_ubo.cpp
     tests/render/test_pipeline_config.cpp
     tests/render/test_vdpm_gpu.cpp
+    tests/render/test_vdpm_scan.cpp
     tests/graphics/test_generational_slot_pool.cpp
     tests/scene/test_particle_emitter.cpp
     tests/core/test_shader_loader.cpp

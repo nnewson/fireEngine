@@ -1,0 +1,79 @@
+#version 450
+#extension GL_EXT_buffer_reference : require
+
+// One level of the VDPM GPU exclusive prefix-sum (Stage B2 emit compaction). Each workgroup scans a
+// block of ELEMENTS_PER_BLOCK elements of `input` with a work-efficient Blelloch (up-sweep +
+// down-sweep) exclusive scan in shared memory, writes the scanned values to `output` (which may
+// alias `input` for an in-place higher level), and writes the block's TOTAL to blockSums[blockIndex]
+// — ALWAYS, including a zero total, so nothing relies on cleared scratch. The recursive orchestration
+// (render/vdpm_scan) scans the block sums the same way and then adds the scanned block offsets back
+// down with vdpm_scan_add.comp, with a barrier between every level.
+
+const uint ELEMENTS_PER_BLOCK = 256; // MUST match kScanElementsPerBlock (render/ubo.hpp)
+
+layout(buffer_reference, std430, buffer_reference_align = 4) buffer UintBuf
+{
+    uint v[];
+};
+
+layout(push_constant) uniform Push
+{
+    UintBuf inputBuf;
+    UintBuf outputBuf;
+    UintBuf blockSums;
+    uint count;
+    uint pad;
+}
+pc;
+
+layout(local_size_x = ELEMENTS_PER_BLOCK) in;
+
+shared uint temp[ELEMENTS_PER_BLOCK];
+
+void main()
+{
+    const uint tid = gl_LocalInvocationID.x;
+    const uint base = gl_WorkGroupID.x * ELEMENTS_PER_BLOCK;
+    const uint gid = base + tid;
+
+    // Load (tail padded with 0 so the block sum is unaffected).
+    temp[tid] = (gid < pc.count) ? pc.inputBuf.v[gid] : 0u;
+    barrier();
+
+    // Up-sweep (reduce): temp ends with the block total at the last slot.
+    for (uint d = 1u; d < ELEMENTS_PER_BLOCK; d <<= 1u)
+    {
+        const uint i = ((tid + 1u) * (d << 1u)) - 1u;
+        if (i < ELEMENTS_PER_BLOCK)
+        {
+            temp[i] += temp[i - d];
+        }
+        barrier();
+    }
+
+    // Record the block total (always), then clear the last slot for the exclusive down-sweep.
+    if (tid == ELEMENTS_PER_BLOCK - 1u)
+    {
+        pc.blockSums.v[gl_WorkGroupID.x] = temp[tid];
+        temp[tid] = 0u;
+    }
+    barrier();
+
+    // Down-sweep: turns the reduction tree into an exclusive scan.
+    for (uint d = ELEMENTS_PER_BLOCK >> 1u; d >= 1u; d >>= 1u)
+    {
+        const uint i = ((tid + 1u) * (d << 1u)) - 1u;
+        if (i < ELEMENTS_PER_BLOCK)
+        {
+            const uint t = temp[i - d];
+            temp[i - d] = temp[i];
+            temp[i] += t;
+        }
+        barrier();
+    }
+
+    if (gid < pc.count)
+    {
+        pc.outputBuf.v[gid] = temp[tid];
+    }
+}
