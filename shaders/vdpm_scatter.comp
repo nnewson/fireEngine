@@ -1,0 +1,53 @@
+#version 450
+#extension GL_EXT_buffer_reference : require
+
+// VDPM GPU emit pass 4 (Stage B2): one invocation per FINEST face; a surviving face writes its
+// three restored-wedge indices at its stable scan slot. The output slot is `outSlot[f]` (the
+// exclusive scan of the survival flags), so surviving faces land in ORIGINAL face order with no
+// gaps — deterministic emission without an atomic append. Wedge restoration is PURE INTEGER
+// indexing: the precomputed `wedgeChoices` CSR already holds the CPU's `nearestWedge` decision for
+// corner `oc` at every ancestor depth, so we index it by the active ancestor's depth — no
+// floating-point on the GPU, so the emitted indices are byte-identical to the CPU emit (see
+// WedgeChoices for why that matters).
+
+layout(buffer_reference, std430, buffer_reference_align = 4) buffer UintBuf
+{
+    uint v[];
+};
+
+layout(push_constant) uniform Push
+{
+    UintBuf indices;        // 3 * faceCount original corner indices
+    UintBuf weld;           // per original vertex: its canonical vertex
+    UintBuf ancestorDepth;  // per canonical: parent-step count to the active ancestor
+    UintBuf survive;        // per face: 0/1
+    UintBuf outSlot;        // per face: exclusive scan of survive (the stable output slot)
+    UintBuf wedgeChoices;   // CSR: restored wedge per (original vertex, ancestor depth)
+    UintBuf wedgeOffsets;   // per original vertex: CSR start into wedgeChoices
+    UintBuf emittedIndices; // out: 3 * survivingTotal restored wedge indices
+    uint faceCount;
+}
+pc;
+
+layout(local_size_x = 64) in;
+
+void main()
+{
+    const uint f = gl_GlobalInvocationID.x;
+    if (f >= pc.faceCount)
+    {
+        return;
+    }
+    if (pc.survive.v[f] == 0u)
+    {
+        return;
+    }
+
+    const uint base = 3u * pc.outSlot.v[f];
+    for (uint k = 0u; k < 3u; ++k)
+    {
+        const uint oc = pc.indices.v[3u * f + k];
+        const uint depth = pc.ancestorDepth.v[pc.weld.v[oc]];
+        pc.emittedIndices.v[base + k] = pc.wedgeChoices.v[pc.wedgeOffsets.v[oc] + depth];
+    }
+}

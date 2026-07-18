@@ -6,12 +6,14 @@
 #include <cstdint>
 #include <cstring>
 #include <limits>
+#include <random>
 #include <span>
 #include <stdexcept>
 #include <vector>
 
 #include <fire_engine/graphics/mesh_simplifier.hpp>
 #include <fire_engine/graphics/vdpm.hpp>
+#include <fire_engine/graphics/vdpm_parallel.hpp>
 #include <fire_engine/graphics/vertex.hpp>
 #include <fire_engine/math/mat4.hpp>
 #include <fire_engine/math/vec3.hpp>
@@ -313,6 +315,53 @@ VertexForest forestOf(const Mesh& m)
     return buildVertexForest(m.verts, simp.collapseSequence(m.verts, m.indices));
 }
 
+// A shared-vertex grid (single wedge per canonical).
+Mesh grid(int n)
+{
+    Mesh m;
+    for (int y = 0; y < n; ++y)
+    {
+        for (int x = 0; x < n; ++x)
+        {
+            const float u = static_cast<float>(x) / static_cast<float>(n - 1);
+            const float v = static_cast<float>(y) / static_cast<float>(n - 1);
+            m.verts.push_back(Vertex{Vec3{static_cast<float>(x), static_cast<float>(y), 0.0f},
+                                     Colour3{}, Vec3{0.0f, 0.0f, 1.0f}, Vec2{u, v}});
+        }
+    }
+    for (int y = 0; y < n - 1; ++y)
+    {
+        for (int x = 0; x < n - 1; ++x)
+        {
+            const auto a = static_cast<std::uint32_t>((y * n) + x);
+            const auto b = static_cast<std::uint32_t>((y * n) + x + 1);
+            const auto c = static_cast<std::uint32_t>(((y + 1) * n) + x);
+            const auto d = static_cast<std::uint32_t>(((y + 1) * n) + x + 1);
+            m.indices.insert(m.indices.end(), {a, b, d, a, d, c});
+        }
+    }
+    return m;
+}
+
+// A per-corner-duplicated grid: every triangle carries its own three vertices at shared positions
+// with slightly varied UVs → every canonical is multi-wedge, so nearestWedge genuinely tie-breaks
+// and the GPU restore must reproduce the CPU's exact wedge choice (the byte-identity risk).
+Mesh seamedGrid(int n)
+{
+    const Mesh shared = grid(n);
+    Mesh dup;
+    for (std::size_t t = 0; t < shared.indices.size(); ++t)
+    {
+        const Vertex& src = shared.verts[shared.indices[t]];
+        Vertex v = src;
+        v.texCoord(
+            Vec2{src.texCoord().s() + (0.125f * static_cast<float>(t % 5)), src.texCoord().t()});
+        dup.indices.push_back(static_cast<std::uint32_t>(dup.verts.size()));
+        dup.verts.push_back(v);
+    }
+    return dup;
+}
+
 // A tiny SYNTHETIC forest with hand-set per-channel errors, so each channel can be made dominant
 // and every channel is non-zero (a real sphere has no UV/tangent deviation). Two splits
 // (multi-split mandatory — a wrong output stride can't pass on element 0 alone).
@@ -472,4 +521,366 @@ TEST_CASE("VdpmGpuMesh::build is the validation boundary (rejects malformed fore
     bad.splits = {s};
     const std::vector<Vertex> fourVerts(4);
     REQUIRE_THROWS_AS(VdpmGpuMesh::build(resources, fourVerts, bad), std::runtime_error);
+}
+
+// ============================================================================================
+// GPU emit harness ([.][gpu], local-only). Cross-checks the four emit passes (shaders/vdpm_ancestor
+// | survival | scatter | emit_finalize) + the exclusive scan against the CPU emit authority
+// (ParallelFront::emitActiveIndices) on a headless device. The GPU emit MUST be BYTE-IDENTICAL to
+// the CPU — same indices, same order, same restored wedges — for any valid settled front.
+// ============================================================================================
+
+namespace
+{
+
+// The GPU emit result: the emitted index stream (already truncated to counters[2]) + the ancestor
+// failure count (must be 0 on a valid front).
+struct EmitResult
+{
+    std::vector<std::uint32_t> indices;
+    std::uint32_t failureCount{0};
+    std::uint32_t emittedCount{0};
+};
+
+// A headless compute device + Resources + the five emit pipelines + a command pool. Builds a full
+// (score + emit) mesh/front per call, records the emit for an uploaded front, and reads back the
+// emitted indices + counters. Non-movable; build one per case.
+class GpuEmitter
+{
+public:
+    GpuEmitter()
+        : device_(Device::headlessCompute()),
+          resources_(device_),
+          pipelines_(device_),
+          pool_(device_.device(), vk::CommandPoolCreateInfo{
+                                      .flags = vk::CommandPoolCreateFlagBits::eResetCommandBuffer,
+                                      .queueFamilyIndex = device_.graphicsFamily()})
+    {
+    }
+    GpuEmitter(const GpuEmitter&) = delete;
+    GpuEmitter& operator=(const GpuEmitter&) = delete;
+    GpuEmitter(GpuEmitter&&) = delete;
+    GpuEmitter& operator=(GpuEmitter&&) = delete;
+    ~GpuEmitter() = default;
+
+    [[nodiscard]] EmitResult emit(std::span<const Vertex> verts,
+                                  std::span<const std::uint32_t> indices,
+                                  const VertexForest& forest, std::span<const std::uint32_t> active)
+    {
+        const VdpmGpuMesh mesh = VdpmGpuMesh::build(resources_, verts, indices, forest);
+        VdpmGpuFront front = VdpmGpuFront::buildWithEmit(resources_, mesh);
+        const std::uint32_t faceCount = front.faceCount();
+
+        const vk::DeviceSize countersSize = 3 * sizeof(std::uint32_t);
+        const vk::DeviceSize idxSize =
+            static_cast<vk::DeviceSize>(faceCount) * 3 * sizeof(std::uint32_t);
+        const Resources::MappedBufferSet countersHost =
+            resources_.createMappedReadbackBuffers(countersSize);
+        // A zero-face mesh has no emitted-index buffer; only the counters are read.
+        const Resources::MappedBufferSet idxHost =
+            faceCount > 0 ? resources_.createMappedReadbackBuffers(idxSize)
+                          : Resources::MappedBufferSet{};
+
+        const vk::CommandBufferAllocateInfo ai{.commandPool = *pool_,
+                                               .level = vk::CommandBufferLevel::ePrimary,
+                                               .commandBufferCount = 1};
+        auto cmds = device_.device().allocateCommandBuffers(ai);
+        vk::raii::CommandBuffer& cmd = cmds[0];
+        cmd.begin(
+            vk::CommandBufferBeginInfo{.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
+
+        front.recordEmit(*cmd, pipelines_, resources_, active);
+
+        // The counters buffer is CLEAR-written for counters[0] (valid front — no atomic) and, on a
+        // zero-face mesh, counters[1]; only the scatter path writes it via compute. So the counters
+        // readback barrier's source scope names BOTH the clear and the compute writes (per
+        // recordEmit's consumer contract) — a compute-only source would race the clear-written
+        // values.
+        recordBufferBarrier(
+            *cmd,
+            makeBufferMemoryBarrier(
+                vk::PipelineStageFlagBits2::eClear | vk::PipelineStageFlagBits2::eComputeShader,
+                vk::AccessFlagBits2::eTransferWrite | vk::AccessFlagBits2::eShaderStorageWrite,
+                vk::PipelineStageFlagBits2::eCopy, vk::AccessFlagBits2::eTransferRead,
+                resources_.vulkanBuffer(front.countersBuffer()), 0, countersSize));
+        cmd.copyBuffer(resources_.vulkanBuffer(front.countersBuffer()),
+                       resources_.vulkanBuffer(countersHost.buffers[0]),
+                       vk::BufferCopy{.size = countersSize});
+        if (faceCount > 0)
+        {
+            // The emitted-index stream is purely compute-written (the scatter) → compute→copy.
+            recordBufferBarrier(
+                *cmd, makeBufferMemoryBarrier(
+                          vk::PipelineStageFlagBits2::eComputeShader,
+                          vk::AccessFlagBits2::eShaderStorageWrite,
+                          vk::PipelineStageFlagBits2::eCopy, vk::AccessFlagBits2::eTransferRead,
+                          resources_.vulkanBuffer(front.emittedIndicesBuffer()), 0, idxSize));
+            cmd.copyBuffer(resources_.vulkanBuffer(front.emittedIndicesBuffer()),
+                           resources_.vulkanBuffer(idxHost.buffers[0]),
+                           vk::BufferCopy{.size = idxSize});
+        }
+
+        // Global transfer-write → host-read barrier exposing both copies to the CPU.
+        const vk::MemoryBarrier2 toHost{
+            .srcStageMask = vk::PipelineStageFlagBits2::eCopy,
+            .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
+            .dstStageMask = vk::PipelineStageFlagBits2::eHost,
+            .dstAccessMask = vk::AccessFlagBits2::eHostRead,
+        };
+        cmd.pipelineBarrier2(
+            vk::DependencyInfo{.memoryBarrierCount = 1, .pMemoryBarriers = &toHost});
+        cmd.end();
+
+        const vk::CommandBufferSubmitInfo cmdInfo{.commandBuffer = *cmd};
+        const vk::SubmitInfo2 submit{.commandBufferInfoCount = 1, .pCommandBufferInfos = &cmdInfo};
+        const vk::raii::Fence fence(device_.device(), vk::FenceCreateInfo{});
+        device_.graphicsQueue().submit2(submit, *fence);
+        (void)device_.device().waitForFences(*fence, vk::True,
+                                             std::numeric_limits<std::uint64_t>::max());
+
+        std::array<std::uint32_t, 3> counters{};
+        std::memcpy(counters.data(), countersHost.mapped[0].data(), countersSize);
+
+        EmitResult result;
+        result.failureCount = counters[0];
+        const std::uint32_t survivingFaces = counters[1];
+        result.emittedCount = counters[2];
+        // Sanity-bound the GPU counts BEFORE trusting them for resize/memcpy: no more survivors
+        // than faces, the index count is exactly 3 per survivor, and it fits the worst-case
+        // allocation.
+        REQUIRE(survivingFaces <= faceCount);
+        REQUIRE(result.emittedCount == 3u * survivingFaces);
+        REQUIRE(result.emittedCount <= 3u * faceCount);
+        if (faceCount > 0 && result.emittedCount > 0)
+        {
+            result.indices.resize(result.emittedCount);
+            std::memcpy(result.indices.data(), idxHost.mapped[0].data(),
+                        static_cast<std::size_t>(result.emittedCount) * sizeof(std::uint32_t));
+        }
+        return result;
+    }
+
+private:
+    Device device_;
+    Resources resources_;
+    VdpmEmitPipelines pipelines_;
+    vk::raii::CommandPool pool_;
+};
+
+// The settled front's per-canonical active flags as the GPU-shaped uint32 array (0/1).
+[[nodiscard]] std::vector<std::uint32_t> activeFlags(const ParallelFront& front)
+{
+    const std::uint32_t n = front.forest().vertexCount;
+    std::vector<std::uint32_t> a(n);
+    for (std::uint32_t v = 0; v < n; ++v)
+    {
+        a[v] = front.active(v) ? 1u : 0u;
+    }
+    return a;
+}
+
+// Assert the GPU emit is byte-identical to the CPU emit for the SAME settled front, and that no
+// ancestor walk failed (a valid front always resolves).
+void expectEmitMatchesCpu(GpuEmitter& emitter, std::span<const Vertex> verts,
+                          std::span<const std::uint32_t> indices, const ParallelFront& front)
+{
+    const std::vector<std::uint32_t> active = activeFlags(front);
+    const std::vector<std::uint32_t> cpu = front.emitActiveIndices(verts, indices);
+    const EmitResult gpu = emitter.emit(verts, indices, front.forest(), active);
+
+    CHECK(gpu.failureCount == 0u);
+    CHECK(gpu.emittedCount == cpu.size());
+    CHECK(gpu.indices == cpu); // byte-identical: indices, order, AND restored wedges
+}
+
+} // namespace
+
+TEST_CASE("VDPM GPU emit: byte-identical to the CPU emit across settled fronts", "[.][gpu]")
+{
+    GpuEmitter emitter;
+    const QuadricSimplifier simp;
+
+    // A sphere (multi-wedge only at poles) and a per-corner-seamed grid (every canonical
+    // multi-wedge → nearestWedge genuinely tie-breaks) exercise the wedge-restoration path.
+    struct Case
+    {
+        const char* name;
+        Mesh mesh;
+    };
+    std::vector<Case> cases;
+    cases.push_back({"sphere", uvSphere(16, 20)});
+    cases.push_back({"seamed-grid", seamedGrid(9)});
+
+    for (const Case& c : cases)
+    {
+        CAPTURE(c.name);
+        const auto collapses = simp.collapseSequence(c.mesh.verts, c.mesh.indices);
+
+        SECTION(std::string(c.name) + " coarsest front (deepest chains → maxDepth walks)")
+        {
+            // A freshly-built front sits at the coarsest front (roots only), so the deepest finest
+            // vertex walks exactly its full removal chain — byte-identity here proves deep-chain
+            // ancestor resolution against the recursive CPU activeAncestor.
+            const ParallelFront front =
+                ParallelFront::build(c.mesh.verts, c.mesh.indices, collapses);
+            expectEmitMatchesCpu(emitter, c.mesh.verts, c.mesh.indices, front);
+        }
+        SECTION(std::string(c.name) + " partially-refined front")
+        {
+            ParallelFront front = ParallelFront::build(c.mesh.verts, c.mesh.indices, collapses);
+            const auto n = static_cast<std::uint32_t>(front.forest().splits.size());
+            // Deterministic pseudo-random scores straddling the budget → a mixed front.
+            std::mt19937 rng(0x5EED);
+            std::uniform_real_distribution<float> dist(0.0f, 2.0f);
+            std::vector<float> score(n);
+            std::vector<std::uint8_t> backface(n, 0);
+            for (std::uint32_t i = 0; i < n; ++i)
+            {
+                score[i] = dist(rng);
+            }
+            front.applyView(score, backface, 1.0f, 0.6f);
+            front.validateInvariants();
+            expectEmitMatchesCpu(emitter, c.mesh.verts, c.mesh.indices, front);
+        }
+        SECTION(std::string(c.name) + " fully-refined front")
+        {
+            ParallelFront front = ParallelFront::build(c.mesh.verts, c.mesh.indices, collapses);
+            const auto n = static_cast<std::uint32_t>(front.forest().splits.size());
+            // Every split over budget → full detail; every finest vertex active (depth-0 restore).
+            front.applyView(std::vector<float>(n, 9.0f), std::vector<std::uint8_t>(n, 0), 1.0f,
+                            0.6f);
+            front.validateInvariants();
+            expectEmitMatchesCpu(emitter, c.mesh.verts, c.mesh.indices, front);
+        }
+        SECTION(std::string(c.name) + " repaired front (realistic view)")
+        {
+            ParallelFront front = ParallelFront::build(c.mesh.verts, c.mesh.indices, collapses);
+            const auto n = static_cast<std::uint32_t>(front.forest().splits.size());
+            std::mt19937 rng(0xC0FFEE);
+            std::uniform_real_distribution<float> dist(0.0f, 2.0f);
+            std::vector<float> score(n);
+            std::vector<std::uint8_t> backface(n, 0);
+            for (std::uint32_t i = 0; i < n; ++i)
+            {
+                score[i] = dist(rng);
+            }
+            front.applyView(score, backface, 1.0f, 0.6f);
+            const Mat4 world = Mat4::identity();
+            const Vec3 cam{0.0f, 0.0f, 3.0f};
+            const Mat4 viewProj = Mat4::identity();
+            front.repairFront(c.mesh.verts, world, cam, viewProj, 1000.0f, 1000.0f, true);
+            front.validateInvariants();
+            expectEmitMatchesCpu(emitter, c.mesh.verts, c.mesh.indices, front);
+        }
+    }
+}
+
+TEST_CASE("VDPM GPU emit: determinism (identical bytes across repeated emits)", "[.][gpu]")
+{
+    GpuEmitter emitter;
+    const QuadricSimplifier simp;
+    const Mesh m = seamedGrid(9);
+    const auto collapses = simp.collapseSequence(m.verts, m.indices);
+    ParallelFront front = ParallelFront::build(m.verts, m.indices, collapses);
+    const auto n = static_cast<std::uint32_t>(front.forest().splits.size());
+    front.applyView(std::vector<float>(n, 9.0f), std::vector<std::uint8_t>(n, 0), 1.0f, 0.6f);
+    const std::vector<std::uint32_t> active = activeFlags(front);
+
+    const EmitResult a = emitter.emit(m.verts, m.indices, front.forest(), active);
+    const EmitResult b = emitter.emit(m.verts, m.indices, front.forest(), active);
+    CHECK(a.indices == b.indices);
+    CHECK(a.emittedCount == b.emittedCount);
+    CHECK(a.failureCount == 0u);
+    CHECK(b.failureCount == 0u);
+}
+
+// ---- Synthetic fixtures pinning the ancestor bound + the degenerate-face path ----
+
+TEST_CASE("VDPM GPU emit: a genuinely empty mesh emits nothing", "[.][gpu]")
+{
+    GpuEmitter emitter;
+    VertexForest empty;
+    empty.vertexCount = 0;
+    const EmitResult r = emitter.emit({}, {}, empty, {});
+    CHECK(r.emittedCount == 0u);
+    CHECK(r.failureCount == 0u);
+    CHECK(r.indices.empty());
+}
+
+TEST_CASE("VDPM GPU emit: all faces collapse but faceCount > 0 (distinct from empty mesh)",
+          "[.][gpu]")
+{
+    // A single triangle (v0,v1,v2) whose corner v2 collapses to v0. At the coarsest front (only the
+    // roots v0,v1 active) the face resolves to ancestors (v0,v1,v0) — two equal → it degenerates,
+    // so NOTHING is emitted even though faceCount == 1. Distinct from the empty-mesh case above.
+    GpuEmitter emitter;
+    std::vector<Vertex> verts;
+    for (const Vec3 p : {Vec3{0, 0, 0}, Vec3{1, 0, 0}, Vec3{0, 1, 0}})
+    {
+        verts.push_back(Vertex{p, Colour3{}, Vec3{0, 0, 1}, Vec2{0, 0}});
+    }
+    const std::vector<std::uint32_t> indices{0, 1, 2};
+
+    VertexForest forest;
+    forest.vertexCount = 3;
+    forest.removingSplit.assign(3, kNoSplit);
+    forest.removingSplit[2] = 0; // vertex 2 is removed by split 0
+    VertexSplit split;
+    split.parent = 0;
+    split.child = 2;
+    forest.splits = {split};
+
+    // Coarsest front: only the roots (v0, v1) active; v2 inactive → resolves up to v0.
+    const std::vector<std::uint32_t> active{1u, 1u, 0u};
+    const EmitResult r = emitter.emit(verts, indices, forest, active);
+    CHECK(r.failureCount == 0u); // v2 resolves to v0 — it does not fail
+    CHECK(r.emittedCount == 0u); // the lone face degenerates
+    CHECK(r.indices.empty());
+
+    // With v2 active too, the same face survives → its three original corners emit.
+    const std::vector<std::uint32_t> full{1u, 1u, 1u};
+    const EmitResult r2 = emitter.emit(verts, indices, forest, full);
+    CHECK(r2.failureCount == 0u);
+    CHECK(r2.emittedCount == 3u);
+    CHECK(r2.indices == std::vector<std::uint32_t>{0u, 1u, 2u});
+}
+
+TEST_CASE("VDPM GPU emit: deepest chain — active root exactly maxDepth away resolves, no failure",
+          "[.][gpu]")
+{
+    // A linear removal chain v3 → v2 → v1 → v0 (each removed by a split whose parent is the
+    // previous vertex): maxDepth == 3. With only the root v0 active, the deepest vertex v3 must be
+    // reached AFTER exactly maxDepth transitions. The ancestor loop tests the vertex reached after
+    // the final allowed transition, so v3 resolves to v0 (depth 3) rather than tripping the bound —
+    // a wrong off-by-one would reject it and bump the failure counter.
+    GpuEmitter emitter;
+    std::vector<Vertex> verts;
+    for (const Vec3 p : {Vec3{0, 0, 0}, Vec3{1, 0, 0}, Vec3{2, 0, 0}, Vec3{3, 0, 0}})
+    {
+        verts.push_back(Vertex{p, Colour3{}, Vec3{0, 0, 1}, Vec2{0, 0}});
+    }
+    // One triangle referencing the two deepest vertices + the root, so the ancestor walk for v3
+    // (and v2) actually runs.
+    const std::vector<std::uint32_t> indices{0, 2, 3};
+
+    VertexForest forest;
+    forest.vertexCount = 4;
+    forest.removingSplit.assign(4, kNoSplit);
+    forest.removingSplit[1] = 2; // v1 removed by split 2 (parent v0)
+    forest.removingSplit[2] = 1; // v2 removed by split 1 (parent v1)
+    forest.removingSplit[3] = 0; // v3 removed by split 0 (parent v2)
+    auto mk = [](std::uint32_t parent, std::uint32_t child)
+    {
+        VertexSplit s;
+        s.parent = parent;
+        s.child = child;
+        return s;
+    };
+    forest.splits = {mk(2, 3), mk(1, 2), mk(0, 1)}; // split i removes child i via removingSplit
+
+    // Only the root v0 active — v1, v2, v3 all resolve up the chain to v0.
+    const std::vector<std::uint32_t> active{1u, 0u, 0u, 0u};
+    const EmitResult r = emitter.emit(verts, indices, forest, active);
+    CHECK(r.failureCount == 0u); // v3 at exactly maxDepth resolves — the bound is not off by one
+    CHECK(r.emittedCount == 0u); // all three corners collapse to v0 → the face degenerates
 }

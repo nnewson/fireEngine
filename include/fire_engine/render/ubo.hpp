@@ -571,4 +571,93 @@ static_assert(alignof(VdpmScanAddPush) == 8);
 static_assert(std::is_standard_layout_v<VdpmScanAddPush>);
 static_assert(std::is_trivially_copyable_v<VdpmScanAddPush>);
 
+// Push for vdpm_ancestor.comp (VDPM GPU emit pass 1): resolve each canonical vertex's active
+// ancestor
+// + depth by walking the collapsed removalParent chain, bounded by maxDepth. counters[0] is the
+// ancestor-failure atomic counter. Field order mirrors the shader's push_constant block.
+struct alignas(8) VdpmAncestorPush
+{
+    std::uint64_t activeAddress{0};
+    std::uint64_t removalParentAddress{0};
+    std::uint64_t ancestorIdAddress{0};
+    std::uint64_t ancestorDepthAddress{0};
+    std::uint64_t countersAddress{0};
+    std::uint32_t vertexCount{0};
+    std::uint32_t maxDepth{0};
+};
+static_assert(offsetof(VdpmAncestorPush, activeAddress) == 0);
+static_assert(offsetof(VdpmAncestorPush, removalParentAddress) == 8);
+static_assert(offsetof(VdpmAncestorPush, ancestorIdAddress) == 16);
+static_assert(offsetof(VdpmAncestorPush, ancestorDepthAddress) == 24);
+static_assert(offsetof(VdpmAncestorPush, countersAddress) == 32);
+static_assert(offsetof(VdpmAncestorPush, vertexCount) == 40);
+static_assert(offsetof(VdpmAncestorPush, maxDepth) == 44);
+static_assert(sizeof(VdpmAncestorPush) == 48);
+static_assert(alignof(VdpmAncestorPush) == 8);
+static_assert(std::is_standard_layout_v<VdpmAncestorPush>);
+static_assert(std::is_trivially_copyable_v<VdpmAncestorPush>);
+
+// Push for vdpm_survival.comp (VDPM GPU emit pass 2): per finest face, write a 0/1 survival flag
+// (three distinct, non-failed ancestors). Field order mirrors the shader's push_constant block.
+struct alignas(8) VdpmSurvivalPush
+{
+    std::uint64_t indicesAddress{0};
+    std::uint64_t weldAddress{0};
+    std::uint64_t ancestorIdAddress{0};
+    std::uint64_t surviveAddress{0};
+    std::uint32_t faceCount{0};
+    std::uint32_t pad{0};
+};
+static_assert(offsetof(VdpmSurvivalPush, indicesAddress) == 0);
+static_assert(offsetof(VdpmSurvivalPush, weldAddress) == 8);
+static_assert(offsetof(VdpmSurvivalPush, ancestorIdAddress) == 16);
+static_assert(offsetof(VdpmSurvivalPush, surviveAddress) == 24);
+static_assert(offsetof(VdpmSurvivalPush, faceCount) == 32);
+static_assert(sizeof(VdpmSurvivalPush) == 40);
+static_assert(alignof(VdpmSurvivalPush) == 8);
+static_assert(std::is_standard_layout_v<VdpmSurvivalPush>);
+static_assert(std::is_trivially_copyable_v<VdpmSurvivalPush>);
+
+// Push for vdpm_scatter.comp (VDPM GPU emit pass 4): a surviving face writes its three
+// restored-wedge indices at its stable scan slot. Field order mirrors the shader's push_constant
+// block.
+struct alignas(8) VdpmScatterPush
+{
+    std::uint64_t indicesAddress{0};
+    std::uint64_t weldAddress{0};
+    std::uint64_t ancestorDepthAddress{0};
+    std::uint64_t surviveAddress{0};
+    std::uint64_t outSlotAddress{0};
+    std::uint64_t wedgeChoicesAddress{0};
+    std::uint64_t wedgeOffsetsAddress{0};
+    std::uint64_t emittedIndicesAddress{0};
+    std::uint32_t faceCount{0};
+    std::uint32_t pad{0};
+};
+static_assert(offsetof(VdpmScatterPush, indicesAddress) == 0);
+static_assert(offsetof(VdpmScatterPush, weldAddress) == 8);
+static_assert(offsetof(VdpmScatterPush, ancestorDepthAddress) == 16);
+static_assert(offsetof(VdpmScatterPush, surviveAddress) == 24);
+static_assert(offsetof(VdpmScatterPush, outSlotAddress) == 32);
+static_assert(offsetof(VdpmScatterPush, wedgeChoicesAddress) == 40);
+static_assert(offsetof(VdpmScatterPush, wedgeOffsetsAddress) == 48);
+static_assert(offsetof(VdpmScatterPush, emittedIndicesAddress) == 56);
+static_assert(offsetof(VdpmScatterPush, faceCount) == 64);
+static_assert(sizeof(VdpmScatterPush) == 72);
+static_assert(alignof(VdpmScatterPush) == 8);
+static_assert(std::is_standard_layout_v<VdpmScatterPush>);
+static_assert(std::is_trivially_copyable_v<VdpmScatterPush>);
+
+// Push for vdpm_emit_finalize.comp (VDPM GPU emit pass 5): a single invocation writes counters[2] =
+// 3 * counters[1] (the emitted index count for the indirect draw).
+struct alignas(8) VdpmEmitFinalizePush
+{
+    std::uint64_t countersAddress{0};
+};
+static_assert(offsetof(VdpmEmitFinalizePush, countersAddress) == 0);
+static_assert(sizeof(VdpmEmitFinalizePush) == 8);
+static_assert(alignof(VdpmEmitFinalizePush) == 8);
+static_assert(std::is_standard_layout_v<VdpmEmitFinalizePush>);
+static_assert(std::is_trivially_copyable_v<VdpmEmitFinalizePush>);
+
 } // namespace fire_engine

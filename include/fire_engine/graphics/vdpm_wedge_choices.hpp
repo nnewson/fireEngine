@@ -48,4 +48,12 @@ struct WedgeChoices
                                              const VertexForest& forest,
                                              std::span<const std::uint32_t> weld);
 
+// The removal-parent GPU acceleration structure (VDPM GPU emit, Stage B2): per canonical vertex,
+// the vertex ONE removal-parent step up its chain — `splits[removingSplit[c]].parent`, or `c`
+// itself at a root. It collapses the GPU ancestor walk to one dependent load per step (vs
+// removingSplit → split record → parent). `removalParent[root] == root` is deliberate: an INACTIVE
+// self-parent fails the walk immediately (a valid front has every root active). Assumes
+// `validateForest` has passed. Sized to `forest.vertexCount`. Vulkan-free + deterministic.
+[[nodiscard]] std::vector<std::uint32_t> buildRemovalParent(const VertexForest& forest);
+
 } // namespace fire_engine

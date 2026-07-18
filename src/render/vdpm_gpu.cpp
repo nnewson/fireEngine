@@ -1,11 +1,14 @@
 #include <fire_engine/render/vdpm_gpu.hpp>
 
 #include <cstddef>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
 #include <fire_engine/graphics/mapped_buffer.hpp>
+#include <fire_engine/graphics/mesh_topology.hpp>
+#include <fire_engine/graphics/vdpm_wedge_choices.hpp>
 
 namespace fire_engine
 {
@@ -23,6 +26,41 @@ void requireAligned(std::uint64_t address, std::uint64_t alignment, const char* 
     {
         throw std::runtime_error(std::string("VDPM GPU buffer address for ") + what +
                                  " is not aligned to the buffer_reference promise");
+    }
+}
+
+// Global compute-write → compute-read/write barrier between emit passes. A global memory barrier
+// (not per-buffer) because a pass touches several buffers reached only by device address here — the
+// same idiom the scan primitive uses between its levels.
+void emitComputeBarrier(vk::CommandBuffer cmd)
+{
+    const vk::MemoryBarrier2 mb{
+        .srcStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+        .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
+        .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+        .dstAccessMask =
+            vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite,
+    };
+    cmd.pipelineBarrier2(vk::DependencyInfo{.memoryBarrierCount = 1, .pMemoryBarriers = &mb});
+}
+
+constexpr std::uint32_t kEmitLocalSize = 64;
+
+// ceil(n / kEmitLocalSize) in 64-bit: `n + 63` wraps as uint32 near UINT32_MAX and would yield a
+// zero / wrong dispatch count (same guard the scan primitive uses).
+[[nodiscard]] std::uint32_t emitGroups(std::uint32_t n)
+{
+    return static_cast<std::uint32_t>((static_cast<std::uint64_t>(n) + kEmitLocalSize - 1) /
+                                      kEmitLocalSize);
+}
+
+// Reject a 1-D dispatch whose group count exceeds the device cap rather than fault the driver.
+void requireDispatchable(std::uint32_t groups, std::uint32_t maxGroupsX, const char* what)
+{
+    if (groups > maxGroupsX)
+    {
+        throw std::runtime_error(std::string("VDPM GPU dispatch for ") + what +
+                                 " exceeds maxComputeWorkGroupCount[0]");
     }
 }
 
@@ -105,6 +143,41 @@ ComputePipelineConfig vdpmScorePipelineConfig()
     return config;
 }
 
+namespace
+{
+// Shared shape for the descriptor-free emit pipelines: one compute shader reached entirely by
+// buffer_reference, one push-constant range carrying its ABI block.
+template <typename Push>
+[[nodiscard]] ComputePipelineConfig emitConfig(const char* spv)
+{
+    ComputePipelineConfig config;
+    config.compShaderPath = spv;
+    config.pushConstantRanges.emplace_back(vk::ShaderStageFlagBits::eCompute, 0,
+                                           static_cast<std::uint32_t>(sizeof(Push)));
+    return config;
+}
+} // namespace
+
+ComputePipelineConfig vdpmAncestorPipelineConfig()
+{
+    return emitConfig<VdpmAncestorPush>("vdpm_ancestor.comp.spv");
+}
+
+ComputePipelineConfig vdpmSurvivalPipelineConfig()
+{
+    return emitConfig<VdpmSurvivalPush>("vdpm_survival.comp.spv");
+}
+
+ComputePipelineConfig vdpmScatterPipelineConfig()
+{
+    return emitConfig<VdpmScatterPush>("vdpm_scatter.comp.spv");
+}
+
+ComputePipelineConfig vdpmEmitFinalizePipelineConfig()
+{
+    return emitConfig<VdpmEmitFinalizePush>("vdpm_emit_finalize.comp.spv");
+}
+
 VdpmGpuMesh VdpmGpuMesh::build(Resources& resources, std::span<const Vertex> vertices,
                                const VertexForest& forest)
 {
@@ -117,8 +190,37 @@ VdpmGpuMesh VdpmGpuMesh::build(Resources& resources, std::span<const Vertex> ver
     {
         throw std::runtime_error("VdpmGpuMesh::build: vertex count != forest.vertexCount");
     }
+    // Reject an over-large score dispatch BEFORE allocating (validateForest already bounded
+    // splits.size() to 32-bit). The B5 selector queries fitsComputeDispatchLimits up front to pick
+    // the CPU fallback instead; this throw is the enforcement boundary.
+    if (emitGroups(static_cast<std::uint32_t>(forest.splits.size())) >
+        resources.maxComputeWorkGroupCountX())
+    {
+        throw std::runtime_error(
+            "VdpmGpuMesh::build: score dispatch exceeds maxComputeWorkGroupCount[0]");
+    }
 
     VdpmGpuMesh mesh;
+    uploadScoreData(mesh, resources, vertices, forest);
+    return mesh;
+}
+
+bool VdpmGpuMesh::fitsComputeDispatchLimits(const Resources& resources, const VertexForest& forest,
+                                            std::size_t indexCount) noexcept
+{
+    const std::uint64_t maxX = resources.maxComputeWorkGroupCountX();
+    auto groups64 = [](std::uint64_t n) { return (n + kEmitLocalSize - 1) / kEmitLocalSize; };
+    // score (splitCount), ancestor (vertexCount), survival/scatter (faceCount = indexCount / 3).
+    // The scan's largest dispatch is ceil(faceCount / kScanElementsPerBlock) <= ceil(faceCount /
+    // 64), so the face check conservatively covers the scan too. All in 64-bit — no wrap on a huge
+    // input.
+    return groups64(forest.splits.size()) <= maxX && groups64(forest.vertexCount) <= maxX &&
+           groups64(indexCount / 3) <= maxX;
+}
+
+void VdpmGpuMesh::uploadScoreData(VdpmGpuMesh& mesh, Resources& resources,
+                                  std::span<const Vertex> vertices, const VertexForest& forest)
+{
     mesh.splitCount_ = static_cast<std::uint32_t>(forest.splits.size());
 
     // Per-split metric records (static, device-local, uploaded once).
@@ -152,6 +254,96 @@ VdpmGpuMesh VdpmGpuMesh::build(Resources& resources, std::span<const Vertex> ver
         mesh.positionsAddress_ = resources.bufferAddress(mesh.positions_);
         requireAligned(mesh.positionsAddress_, 16, "positions");
     }
+
+    // Assemble the score portion of the binding (emit portion stays null; hasEmitData false).
+    mesh.binding_.splitsAddress = mesh.splitsAddress_;
+    mesh.binding_.positionsAddress = mesh.positionsAddress_;
+    mesh.binding_.splitCount = mesh.splitCount_;
+    mesh.binding_.vertexCount = forest.vertexCount;
+}
+
+VdpmGpuMesh VdpmGpuMesh::build(Resources& resources, std::span<const Vertex> vertices,
+                               std::span<const std::uint32_t> indices, const VertexForest& forest)
+{
+    // ALL validation + throwing CPU derivation runs BEFORE the first upload, so malformed input
+    // leaves no orphaned resource-table entries.
+    validateForest(forest);
+    if (vertices.size() != forest.vertexCount)
+    {
+        throw std::runtime_error("VdpmGpuMesh::build: vertex count != forest.vertexCount");
+    }
+    // Index validation: a shader indexes weld/positions with these, so reject a malformed buffer
+    // here rather than fault a GPU thread. Every corner references an original vertex in
+    // [0, vertexCount); the finest index count must fit 32-bit GPU indexing.
+    if ((indices.size() % 3) != 0)
+    {
+        throw std::runtime_error("VdpmGpuMesh::build: index count is not a multiple of 3");
+    }
+    if (indices.size() > std::numeric_limits<std::uint32_t>::max())
+    {
+        throw std::runtime_error("VdpmGpuMesh::build: index count exceeds 32-bit GPU indexing");
+    }
+    for (const std::uint32_t idx : indices)
+    {
+        if (idx >= forest.vertexCount)
+        {
+            throw std::runtime_error("VdpmGpuMesh::build: index references an out-of-range vertex");
+        }
+    }
+
+    // Derive the emit acceleration structures (these can throw — a cycle / a 32-bit overflow). weld
+    // is built here (not passed) so it can't disagree with the mesh; wedge choices + removal parent
+    // are the precomputed GPU walk data (Vulkan-free). All BEFORE any upload.
+    const std::vector<std::uint32_t> weld = mesh_topology::weldByPosition(vertices);
+    const WedgeChoices wc = buildWedgeChoices(vertices, forest, weld);
+    const std::vector<std::uint32_t> removalParent = buildRemovalParent(forest);
+    const std::vector<std::uint32_t> indexVec{indices.begin(), indices.end()};
+
+    // Reject an over-large static emit/score dispatch BEFORE allocating, so a mesh the device can't
+    // dispatch never gets GPU buffers (the B5 selector queries this same predicate to pick the CPU
+    // fallback up front; recordEmit re-checks as defence-in-depth).
+    if (!fitsComputeDispatchLimits(resources, forest, indices.size()))
+    {
+        throw std::runtime_error(
+            "VdpmGpuMesh::build: emit dispatch exceeds maxComputeWorkGroupCount[0]");
+    }
+
+    // Validation + derivation complete — now the uploads (nothing below throws for bad input).
+    VdpmGpuMesh mesh;
+    uploadScoreData(mesh, resources, vertices, forest);
+
+    auto uploadU32 = [&](const std::vector<std::uint32_t>& data, BufferHandle& handle,
+                         std::uint64_t& address, const char* what)
+    {
+        if (data.empty())
+        {
+            return; // zero-byte VMA allocations are invalid; a null address is never dereferenced
+        }
+        handle = resources.createDeviceLocalStorageBuffer(data.size() * sizeof(std::uint32_t),
+                                                          data.data());
+        address = resources.bufferAddress(handle);
+        requireAligned(address, 4, what);
+    };
+
+    std::uint64_t indicesAddress = 0;
+    std::uint64_t weldAddress = 0;
+    std::uint64_t removalParentAddress = 0;
+    std::uint64_t choicesAddress = 0;
+    std::uint64_t offsetsAddress = 0;
+    uploadU32(indexVec, mesh.indices_, indicesAddress, "indices");
+    uploadU32(weld, mesh.weld_, weldAddress, "weld");
+    uploadU32(removalParent, mesh.removalParent_, removalParentAddress, "removalParent");
+    uploadU32(wc.choices, mesh.wedgeChoices_, choicesAddress, "wedgeChoices");
+    uploadU32(wc.offsets, mesh.wedgeOffsets_, offsetsAddress, "wedgeOffsets");
+
+    mesh.binding_.indicesAddress = indicesAddress;
+    mesh.binding_.weldAddress = weldAddress;
+    mesh.binding_.removalParentAddress = removalParentAddress;
+    mesh.binding_.wedgeChoicesAddress = choicesAddress;
+    mesh.binding_.wedgeOffsetsAddress = offsetsAddress;
+    mesh.binding_.faceCount = static_cast<std::uint32_t>(indices.size() / 3);
+    mesh.binding_.maxDepth = wc.maxDepth;
+    mesh.binding_.hasEmitData = true;
     return mesh;
 }
 
@@ -159,6 +351,7 @@ VdpmGpuFront VdpmGpuFront::build(Resources& resources, const VdpmGpuMesh& mesh)
 {
     VdpmGpuFront front;
     front.binding_ = mesh.binding(); // copy the immutable binding — no pointer into the mesh
+    front.maxWorkGroupCountX_ = resources.maxComputeWorkGroupCountX();
     if (front.binding_.splitCount == 0)
     {
         return front; // nothing to score
@@ -166,7 +359,7 @@ VdpmGpuFront VdpmGpuFront::build(Resources& resources, const VdpmGpuMesh& mesh)
 
     // Device-local score output, readback-enabled (eTransferSrc) so the harness can copy it back.
     front.output_ = resources.createDeviceLocalStorageBuffer(
-        mesh.splitCount() * sizeof(VdpmScoreOut), nullptr, /*allowReadback=*/true);
+        mesh.splitCount() * sizeof(VdpmScoreOut), nullptr, vk::BufferUsageFlagBits::eTransferSrc);
     front.outputAddress_ = resources.bufferAddress(front.output_);
     requireAligned(front.outputAddress_, 4, "output");
 
@@ -181,6 +374,175 @@ VdpmGpuFront VdpmGpuFront::build(Resources& resources, const VdpmGpuMesh& mesh)
         requireAligned(front.paramsAddress_[i], 16, "params");
     }
     return front;
+}
+
+VdpmGpuFront VdpmGpuFront::buildWithEmit(Resources& resources, const VdpmGpuMesh& mesh)
+{
+    if (!mesh.binding().hasEmitData)
+    {
+        throw std::logic_error("VdpmGpuFront::buildWithEmit: mesh has no emit data (score-only)");
+    }
+    VdpmGpuFront front = build(resources, mesh); // score workspace + binding copy
+    front.hasEmit_ = true;
+
+    const VdpmGpuMeshBinding& b = front.binding_;
+    const std::size_t vBytes = static_cast<std::size_t>(b.vertexCount) * sizeof(std::uint32_t);
+    const std::size_t fBytes = static_cast<std::size_t>(b.faceCount) * sizeof(std::uint32_t);
+
+    // Host-visible + BDA `active` (uploaded per emit). Slot 0 of the per-frame set —
+    // single-buffered for B2; the GPU serialises on one queue and the harness fence-waits before
+    // reuse.
+    if (b.vertexCount > 0)
+    {
+        const MappedBufferSet active = resources.createMappedDeviceAddressBuffers(vBytes);
+        front.activeMapped_ = active.mapped[0];
+        front.activeAddress_ = resources.bufferAddress(active.buffers[0]);
+        requireAligned(front.activeAddress_, 4, "active");
+    }
+
+    auto deviceLocal = [&](std::size_t bytes, BufferHandle& handle, std::uint64_t& address,
+                           vk::BufferUsageFlags extraUsage, const char* what)
+    {
+        if (bytes == 0)
+        {
+            return; // never dispatched over (0 groups); the null address is never dereferenced
+        }
+        handle = resources.createDeviceLocalStorageBuffer(bytes, nullptr, extraUsage);
+        address = resources.bufferAddress(handle);
+        requireAligned(address, 4, what);
+    };
+
+    deviceLocal(vBytes, front.ancestorId_, front.ancestorIdAddress_, {}, "ancestorId");
+    deviceLocal(vBytes, front.ancestorDepth_, front.ancestorDepthAddress_, {}, "ancestorDepth");
+    deviceLocal(fBytes, front.survive_, front.surviveAddress_, {}, "survive");
+    deviceLocal(fBytes, front.outSlot_, front.outSlotAddress_, {}, "outSlot");
+    // Emitted indices: 3 corners per surviving face; sized for the worst case (all faces survive).
+    // eIndexBuffer so B5 can bind it as the draw's index source; eTransferSrc for the harness
+    // readback.
+    deviceLocal(fBytes * 3, front.emittedIndices_, front.emittedIndicesAddress_,
+                vk::BufferUsageFlagBits::eIndexBuffer | vk::BufferUsageFlagBits::eTransferSrc,
+                "emittedIndices");
+    // Counters [ancestorFailures, survivingFaces, emittedIndexCount] — always present + readable.
+    deviceLocal(3 * sizeof(std::uint32_t), front.counters_, front.countersAddress_,
+                vk::BufferUsageFlagBits::eTransferSrc, "counters");
+
+    // Exclusive-scan per-level scratch (empty when faceCount fits one block).
+    const std::vector<std::uint32_t> levels = VdpmScan::scratchElementCounts(b.faceCount);
+    front.scanScratch_.resize(levels.size());
+    front.scanScratchAddress_.resize(levels.size());
+    for (std::size_t i = 0; i < levels.size(); ++i)
+    {
+        const std::size_t bytes = static_cast<std::size_t>(levels[i]) * sizeof(std::uint32_t);
+        front.scanScratch_[i] = resources.createDeviceLocalStorageBuffer(bytes, nullptr);
+        front.scanScratchAddress_[i] = resources.bufferAddress(front.scanScratch_[i]);
+        requireAligned(front.scanScratchAddress_[i], 4, "scanScratch");
+    }
+    return front;
+}
+
+void VdpmGpuFront::recordEmit(vk::CommandBuffer cmd, const VdpmEmitPipelines& pipelines,
+                              Resources& resources, std::span<const std::uint32_t> active)
+{
+    if (!hasEmit_)
+    {
+        throw std::logic_error(
+            "VdpmGpuFront::recordEmit: front has no emit workspace (score-only)");
+    }
+    if (active.size() != binding_.vertexCount)
+    {
+        throw std::runtime_error("VdpmGpuFront::recordEmit: active size != vertexCount");
+    }
+    // The per-canonical (ancestor) + per-face (survival/scatter) dispatches must fit the device cap
+    // — the scan validates its own levels internally.
+    requireDispatchable(emitGroups(binding_.vertexCount), maxWorkGroupCountX_, "ancestor");
+    requireDispatchable(emitGroups(binding_.faceCount), maxWorkGroupCountX_, "survival/scatter");
+
+    // Upload the settled front (host-visible coherent → visible to the device at queue submit).
+    if (binding_.vertexCount > 0)
+    {
+        writeMapped(activeMapped_, active.data(), active.size_bytes());
+    }
+
+    // Clear the whole counters buffer ONCE: ancestor's atomic (counters[0]), the scan's total
+    // (counters[1] — pre-zeroed so a zero-face scan needs no dispatch), and finalize's index count
+    // (counters[2]) all start defined. fillBuffer is a CLEAR (eClear stage / eTransferWrite).
+    const vk::Buffer countersBuf = resources.vulkanBuffer(counters_);
+    cmd.fillBuffer(countersBuf, 0, 3 * sizeof(std::uint32_t), 0);
+    const vk::MemoryBarrier2 clearToCompute{
+        .srcStageMask = vk::PipelineStageFlagBits2::eClear,
+        .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
+        .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+        .dstAccessMask =
+            vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite,
+    };
+    cmd.pipelineBarrier2(
+        vk::DependencyInfo{.memoryBarrierCount = 1, .pMemoryBarriers = &clearToCompute});
+
+    // Pass 1 — ancestor resolution (per canonical vertex).
+    {
+        const VdpmAncestorPush push{.activeAddress = activeAddress_,
+                                    .removalParentAddress = binding_.removalParentAddress,
+                                    .ancestorIdAddress = ancestorIdAddress_,
+                                    .ancestorDepthAddress = ancestorDepthAddress_,
+                                    .countersAddress = countersAddress_,
+                                    .vertexCount = binding_.vertexCount,
+                                    .maxDepth = binding_.maxDepth};
+        cmd.bindPipeline(vk::PipelineBindPoint::eCompute, pipelines.ancestor().pipeline());
+        cmd.pushConstants<VdpmAncestorPush>(pipelines.ancestor().pipelineLayout(),
+                                            vk::ShaderStageFlagBits::eCompute, 0, push);
+        cmd.dispatch(emitGroups(binding_.vertexCount), 1, 1);
+    }
+    emitComputeBarrier(cmd);
+
+    // Pass 2 — per-face survival flag.
+    {
+        const VdpmSurvivalPush push{.indicesAddress = binding_.indicesAddress,
+                                    .weldAddress = binding_.weldAddress,
+                                    .ancestorIdAddress = ancestorIdAddress_,
+                                    .surviveAddress = surviveAddress_,
+                                    .faceCount = binding_.faceCount};
+        cmd.bindPipeline(vk::PipelineBindPoint::eCompute, pipelines.survival().pipeline());
+        cmd.pushConstants<VdpmSurvivalPush>(pipelines.survival().pipelineLayout(),
+                                            vk::ShaderStageFlagBits::eCompute, 0, push);
+        cmd.dispatch(emitGroups(binding_.faceCount), 1, 1);
+    }
+    emitComputeBarrier(cmd);
+
+    // Pass 3 — exclusive scan of the survival flags → per-face output slot; grand total to
+    // counters[1]. (No dispatch when faceCount == 0; counters[1] stays the pre-zeroed 0.)
+    pipelines.scan().recordScan(cmd, surviveAddress_, outSlotAddress_, scanScratchAddress_,
+                                countersAddress_ + sizeof(std::uint32_t), binding_.faceCount);
+    // One barrier after the scan, before BOTH consumers (scatter reads outSlot; finalize reads
+    // counters[1]).
+    emitComputeBarrier(cmd);
+
+    // Pass 4 — stable scatter of the surviving faces' restored-wedge corners.
+    {
+        const VdpmScatterPush push{.indicesAddress = binding_.indicesAddress,
+                                   .weldAddress = binding_.weldAddress,
+                                   .ancestorDepthAddress = ancestorDepthAddress_,
+                                   .surviveAddress = surviveAddress_,
+                                   .outSlotAddress = outSlotAddress_,
+                                   .wedgeChoicesAddress = binding_.wedgeChoicesAddress,
+                                   .wedgeOffsetsAddress = binding_.wedgeOffsetsAddress,
+                                   .emittedIndicesAddress = emittedIndicesAddress_,
+                                   .faceCount = binding_.faceCount};
+        cmd.bindPipeline(vk::PipelineBindPoint::eCompute, pipelines.scatter().pipeline());
+        cmd.pushConstants<VdpmScatterPush>(pipelines.scatter().pipelineLayout(),
+                                           vk::ShaderStageFlagBits::eCompute, 0, push);
+        cmd.dispatch(emitGroups(binding_.faceCount), 1, 1);
+    }
+
+    // Pass 5 — finalize: counters[2] = 3 * counters[1] (the emitted index count). One invocation,
+    // always dispatched (defines the count even when every face collapses away).
+    {
+        const VdpmEmitFinalizePush push{.countersAddress = countersAddress_};
+        cmd.bindPipeline(vk::PipelineBindPoint::eCompute, pipelines.finalize().pipeline());
+        cmd.pushConstants<VdpmEmitFinalizePush>(pipelines.finalize().pipelineLayout(),
+                                                vk::ShaderStageFlagBits::eCompute, 0, push);
+        cmd.dispatch(1, 1, 1);
+    }
+    // No consumer barrier — the caller synchronises the emitted-index / counters reads.
 }
 
 void VdpmGpuFront::recordScore(vk::CommandBuffer cmd, const ComputePipeline& pipeline,
@@ -200,8 +562,8 @@ void VdpmGpuFront::recordScore(vk::CommandBuffer cmd, const ComputePipeline& pip
     const VdpmScorePushConstants push{.paramsAddress = paramsAddress_[frameIndex]};
     cmd.pushConstants<VdpmScorePushConstants>(pipeline.pipelineLayout(),
                                               vk::ShaderStageFlagBits::eCompute, 0, push);
-    constexpr std::uint32_t kLocalSize = 64;
-    const std::uint32_t groups = (binding_.splitCount + kLocalSize - 1) / kLocalSize;
+    const std::uint32_t groups = emitGroups(binding_.splitCount); // 64-wide, 64-bit ceil
+    requireDispatchable(groups, maxWorkGroupCountX_, "score");
     cmd.dispatch(groups, 1, 1);
 }
 

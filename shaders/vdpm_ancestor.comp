@@ -1,0 +1,65 @@
+#version 450
+#extension GL_EXT_buffer_reference : require
+
+// VDPM GPU emit pass 1 (Stage B2): one invocation per canonical vertex resolves its ACTIVE ANCESTOR
+// (the coarsest active vertex up the removal-parent chain) and the DEPTH (number of parent steps) —
+// the depth indexes the precomputed wedge-choice list at scatter. The walk uses the collapsed
+// `removalParent` acceleration structure (one dependent load per step). The loop is BOUNDED by
+// maxDepth so corrupt future GPU state can't hang the device; a failure (inactive root / corrupt
+// chain / bound exceeded) writes the invalid sentinel + a defined depth and bumps the failure
+// counter. Survival drops any face touching a failed ancestor, so it can never reach the scatter.
+
+const uint INVALID = 0xFFFFFFFFu;
+
+layout(buffer_reference, std430, buffer_reference_align = 4) buffer UintBuf
+{
+    uint v[];
+};
+
+layout(push_constant) uniform Push
+{
+    UintBuf activeFlags;   // per canonical: 0/1 (the uploaded front)
+    UintBuf removalParent; // per canonical: one removal-parent step up (root == self)
+    UintBuf ancestorId;    // out per canonical: active ancestor, or INVALID
+    UintBuf ancestorDepth; // out per canonical: parent-step count (defined even on failure)
+    UintBuf counters;      // [0] = ancestor failure count (atomicAdd)
+    uint vertexCount;
+    uint maxDepth;
+}
+pc;
+
+layout(local_size_x = 64) in;
+
+void main()
+{
+    const uint c = gl_GlobalInvocationID.x;
+    if (c >= pc.vertexCount)
+    {
+        return;
+    }
+
+    uint ancestor = c;
+    uint depth = 0u;
+    for (;;)
+    {
+        // Test the vertex reached AFTER `depth` transitions (so an active root exactly maxDepth
+        // steps away is accepted, not rejected — the bound is on TRANSITIONS).
+        if (pc.activeFlags.v[ancestor] != 0u)
+        {
+            pc.ancestorId.v[c] = ancestor;
+            pc.ancestorDepth.v[c] = depth;
+            return;
+        }
+        const uint parent = pc.removalParent.v[ancestor];
+        if (parent == ancestor || depth == pc.maxDepth)
+        {
+            // inactive root, corrupt chain, or exceeded the bound
+            pc.ancestorId.v[c] = INVALID;
+            pc.ancestorDepth.v[c] = 0u; // defined value
+            atomicAdd(pc.counters.v[0], 1u);
+            return;
+        }
+        ancestor = parent;
+        ++depth;
+    }
+}

@@ -126,11 +126,17 @@ public:
     [[nodiscard]] BufferHandle createStaticStorageBuffer(std::size_t size, const void* initialData);
     // Device-local storage buffer WITH a device address (BDA) — like createStaticStorageBuffer but
     // buffer_reference-addressable, for GPU compute that chains buffers by pointer (the VDPM GPU
-    // front's static per-split metric input + persistent score/backface output). `allowReadback`
-    // adds eTransferSrc so a test can copy it to a host-visible buffer; production leaves it off.
-    [[nodiscard]] BufferHandle createDeviceLocalStorageBuffer(std::size_t size,
-                                                              const void* initialData,
-                                                              bool allowReadback = false);
+    // front's static per-split metric input + persistent score/backface output). `additionalUsage`
+    // ORs in extra usage flags on top of the storage+BDA+transfer-dst base — eTransferSrc for a
+    // test readback, eIndexBuffer for a compute-emitted index stream (VDPM emit), eIndirectBuffer
+    // for a compute-written indirect command (a superset arg rather than a growing boolean
+    // interface).
+    [[nodiscard]] BufferHandle
+    createDeviceLocalStorageBuffer(std::size_t size, const void* initialData,
+                                   vk::BufferUsageFlags additionalUsage = {});
+    // The device's maxComputeWorkGroupCount[0] — the hard cap on a 1-D compute dispatch's group
+    // count, so a caller can reject an over-large dispatch rather than fault the driver.
+    [[nodiscard]] std::uint32_t maxComputeWorkGroupCountX() const noexcept;
     // Per-frame, persistently-mapped storage buffers with a device address (for
     // the soft-body solver's per-frame collider buffer, addressed via bDA).
     [[nodiscard]] MappedBufferSet createMappedDeviceAddressBuffers(std::size_t size);

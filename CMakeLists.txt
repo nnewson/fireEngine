@@ -203,6 +203,10 @@ set(SHADER_SOURCES
     shaders/vdpm_score.comp
     shaders/vdpm_scan_block.comp
     shaders/vdpm_scan_add.comp
+    shaders/vdpm_ancestor.comp
+    shaders/vdpm_survival.comp
+    shaders/vdpm_scatter.comp
+    shaders/vdpm_emit_finalize.comp
 )
 
 # glslc from the vcpkg `shaderc` port (installed under <vcpkg-installed>/<triplet>/tools/shaderc via

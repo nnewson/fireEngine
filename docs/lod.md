@@ -579,8 +579,31 @@ at a fraction of the triangles. The remaining residuals and follow-ons, in rough
   cross-checks the shader against the CPU authority (scores close, back-face decisions exact). The
   std430 ABI (`render/ubo.hpp` `VdpmSplitGpu`/`VdpmScoreOut`/`VdpmScoreParams`) is fully
   offset-asserted; `worldLinear` is a padded 3-column mat3, all flags are uint32, and the params block
-  carries the three buffer_reference addresses (only its own address is pushed). Next: B2 emit → B3
-  refine/coarsen → B4 repairs → B5 end-to-end.
+  carries the three buffer_reference addresses (only its own address is pushed). **B2 — emit** then
+  ported `ParallelFront::emitActiveIndices` to the GPU, **byte-identically**, from a CPU-uploaded front.
+  Two precomputed Vulkan-free structures make byte-identity *structural* rather than float-dependent:
+  `buildWedgeChoices` bakes the CPU's `nearestWedge` decision for each (original vertex, ancestor depth)
+  into a CSR — so GPU restoration is pure integer indexing (a GPU-recomputed distance could tie-break a
+  near-equal wedge differently) — and `buildRemovalParent` collapses the removal chain to one dependent
+  load per step. Four descriptor-free passes (`shaders/vdpm_ancestor|survival|scatter|emit_finalize`)
+  around the shared `VdpmScan` exclusive-scan primitive (recursive Blelloch, 256-element blocks): the
+  **ancestor** pass walks the removal-parent chain (bounded by `maxDepth`, one atomic failure counter)
+  to each canonical's active ancestor + depth; **survival** flags a face iff its three ancestors are
+  distinct and none failed; the **scan** turns the flags into a stable per-face output slot + the
+  surviving total; **scatter** writes each surviving face's three restored-wedge corners at `3·slot` in
+  original face order (no atomic append); a one-invocation **finalize** sets the emitted index count to
+  `3·survivors`. `VdpmGpuMesh`'s full build uploads the static emit data (indices/weld/removal-parent/
+  wedge CSR, index-range-validated); `VdpmGpuFront::recordEmit` clears a single 3-uint counters buffer
+  once (`fillBuffer`, an `eClear`→compute barrier) so the atomic, scan total, and index count all start
+  defined with no CPU readback, then records the passes with compute→compute barriers (one after the
+  scan feeding BOTH scatter and finalize). The `[.][gpu]` harness proves byte-identity (indices, order,
+  wedges) across coarsest/partial/full/repaired fronts on a sphere + per-corner-seamed grid, plus
+  determinism, an empty mesh, an all-faces-collapse front (faceCount > 0), and a deepest-chain fixture
+  pinning the ancestor bound's off-by-one. `VdpmGpuMesh::fitsComputeDispatchLimits` gates GPU
+  eligibility (static dispatch counts vs the device cap) before allocation, so B5's backend selector
+  can fall back to the CPU front rather than fault at record time. Next: B3 refine/coarsen → B4
+  repairs → B5 end-to-end (which should also record the wedge-choice memory for a real loaded asset —
+  it needs the Vulkan glTF path, so it can't live in the Vulkan-free `[vdpm]` evidence test).
 - **7 forest skips.** `buildVertexForest` skips collapses whose edge diverged from its adjacency
   replay (7 of ~6800 on the helmet); past the first skip the forest is slightly unfaithful. The repairs
   cover the visible symptoms; truncating the stream at the first skip would be the clean structural fix.
