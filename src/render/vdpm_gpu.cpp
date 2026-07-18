@@ -66,6 +66,19 @@ void requireDispatchable(std::uint32_t groups, std::uint32_t maxGroupsX, const c
     }
 }
 
+// Record the SHARED bounded ancestor-resolution pass (`vdpm_ancestor.comp`): per canonical vertex,
+// walk removalParent to its active ancestor + depth, atomic-incrementing `push.counters[0]` on a
+// bad chain. Reused by B2 emit AND B4 repair (each round, against the live front). Records NO
+// barrier — the caller orders the consumer read.
+void recordAncestorResolve(vk::CommandBuffer cmd, const ComputePipeline& ancestorPipeline,
+                           const VdpmAncestorPush& push)
+{
+    cmd.bindPipeline(vk::PipelineBindPoint::eCompute, ancestorPipeline.pipeline());
+    cmd.pushConstants<VdpmAncestorPush>(ancestorPipeline.pipelineLayout(),
+                                        vk::ShaderStageFlagBits::eCompute, 0, push);
+    cmd.dispatch(emitGroups(push.vertexCount), 1, 1);
+}
+
 } // namespace
 
 VdpmSplitGpu packVdpmSplit(const VertexSplit& split) noexcept
@@ -198,6 +211,16 @@ ComputePipelineConfig vdpmRefinePipelineConfig()
 ComputePipelineConfig vdpmCoarsenPipelineConfig()
 {
     return emitConfig<VdpmCoarsenPush>("vdpm_coarsen.comp.spv");
+}
+
+ComputePipelineConfig vdpmRepairDetectPipelineConfig()
+{
+    return emitConfig<VdpmRepairDetectPush>("vdpm_repair_detect.comp.spv");
+}
+
+ComputePipelineConfig vdpmRepairFallbackPipelineConfig()
+{
+    return emitConfig<VdpmRepairFallbackPush>("vdpm_repair_fallback.comp.spv");
 }
 
 VdpmGpuMesh VdpmGpuMesh::build(Resources& resources, std::span<const Vertex> vertices,
@@ -380,6 +403,17 @@ VdpmGpuMesh VdpmGpuMesh::build(Resources& resources, std::span<const Vertex> ver
     const std::vector<std::uint32_t> removalParent = buildRemovalParent(forest);
     const std::vector<std::uint32_t> indexVec{indices.begin(), indices.end()};
     const DependencyDag dag = buildDependencyDag(forest); // throws on a cycle — before any upload
+    // Canonical finest faces (post-weld, degenerate faces dropped) — the B4 repair detector's
+    // input; identical to ParallelFront::finestFaces() (same corner order + winding). Flattened for
+    // upload.
+    const std::vector<std::array<std::uint32_t, 3>> finestFaces =
+        mesh_topology::canonicalFaces(weld, indices);
+    std::vector<std::uint32_t> finestFacesFlat;
+    finestFacesFlat.reserve(finestFaces.size() * 3);
+    for (const std::array<std::uint32_t, 3>& f : finestFaces)
+    {
+        finestFacesFlat.insert(finestFacesFlat.end(), {f[0], f[1], f[2]});
+    }
 
     // Reject an over-large static emit/score dispatch BEFORE allocating, so a mesh the device can't
     // dispatch never gets GPU buffers (the B5 selector queries this same predicate to pick the CPU
@@ -412,17 +446,24 @@ VdpmGpuMesh VdpmGpuMesh::build(Resources& resources, std::span<const Vertex> ver
     std::uint64_t removalParentAddress = 0;
     std::uint64_t choicesAddress = 0;
     std::uint64_t offsetsAddress = 0;
+    std::uint64_t finestFacesAddress = 0;
+    std::uint64_t removingSplitAddress = 0;
     uploadU32(indexVec, mesh.indices_, indicesAddress, "indices");
     uploadU32(weld, mesh.weld_, weldAddress, "weld");
     uploadU32(removalParent, mesh.removalParent_, removalParentAddress, "removalParent");
     uploadU32(wc.choices, mesh.wedgeChoices_, choicesAddress, "wedgeChoices");
     uploadU32(wc.offsets, mesh.wedgeOffsets_, offsetsAddress, "wedgeOffsets");
+    uploadU32(finestFacesFlat, mesh.finestFaces_, finestFacesAddress, "finestFaces");
+    uploadU32(forest.removingSplit, mesh.removingSplit_, removingSplitAddress, "removingSplit");
 
     mesh.binding_.indicesAddress = indicesAddress;
     mesh.binding_.weldAddress = weldAddress;
     mesh.binding_.removalParentAddress = removalParentAddress;
     mesh.binding_.wedgeChoicesAddress = choicesAddress;
     mesh.binding_.wedgeOffsetsAddress = offsetsAddress;
+    mesh.binding_.finestFacesAddress = finestFacesAddress;
+    mesh.binding_.removingSplitAddress = removingSplitAddress;
+    mesh.binding_.finestFaceCount = static_cast<std::uint32_t>(finestFaces.size());
     mesh.binding_.faceCount = static_cast<std::uint32_t>(indices.size() / 3);
     mesh.binding_.maxDepth = wc.maxDepth;
     mesh.binding_.hasEmitData = true;
@@ -560,20 +601,15 @@ void VdpmGpuFront::recordEmit(vk::CommandBuffer cmd, const VdpmEmitPipelines& pi
     cmd.pipelineBarrier2(
         vk::DependencyInfo{.memoryBarrierCount = 1, .pMemoryBarriers = &clearToCompute});
 
-    // Pass 1 — ancestor resolution (per canonical vertex).
-    {
-        const VdpmAncestorPush push{.activeAddress = activeAddress_,
-                                    .removalParentAddress = binding_.removalParentAddress,
-                                    .ancestorIdAddress = ancestorIdAddress_,
-                                    .ancestorDepthAddress = ancestorDepthAddress_,
-                                    .countersAddress = countersAddress_,
-                                    .vertexCount = binding_.vertexCount,
-                                    .maxDepth = binding_.maxDepth};
-        cmd.bindPipeline(vk::PipelineBindPoint::eCompute, pipelines.ancestor().pipeline());
-        cmd.pushConstants<VdpmAncestorPush>(pipelines.ancestor().pipelineLayout(),
-                                            vk::ShaderStageFlagBits::eCompute, 0, push);
-        cmd.dispatch(emitGroups(binding_.vertexCount), 1, 1);
-    }
+    // Pass 1 — ancestor resolution (per canonical vertex; the shared pass, failures → counters[0]).
+    recordAncestorResolve(cmd, pipelines.ancestor(),
+                          VdpmAncestorPush{.activeAddress = activeAddress_,
+                                           .removalParentAddress = binding_.removalParentAddress,
+                                           .ancestorIdAddress = ancestorIdAddress_,
+                                           .ancestorDepthAddress = ancestorDepthAddress_,
+                                           .countersAddress = countersAddress_,
+                                           .vertexCount = binding_.vertexCount,
+                                           .maxDepth = binding_.maxDepth});
     emitComputeBarrier(cmd);
 
     // Pass 2 — per-face survival flag.
@@ -627,7 +663,8 @@ void VdpmGpuFront::recordEmit(vk::CommandBuffer cmd, const VdpmEmitPipelines& pi
     // No consumer barrier — the caller synchronises the emitted-index / counters reads.
 }
 
-VdpmGpuFront VdpmGpuFront::buildWithFront(Resources& resources, const VdpmGpuMesh& mesh)
+VdpmGpuFront VdpmGpuFront::buildWithFront(Resources& resources, const VdpmGpuMesh& mesh,
+                                          bool withClassificationReadback)
 {
     VdpmGpuFront front;
     front.binding_ = mesh.binding();
@@ -684,6 +721,36 @@ VdpmGpuFront VdpmGpuFront::buildWithFront(Resources& resources, const VdpmGpuMes
         front.scoresMapped_ = scores.mapped[0];
         front.scoresAddress_ = resources.bufferAddress(scores.buffers[0]);
         requireAligned(front.scoresAddress_, 4, "scores");
+    }
+
+    // Repair scratch (Stage B4) — only when the mesh carries the finest faces (a full-build mesh).
+    // The ancestor cache is per canonical vertex; repairControl is a 4-uint diagnostic buffer
+    // SEPARATE from failFlags; repairParams is host-visible (uploaded per repair).
+    if (b.finestFacesAddress != 0 && b.vertexCount > 0)
+    {
+        front.hasRepair_ = true;
+        // stateBuf gives eTransferSrc (harmless on the ancestor caches) + eTransferDst (the
+        // fillBuffer clear of repairControl) via the device-local factory.
+        stateBuf(vBytes, nullptr, front.repairAncestorId_, front.repairAncestorIdAddress_,
+                 "repairAncestorId");
+        stateBuf(vBytes, nullptr, front.repairAncestorDepth_, front.repairAncestorDepthAddress_,
+                 "repairAncestorDepth");
+        const std::array<std::uint32_t, 4> zeroCtrl{0, 0, 0, 0};
+        stateBuf(4 * sizeof(std::uint32_t), zeroCtrl.data(), front.repairControl_,
+                 front.repairControlAddress_, "repairControl");
+        // Per-face classification readback (opt-in, test/debug only — a PRODUCTION front leaves
+        // this null so it spends no per-face memory).
+        if (withClassificationReadback)
+        {
+            stateBuf(static_cast<std::size_t>(b.finestFaceCount) * sizeof(std::uint32_t), nullptr,
+                     front.repairClassification_, front.repairClassificationAddress_,
+                     "repairClassification");
+        }
+        const MappedBufferSet params =
+            resources.createMappedDeviceAddressBuffers(sizeof(VdpmRepairParams));
+        front.repairParamsMapped_ = params.mapped[0];
+        front.repairParamsAddress_ = resources.bufferAddress(params.buffers[0]);
+        requireAligned(front.repairParamsAddress_, 16, "repairParams");
     }
     return front;
 }
@@ -838,6 +905,222 @@ void VdpmGpuFront::recordApplyView(vk::CommandBuffer cmd, const VdpmRefinePipeli
             emitComputeBarrier(cmd);
         }
     }
+}
+
+void VdpmGpuFront::recordRepair(vk::CommandBuffer cmd, const VdpmRefinePipelines& refinePipelines,
+                                const VdpmRepairPipelines& repairPipelines, Resources& resources,
+                                const VdpmRepairParams& params, std::uint32_t roundBudget)
+{
+    if (!hasRepair_)
+    {
+        throw std::logic_error("VdpmGpuFront::recordRepair: front has no repair state (full mesh + "
+                               "buildWithFront required)");
+    }
+    if (binding_.splitCount == 0 || binding_.finestFaceCount == 0)
+    {
+        return; // nothing to repair (no splits / no faces)
+    }
+    requireDispatchable(emitGroups(binding_.vertexCount), maxWorkGroupCountX_, "repair ancestor");
+    requireDispatchable(emitGroups(binding_.finestFaceCount), maxWorkGroupCountX_, "repair detect");
+    requireDispatchable(emitGroups(binding_.splitCount), maxWorkGroupCountX_, "repair fallback");
+
+    writeMapped(repairParamsMapped_, params);
+
+    const vk::Buffer requiredBuf = resources.vulkanBuffer(requiredState_);
+    const vk::Buffer controlBuf = resources.vulkanBuffer(repairControl_);
+    const auto sBytes = static_cast<vk::DeviceSize>(binding_.splitCount) * sizeof(std::uint32_t);
+
+    // Leading barrier: applyView's coarsen (compute, no trailing barrier) → this repair's first
+    // reads (active/refined) + clears. Covers applyView → repair generally.
+    const vk::MemoryBarrier2 lead{
+        .srcStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+        .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
+        .dstStageMask =
+            vk::PipelineStageFlagBits2::eComputeShader | vk::PipelineStageFlagBits2::eClear,
+        .dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead |
+                         vk::AccessFlagBits2::eShaderStorageWrite |
+                         vk::AccessFlagBits2::eTransferWrite,
+    };
+    cmd.pipelineBarrier2(vk::DependencyInfo{.memoryBarrierCount = 1, .pMemoryBarriers = &lead});
+
+    // Clear the whole repair-control buffer once ([anyMarked, ancestorFailure, fallbackFired,
+    // pad]).
+    cmd.fillBuffer(controlBuf, 0, 4 * sizeof(std::uint32_t), 0);
+    const vk::MemoryBarrier2 clearToCompute{
+        .srcStageMask = vk::PipelineStageFlagBits2::eClear,
+        .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
+        .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+        .dstAccessMask =
+            vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite,
+    };
+    cmd.pipelineBarrier2(
+        vk::DependencyInfo{.memoryBarrierCount = 1, .pMemoryBarriers = &clearToCompute});
+
+    // Order a prior compute write to `required` (the last close/refine) before a fillBuffer clear,
+    // then expose the clear to the next compute — the compute→eClear→compute reset the reviewer
+    // pinned (B3's trailing barrier targets compute, not eClear).
+    auto resetRequired = [&]()
+    {
+        const vk::MemoryBarrier2 computeToClear{
+            .srcStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+            .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
+            .dstStageMask = vk::PipelineStageFlagBits2::eClear,
+            .dstAccessMask = vk::AccessFlagBits2::eTransferWrite,
+        };
+        cmd.pipelineBarrier2(
+            vk::DependencyInfo{.memoryBarrierCount = 1, .pMemoryBarriers = &computeToClear});
+        cmd.fillBuffer(requiredBuf, 0, sBytes, 0);
+        cmd.pipelineBarrier2(
+            vk::DependencyInfo{.memoryBarrierCount = 1, .pMemoryBarriers = &clearToCompute});
+    };
+
+    // Ancestor resolve (live front → cache) + detect (mark violations). NO trailing barrier — the
+    // caller adds detect→consumer (close, or the fallback).
+    auto ancestorThenDetect = [&]()
+    {
+        recordAncestorResolve(
+            cmd, repairPipelines.ancestor(),
+            VdpmAncestorPush{.activeAddress = activeStateAddress_,
+                             .removalParentAddress = binding_.removalParentAddress,
+                             .ancestorIdAddress = repairAncestorIdAddress_,
+                             .ancestorDepthAddress = repairAncestorDepthAddress_,
+                             // ancestor failures → repairControl[1] (its counters[0] == control+1).
+                             .countersAddress = repairControlAddress_ + sizeof(std::uint32_t),
+                             .vertexCount = binding_.vertexCount,
+                             .maxDepth = binding_.maxDepth});
+        emitComputeBarrier(cmd); // ancestor cache → detect read
+        const VdpmRepairDetectPush push{.finestFacesAddress = binding_.finestFacesAddress,
+                                        .positionsAddress = binding_.positionsAddress,
+                                        .activeAddress = activeStateAddress_,
+                                        .ancestorIdAddress = repairAncestorIdAddress_,
+                                        .removingSplitAddress = binding_.removingSplitAddress,
+                                        .requiredAddress = requiredStateAddress_,
+                                        .repairControlAddress = repairControlAddress_,
+                                        .paramsAddress = repairParamsAddress_,
+                                        .classificationAddress = 0, // production: no classification
+                                        .faceCount = binding_.finestFaceCount,
+                                        .writeClassification = 0};
+        cmd.bindPipeline(vk::PipelineBindPoint::eCompute, repairPipelines.detect().pipeline());
+        cmd.pushConstants<VdpmRepairDetectPush>(repairPipelines.detect().pipelineLayout(),
+                                                vk::ShaderStageFlagBits::eCompute, 0, push);
+        cmd.dispatch(emitGroups(binding_.finestFaceCount), 1, 1);
+    };
+
+    // Bounded snapshot rounds: reset required → detect → close+refine (the shared recorder barriers
+    // detect→close and refine→consumer).
+    for (std::uint32_t round = 0; round < roundBudget; ++round)
+    {
+        resetRequired();
+        ancestorThenDetect();
+        recordCloseAndRefineRequired(cmd, refinePipelines);
+    }
+
+    // Final detection: clear `anyMarked` (repairControl[0]) so it reflects ONLY this pass, reset
+    // required, detect. Then the fallback reads anyMarked with no CPU round-trip.
+    {
+        const vk::MemoryBarrier2 computeToClear{
+            .srcStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+            .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
+            .dstStageMask = vk::PipelineStageFlagBits2::eClear,
+            .dstAccessMask = vk::AccessFlagBits2::eTransferWrite,
+        };
+        cmd.pipelineBarrier2(
+            vk::DependencyInfo{.memoryBarrierCount = 1, .pMemoryBarriers = &computeToClear});
+        cmd.fillBuffer(controlBuf, 0, sizeof(std::uint32_t), 0); // just anyMarked
+        cmd.pipelineBarrier2(
+            vk::DependencyInfo{.memoryBarrierCount = 1, .pMemoryBarriers = &clearToCompute});
+    }
+    resetRequired();
+    ancestorThenDetect();
+    emitComputeBarrier(cmd); // detect (anyMarked + required) → fallback reads
+
+    // Fallback: seed every unrefined split iff anyMarked, else clear required — then close+refine
+    // drives to full detail (guaranteed hole-free) or no-ops.
+    {
+        const VdpmRepairFallbackPush push{.requiredAddress = requiredStateAddress_,
+                                          .refinedAddress = refinedStateAddress_,
+                                          .repairControlAddress = repairControlAddress_,
+                                          .splitCount = binding_.splitCount};
+        cmd.bindPipeline(vk::PipelineBindPoint::eCompute, repairPipelines.fallback().pipeline());
+        cmd.pushConstants<VdpmRepairFallbackPush>(repairPipelines.fallback().pipelineLayout(),
+                                                  vk::ShaderStageFlagBits::eCompute, 0, push);
+        cmd.dispatch(emitGroups(binding_.splitCount), 1, 1);
+    }
+    recordCloseAndRefineRequired(cmd, refinePipelines);
+    // No consumer barrier — the caller synchronises the state read-back.
+}
+
+void VdpmGpuFront::recordDetectClassify(vk::CommandBuffer cmd,
+                                        const VdpmRepairPipelines& repairPipelines,
+                                        Resources& resources, const VdpmRepairParams& params)
+{
+    if (!hasRepair_ || repairClassification_ == NullBuffer)
+    {
+        throw std::logic_error("VdpmGpuFront::recordDetectClassify: front has no classification "
+                               "buffer (buildWithFront withClassificationReadback)");
+    }
+    if (binding_.finestFaceCount == 0)
+    {
+        return;
+    }
+    writeMapped(repairParamsMapped_, params);
+
+    // Leading barrier (prior compute → this clear + compute), then clear required + repairControl.
+    const vk::MemoryBarrier2 lead{
+        .srcStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+        .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
+        .dstStageMask =
+            vk::PipelineStageFlagBits2::eComputeShader | vk::PipelineStageFlagBits2::eClear,
+        .dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead |
+                         vk::AccessFlagBits2::eShaderStorageWrite |
+                         vk::AccessFlagBits2::eTransferWrite,
+    };
+    cmd.pipelineBarrier2(vk::DependencyInfo{.memoryBarrierCount = 1, .pMemoryBarriers = &lead});
+    cmd.fillBuffer(resources.vulkanBuffer(repairControl_), 0, 4 * sizeof(std::uint32_t), 0);
+    // A split-free (already-full-detail) mesh has no `required` buffer; the detect never marks
+    // (every corner is active), so skip the clear rather than fillBuffer a null zero-size buffer.
+    if (binding_.splitCount > 0)
+    {
+        cmd.fillBuffer(resources.vulkanBuffer(requiredState_), 0,
+                       static_cast<vk::DeviceSize>(binding_.splitCount) * sizeof(std::uint32_t), 0);
+    }
+    const vk::MemoryBarrier2 clearToCompute{
+        .srcStageMask = vk::PipelineStageFlagBits2::eClear,
+        .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
+        .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+        .dstAccessMask =
+            vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite,
+    };
+    cmd.pipelineBarrier2(
+        vk::DependencyInfo{.memoryBarrierCount = 1, .pMemoryBarriers = &clearToCompute});
+
+    recordAncestorResolve(
+        cmd, repairPipelines.ancestor(),
+        VdpmAncestorPush{.activeAddress = activeStateAddress_,
+                         .removalParentAddress = binding_.removalParentAddress,
+                         .ancestorIdAddress = repairAncestorIdAddress_,
+                         .ancestorDepthAddress = repairAncestorDepthAddress_,
+                         .countersAddress = repairControlAddress_ + sizeof(std::uint32_t),
+                         .vertexCount = binding_.vertexCount,
+                         .maxDepth = binding_.maxDepth});
+    emitComputeBarrier(cmd);
+
+    const VdpmRepairDetectPush push{.finestFacesAddress = binding_.finestFacesAddress,
+                                    .positionsAddress = binding_.positionsAddress,
+                                    .activeAddress = activeStateAddress_,
+                                    .ancestorIdAddress = repairAncestorIdAddress_,
+                                    .removingSplitAddress = binding_.removingSplitAddress,
+                                    .requiredAddress = requiredStateAddress_,
+                                    .repairControlAddress = repairControlAddress_,
+                                    .paramsAddress = repairParamsAddress_,
+                                    .classificationAddress = repairClassificationAddress_,
+                                    .faceCount = binding_.finestFaceCount,
+                                    .writeClassification = 1};
+    cmd.bindPipeline(vk::PipelineBindPoint::eCompute, repairPipelines.detect().pipeline());
+    cmd.pushConstants<VdpmRepairDetectPush>(repairPipelines.detect().pipelineLayout(),
+                                            vk::ShaderStageFlagBits::eCompute, 0, push);
+    cmd.dispatch(emitGroups(binding_.finestFaceCount), 1, 1);
+    // No consumer barrier — the caller synchronises the classification/required read-back.
 }
 
 void VdpmGpuFront::recordScore(vk::CommandBuffer cmd, const ComputePipeline& pipeline,

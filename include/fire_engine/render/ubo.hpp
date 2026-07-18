@@ -792,4 +792,91 @@ static_assert(alignof(VdpmCoarsenPush) == 8);
 static_assert(std::is_standard_layout_v<VdpmCoarsenPush>);
 static_assert(std::is_trivially_copyable_v<VdpmCoarsenPush>);
 
+// ---- VDPM GPU repair fixpoint (Stage B4) ----
+
+// Per-repair view params for the foldover/coverage detector (Stage B4): the world + jitter-free
+// viewProj transforms, camera position, and viewport + cull policy the CPU `detail::` classifiers
+// consume. Uploaded once per repair (host-visible). Mat4 maps directly to a GLSL mat4
+// (column-major, 64 B), as in CameraUBO.
+struct alignas(16) VdpmRepairParams
+{
+    Mat4 world;
+    Mat4 viewProj;
+    float cameraPos[4]{};                      // xyz + pad
+    float viewport[4]{0.0f, 0.0f, 0.0f, 0.0f}; // x=width, y=height, z=rasterBackfaceCulling(0/1), w
+};
+static_assert(offsetof(VdpmRepairParams, world) == 0);
+static_assert(offsetof(VdpmRepairParams, viewProj) == 64);
+static_assert(offsetof(VdpmRepairParams, cameraPos) == 128);
+static_assert(offsetof(VdpmRepairParams, viewport) == 144);
+static_assert(sizeof(VdpmRepairParams) == 160);
+static_assert(alignof(VdpmRepairParams) == 16);
+static_assert(std::is_standard_layout_v<VdpmRepairParams>);
+static_assert(std::is_trivially_copyable_v<VdpmRepairParams>);
+
+// Push for vdpm_repair_detect.comp: per canonical finest face, classify foldover ∪ coverage against
+// the settled front (ancestor cache from the shared ancestor pass) and atomic-OR each violation's
+// inactive-corner removing split into `required`; atomic-OR `repairControl[0]` (anyMarked).
+struct alignas(8) VdpmRepairDetectPush
+{
+    std::uint64_t finestFacesAddress{0};
+    std::uint64_t positionsAddress{0};
+    std::uint64_t activeAddress{0};
+    std::uint64_t ancestorIdAddress{0};
+    std::uint64_t removingSplitAddress{0};
+    std::uint64_t requiredAddress{0};
+    std::uint64_t repairControlAddress{0};
+    std::uint64_t paramsAddress{0};
+    std::uint64_t classificationAddress{0}; // per face: packed {foldover, coverageKind, worstLocal}
+    std::uint32_t faceCount{0};
+    std::uint32_t writeClassification{0}; // 1 = write `classification` (test only); 0 = skip
+};
+static_assert(offsetof(VdpmRepairDetectPush, finestFacesAddress) == 0);
+static_assert(offsetof(VdpmRepairDetectPush, positionsAddress) == 8);
+static_assert(offsetof(VdpmRepairDetectPush, activeAddress) == 16);
+static_assert(offsetof(VdpmRepairDetectPush, ancestorIdAddress) == 24);
+static_assert(offsetof(VdpmRepairDetectPush, removingSplitAddress) == 32);
+static_assert(offsetof(VdpmRepairDetectPush, requiredAddress) == 40);
+static_assert(offsetof(VdpmRepairDetectPush, repairControlAddress) == 48);
+static_assert(offsetof(VdpmRepairDetectPush, paramsAddress) == 56);
+static_assert(offsetof(VdpmRepairDetectPush, classificationAddress) == 64);
+static_assert(offsetof(VdpmRepairDetectPush, faceCount) == 72);
+static_assert(offsetof(VdpmRepairDetectPush, writeClassification) == 76);
+static_assert(sizeof(VdpmRepairDetectPush) == 80);
+static_assert(alignof(VdpmRepairDetectPush) == 8);
+static_assert(std::is_standard_layout_v<VdpmRepairDetectPush>);
+static_assert(std::is_trivially_copyable_v<VdpmRepairDetectPush>);
+
+// Packing for VdpmRepairDetectPush::classification (the test-only per-face readback): bit 0 =
+// foldover; bits 1-2 = coverage kind (0 None / 1 AllInactiveCorners / 2 WorstInactiveCorner); bits
+// 4-5 = the worst LOCAL corner (0..2) when the kind is WorstInactiveCorner. Mirrors the CPU
+// `detail::isFoldover` + `detail::CoverageRepair` so the harness can compare per face per branch.
+inline constexpr std::uint32_t kVdpmDetectFoldoverBit = 0x1u;
+inline constexpr std::uint32_t kVdpmDetectCoverageKindShift = 1u;
+inline constexpr std::uint32_t kVdpmDetectCoverageKindMask = 0x3u;
+inline constexpr std::uint32_t kVdpmDetectWorstCornerShift = 4u;
+inline constexpr std::uint32_t kVdpmDetectWorstCornerMask = 0x3u;
+
+// Push for vdpm_repair_fallback.comp: the correctness-preserving fallback. Per split,
+// FULL-OVERWRITE `required[s] = (repairControl[0] != 0 && refined[s] == 0) ? 1 : 0` — so if the
+// post-budget detect still found a violation (anyMarked), every unrefined split is seeded and the
+// subsequent close+refine drives to FULL DETAIL (guaranteed hole-free); otherwise required stays 0
+// (a no-op). A thread sets `repairControl[2]` (fallback fired) when triggered.
+struct alignas(8) VdpmRepairFallbackPush
+{
+    std::uint64_t requiredAddress{0};
+    std::uint64_t refinedAddress{0};
+    std::uint64_t repairControlAddress{0};
+    std::uint32_t splitCount{0};
+    std::uint32_t pad{0};
+};
+static_assert(offsetof(VdpmRepairFallbackPush, requiredAddress) == 0);
+static_assert(offsetof(VdpmRepairFallbackPush, refinedAddress) == 8);
+static_assert(offsetof(VdpmRepairFallbackPush, repairControlAddress) == 16);
+static_assert(offsetof(VdpmRepairFallbackPush, splitCount) == 24);
+static_assert(sizeof(VdpmRepairFallbackPush) == 32);
+static_assert(alignof(VdpmRepairFallbackPush) == 8);
+static_assert(std::is_standard_layout_v<VdpmRepairFallbackPush>);
+static_assert(std::is_trivially_copyable_v<VdpmRepairFallbackPush>);
+
 } // namespace fire_engine

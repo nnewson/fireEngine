@@ -352,10 +352,28 @@ Candidates" section folds in here:
   hot-cold / back-facing / back-to-back / single-rank+empty fixtures. **Evidence** (`[B3Evidence]`):
   per instance-frame = `1 + 3(maxRank+1)` dispatches — sphere(24,32) maxRank 18 ⇒ 58; a deep flat
   grid(65) maxRank 312 ⇒ **940** — so B5 must weigh batching same-mesh instances by rank (or a work
-  queue) for deep forests; helmet rank counts ride render integration. **Stage B3 complete.** Still
-  ahead: B4 repairs → B5 end-to-end (compute writes the indirect buffer + a compute→indirect-read
-  barrier; **also record the wedge-choice + rank-count memory for a real loaded asset (helmet) here** —
-  it needs the Vulkan glTF path, not the Vulkan-free `[vdpm]` evidence test).
+  queue) for deep forests; helmet rank counts ride render integration. **Stage B3 complete.** **B4
+  repairs** *(branch `cr-vdpm-gpu-repair`)*: the GPU foldover ∪ coverage repair — the snapshot analogue
+  of `ParallelFront::repairFront`, run after `applyView` settles the front. Each round: clear `required`
+  → the **shared ancestor resolve** (factored out of `recordEmit`, one resolve/canonical-vertex against
+  the live front) → **detect** (`shaders/vdpm_repair_detect.comp`, a faithful port of
+  `detail::isFoldover` + `detail::classifyCoverageRepair` — world-space winding + screen-space coverage,
+  marking each violation's inactive-corner removing split) → the shared `recordCloseAndRefineRequired`.
+  Because the classifiers are screen-space FP, the contract is the P2 one, not integer-exact: after
+  repair the GPU front has **zero CPU-classified foldovers + zero coverage failures**, valid invariants,
+  no GPU failure/ancestor flags, and emitted triangles ≤ full detail. Convergence is GPU-resident with
+  no per-round readback: a **bounded round budget** then a final detect + a **full-detail fallback**
+  (`vdpm_repair_fallback.comp` — if a violation still remains it seeds every unrefined split and refines
+  to full detail, always hole-free; a `repairFallbackToFullDetail` diagnostic). A repair-control buffer
+  `{anyMarked, ancestorFailure, fallbackFired}` is SEPARATE from B3's failFlags. Sync: a leading
+  compute→(compute|clear) barrier + the per-round compute→eClear→compute reset. `VdpmRepairParams`
+  (world/viewProj/camera/viewport) uploads per repair; `canonicalFaces` + `removingSplit` join the full
+  build. The `[.][gpu]` harness proves the contract on sphere/grid, DIRECT per-face classification
+  readback matching the CPU classifiers **exactly** across mixed fronts (all branches), and the fallback
+  (tiny budget → fires → still hole-free). **Stage B4 complete.** Still ahead: B5 end-to-end (compute
+  writes the indirect buffer + a compute→indirect-read barrier; **also record the wedge-choice +
+  rank-count memory for a real loaded asset (helmet) here** — it needs the Vulkan glTF path, not the
+  Vulkan-free `[vdpm]` evidence test).
 - ✅ **Static GPU residency** — device-local static asset upload split from dynamic mapped buffers.
   Landed in block B (`createDeviceLocalBuffer` for static vertices/indices/LODs/VIPM), and the batching
   follow-up is now done too *(branch `cr-static-residency-batch`)*: when a load-time `uploadBatch_` is

@@ -628,9 +628,23 @@ at a fraction of the triangles. The remaining residuals and follow-ons, in rough
   slots (for closure); `rankOffsets` stays CPU-side driving per-rank `(offset,count)` push constants
   (only `splitsByRank` is uploaded). Evidence (`[B3Evidence]`): `1 + 3(maxRank+1)` dispatches per
   instance-frame — sphere maxRank 18 ⇒ 58, a deep flat grid maxRank 312 ⇒ 940 — so B5 weighs batching
-  same-mesh instances by rank / a work queue for deep forests. Next: B4 repairs → B5 end-to-end (which
-  should also record the wedge-choice + rank-count memory for a real loaded asset — it needs the Vulkan
-  glTF path, so it can't live in the Vulkan-free `[vdpm]` evidence test).
+  same-mesh instances by rank / a work queue for deep forests. **B4 — repairs** then ported the
+  snapshot foldover ∪ coverage fixpoint (`ParallelFront::repairFront`) to the GPU, run after `applyView`.
+  Each round clears `required`, runs the **shared ancestor resolve** (factored out of `recordEmit`, one
+  resolve/canonical-vertex against the live front), a **detect** pass (`vdpm_repair_detect.comp` — a
+  faithful port of `detail::isFoldover` + `detail::classifyCoverageRepair`, marking each violation's
+  inactive-corner removing split), then the shared `recordCloseAndRefineRequired`. As the classifiers
+  are screen-space FP, the contract is the P2 one — zero CPU-classified foldovers + zero coverage
+  failures on the read-back front, valid invariants, no failure flags, emitted ≤ full detail — NOT
+  integer-exact. Convergence is bounded + GPU-resident with no per-round readback: a round budget then a
+  final detect + a **full-detail fallback** (`vdpm_repair_fallback.comp`, seeds every unrefined split
+  iff a violation remains → always hole-free), with a separate repair-control buffer `{anyMarked,
+  ancestorFailure, fallbackFired}`. Sync: a leading compute→(compute|clear) barrier + a per-round
+  compute→eClear→compute `required` reset. The `[.][gpu]` harness proves the contract, plus DIRECT
+  per-face classification readback matching the CPU classifiers **exactly** across mixed fronts (every
+  branch) and the fallback path (tiny budget → fires → hole-free). Next: B5 end-to-end (which should
+  also record the wedge-choice + rank-count memory for a real loaded asset — it needs the Vulkan glTF
+  path, so it can't live in the Vulkan-free `[vdpm]` evidence test).
 - **7 forest skips.** `buildVertexForest` skips collapses whose edge diverged from its adjacency
   replay (7 of ~6800 on the helmet); past the first skip the forest is slightly unfaithful. The repairs
   cover the visible symptoms; truncating the stream at the first skip would be the clean structural fix.
