@@ -341,6 +341,7 @@ add_executable(test_fire_engine
     tests/render/test_vdpm_gpu.cpp
     tests/render/test_vdpm_gpu_front.cpp
     tests/render/test_vdpm_gpu_repair.cpp
+    tests/render/test_vdpm_gpu_runtime.cpp
     tests/render/test_vdpm_scan.cpp
     tests/graphics/test_generational_slot_pool.cpp
     tests/scene/test_particle_emitter.cpp

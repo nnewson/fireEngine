@@ -648,14 +648,21 @@ static_assert(alignof(VdpmScatterPush) == 8);
 static_assert(std::is_standard_layout_v<VdpmScatterPush>);
 static_assert(std::is_trivially_copyable_v<VdpmScatterPush>);
 
+// The finalize pass writes the 5-word draw indirect command into a buffer laid out as the
+// Vulkan-free graphics::DrawIndexedIndirectCommand (already asserted bit-for-bit against
+// VkDrawIndexedIndirectCommand in render/resources.cpp) — the single authority; no VDPM-local
+// mirror.
+
 // Push for vdpm_emit_finalize.comp (VDPM GPU emit pass 5): a single invocation writes counters[2] =
-// 3 * counters[1] (the emitted index count for the indirect draw).
+// 3 * counters[1] (the emitted index count) AND the full 5-word draw indirect command.
 struct alignas(8) VdpmEmitFinalizePush
 {
     std::uint64_t countersAddress{0};
+    std::uint64_t indirectAddress{0};
 };
 static_assert(offsetof(VdpmEmitFinalizePush, countersAddress) == 0);
-static_assert(sizeof(VdpmEmitFinalizePush) == 8);
+static_assert(offsetof(VdpmEmitFinalizePush, indirectAddress) == 8);
+static_assert(sizeof(VdpmEmitFinalizePush) == 16);
 static_assert(alignof(VdpmEmitFinalizePush) == 8);
 static_assert(std::is_standard_layout_v<VdpmEmitFinalizePush>);
 static_assert(std::is_trivially_copyable_v<VdpmEmitFinalizePush>);

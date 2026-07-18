@@ -369,6 +369,28 @@ public:
     [[nodiscard]] static VdpmGpuFront buildWithFront(Resources& resources, const VdpmGpuMesh& mesh,
                                                      bool withClassificationReadback = false);
 
+    // The PRODUCTION runtime front (Stage B5): the full lifecycle — scoring + persistent
+    // refine/coarsen state + repair scratch + emit workspace — in ONE front, with the draw-consumed
+    // outputs (emitted indices, indirect command, counters) and host-written repair params RINGED
+    // per frame-in-flight (persistent front per instance, transient output per frame slot).
+    // Requires the full mesh (emit/repair data). `recordFrame` drives it; the renderer binds
+    // `emittedIndicesBuffer(frameIndex)` + `emittedIndirectBuffer(frameIndex)` for the indirect
+    // draw.
+    [[nodiscard]] static VdpmGpuFront buildRuntime(Resources& resources, const VdpmGpuMesh& mesh);
+
+    // Record ONE full GPU frame for a runtime front (Stage B5): score(view) → apply(scored) →
+    // repair → emit into frame slot `frameIndex`, chaining GPU buffers with no host round-trip
+    // (only the score view params + repair params are host-written, into their ring slots). Records
+    // NO consumer barrier after emit — the caller (renderer) adds the compute→(index-read +
+    // indirect-read) barrier before the draw. Throws std::logic_error on a non-runtime front.
+    void recordFrame(vk::CommandBuffer cmd, const ComputePipeline& scorePipeline,
+                     const VdpmRefinePipelines& refinePipelines,
+                     const VdpmRepairPipelines& repairPipelines,
+                     const VdpmEmitPipelines& emitPipelines, Resources& resources,
+                     std::uint32_t frameIndex, const VdpmViewParams& scoreView,
+                     const VdpmRepairParams& repairParams, float pixelBudget, float coarsenBudget,
+                     std::uint32_t repairRoundBudget);
+
     // Record ONLY the score dispatch for frame `frameIndex` (writes that slot's mapped params from
     // `view`, pushes its address, dispatches ceil(splitCount / 64)). NO barriers — the consumer
     // owns synchronisation (the harness a compute→transfer→host readback; later stages
@@ -397,6 +419,14 @@ public:
     void recordEmit(vk::CommandBuffer cmd, const VdpmEmitPipelines& pipelines, Resources& resources,
                     std::span<const std::uint32_t> active);
 
+    // Like recordEmit but reads the front's OWN live refine/coarsen state (`activeState`) instead
+    // of a CPU-uploaded active span (Stage B5, the active-state→emit seam), and writes the emitted
+    // indices / counters / indirect command into frame slot `frameIndex` of the transient RING (so
+    // a draw can consume slot N while slot N+1 is computed). Requires a runtime front
+    // (buildRuntime).
+    void recordEmitFromFront(vk::CommandBuffer cmd, const VdpmEmitPipelines& pipelines,
+                             Resources& resources, std::uint32_t frameIndex);
+
     // Record one refine/coarsen frame (Stage B3): upload `scores` (one VdpmScoreOut per split),
     // clear the failure flags, then mark → recordCloseAndRefineRequired → coarsen. Mirrors
     // `ParallelFront::applyView` exactly, as rank-ordered dispatches. The persistent front STATE is
@@ -410,6 +440,13 @@ public:
     void recordApplyView(vk::CommandBuffer cmd, const VdpmRefinePipelines& pipelines,
                          Resources& resources, std::span<const VdpmScoreOut> scores,
                          float pixelBudget, float coarsenBudget);
+
+    // Like recordApplyView but reads the front's OWN GPU score output (from a prior recordScore) as
+    // the per-split scores — no host upload (Stage B5, the score→apply seam). The caller records
+    // recordScore then a compute→compute barrier then this. Same barriers/contract as
+    // recordApplyView.
+    void recordApplyScoredView(vk::CommandBuffer cmd, const VdpmRefinePipelines& pipelines,
+                               Resources& resources, float pixelBudget, float coarsenBudget);
 
     // Record the GPU foldover ∪ coverage repair to a fixpoint (Stage B4) — the snapshot analogue of
     // `ParallelFront::repairFront`, run AFTER recordApplyView has settled the front. Each round:
@@ -491,6 +528,27 @@ public:
     {
         return counters_;
     }
+    // The GPU-written draw indirect command (laid out as graphics::DrawIndexedIndirectCommand) —
+    // eIndirectBuffer (B5 draw) + eTransferSrc (harness readback). The finalize fills all 5 words.
+    [[nodiscard]] BufferHandle emittedIndirectBuffer() const noexcept
+    {
+        return emittedIndirect_;
+    }
+
+    // Runtime-front (buildRuntime) ring-slot accessors: the draw-consumed outputs for frame slot
+    // `frameIndex`. The renderer binds these for the indirect draw; the harness reads them back.
+    [[nodiscard]] BufferHandle emittedIndicesBuffer(std::uint32_t frameIndex) const noexcept
+    {
+        return frameOutputs_[frameIndex].emittedIndices;
+    }
+    [[nodiscard]] BufferHandle emittedIndirectBuffer(std::uint32_t frameIndex) const noexcept
+    {
+        return frameOutputs_[frameIndex].indirect;
+    }
+    [[nodiscard]] BufferHandle countersBuffer(std::uint32_t frameIndex) const noexcept
+    {
+        return frameOutputs_[frameIndex].counters;
+    }
     [[nodiscard]] std::uint32_t splitCount() const noexcept
     {
         return binding_.splitCount;
@@ -521,6 +579,8 @@ private:
     BufferHandle outSlot_{NullBuffer};
     BufferHandle counters_{NullBuffer};
     BufferHandle emittedIndices_{NullBuffer};
+    BufferHandle emittedIndirect_{NullBuffer}; // GPU-written draw indirect command (B5)
+    std::uint64_t emittedIndirectAddress_{0};
     std::uint64_t ancestorIdAddress_{0};
     std::uint64_t ancestorDepthAddress_{0};
     std::uint64_t surviveAddress_{0};
@@ -570,6 +630,43 @@ private:
     // refine, barriers between refine ranks, and a trailing refine-write→consumer-read barrier — so
     // every caller (mark→…→coarsen, or detect→…→next-detect) is synchronised by construction.
     void recordCloseAndRefineRequired(vk::CommandBuffer cmd, const VdpmRefinePipelines& pipelines);
+
+    // The shared applyView body (mark → close+refine → coarsen) reading `scoresAddress` — the
+    // common recorder both recordApplyView (host-uploaded scores) and recordApplyScoredView (the
+    // GPU score output) delegate to, so a raw device address is never exposed publicly.
+    void recordApplyViewImpl(vk::CommandBuffer cmd, const VdpmRefinePipelines& pipelines,
+                             Resources& resources, std::uint64_t scoresAddress, float pixelBudget,
+                             float coarsenBudget);
+
+    // One frame slot's transient, draw-consumed emit outputs (ringed in a runtime front).
+    struct FrameOutput
+    {
+        BufferHandle emittedIndices{NullBuffer};
+        BufferHandle counters{NullBuffer};
+        BufferHandle indirect{NullBuffer};
+        std::uint64_t emittedIndicesAddress{0};
+        std::uint64_t countersAddress{0};
+        std::uint64_t indirectAddress{0};
+    };
+    // The shared emit body reading `activeAddress` and writing `out` — the common recorder both
+    // recordEmit (CPU-uploaded active, single output) and recordEmitFromFront (live front state,
+    // ring slot) delegate to.
+    void recordEmitImpl(vk::CommandBuffer cmd, const VdpmEmitPipelines& pipelines,
+                        Resources& resources, std::uint64_t activeAddress, const FrameOutput& out);
+
+    // The shared repair body reading the repair params at `paramsAddress` — recordRepair (single
+    // params buffer) and recordFrame (ring slot) delegate to it.
+    void recordRepairImpl(vk::CommandBuffer cmd, const VdpmRefinePipelines& refinePipelines,
+                          const VdpmRepairPipelines& repairPipelines, Resources& resources,
+                          std::uint64_t paramsAddress, std::uint32_t roundBudget);
+
+    // Runtime front (Stage B5): the draw-consumed outputs ringed per frame-in-flight + the
+    // host-written repair params ringed (persistent front, transient output). `hasRuntime_` implies
+    // hasFront_ + hasEmit_ + hasRepair_.
+    bool hasRuntime_{false};
+    std::array<FrameOutput, kMaxFramesInFlight> frameOutputs_{};
+    std::array<std::span<std::byte>, kMaxFramesInFlight> repairParamsRing_{};
+    std::array<std::uint64_t, kMaxFramesInFlight> repairParamsRingAddress_{};
 };
 
 } // namespace fire_engine
