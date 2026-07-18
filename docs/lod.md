@@ -642,9 +642,19 @@ at a fraction of the triangles. The remaining residuals and follow-ons, in rough
   ancestorFailure, fallbackFired}`. Sync: a leading compute→(compute|clear) barrier + a per-round
   compute→eClear→compute `required` reset. The `[.][gpu]` harness proves the contract, plus DIRECT
   per-face classification readback matching the CPU classifiers **exactly** across mixed fronts (every
-  branch) and the fallback path (tiny budget → fires → hole-free). Next: B5 end-to-end (which should
-  also record the wedge-choice + rank-count memory for a real loaded asset — it needs the Vulkan glTF
-  path, so it can't live in the Vulkan-free `[vdpm]` evidence test).
+  branch) and the fallback path (tiny budget → fires → hole-free). **B5a — combined runtime front**
+  then assembled the production unit: `buildRuntime` puts scoring + persistent refine/coarsen state +
+  repair scratch + emit workspace in ONE front, with the draw-consumed outputs (emitted indices,
+  indirect command, counters) + host repair params RINGED per frame-in-flight (persistent front,
+  transient output). `recordApplyScoredView` reads the front's own GPU score output and
+  `recordEmitFromFront(frameIndex)` the live front state — no host round-trip (both delegate to shared
+  `record*Impl` recorders); the emit finalize writes the full 5-word indirect command; `recordFrame`
+  chains the lot GPU-only. The `[.][gpu]` harness splits the contract: off-threshold (cull-off, tiny
+  budget) exact front + emit vs the CPU lifecycle; general fixtures need only a valid hole-free front +
+  emitted ≤ finest + clean diagnostics + a correct 5-word indirect (`indexCount == counters[2]`); a
+  two-frame back-to-back test proves the ring. Next: B5b — renderer integration (opaque handles, the
+  work-request seam, `drawIndexedIndirect` from the GPU buffers, CPU fallback default) → B5c — delayed
+  diagnostics + the deferred helmet wedge/rank-count evidence (Vulkan glTF path) + a possible GPU flip.
 - **7 forest skips.** `buildVertexForest` skips collapses whose edge diverged from its adjacency
   replay (7 of ~6800 on the helmet); past the first skip the forest is slightly unfaithful. The repairs
   cover the visible symptoms; truncating the stream at the first skip would be the clean structural fix.

@@ -1,20 +1,36 @@
 #version 450
 #extension GL_EXT_buffer_reference : require
 
-// VDPM GPU emit pass 5 (Stage B2): a SINGLE invocation converts the surviving-face total (written
-// to counters[1] by the scan) into the emitted INDEX count `3 * total` (counters[2]) — the value a
-// later GPU-written indirect draw consumes as `indexCount`. Always dispatched (even when faceCount
-// == 0): with zero faces the scan pre-zeroed counters[1], so this writes counters[2] = 0
-// unconditionally, keeping the index count defined without a CPU readback branch.
+// VDPM GPU emit pass 5 (Stage B2/B5): a SINGLE invocation converts the surviving-face total
+// (written to counters[1] by the scan) into the emitted INDEX count `3 * total` (counters[2]) AND
+// writes the full 5-word VkDrawIndexedIndirectCommand a later GPU-driven draw consumes. Always
+// dispatched (even when faceCount == 0): with zero faces the scan pre-zeroed counters[1], so this
+// writes indexCount 0 and instanceCount 1 (a valid no-op draw) unconditionally — no CPU readback
+// branch, and the indirect command is always fully defined.
 
 layout(buffer_reference, std430, buffer_reference_align = 4) buffer UintBuf
 {
     uint v[];
 };
 
+// Mirrors VkDrawIndexedIndirectCommand (vertexOffset is int32, but its bit pattern is 0 here).
+struct IndirectCmd
+{
+    uint indexCount;
+    uint instanceCount;
+    uint firstIndex;
+    uint vertexOffset;
+    uint firstInstance;
+};
+layout(buffer_reference, std430, buffer_reference_align = 4) buffer IndirectBuf
+{
+    IndirectCmd cmd;
+};
+
 layout(push_constant) uniform Push
 {
-    UintBuf counters; // [1] = surviving face total (scan); [2] = emitted index count (out)
+    UintBuf counters;     // [1] = surviving face total (scan); [2] = emitted index count (out)
+    IndirectBuf indirect; // the draw's indirect command (out)
 }
 pc;
 
@@ -22,5 +38,11 @@ layout(local_size_x = 1) in;
 
 void main()
 {
-    pc.counters.v[2] = 3u * pc.counters.v[1];
+    const uint indexCount = 3u * pc.counters.v[1];
+    pc.counters.v[2] = indexCount;
+    pc.indirect.cmd.indexCount = indexCount;
+    pc.indirect.cmd.instanceCount = 1u;
+    pc.indirect.cmd.firstIndex = 0u;
+    pc.indirect.cmd.vertexOffset = 0u;
+    pc.indirect.cmd.firstInstance = 0u;
 }

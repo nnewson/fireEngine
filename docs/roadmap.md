@@ -370,10 +370,26 @@ Candidates" section folds in here:
   (world/viewProj/camera/viewport) uploads per repair; `canonicalFaces` + `removingSplit` join the full
   build. The `[.][gpu]` harness proves the contract on sphere/grid, DIRECT per-face classification
   readback matching the CPU classifiers **exactly** across mixed fronts (all branches), and the fallback
-  (tiny budget → fires → still hole-free). **Stage B4 complete.** Still ahead: B5 end-to-end (compute
-  writes the indirect buffer + a compute→indirect-read barrier; **also record the wedge-choice +
-  rank-count memory for a real loaded asset (helmet) here** — it needs the Vulkan glTF path, not the
-  Vulkan-free `[vdpm]` evidence test).
+  (tiny budget → fires → still hole-free). **Stage B4 complete.** **B5a — combined runtime front**
+  *(branch `cr-vdpm-gpu-runtime`)*: the production-shaped unit B5b wires in. `VdpmGpuFront::buildRuntime`
+  combines the whole lifecycle in one front — scoring + persistent refine/coarsen state + repair
+  scratch + emit workspace — with the DRAW-CONSUMED outputs (emitted index buffer, indirect command,
+  counters) + host-written repair params RINGED per frame-in-flight (persistent front per instance,
+  transient output per slot). Two GPU data seams remove the host round-trip: `recordApplyScoredView`
+  reads the front's OWN score output (the mark/coarsen reduction `max(4 channels)` already matches, so
+  `recordScore`'s output feeds them directly), and `recordEmitFromFront(frameIndex)` reads the live
+  refine/coarsen state into a ring slot (the emit + apply bodies were factored into shared
+  `record*Impl` recorders so a raw device address is never public). The emit finalize now writes the
+  full 5-word `VkDrawIndexedIndirectCommand` (all fields every frame, incl. the zero-face case).
+  `recordFrame(frameIndex, …)` chains score → apply-scored → repair → emit GPU-only. Local `[.][gpu]`
+  harness: OFF-THRESHOLD (cull-off, tiny budget) exact front + emit vs the CPU lifecycle; GENERAL valid
+  hole-free front + emitted ≤ finest + clean diagnostics + the 5 indirect words + `indexCount ==
+  counters[2]`; and two frames back-to-back (no CPU wait) proving the ring keeps distinct slot outputs.
+  **Stage B5a complete.** Still ahead: **B5b** — renderer integration (opaque mesh/front handles, the
+  work-request seam recording after collectDrawCommands, `drawIndexedIndirect` from the GPU buffers,
+  the compute→(index-read + indirect-read) barrier, CPU-fallback selection **default CPU**); **B5c** —
+  completed-frame delayed diagnostics, the deferred helmet wedge/rank-count evidence (Vulkan glTF path),
+  and a possible default flip to GPU after parity + zero-VUID + no unexpected fallbacks.
 - ✅ **Static GPU residency** — device-local static asset upload split from dynamic mapped buffers.
   Landed in block B (`createDeviceLocalBuffer` for static vertices/indices/LODs/VIPM), and the batching
   follow-up is now done too *(branch `cr-static-residency-batch`)*: when a load-time `uploadBatch_` is

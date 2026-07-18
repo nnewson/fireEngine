@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 
+#include <fire_engine/graphics/draw_command.hpp>
 #include <fire_engine/graphics/mapped_buffer.hpp>
 #include <fire_engine/graphics/mesh_topology.hpp>
 #include <fire_engine/graphics/vdpm_parallel.hpp>
@@ -548,6 +549,11 @@ VdpmGpuFront VdpmGpuFront::buildWithEmit(Resources& resources, const VdpmGpuMesh
     // Counters [ancestorFailures, survivingFaces, emittedIndexCount] — always present + readable.
     deviceLocal(3 * sizeof(std::uint32_t), front.counters_, front.countersAddress_,
                 vk::BufferUsageFlagBits::eTransferSrc, "counters");
+    // The GPU-written draw indirect command — eIndirectBuffer (B5 draw) + eTransferSrc (readback).
+    deviceLocal(sizeof(DrawIndexedIndirectCommand), front.emittedIndirect_,
+                front.emittedIndirectAddress_,
+                vk::BufferUsageFlagBits::eIndirectBuffer | vk::BufferUsageFlagBits::eTransferSrc,
+                "emittedIndirect");
 
     // Exclusive-scan per-level scratch (empty when faceCount fits one block).
     const std::vector<std::uint32_t> levels = VdpmScan::scratchElementCounts(b.faceCount);
@@ -575,22 +581,45 @@ void VdpmGpuFront::recordEmit(vk::CommandBuffer cmd, const VdpmEmitPipelines& pi
     {
         throw std::runtime_error("VdpmGpuFront::recordEmit: active size != vertexCount");
     }
+    // Upload the settled front (host-visible coherent → visible at queue submit), then emit into
+    // the single (non-ringed) B2 workspace output.
+    if (binding_.vertexCount > 0)
+    {
+        writeMapped(activeMapped_, active.data(), active.size_bytes());
+    }
+    recordEmitImpl(cmd, pipelines, resources, activeAddress_,
+                   FrameOutput{.emittedIndices = emittedIndices_,
+                               .counters = counters_,
+                               .indirect = emittedIndirect_,
+                               .emittedIndicesAddress = emittedIndicesAddress_,
+                               .countersAddress = countersAddress_,
+                               .indirectAddress = emittedIndirectAddress_});
+}
+
+void VdpmGpuFront::recordEmitFromFront(vk::CommandBuffer cmd, const VdpmEmitPipelines& pipelines,
+                                       Resources& resources, std::uint32_t frameIndex)
+{
+    if (!hasRuntime_)
+    {
+        throw std::logic_error("VdpmGpuFront::recordEmitFromFront: front is not a runtime front");
+    }
+    // Read the LIVE refine/coarsen state (no CPU upload); write the frame slot's ringed output.
+    recordEmitImpl(cmd, pipelines, resources, activeStateAddress_, frameOutputs_[frameIndex]);
+}
+
+void VdpmGpuFront::recordEmitImpl(vk::CommandBuffer cmd, const VdpmEmitPipelines& pipelines,
+                                  Resources& resources, std::uint64_t activeAddress,
+                                  const FrameOutput& out)
+{
     // The per-canonical (ancestor) + per-face (survival/scatter) dispatches must fit the device cap
     // — the scan validates its own levels internally.
     requireDispatchable(emitGroups(binding_.vertexCount), maxWorkGroupCountX_, "ancestor");
     requireDispatchable(emitGroups(binding_.faceCount), maxWorkGroupCountX_, "survival/scatter");
 
-    // Upload the settled front (host-visible coherent → visible to the device at queue submit).
-    if (binding_.vertexCount > 0)
-    {
-        writeMapped(activeMapped_, active.data(), active.size_bytes());
-    }
-
     // Clear the whole counters buffer ONCE: ancestor's atomic (counters[0]), the scan's total
     // (counters[1] — pre-zeroed so a zero-face scan needs no dispatch), and finalize's index count
     // (counters[2]) all start defined. fillBuffer is a CLEAR (eClear stage / eTransferWrite).
-    const vk::Buffer countersBuf = resources.vulkanBuffer(counters_);
-    cmd.fillBuffer(countersBuf, 0, 3 * sizeof(std::uint32_t), 0);
+    cmd.fillBuffer(resources.vulkanBuffer(out.counters), 0, 3 * sizeof(std::uint32_t), 0);
     const vk::MemoryBarrier2 clearToCompute{
         .srcStageMask = vk::PipelineStageFlagBits2::eClear,
         .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
@@ -603,11 +632,11 @@ void VdpmGpuFront::recordEmit(vk::CommandBuffer cmd, const VdpmEmitPipelines& pi
 
     // Pass 1 — ancestor resolution (per canonical vertex; the shared pass, failures → counters[0]).
     recordAncestorResolve(cmd, pipelines.ancestor(),
-                          VdpmAncestorPush{.activeAddress = activeAddress_,
+                          VdpmAncestorPush{.activeAddress = activeAddress,
                                            .removalParentAddress = binding_.removalParentAddress,
                                            .ancestorIdAddress = ancestorIdAddress_,
                                            .ancestorDepthAddress = ancestorDepthAddress_,
-                                           .countersAddress = countersAddress_,
+                                           .countersAddress = out.countersAddress,
                                            .vertexCount = binding_.vertexCount,
                                            .maxDepth = binding_.maxDepth});
     emitComputeBarrier(cmd);
@@ -629,7 +658,7 @@ void VdpmGpuFront::recordEmit(vk::CommandBuffer cmd, const VdpmEmitPipelines& pi
     // Pass 3 — exclusive scan of the survival flags → per-face output slot; grand total to
     // counters[1]. (No dispatch when faceCount == 0; counters[1] stays the pre-zeroed 0.)
     pipelines.scan().recordScan(cmd, surviveAddress_, outSlotAddress_, scanScratchAddress_,
-                                countersAddress_ + sizeof(std::uint32_t), binding_.faceCount);
+                                out.countersAddress + sizeof(std::uint32_t), binding_.faceCount);
     // One barrier after the scan, before BOTH consumers (scatter reads outSlot; finalize reads
     // counters[1]).
     emitComputeBarrier(cmd);
@@ -643,7 +672,7 @@ void VdpmGpuFront::recordEmit(vk::CommandBuffer cmd, const VdpmEmitPipelines& pi
                                    .outSlotAddress = outSlotAddress_,
                                    .wedgeChoicesAddress = binding_.wedgeChoicesAddress,
                                    .wedgeOffsetsAddress = binding_.wedgeOffsetsAddress,
-                                   .emittedIndicesAddress = emittedIndicesAddress_,
+                                   .emittedIndicesAddress = out.emittedIndicesAddress,
                                    .faceCount = binding_.faceCount};
         cmd.bindPipeline(vk::PipelineBindPoint::eCompute, pipelines.scatter().pipeline());
         cmd.pushConstants<VdpmScatterPush>(pipelines.scatter().pipelineLayout(),
@@ -651,10 +680,11 @@ void VdpmGpuFront::recordEmit(vk::CommandBuffer cmd, const VdpmEmitPipelines& pi
         cmd.dispatch(emitGroups(binding_.faceCount), 1, 1);
     }
 
-    // Pass 5 — finalize: counters[2] = 3 * counters[1] (the emitted index count). One invocation,
-    // always dispatched (defines the count even when every face collapses away).
+    // Pass 5 — finalize: counters[2] = 3 * counters[1] + the full 5-word draw indirect command. One
+    // invocation, always dispatched (defines the count + indirect even when every face collapses).
     {
-        const VdpmEmitFinalizePush push{.countersAddress = countersAddress_};
+        const VdpmEmitFinalizePush push{.countersAddress = out.countersAddress,
+                                        .indirectAddress = out.indirectAddress};
         cmd.bindPipeline(vk::PipelineBindPoint::eCompute, pipelines.finalize().pipeline());
         cmd.pushConstants<VdpmEmitFinalizePush>(pipelines.finalize().pipelineLayout(),
                                                 vk::ShaderStageFlagBits::eCompute, 0, push);
@@ -755,6 +785,149 @@ VdpmGpuFront VdpmGpuFront::buildWithFront(Resources& resources, const VdpmGpuMes
     return front;
 }
 
+VdpmGpuFront VdpmGpuFront::buildRuntime(Resources& resources, const VdpmGpuMesh& mesh)
+{
+    const VdpmGpuMeshBinding& b = mesh.binding();
+    if (!b.hasEmitData || b.finestFacesAddress == 0 || b.vertexCount == 0)
+    {
+        throw std::logic_error(
+            "VdpmGpuFront::buildRuntime: requires a full mesh (emit + repair data)");
+    }
+
+    VdpmGpuFront front = build(resources, mesh); // score output + params ring + binding + limit
+    front.hasFront_ = true;
+    front.hasEmit_ = true;
+    front.hasRepair_ = true;
+    front.hasRuntime_ = true;
+    front.rankRanges_.assign(mesh.rankRanges().begin(), mesh.rankRanges().end());
+
+    const std::size_t vBytes = static_cast<std::size_t>(b.vertexCount) * sizeof(std::uint32_t);
+    const std::size_t sBytes = static_cast<std::size_t>(b.splitCount) * sizeof(std::uint32_t);
+    const std::size_t fBytes = static_cast<std::size_t>(b.faceCount) * sizeof(std::uint32_t);
+    const std::vector<std::uint32_t> zerosV(b.vertexCount, 0);
+    const std::vector<std::uint32_t> zerosS(b.splitCount, 0);
+
+    auto dev = [&](std::size_t bytes, const void* init, BufferHandle& h, std::uint64_t& addr,
+                   vk::BufferUsageFlags extra, const char* what)
+    {
+        if (bytes == 0)
+        {
+            return; // zero-byte VMA allocations are invalid; a null address is never dereferenced
+        }
+        h = resources.createDeviceLocalStorageBuffer(bytes, init, extra);
+        addr = resources.bufferAddress(h);
+        requireAligned(addr, 4, what);
+    };
+    const auto srcFlag = vk::BufferUsageFlagBits::eTransferSrc;
+
+    // Persistent front state (B3) — readback-enabled for diagnostics/harness.
+    dev(vBytes, mesh.initialActive().data(), front.activeState_, front.activeStateAddress_, srcFlag,
+        "activeState");
+    dev(vBytes, zerosV.data(), front.dependentsState_, front.dependentsStateAddress_, srcFlag,
+        "dependentsState");
+    dev(sBytes, zerosS.data(), front.refinedState_, front.refinedStateAddress_, srcFlag,
+        "refinedState");
+    dev(sBytes, zerosS.data(), front.requiredState_, front.requiredStateAddress_, {},
+        "requiredState");
+    const std::array<std::uint32_t, 2> zeroFlags{0, 0};
+    dev(2 * sizeof(std::uint32_t), zeroFlags.data(), front.failFlags_, front.failFlagsAddress_,
+        srcFlag, "failFlags");
+
+    // Emit workspace (B2) — internal, single (compute-only, serialised).
+    dev(vBytes, nullptr, front.ancestorId_, front.ancestorIdAddress_, {}, "ancestorId");
+    dev(vBytes, nullptr, front.ancestorDepth_, front.ancestorDepthAddress_, {}, "ancestorDepth");
+    dev(fBytes, nullptr, front.survive_, front.surviveAddress_, {}, "survive");
+    dev(fBytes, nullptr, front.outSlot_, front.outSlotAddress_, {}, "outSlot");
+    const std::vector<std::uint32_t> levels = VdpmScan::scratchElementCounts(b.faceCount);
+    front.scanScratch_.resize(levels.size());
+    front.scanScratchAddress_.resize(levels.size());
+    for (std::size_t i = 0; i < levels.size(); ++i)
+    {
+        dev(static_cast<std::size_t>(levels[i]) * sizeof(std::uint32_t), nullptr,
+            front.scanScratch_[i], front.scanScratchAddress_[i], {}, "scanScratch");
+    }
+
+    // Repair scratch (B4). The repair ancestor cache SHARES the emit's ancestor buffer — repair
+    // completes (its close+refine trailing barrier) before emit's ancestor pass in recordFrame, so
+    // the transient cache never overlaps; sharing saves a per-instance vertex buffer. (The isolated
+    // B4 buildWithFront keeps a separate allocation since it has no emit workspace.) Only the
+    // control diagnostic (SEPARATE from failFlags) is new here.
+    front.repairAncestorId_ = front.ancestorId_;
+    front.repairAncestorIdAddress_ = front.ancestorIdAddress_;
+    front.repairAncestorDepth_ = front.ancestorDepth_;
+    front.repairAncestorDepthAddress_ = front.ancestorDepthAddress_;
+    const std::array<std::uint32_t, 4> zeroCtrl{0, 0, 0, 0};
+    dev(4 * sizeof(std::uint32_t), zeroCtrl.data(), front.repairControl_,
+        front.repairControlAddress_, srcFlag, "repairControl");
+
+    // RINGED draw-consumed outputs (emitted indices / counters / indirect) + host-written repair
+    // params — one per frame-in-flight, so a draw can read slot N while slot N+1 is computed.
+    for (int i = 0; i < kMaxFramesInFlight; ++i)
+    {
+        FrameOutput& out = front.frameOutputs_[i];
+        dev(fBytes * 3, nullptr, out.emittedIndices, out.emittedIndicesAddress,
+            vk::BufferUsageFlagBits::eIndexBuffer | srcFlag, "emittedIndices");
+        dev(3 * sizeof(std::uint32_t), nullptr, out.counters, out.countersAddress, srcFlag,
+            "counters");
+        dev(sizeof(DrawIndexedIndirectCommand), nullptr, out.indirect, out.indirectAddress,
+            vk::BufferUsageFlagBits::eIndirectBuffer | srcFlag, "indirect");
+    }
+    const MappedBufferSet repairParams =
+        resources.createMappedDeviceAddressBuffers(sizeof(VdpmRepairParams));
+    for (int i = 0; i < kMaxFramesInFlight; ++i)
+    {
+        front.repairParamsRing_[i] = repairParams.mapped[i];
+        front.repairParamsRingAddress_[i] = resources.bufferAddress(repairParams.buffers[i]);
+        requireAligned(front.repairParamsRingAddress_[i], 16, "repairParams");
+    }
+    return front;
+}
+
+void VdpmGpuFront::recordFrame(vk::CommandBuffer cmd, const ComputePipeline& scorePipeline,
+                               const VdpmRefinePipelines& refinePipelines,
+                               const VdpmRepairPipelines& repairPipelines,
+                               const VdpmEmitPipelines& emitPipelines, Resources& resources,
+                               std::uint32_t frameIndex, const VdpmViewParams& scoreView,
+                               const VdpmRepairParams& repairParams, float pixelBudget,
+                               float coarsenBudget, std::uint32_t repairRoundBudget)
+{
+    if (!hasRuntime_)
+    {
+        throw std::logic_error("VdpmGpuFront::recordFrame: front is not a runtime front");
+    }
+    // LIFECYCLE BOUNDARY barrier: the score buffer + the internal emit scratch are SINGLE-buffered
+    // (only the draw-consumed outputs ring), so a prior frame's mark/coarsen READS of the score
+    // output (and its emit-scratch reads/writes) must be ordered before THIS frame's recordScore
+    // WRITE + emit-scratch reuse — a write-after-read the per-pass barriers (which sit AFTER the
+    // score dispatch) can't cover. src names READS + WRITES; a no-op for the first frame on a fresh
+    // front. (Also the only synchronisation on a zero-split mesh, where score/apply/repair all
+    // early-out and two back-to-back emits would otherwise race the shared scratch.)
+    const vk::MemoryBarrier2 lifecycleBoundary{
+        .srcStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+        .srcAccessMask =
+            vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite,
+        .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+        .dstAccessMask =
+            vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite,
+    };
+    cmd.pipelineBarrier2(
+        vk::DependencyInfo{.memoryBarrierCount = 1, .pMemoryBarriers = &lifecycleBoundary});
+
+    // (1) Score → the front's score output (score params written to this frame's ring slot). No
+    // barrier here — recordApplyScoredView's leading barrier orders the score write → the mark
+    // read.
+    recordScore(cmd, scorePipeline, frameIndex, scoreView);
+    // (2) Refine/coarsen reading that GPU score output (no host round-trip).
+    recordApplyScoredView(cmd, refinePipelines, resources, pixelBudget, coarsenBudget);
+    // (3) Repair, reading this frame's ring repair params.
+    writeMapped(repairParamsRing_[frameIndex], repairParams);
+    recordRepairImpl(cmd, refinePipelines, repairPipelines, resources,
+                     repairParamsRingAddress_[frameIndex], repairRoundBudget);
+    // (4) Emit the live settled front into this frame's ring output. No consumer barrier — the
+    // caller (renderer) adds the compute→(index-read + indirect-read) barrier before the draw.
+    recordEmitFromFront(cmd, emitPipelines, resources, frameIndex);
+}
+
 void VdpmGpuFront::recordCloseAndRefineRequired(vk::CommandBuffer cmd,
                                                 const VdpmRefinePipelines& pipelines)
 {
@@ -822,16 +995,39 @@ void VdpmGpuFront::recordApplyView(vk::CommandBuffer cmd, const VdpmRefinePipeli
     {
         return; // no splits: the front is fixed at the coarsest = finest state
     }
+    // Upload the per-split scores (host-visible coherent → visible at queue submit), then run the
+    // shared body reading the uploaded buffer.
+    writeMapped(scoresMapped_, scores.data(), scores.size_bytes());
+    recordApplyViewImpl(cmd, pipelines, resources, scoresAddress_, pixelBudget, coarsenBudget);
+}
 
+void VdpmGpuFront::recordApplyScoredView(vk::CommandBuffer cmd,
+                                         const VdpmRefinePipelines& pipelines, Resources& resources,
+                                         float pixelBudget, float coarsenBudget)
+{
+    if (!hasFront_)
+    {
+        throw std::logic_error(
+            "VdpmGpuFront::recordApplyScoredView: front has no refine/coarsen state");
+    }
+    if (binding_.splitCount == 0)
+    {
+        return;
+    }
+    // Read the front's own GPU score output (recordScore wrote it; the caller ordered a barrier).
+    recordApplyViewImpl(cmd, pipelines, resources, outputAddress_, pixelBudget, coarsenBudget);
+}
+
+void VdpmGpuFront::recordApplyViewImpl(vk::CommandBuffer cmd, const VdpmRefinePipelines& pipelines,
+                                       Resources& resources, std::uint64_t scoresAddress,
+                                       float pixelBudget, float coarsenBudget)
+{
     // Defence-in-depth dispatch validation (build already rejected an ineligible mesh).
     requireDispatchable(emitGroups(binding_.splitCount), maxWorkGroupCountX_, "mark");
     for (const RankRange& rr : rankRanges_)
     {
         requireDispatchable(emitGroups(rr.count), maxWorkGroupCountX_, "rank");
     }
-
-    // Upload the per-split scores (host-visible coherent → visible at queue submit).
-    writeMapped(scoresMapped_, scores.data(), scores.size_bytes());
 
     // Leading barrier: order any PRIOR frame's compute writes (persistent state, `required`,
     // `failFlags`) before this frame's failFlags clear (transfer) and mark (compute). This makes
@@ -867,7 +1063,7 @@ void VdpmGpuFront::recordApplyView(vk::CommandBuffer cmd, const VdpmRefinePipeli
 
     // (1) MARK — full-overwrite the required seed over all splits.
     {
-        const VdpmMarkPush push{.scoresAddress = scoresAddress_,
+        const VdpmMarkPush push{.scoresAddress = scoresAddress,
                                 .requiredAddress = requiredStateAddress_,
                                 .splitCount = binding_.splitCount,
                                 .pixelBudget = pixelBudget};
@@ -888,7 +1084,7 @@ void VdpmGpuFront::recordApplyView(vk::CommandBuffer cmd, const VdpmRefinePipeli
         const RankRange& rr = rankRanges_[r];
         const VdpmCoarsenPush push{.splitsByRankAddress = binding_.splitsByRankAddress,
                                    .frontSplitsAddress = binding_.frontSplitsAddress,
-                                   .scoresAddress = scoresAddress_,
+                                   .scoresAddress = scoresAddress,
                                    .refinedAddress = refinedStateAddress_,
                                    .activeAddress = activeStateAddress_,
                                    .dependentsAddress = dependentsStateAddress_,
@@ -916,6 +1112,18 @@ void VdpmGpuFront::recordRepair(vk::CommandBuffer cmd, const VdpmRefinePipelines
         throw std::logic_error("VdpmGpuFront::recordRepair: front has no repair state (full mesh + "
                                "buildWithFront required)");
     }
+    // Upload to the single (non-ringed) repair-params buffer, then run the shared body.
+    writeMapped(repairParamsMapped_, params);
+    recordRepairImpl(cmd, refinePipelines, repairPipelines, resources, repairParamsAddress_,
+                     roundBudget);
+}
+
+void VdpmGpuFront::recordRepairImpl(vk::CommandBuffer cmd,
+                                    const VdpmRefinePipelines& refinePipelines,
+                                    const VdpmRepairPipelines& repairPipelines,
+                                    Resources& resources, std::uint64_t paramsAddress,
+                                    std::uint32_t roundBudget)
+{
     if (binding_.splitCount == 0 || binding_.finestFaceCount == 0)
     {
         return; // nothing to repair (no splits / no faces)
@@ -923,8 +1131,6 @@ void VdpmGpuFront::recordRepair(vk::CommandBuffer cmd, const VdpmRefinePipelines
     requireDispatchable(emitGroups(binding_.vertexCount), maxWorkGroupCountX_, "repair ancestor");
     requireDispatchable(emitGroups(binding_.finestFaceCount), maxWorkGroupCountX_, "repair detect");
     requireDispatchable(emitGroups(binding_.splitCount), maxWorkGroupCountX_, "repair fallback");
-
-    writeMapped(repairParamsMapped_, params);
 
     const vk::Buffer requiredBuf = resources.vulkanBuffer(requiredState_);
     const vk::Buffer controlBuf = resources.vulkanBuffer(repairControl_);
@@ -996,7 +1202,7 @@ void VdpmGpuFront::recordRepair(vk::CommandBuffer cmd, const VdpmRefinePipelines
                                         .removingSplitAddress = binding_.removingSplitAddress,
                                         .requiredAddress = requiredStateAddress_,
                                         .repairControlAddress = repairControlAddress_,
-                                        .paramsAddress = repairParamsAddress_,
+                                        .paramsAddress = paramsAddress,
                                         .classificationAddress = 0, // production: no classification
                                         .faceCount = binding_.finestFaceCount,
                                         .writeClassification = 0};
