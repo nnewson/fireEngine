@@ -24,16 +24,23 @@ DependencyDag buildDependencyDag(const VertexForest& forest)
     // the same number of times.
     std::vector<std::vector<std::uint32_t>> dependents(n);
     std::vector<std::uint32_t> inDegree(n, 0);
-    auto addDependency = [&](std::uint32_t split, std::uint32_t depVertex)
+    // The dependency SPLIT of a referenced vertex: kNoSplit for the boundary sentinel (no vr) or a
+    // root (always active — no split has to fire first). Populated into the DAG's triple below so
+    // it is the one authority the closure + the GPU uploader share.
+    auto depSplitOf = [&](std::uint32_t depVertex) -> std::uint32_t
     {
         if (depVertex == kInvalidVertex)
         {
-            return; // boundary edge: no vr
+            return kNoSplit;
         }
-        const std::uint32_t depSplit = forest.removingSplit[depVertex];
+        return forest.removingSplit[depVertex];
+    };
+    std::vector<SplitDependencies> deps(n);
+    auto addDependency = [&](std::uint32_t split, std::uint32_t depSplit)
+    {
         if (depSplit == kNoSplit)
         {
-            return; // a root vertex is always active — no split has to fire first
+            return; // boundary or root — no edge
         }
         dependents[depSplit].push_back(split);
         ++inDegree[split];
@@ -41,9 +48,10 @@ DependencyDag buildDependencyDag(const VertexForest& forest)
     for (std::uint32_t s = 0; s < static_cast<std::uint32_t>(n); ++s)
     {
         const VertexSplit& sp = forest.splits[s];
-        addDependency(s, sp.parent);
-        addDependency(s, sp.vl);
-        addDependency(s, sp.vr);
+        deps[s] = {depSplitOf(sp.parent), depSplitOf(sp.vl), depSplitOf(sp.vr)};
+        addDependency(s, deps[s].parent);
+        addDependency(s, deps[s].vl);
+        addDependency(s, deps[s].vr);
     }
 
     // Kahn's algorithm: seed with the dependency-free splits (rank 0), and each time a split's last
@@ -98,6 +106,7 @@ DependencyDag buildDependencyDag(const VertexForest& forest)
         dag.splitsByRank[cursor[rank[s]]++] = s;
     }
     dag.rank = std::move(rank);
+    dag.dependencies = std::move(deps);
     return dag;
 }
 
@@ -221,14 +230,12 @@ std::uint32_t ParallelFront::closeAndApplyRequired()
             {
                 continue;
             }
-            const VertexSplit& sp = forest_.splits[s];
-            for (const std::uint32_t dep : {sp.parent, sp.vl, sp.vr})
+            // The three dependency splits (parent/vl/vr removers) from the DAG's shared triple —
+            // the GPU closure reads the identical per-slot record. kNoSplit slots (root / boundary)
+            // skip.
+            const SplitDependencies& d = dag_.dependencies[s];
+            for (const std::uint32_t depSplit : {d.parent, d.vl, d.vr})
             {
-                if (dep == kInvalidVertex)
-                {
-                    continue;
-                }
-                const std::uint32_t depSplit = forest_.removingSplit[dep];
                 if (depSplit != kNoSplit)
                 {
                     required_[depSplit] = 1u;
@@ -523,22 +530,54 @@ ParallelFront::emitActiveIndices(std::span<const Vertex> vertices,
     return out;
 }
 
-void ParallelFront::validateInvariants() const
+namespace
 {
+
+// Shared implementation for both flag widths (uint8 CPU state / uint32 GPU read-back). Templated on
+// the flag type so the GPU's uint32 flags are checked WITHOUT a narrowing conversion that could
+// hide a corrupt value (256 → 0, 257 → 1); every active/refined entry is required to be exactly 0
+// or 1.
+template <typename FlagT>
+void validateFrontInvariantsImpl(const VertexForest& forest, std::span<const FlagT> active,
+                                 std::span<const FlagT> refined,
+                                 std::span<const std::uint32_t> dependents)
+{
+    if (active.size() != forest.vertexCount || dependents.size() != forest.vertexCount ||
+        refined.size() != forest.splits.size())
+    {
+        throw std::logic_error("validateFrontInvariants: state span size mismatch");
+    }
+    // Every flag must be exactly 0 or 1 — a wider value (a stray GPU write, an uninitialised slot)
+    // is corruption, not a truthy "active". Checked before any flag is used as a boolean below.
+    for (const FlagT f : active)
+    {
+        if (f > FlagT{1})
+        {
+            throw std::logic_error("validateFrontInvariants: active flag is not 0 or 1");
+        }
+    }
+    for (const FlagT f : refined)
+    {
+        if (f > FlagT{1})
+        {
+            throw std::logic_error("validateFrontInvariants: refined flag is not 0 or 1");
+        }
+    }
     // Reconstruct the dependent counts from scratch over the refined splits, and check each refined
     // split's dependencies are active as we go.
-    std::vector<std::uint32_t> expected(forest_.vertexCount, 0);
-    for (std::uint32_t s = 0; s < static_cast<std::uint32_t>(refined_.size()); ++s)
+    std::vector<std::uint32_t> expected(forest.vertexCount, 0);
+    for (std::uint32_t s = 0; s < static_cast<std::uint32_t>(refined.size()); ++s)
     {
-        if (refined_[s] == 0)
+        if (refined[s] == 0)
         {
             continue;
         }
-        const VertexSplit& sp = forest_.splits[s];
-        if (active_[sp.parent] == 0 || active_[sp.vl] == 0 ||
-            (sp.vr != kInvalidVertex && active_[sp.vr] == 0))
+        const VertexSplit& sp = forest.splits[s];
+        if (active[sp.parent] == 0 || active[sp.vl] == 0 ||
+            (sp.vr != kInvalidVertex && active[sp.vr] == 0))
         {
-            throw std::logic_error("ParallelFront: a refined split has an inactive dependency");
+            throw std::logic_error("validateFrontInvariants: a refined split has an inactive "
+                                   "dependency");
         }
         ++expected[sp.parent];
         ++expected[sp.vl];
@@ -547,21 +586,42 @@ void ParallelFront::validateInvariants() const
             ++expected[sp.vr];
         }
     }
-    for (std::uint32_t v = 0; v < static_cast<std::uint32_t>(forest_.vertexCount); ++v)
+    for (std::uint32_t v = 0; v < static_cast<std::uint32_t>(forest.vertexCount); ++v)
     {
-        if (dependents_[v] != expected[v])
+        if (dependents[v] != expected[v])
         {
-            throw std::logic_error("ParallelFront: dependents_ count mismatch");
+            throw std::logic_error("validateFrontInvariants: dependents count mismatch");
         }
         // A non-root vertex is active exactly when its removing split is refined; a root is always
         // active.
-        const std::uint32_t rs = forest_.removingSplit[v];
-        const bool shouldBeActive = rs == kNoSplit || refined_[rs] != 0;
-        if ((active_[v] != 0) != shouldBeActive)
+        const std::uint32_t rs = forest.removingSplit[v];
+        const bool shouldBeActive = rs == kNoSplit || refined[rs] != 0;
+        if ((active[v] != 0) != shouldBeActive)
         {
-            throw std::logic_error("ParallelFront: active/refined inconsistency");
+            throw std::logic_error("validateFrontInvariants: active/refined inconsistency");
         }
     }
+}
+
+} // namespace
+
+void validateFrontInvariants(const VertexForest& forest, std::span<const std::uint8_t> active,
+                             std::span<const std::uint8_t> refined,
+                             std::span<const std::uint32_t> dependents)
+{
+    validateFrontInvariantsImpl<std::uint8_t>(forest, active, refined, dependents);
+}
+
+void validateFrontInvariants(const VertexForest& forest, std::span<const std::uint32_t> active,
+                             std::span<const std::uint32_t> refined,
+                             std::span<const std::uint32_t> dependents)
+{
+    validateFrontInvariantsImpl<std::uint32_t>(forest, active, refined, dependents);
+}
+
+void ParallelFront::validateInvariants() const
+{
+    validateFrontInvariants(forest_, active_, refined_, dependents_);
 }
 
 } // namespace fire_engine

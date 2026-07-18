@@ -219,6 +219,66 @@ TEST_CASE("dependency DAG: real forests are acyclic and rank-consistent", "[vdpm
     }
 }
 
+TEST_CASE("dependency DAG: the shared dependency triple mirrors removingSplit per-slot", "[vdpm]")
+{
+    // The DAG's parent/vl/vr dependency triple is the ONE authority the closure + the GPU B3
+    // uploader read (instead of each re-deriving removingSplit[...]). Every slot must equal the
+    // removing split of its referenced vertex — kNoSplit for a root (always active) or the boundary
+    // sentinel (no vr).
+    auto depSplitOf = [](const VertexForest& f, std::uint32_t v)
+    { return v == kInvalidVertex ? kNoSplit : f.removingSplit[v]; };
+
+    for (const Mesh& m : {makeGrid(17), makeUvSphere(24, 32)})
+    {
+        const VertexForest forest = forestOf(m);
+        const DependencyDag dag = buildDependencyDag(forest);
+        REQUIRE(dag.dependencies.size() == forest.splits.size());
+
+        for (std::uint32_t s = 0; s < static_cast<std::uint32_t>(forest.splits.size()); ++s)
+        {
+            const VertexSplit& sp = forest.splits[s];
+            const SplitDependencies& d = dag.dependencies[s];
+            CHECK(d.parent == depSplitOf(forest, sp.parent));
+            CHECK(d.vl == depSplitOf(forest, sp.vl));
+            CHECK(d.vr == depSplitOf(forest, sp.vr));
+        }
+    }
+
+    SECTION("a boundary split (vr sentinel) and a same-vertex parent/vl split (duplicate) — an "
+            "explicit synthetic forest, not an incidental collapse topology")
+    {
+        // vertex 0 root; split 0 removes vertex 1 (from the root); split 1 removes vertex 2 with
+        // BOTH parent and vl = vertex 1 and NO vr (boundary). So split 1's parent+vl slots both
+        // carry split 0 (not de-duplicated), its vr slot is kNoSplit (the boundary sentinel —
+        // checked directly here rather than relying on a real mesh keeping a boundary edge), and
+        // refining it bumps dependents_[1] twice.
+        VertexForest f;
+        f.vertexCount = 3;
+        f.removingSplit = {kNoSplit, 0, 1};
+        auto mk = [](std::uint32_t child, std::uint32_t parent, std::uint32_t vl)
+        {
+            VertexSplit s;
+            s.child = child;
+            s.parent = parent;
+            s.vl = vl;
+            s.vr = kInvalidVertex;
+            return s;
+        };
+        f.splits = {mk(1, 0, 0), mk(2, 1, 1)};
+
+        const DependencyDag dag = buildDependencyDag(f);
+        CHECK(dag.dependencies[1].parent == 0u);   // both slots resolve to split 0...
+        CHECK(dag.dependencies[1].vl == 0u);       // ...not de-duplicated
+        CHECK(dag.dependencies[1].vr == kNoSplit); // the boundary sentinel
+        CHECK(dag.rank[1] == 1u);                  // still one rank past split 0
+
+        ParallelFront front = ParallelFront::build(f);
+        front.applyView(std::vector<float>{9, 9}, std::vector<std::uint8_t>{0, 0}, 1.0f, 0.6f);
+        front.validateInvariants(); // reconstructs dependents_[1] == 2 from split 1's two slots
+        CHECK(front.active(2));
+    }
+}
+
 // Hidden ([.]) evidence: how the DAG rank depth scales with mesh size. Each frame runs ~3
 // rank-ordered sequences (closure + refine + coarsen), so a naive rank-PER-instance dispatch is
 // ~3·maxRank dispatches per instance — ~90 for a curved 12k-split mesh, ~750 for a 4k-split flat
@@ -824,6 +884,69 @@ TEST_CASE("ParallelFront: same-rank splits correctly share a dependency (diamond
     for (std::uint32_t v = 1; v <= 4; ++v)
     {
         CHECK_FALSE(front.active(v)); // ...and coarsened all the way back out
+    }
+}
+
+TEST_CASE("validateFrontInvariants: passes a consistent front, rejects each tampered invariant",
+          "[vdpm]")
+{
+    // The shared first-principles validator (also called by the GPU B3 harness on read-back state).
+    // Base case: the diamond with only split 0 refined — vertex 1 active, dependents_[0] == 2
+    // (split 0's parent + vl both reference the root vertex 0).
+    const VertexForest forest = makeDiamondForest();
+    const std::vector<std::uint8_t> active{1, 1, 0, 0, 0};
+    const std::vector<std::uint8_t> refined{1, 0, 0, 0};
+    const std::vector<std::uint32_t> dependents{2, 0, 0, 0, 0};
+    CHECK_NOTHROW(validateFrontInvariants(forest, active, refined, dependents));
+
+    SECTION("a refined split with an inactive dependency throws")
+    {
+        std::vector<std::uint8_t> a = active;
+        a[0] = 0; // split 0 is refined but its parent/vl (root vertex 0) is now inactive
+        CHECK_THROWS_AS(validateFrontInvariants(forest, a, refined, dependents), std::logic_error);
+    }
+    SECTION("a dependents count mismatch throws")
+    {
+        std::vector<std::uint32_t> d = dependents;
+        d[0] = 1; // should be 2 (per-slot: split 0's parent + vl)
+        CHECK_THROWS_AS(validateFrontInvariants(forest, active, refined, d), std::logic_error);
+    }
+    SECTION("an active/refined inconsistency throws")
+    {
+        std::vector<std::uint8_t> a = active;
+        a[1] = 0; // vertex 1's removing split (0) is refined, so it must be active
+        CHECK_THROWS_AS(validateFrontInvariants(forest, a, refined, dependents), std::logic_error);
+    }
+    SECTION("a wrong-sized state span throws")
+    {
+        std::vector<std::uint8_t> shortActive{1, 1, 0, 0}; // vertexCount is 5
+        CHECK_THROWS_AS(validateFrontInvariants(forest, shortActive, refined, dependents),
+                        std::logic_error);
+    }
+    SECTION("the uint32 (GPU read-back) overload accepts the same consistent front")
+    {
+        const std::vector<std::uint32_t> active32{1, 1, 0, 0, 0};
+        const std::vector<std::uint32_t> refined32{1, 0, 0, 0};
+        CHECK_NOTHROW(validateFrontInvariants(forest, active32, refined32, dependents));
+    }
+    SECTION("a flag that is not exactly 0 or 1 is rejected — NO lossy narrowing")
+    {
+        // The whole point of the templated (non-narrowing) validator: a corrupt GPU flag whose low
+        // bits alias 0/1 (256 → 0, 257 → 1 under a uint8 truncation) must still be caught. A uint8
+        // '2' is likewise not a truthy "active".
+        std::vector<std::uint32_t> a32{1, 1, 0, 0, 0};
+        a32[2] = 256u; // would truncate to 0 (a "false") — must throw instead
+        CHECK_THROWS_AS(validateFrontInvariants(forest, a32, std::vector<std::uint32_t>{1, 0, 0, 0},
+                                                dependents),
+                        std::logic_error);
+        a32[2] = 257u; // would truncate to 1 (a spurious "true") — must throw instead
+        CHECK_THROWS_AS(validateFrontInvariants(forest, a32, std::vector<std::uint32_t>{1, 0, 0, 0},
+                                                dependents),
+                        std::logic_error);
+
+        std::vector<std::uint8_t> a8 = active;
+        a8[2] = 2; // a nonzero-but-not-1 uint8 is corruption, not "active"
+        CHECK_THROWS_AS(validateFrontInvariants(forest, a8, refined, dependents), std::logic_error);
     }
 }
 
