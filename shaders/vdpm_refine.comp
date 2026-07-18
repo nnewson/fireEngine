@@ -1,0 +1,82 @@
+#version 450
+#extension GL_EXT_buffer_reference : require
+
+// VDPM GPU refine/coarsen pass 3 (Stage B3): APPLY refinements, one RANK per dispatch, ranks issued
+// in ASCENDING order. A required, not-yet-refined split whose parent/vl/vr are all active refines:
+// mark `refined`, activate `child`, and atomic-add `dependents` at each VERTEX slot (parent/vl/vr —
+// per-slot, so a duplicated vertex is counted twice, matching the CPU). Because the closure ran and
+// dependencies have lower rank (refined in earlier ascending passes, with a barrier between), the
+// dependencies are always active; a required refine that finds an INACTIVE dependency is a
+// scheduling bug — it sets the refine-failure flag and does NOT mutate (the GPU analogue of the
+// CPU's "required refine must succeed"). `refined[s]` and `active[child]` are single-writer (a
+// vertex has a unique removing split); `dependents` is shared → atomic.
+
+const uint kInvalidVertex = 0xFFFFFFFFu;
+
+struct FrontSplit
+{
+    uint parent;
+    uint child;
+    uint vl;
+    uint vr;
+    uint parentDep;
+    uint vlDep;
+    uint vrDep;
+    uint pad;
+};
+
+layout(buffer_reference, std430, buffer_reference_align = 4) buffer FrontBuf
+{
+    FrontSplit v[];
+};
+layout(buffer_reference, std430, buffer_reference_align = 4) buffer UintBuf
+{
+    uint v[];
+};
+
+layout(push_constant) uniform Push
+{
+    UintBuf splitsByRank;
+    FrontBuf frontSplits;
+    UintBuf required;
+    UintBuf refined;
+    UintBuf activeFlags;
+    UintBuf dependents;
+    UintBuf failFlags; // [0] = refine failure, [1] = dependents underflow
+    uint rankOffset;
+    uint rankCount;
+}
+pc;
+
+layout(local_size_x = 64) in;
+
+void main()
+{
+    const uint gid = gl_GlobalInvocationID.x;
+    if (gid >= pc.rankCount)
+    {
+        return;
+    }
+    const uint s = pc.splitsByRank.v[pc.rankOffset + gid];
+    if (pc.required.v[s] == 0u || pc.refined.v[s] != 0u)
+    {
+        return;
+    }
+    const FrontSplit f = pc.frontSplits.v[s];
+    const bool depsActive = pc.activeFlags.v[f.parent] != 0u && pc.activeFlags.v[f.vl] != 0u &&
+                            (f.vr == kInvalidVertex || pc.activeFlags.v[f.vr] != 0u);
+    if (!depsActive)
+    {
+        atomicOr(pc.failFlags.v[0],
+                 1u); // required refine with an inactive dependency — no mutation
+        return;
+    }
+    pc.refined.v[s] = 1u;
+    pc.activeFlags.v[f.child] = 1u;
+    atomicAdd(pc.dependents.v[f.parent], 1u);
+    atomicAdd(pc.dependents.v[f.vl], 1u);
+    if (f.vr != kInvalidVertex)
+    {
+        atomicAdd(pc.dependents.v[f.vr], 1u);
+    }
+}

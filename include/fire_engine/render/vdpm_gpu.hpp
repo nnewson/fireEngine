@@ -19,6 +19,9 @@
 namespace fire_engine
 {
 
+struct DependencyDag; // graphics/vdpm_parallel.hpp — the forest's refine-dependency DAG (B3
+                      // topology)
+
 // CPU → GPU packing for the VDPM GPU-front scoring ABI (Stage B1). These convert the Vulkan-free
 // scoring authority (VdpmViewParams / VertexSplit, graphics/vdpm.hpp) into the std430 SSBO images
 // (render/ubo.hpp) the compute shader reads. Keeping the conversion here — a thin, tested field
@@ -52,6 +55,22 @@ namespace fire_engine
 [[nodiscard]] ComputePipelineConfig vdpmScatterPipelineConfig();
 [[nodiscard]] ComputePipelineConfig vdpmEmitFinalizePipelineConfig();
 
+// The four VDPM GPU refine/coarsen pipeline configs (Stage B3): mark (seed required), close
+// (requirement closure over the DAG), refine (rank-ordered apply), coarsen (rank-ordered collapse).
+// Descriptor-free; each carries its ABI push block.
+[[nodiscard]] ComputePipelineConfig vdpmMarkPipelineConfig();
+[[nodiscard]] ComputePipelineConfig vdpmClosePipelineConfig();
+[[nodiscard]] ComputePipelineConfig vdpmRefinePipelineConfig();
+[[nodiscard]] ComputePipelineConfig vdpmCoarsenPipelineConfig();
+
+// A rank's contiguous range in `splitsByRank` — the CPU recorder issues one dispatch per rank over
+// `[offset, offset + count)`. Copied into the front at build (never a pointer into a movable mesh).
+struct RankRange
+{
+    std::uint32_t offset{0};
+    std::uint32_t count{0};
+};
+
 // The IMMUTABLE GPU binding of a VdpmGpuMesh — device addresses + counts, copied into a front so
 // the front never holds a pointer into a (movable) mesh object. The emit block (indices, weld,
 // removalParent, wedge choices) is populated ONLY by the full build; a score-only build leaves
@@ -72,6 +91,13 @@ struct VdpmGpuMeshBinding
     std::uint32_t vertexCount{0};          // canonical vertex count (= forest.vertexCount)
     std::uint32_t maxDepth{0};             // deepest removal-parent chain (the ancestor loop bound)
     bool hasEmitData{false};
+
+    // Refine/coarsen front topology (Stage B3) — built from the forest's dependency DAG in the base
+    // build (so every mesh carries it); null/zero only for an empty (zero-split) forest.
+    std::uint64_t frontSplitsAddress{
+        0}; // VdpmFrontSplitGpu per split (vertices + dependency splits)
+    std::uint64_t splitsByRankAddress{0}; // uint32 per split, packed by ascending rank
+    std::uint32_t maxRank{0};             // rank passes = maxRank + 1
 };
 
 // STATIC per-geometry GPU data — the per-split metric records + the canonical-vertex positions,
@@ -126,13 +152,28 @@ public:
     {
         return splitCount_;
     }
+    // The per-rank dispatch ranges (Stage B3), copied into a front at build so it holds no pointer
+    // into this (movable) mesh. Empty for a zero-split forest.
+    [[nodiscard]] std::span<const RankRange> rankRanges() const noexcept
+    {
+        return rankRanges_;
+    }
+    // The coarsest front's initial `active` flags (roots = 1, others = 0), uploaded into a front's
+    // persistent state at build. Per original/canonical vertex.
+    [[nodiscard]] std::span<const std::uint32_t> initialActive() const noexcept
+    {
+        return initialActive_;
+    }
 
 private:
-    // Pack + upload the static splits/positions and fill the score portion of the binding. Assumes
-    // the forest is ALREADY validated: the caller runs every validation + throwing CPU derivation
-    // BEFORE the first upload, so malformed input orphans no GPU-resource-table entries.
+    // Pack + upload the static splits/positions + front topology (from the caller-built `dag`) and
+    // fill the score portion of the binding. Assumes the forest is ALREADY validated and the DAG
+    // ALREADY built: the caller runs every validation + throwing CPU derivation (incl.
+    // buildDependencyDag) BEFORE the first upload, so malformed input orphans no GPU-resource
+    // entries.
     static void uploadScoreData(VdpmGpuMesh& mesh, Resources& resources,
-                                std::span<const Vertex> vertices, const VertexForest& forest);
+                                std::span<const Vertex> vertices, const VertexForest& forest,
+                                const DependencyDag& dag);
 
     BufferHandle splits_{NullBuffer};
     BufferHandle positions_{NullBuffer};
@@ -146,6 +187,15 @@ private:
     BufferHandle removalParent_{NullBuffer};
     BufferHandle wedgeChoices_{NullBuffer};
     BufferHandle wedgeOffsets_{NullBuffer};
+
+    // Refine/coarsen front topology (Stage B3), built in the base build; null/empty for a
+    // zero-split forest. `rankRanges_`/`initialActive_` are CPU-side (copied into each front at
+    // build).
+    BufferHandle frontSplits_{NullBuffer};
+    BufferHandle splitsByRank_{NullBuffer};
+    std::vector<RankRange> rankRanges_;
+    std::vector<std::uint32_t> initialActive_;
+
     VdpmGpuMeshBinding binding_{}; // fully assembled at build; the front copies it verbatim
 };
 
@@ -198,6 +248,48 @@ private:
     VdpmScan scan_;
 };
 
+// The four refine/coarsen pipelines built once and reused across instances (Stage B3). Descriptor-
+// free; non-movable (the pipelines hold pointers to `device`); construct one per device.
+class VdpmRefinePipelines
+{
+public:
+    explicit VdpmRefinePipelines(const Device& device)
+        : mark_(device, vdpmMarkPipelineConfig()),
+          close_(device, vdpmClosePipelineConfig()),
+          refine_(device, vdpmRefinePipelineConfig()),
+          coarsen_(device, vdpmCoarsenPipelineConfig())
+    {
+    }
+    VdpmRefinePipelines(const VdpmRefinePipelines&) = delete;
+    VdpmRefinePipelines& operator=(const VdpmRefinePipelines&) = delete;
+    VdpmRefinePipelines(VdpmRefinePipelines&&) = delete;
+    VdpmRefinePipelines& operator=(VdpmRefinePipelines&&) = delete;
+    ~VdpmRefinePipelines() = default;
+
+    [[nodiscard]] const ComputePipeline& mark() const noexcept
+    {
+        return mark_;
+    }
+    [[nodiscard]] const ComputePipeline& close() const noexcept
+    {
+        return close_;
+    }
+    [[nodiscard]] const ComputePipeline& refine() const noexcept
+    {
+        return refine_;
+    }
+    [[nodiscard]] const ComputePipeline& coarsen() const noexcept
+    {
+        return coarsen_;
+    }
+
+private:
+    ComputePipeline mark_;
+    ComputePipeline close_;
+    ComputePipeline refine_;
+    ComputePipeline coarsen_;
+};
+
 // PER-INSTANCE GPU front state — the per-split score/backface output + the per-frame mapped params
 // block, and (full build only) the emit workspace + resident emitted-index buffer. References its
 // shared VdpmGpuMesh.
@@ -212,6 +304,14 @@ public:
     // emitted-index buffer). Requires `mesh.binding().hasEmitData` (throws std::logic_error
     // otherwise). Single-buffered — the per-frame-in-flight ring is a Stage B5 concern.
     [[nodiscard]] static VdpmGpuFront buildWithEmit(Resources& resources, const VdpmGpuMesh& mesh);
+
+    // Refine/coarsen front (Stage B3): the persistent front STATE
+    // (active/refined/dependents/required — device-resident uint32), the uploaded per-split score
+    // input, the invariant-failure flags, and the per-rank dispatch ranges copied from the mesh.
+    // State is initialized to the coarsest front (roots active, nothing refined, dependents 0).
+    // Does NOT allocate the score-output/params or the emit workspace (B3 uploads scores directly).
+    // Copies the mesh's rank ranges (no pointer into it).
+    [[nodiscard]] static VdpmGpuFront buildWithFront(Resources& resources, const VdpmGpuMesh& mesh);
 
     // Record ONLY the score dispatch for frame `frameIndex` (writes that slot's mapped params from
     // `view`, pushes its address, dispatches ceil(splitCount / 64)). NO barriers — the consumer
@@ -241,11 +341,44 @@ public:
     void recordEmit(vk::CommandBuffer cmd, const VdpmEmitPipelines& pipelines, Resources& resources,
                     std::span<const std::uint32_t> active);
 
+    // Record one refine/coarsen frame (Stage B3): upload `scores` (one VdpmScoreOut per split),
+    // clear the failure flags, then mark → recordCloseAndRefineRequired → coarsen. Mirrors
+    // `ParallelFront::applyView` exactly, as rank-ordered dispatches. The persistent front STATE is
+    // mutated in place (score→refine/coarsen decisions matched integer-exact to the CPU model). The
+    // shared recorder owns its own boundary barriers, so both this and the future B4 repair round
+    // are safe by construction. Records NO consumer barrier after the final coarsen — the caller
+    // synchronises the state read-back. `scores.size()` must equal splitCount; the per-rank
+    // dispatches are validated against the device cap (defence-in-depth; `build` already rejected
+    // an ineligible mesh). Throws std::logic_error on a non-front build. A zero-split front records
+    // nothing.
+    void recordApplyView(vk::CommandBuffer cmd, const VdpmRefinePipelines& pipelines,
+                         Resources& resources, std::span<const VdpmScoreOut> scores,
+                         float pixelBudget, float coarsenBudget);
+
     // The device-local score output (one VdpmScoreOut per split), created with eTransferSrc so a
     // test can copy it back.
     [[nodiscard]] BufferHandle outputBuffer() const noexcept
     {
         return output_;
+    }
+    // The persistent refine/coarsen state buffers (uint32; Stage B3) — all eTransferSrc so the
+    // harness can read them back and cross-check the CPU model + `validateFrontInvariants`.
+    [[nodiscard]] BufferHandle activeStateBuffer() const noexcept
+    {
+        return activeState_;
+    }
+    [[nodiscard]] BufferHandle refinedStateBuffer() const noexcept
+    {
+        return refinedState_;
+    }
+    [[nodiscard]] BufferHandle dependentsStateBuffer() const noexcept
+    {
+        return dependentsState_;
+    }
+    // The 2-uint invariant-failure flags [refineFailure, dependentsUnderflow]; must read back as 0.
+    [[nodiscard]] BufferHandle failFlagsBuffer() const noexcept
+    {
+        return failFlags_;
     }
     // The resident emitted-index buffer (3 * survivingFaces uint32; full build only) — storage +
     // BDA
@@ -299,6 +432,31 @@ private:
     std::uint64_t emittedIndicesAddress_{0};
     std::vector<BufferHandle> scanScratch_;
     std::vector<std::uint64_t> scanScratchAddress_;
+
+    // Refine/coarsen front (Stage B3). Persistent device-resident state (uint32, readback-enabled);
+    // `scores` is host-visible + BDA (uploaded per applyView); `failFlags` is device-local +
+    // readback
+    // + transfer-dst (cleared each frame). `rankRanges_` is copied from the mesh.
+    bool hasFront_{false};
+    BufferHandle activeState_{NullBuffer};
+    BufferHandle refinedState_{NullBuffer};
+    BufferHandle dependentsState_{NullBuffer};
+    BufferHandle requiredState_{NullBuffer};
+    BufferHandle failFlags_{NullBuffer};
+    std::uint64_t activeStateAddress_{0};
+    std::uint64_t refinedStateAddress_{0};
+    std::uint64_t dependentsStateAddress_{0};
+    std::uint64_t requiredStateAddress_{0};
+    std::uint64_t failFlagsAddress_{0};
+    std::span<std::byte> scoresMapped_{};
+    std::uint64_t scoresAddress_{0};
+    std::vector<RankRange> rankRanges_;
+
+    // The shared close+refine recorder (Stage B3), reused by B4's repair round. Owns its boundary
+    // barriers: a leading seed-write→closure-read barrier, barriers between close ranks and before
+    // refine, barriers between refine ranks, and a trailing refine-write→consumer-read barrier — so
+    // every caller (mark→…→coarsen, or detect→…→next-detect) is synchronised by construction.
+    void recordCloseAndRefineRequired(vk::CommandBuffer cmd, const VdpmRefinePipelines& pipelines);
 };
 
 } // namespace fire_engine

@@ -1,0 +1,107 @@
+#version 450
+#extension GL_EXT_buffer_reference : require
+
+// VDPM GPU refine/coarsen pass 4 (Stage B3): COARSEN, one RANK per dispatch, ranks issued in
+// DESCENDING order. A refined split that is over-coarse (`backface || s < coarsenBudget`, with the
+// decision score `s = max(geometry, uv, normal, tangent)`) AND whose child is a leaf
+// (`dependents[child] == 0`) collapses: clear `refined`, deactivate `child`, atomic-sub
+// `dependents` at each VERTEX slot. A split's dependents have strictly HIGHER rank, so processing
+// high→low (with a barrier between ranks) frees the child before this rank reads it — the
+// fine-first fixpoint in one sweep. A dependent decrement whose old value is 0 is corruption → sets
+// the underflow flag.
+
+const uint kInvalidVertex = 0xFFFFFFFFu;
+
+struct ScoreOut
+{
+    float geometry;
+    float uv;
+    float normal;
+    float tangent;
+    float straddle;
+    uint backface;
+};
+
+struct FrontSplit
+{
+    uint parent;
+    uint child;
+    uint vl;
+    uint vr;
+    uint parentDep;
+    uint vlDep;
+    uint vrDep;
+    uint pad;
+};
+
+layout(buffer_reference, std430, buffer_reference_align = 4) buffer ScoreBuf
+{
+    ScoreOut v[];
+};
+layout(buffer_reference, std430, buffer_reference_align = 4) buffer FrontBuf
+{
+    FrontSplit v[];
+};
+layout(buffer_reference, std430, buffer_reference_align = 4) buffer UintBuf
+{
+    uint v[];
+};
+
+layout(push_constant) uniform Push
+{
+    UintBuf splitsByRank;
+    FrontBuf frontSplits;
+    ScoreBuf scores;
+    UintBuf refined;
+    UintBuf activeFlags;
+    UintBuf dependents;
+    UintBuf failFlags; // [0] = refine failure, [1] = dependents underflow
+    uint rankOffset;
+    uint rankCount;
+    float coarsenBudget;
+}
+pc;
+
+layout(local_size_x = 64) in;
+
+void subOne(UintBuf counts, uint index)
+{
+    // atomicAdd with 0xFFFFFFFF == subtract 1 with wrap; old value 0 means underflow (corruption).
+    if (atomicAdd(counts.v[index], 0xFFFFFFFFu) == 0u)
+    {
+        atomicOr(pc.failFlags.v[1], 1u);
+    }
+}
+
+void main()
+{
+    const uint gid = gl_GlobalInvocationID.x;
+    if (gid >= pc.rankCount)
+    {
+        return;
+    }
+    const uint s = pc.splitsByRank.v[pc.rankOffset + gid];
+    if (pc.refined.v[s] == 0u)
+    {
+        return;
+    }
+    const ScoreOut o = pc.scores.v[s];
+    const float score = max(max(o.geometry, o.uv), max(o.normal, o.tangent));
+    if (o.backface == 0u && score >= pc.coarsenBudget)
+    {
+        return; // still fine enough and front-facing — keep it
+    }
+    const FrontSplit f = pc.frontSplits.v[s];
+    if (pc.dependents.v[f.child] != 0u)
+    {
+        return; // the child props up a refined split — not a leaf
+    }
+    pc.refined.v[s] = 0u;
+    pc.activeFlags.v[f.child] = 0u;
+    subOne(pc.dependents, f.parent);
+    subOne(pc.dependents, f.vl);
+    if (f.vr != kInvalidVertex)
+    {
+        subOne(pc.dependents, f.vr);
+    }
+}

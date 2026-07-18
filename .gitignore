@@ -9,3 +9,5 @@ CMakeFiles
 Testing
 .DS_Store
 *.pyc
+# Runtime-written Vulkan pipeline cache (emitted next to the app when run from the source root).
+pipeline_cache.bin
