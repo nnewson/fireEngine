@@ -297,7 +297,11 @@ public:
             const std::vector<std::uint32_t> counters = readVec(countersIdx[i]);
             std::ranges::copy(counters, rb.counters.begin());
             const std::vector<std::uint32_t> ind = readVec(indirectIdx[i]);
-            std::memcpy(&rb.indirect, ind.data(), sizeof(DrawIndexedIndirectCommand));
+            rb.indirect.indexCount = ind[0];
+            rb.indirect.instanceCount = ind[1];
+            rb.indirect.firstIndex = ind[2];
+            rb.indirect.vertexOffset = static_cast<std::int32_t>(ind[3]);
+            rb.indirect.firstInstance = ind[4];
             const std::vector<std::uint32_t> allIdx = readVec(emittedIdx[i]);
             rb.emittedIndices.assign(allIdx.begin(), allIdx.begin() + rb.counters[2]);
         }
