@@ -335,10 +335,27 @@ Candidates" section folds in here:
   front (faceCount > 0), and a deepest-chain fixture pinning the ancestor bound's off-by-one.
   `VdpmGpuMesh::fitsComputeDispatchLimits` is the B5 backend selector's GPU-eligibility gate (static
   dispatch counts vs the 1-D group cap, checked BEFORE allocation so the selector can pick the CPU
-  fallback); `build` enforces the same bound. **Stage B2 complete.** Still ahead: B3 refine/coarsen →
-  B4 repairs → B5 end-to-end (compute writes the indirect buffer + a compute→indirect-read barrier;
-  **record the wedge-choice memory for a real loaded asset (helmet) here** — it needs the Vulkan glTF
-  path, so it belongs to render integration, not the Vulkan-free `[vdpm]` evidence test).
+  fallback); `build` enforces the same bound. **Stage B2 complete.** **B3 refine/coarsen** *(prep
+  branch `cr-vdpm-dag-dependencies` — the DAG dependency triple + a shared `validateFrontInvariants`;
+  then `cr-vdpm-gpu-refine-coarsen`)*: the persistent front STATE (active/refined/dependents/required,
+  device-resident uint32) is updated by rank-ordered compute dispatches — the port of
+  `ParallelFront::applyView`, matched INTEGER-EXACT to it. Four passes (`shaders/vdpm_mark` seeds the
+  refine predicate `backface==0 && max(4 channels) > budget` from the production `VdpmScoreOut`;
+  `vdpm_close` closes requiredness over the DAG one rank per dispatch, DESCENDING, via atomic-OR;
+  `vdpm_refine` applies ASCENDING, atomic-adding `dependents` per vertex-slot; `vdpm_coarsen` collapses
+  DESCENDING) around a **shared `recordCloseAndRefineRequired`** that owns its boundary barriers (so
+  B4's repair round reuses it). A GPU **invariant-failure flag** (refine-with-inactive-dependency /
+  dependents underflow) the harness asserts stays 0. `VdpmFrontSplitGpu` (32 B) carries the vertex +
+  dependency-split slots; `rankOffsets` stays CPU-side driving per-rank `(offset,count)` push
+  constants. The `[.][gpu]` harness cross-checks active/refined/dependents element-exact vs the CPU
+  model + `validateFrontInvariants` across moving-view / per-channel / diamond / deep-chain /
+  hot-cold / back-facing / back-to-back / single-rank+empty fixtures. **Evidence** (`[B3Evidence]`):
+  per instance-frame = `1 + 3(maxRank+1)` dispatches — sphere(24,32) maxRank 18 ⇒ 58; a deep flat
+  grid(65) maxRank 312 ⇒ **940** — so B5 must weigh batching same-mesh instances by rank (or a work
+  queue) for deep forests; helmet rank counts ride render integration. **Stage B3 complete.** Still
+  ahead: B4 repairs → B5 end-to-end (compute writes the indirect buffer + a compute→indirect-read
+  barrier; **also record the wedge-choice + rank-count memory for a real loaded asset (helmet) here** —
+  it needs the Vulkan glTF path, not the Vulkan-free `[vdpm]` evidence test).
 - ✅ **Static GPU residency** — device-local static asset upload split from dynamic mapped buffers.
   Landed in block B (`createDeviceLocalBuffer` for static vertices/indices/LODs/VIPM), and the batching
   follow-up is now done too *(branch `cr-static-residency-batch`)*: when a load-time `uploadBatch_` is

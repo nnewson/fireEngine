@@ -1,0 +1,72 @@
+#version 450
+#extension GL_EXT_buffer_reference : require
+
+// VDPM GPU refine/coarsen pass 2 (Stage B3): CLOSE the requirement set over the dependency DAG, one
+// RANK per dispatch, ranks issued in DESCENDING order by the CPU recorder. Each required split
+// atomic-ORs its three dependency splits (`removingSplit[parent/vl/vr]`, the DAG triple mirrored
+// into the front record) into `required`. Because a dependency has strictly LOWER rank, one
+// high→low sweep reaches every dependency before its own rank is processed. Same-rank splits may
+// mark the same dependency — hence the atomic OR. The dispatch covers `splitsByRank[rankOffset .. +
+// rankCount]`.
+
+const uint kNoSplit = 0xFFFFFFFFu;
+
+struct FrontSplit
+{
+    uint parent;
+    uint child;
+    uint vl;
+    uint vr;
+    uint parentDep;
+    uint vlDep;
+    uint vrDep;
+    uint pad;
+};
+
+layout(buffer_reference, std430, buffer_reference_align = 4) buffer FrontBuf
+{
+    FrontSplit v[];
+};
+layout(buffer_reference, std430, buffer_reference_align = 4) buffer UintBuf
+{
+    uint v[];
+};
+
+layout(push_constant) uniform Push
+{
+    UintBuf splitsByRank;
+    FrontBuf frontSplits;
+    UintBuf required;
+    uint rankOffset;
+    uint rankCount;
+}
+pc;
+
+layout(local_size_x = 64) in;
+
+void main()
+{
+    const uint gid = gl_GlobalInvocationID.x;
+    if (gid >= pc.rankCount)
+    {
+        return;
+    }
+    const uint s = pc.splitsByRank.v[pc.rankOffset + gid];
+    if (pc.required.v[s] == 0u)
+    {
+        return;
+    }
+    const FrontSplit f = pc.frontSplits.v[s];
+    if (f.parentDep != kNoSplit)
+    {
+        atomicOr(pc.required.v[f.parentDep], 1u);
+    }
+    if (f.vlDep != kNoSplit)
+    {
+        atomicOr(pc.required.v[f.vlDep], 1u);
+    }
+    if (f.vrDep != kNoSplit)
+    {
+        atomicOr(pc.required.v[f.vrDep], 1u);
+    }
+}

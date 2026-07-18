@@ -190,6 +190,13 @@ public:
     {
         return refined_[splitIndex] != 0;
     }
+    // The refined-split count depending on `canonicalVertex` (its `dependents_` entry) — exposed so
+    // the GPU B3 harness can cross-check the whole persistent state (active/refined/dependents)
+    // element-exact against this model, not just active/refined.
+    [[nodiscard]] std::uint32_t dependents(std::uint32_t canonicalVertex) const
+    {
+        return dependents_[canonicalVertex];
+    }
     [[nodiscard]] const VertexForest& forest() const noexcept
     {
         return forest_;

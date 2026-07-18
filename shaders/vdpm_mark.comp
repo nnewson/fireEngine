@@ -1,0 +1,51 @@
+#version 450
+#extension GL_EXT_buffer_reference : require
+
+// VDPM GPU refine/coarsen pass 1 (Stage B3): over ALL splits, FULL-OVERWRITE the per-split
+// `required` seed = the refine predicate `backface == 0 && s > pixelBudget`, where the decision
+// score `s = max(geometry, uv, normal, tangent)` (straddle excluded, matching
+// VdpmSplitScore::score). Full overwrite means no separate clear is needed before the closure. A
+// back-facing split scores 0 on the CPU side too, so the explicit backface gate and the raw max
+// agree.
+
+struct ScoreOut
+{
+    float geometry;
+    float uv;
+    float normal;
+    float tangent;
+    float straddle;
+    uint backface;
+};
+
+layout(buffer_reference, std430, buffer_reference_align = 4) buffer ScoreBuf
+{
+    ScoreOut v[];
+};
+layout(buffer_reference, std430, buffer_reference_align = 4) buffer UintBuf
+{
+    uint v[];
+};
+
+layout(push_constant) uniform Push
+{
+    ScoreBuf scores;
+    UintBuf required;
+    uint splitCount;
+    float pixelBudget;
+}
+pc;
+
+layout(local_size_x = 64) in;
+
+void main()
+{
+    const uint s = gl_GlobalInvocationID.x;
+    if (s >= pc.splitCount)
+    {
+        return;
+    }
+    const ScoreOut o = pc.scores.v[s];
+    const float score = max(max(o.geometry, o.uv), max(o.normal, o.tangent));
+    pc.required.v[s] = (o.backface == 0u && score > pc.pixelBudget) ? 1u : 0u;
+}

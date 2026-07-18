@@ -611,9 +611,26 @@ at a fraction of the triangles. The remaining residuals and follow-ons, in rough
   determinism, an empty mesh, an all-faces-collapse front (faceCount > 0), and a deepest-chain fixture
   pinning the ancestor bound's off-by-one. `VdpmGpuMesh::fitsComputeDispatchLimits` gates GPU
   eligibility (static dispatch counts vs the device cap) before allocation, so B5's backend selector
-  can fall back to the CPU front rather than fault at record time. Next: B3 refine/coarsen → B4
-  repairs → B5 end-to-end (which should also record the wedge-choice memory for a real loaded asset —
-  it needs the Vulkan glTF path, so it can't live in the Vulkan-free `[vdpm]` evidence test).
+  can fall back to the CPU front rather than fault at record time. **B3 — refine/coarsen** then moved
+  the persistent front STATE (active/refined/dependents/required, device-resident uint32) onto the GPU,
+  updated by rank-ordered dispatches — the port of `ParallelFront::applyView`, matched INTEGER-EXACT.
+  Two Vulkan-free prep pieces landed first (`DependencyDag`'s per-split dependency triple as the shared
+  closure authority + a templated `validateFrontInvariants` the GPU harness reuses on read-back state).
+  The four passes — `vdpm_mark` (seed `backface==0 && max(geometry,uv,normal,tangent) > budget` from
+  the production `VdpmScoreOut` — straddle excluded, matching `VdpmSplitScore::score`), `vdpm_close`
+  (requirement closure over the DAG, one rank/dispatch DESCENDING, atomic-OR), `vdpm_refine` (apply
+  ASCENDING, atomic-add `dependents` per vertex-slot), `vdpm_coarsen` (collapse DESCENDING) — wrap a
+  **shared `recordCloseAndRefineRequired`** that owns its boundary barriers (leading seed→closure,
+  between ranks, trailing refine→consumer), so B4's repair round reuses the identical scheduler. A GPU
+  **invariant-failure flag** (required-refine-with-inactive-dependency / dependents underflow) gives a
+  scheduling bug a precise diagnosis with no runtime readback; the harness asserts it stays 0.
+  `VdpmFrontSplitGpu` (32 B) carries the vertex slots (for `dependents`/child) + the dependency-split
+  slots (for closure); `rankOffsets` stays CPU-side driving per-rank `(offset,count)` push constants
+  (only `splitsByRank` is uploaded). Evidence (`[B3Evidence]`): `1 + 3(maxRank+1)` dispatches per
+  instance-frame — sphere maxRank 18 ⇒ 58, a deep flat grid maxRank 312 ⇒ 940 — so B5 weighs batching
+  same-mesh instances by rank / a work queue for deep forests. Next: B4 repairs → B5 end-to-end (which
+  should also record the wedge-choice + rank-count memory for a real loaded asset — it needs the Vulkan
+  glTF path, so it can't live in the Vulkan-free `[vdpm]` evidence test).
 - **7 forest skips.** `buildVertexForest` skips collapses whose edge diverged from its adjacency
   replay (7 of ~6800 on the helmet); past the first skip the forest is slightly unfaithful. The repairs
   cover the visible symptoms; truncating the stream at the first skip would be the clean structural fix.

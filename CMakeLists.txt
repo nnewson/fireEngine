@@ -207,6 +207,10 @@ set(SHADER_SOURCES
     shaders/vdpm_survival.comp
     shaders/vdpm_scatter.comp
     shaders/vdpm_emit_finalize.comp
+    shaders/vdpm_mark.comp
+    shaders/vdpm_close.comp
+    shaders/vdpm_refine.comp
+    shaders/vdpm_coarsen.comp
 )
 
 # glslc from the vcpkg `shaderc` port (installed under <vcpkg-installed>/<triplet>/tools/shaderc via
@@ -333,6 +337,7 @@ add_executable(test_fire_engine
     tests/render/test_ubo.cpp
     tests/render/test_pipeline_config.cpp
     tests/render/test_vdpm_gpu.cpp
+    tests/render/test_vdpm_gpu_front.cpp
     tests/render/test_vdpm_scan.cpp
     tests/graphics/test_generational_slot_pool.cpp
     tests/scene/test_particle_emitter.cpp

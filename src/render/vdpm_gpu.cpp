@@ -1,5 +1,6 @@
 #include <fire_engine/render/vdpm_gpu.hpp>
 
+#include <array>
 #include <cstddef>
 #include <limits>
 #include <stdexcept>
@@ -8,6 +9,7 @@
 
 #include <fire_engine/graphics/mapped_buffer.hpp>
 #include <fire_engine/graphics/mesh_topology.hpp>
+#include <fire_engine/graphics/vdpm_parallel.hpp>
 #include <fire_engine/graphics/vdpm_wedge_choices.hpp>
 
 namespace fire_engine
@@ -178,6 +180,26 @@ ComputePipelineConfig vdpmEmitFinalizePipelineConfig()
     return emitConfig<VdpmEmitFinalizePush>("vdpm_emit_finalize.comp.spv");
 }
 
+ComputePipelineConfig vdpmMarkPipelineConfig()
+{
+    return emitConfig<VdpmMarkPush>("vdpm_mark.comp.spv");
+}
+
+ComputePipelineConfig vdpmClosePipelineConfig()
+{
+    return emitConfig<VdpmClosePush>("vdpm_close.comp.spv");
+}
+
+ComputePipelineConfig vdpmRefinePipelineConfig()
+{
+    return emitConfig<VdpmRefinePush>("vdpm_refine.comp.spv");
+}
+
+ComputePipelineConfig vdpmCoarsenPipelineConfig()
+{
+    return emitConfig<VdpmCoarsenPush>("vdpm_coarsen.comp.spv");
+}
+
 VdpmGpuMesh VdpmGpuMesh::build(Resources& resources, std::span<const Vertex> vertices,
                                const VertexForest& forest)
 {
@@ -199,9 +221,12 @@ VdpmGpuMesh VdpmGpuMesh::build(Resources& resources, std::span<const Vertex> ver
         throw std::runtime_error(
             "VdpmGpuMesh::build: score dispatch exceeds maxComputeWorkGroupCount[0]");
     }
+    // Build + validate the dependency DAG (throws on a cycle) BEFORE any upload — the "all throwing
+    // derivation before the first upload" contract, so an invalid forest orphans no GPU resources.
+    const DependencyDag dag = buildDependencyDag(forest);
 
     VdpmGpuMesh mesh;
-    uploadScoreData(mesh, resources, vertices, forest);
+    uploadScoreData(mesh, resources, vertices, forest, dag);
     return mesh;
 }
 
@@ -219,7 +244,8 @@ bool VdpmGpuMesh::fitsComputeDispatchLimits(const Resources& resources, const Ve
 }
 
 void VdpmGpuMesh::uploadScoreData(VdpmGpuMesh& mesh, Resources& resources,
-                                  std::span<const Vertex> vertices, const VertexForest& forest)
+                                  std::span<const Vertex> vertices, const VertexForest& forest,
+                                  const DependencyDag& dag)
 {
     mesh.splitCount_ = static_cast<std::uint32_t>(forest.splits.size());
 
@@ -260,6 +286,61 @@ void VdpmGpuMesh::uploadScoreData(VdpmGpuMesh& mesh, Resources& resources,
     mesh.binding_.positionsAddress = mesh.positionsAddress_;
     mesh.binding_.splitCount = mesh.splitCount_;
     mesh.binding_.vertexCount = forest.vertexCount;
+
+    // Front topology (Stage B3): the caller-built dependency DAG gives the per-split mutation
+    // record
+    // + the rank-ordered dispatch layout. The DAG was built + validated (acyclicity) BEFORE any
+    // upload, so a malformed forest never reaches here (the "validate before upload" contract).
+    mesh.binding_.maxRank = dag.maxRank;
+
+    // Coarsest front's initial active flags: roots (never removed) active, everything else
+    // inactive.
+    mesh.initialActive_.assign(forest.vertexCount, 0);
+    for (std::uint32_t v = 0; v < forest.vertexCount; ++v)
+    {
+        if (forest.removingSplit[v] == kNoSplit)
+        {
+            mesh.initialActive_[v] = 1;
+        }
+    }
+
+    // Per-split mutation record: vertex slots (for dependents / child activation) + the DAG's
+    // dependency-split triple (for closure), 1:1 with DependencyDag::dependencies.
+    std::vector<VdpmFrontSplitGpu> frontSplits(mesh.splitCount_);
+    for (std::uint32_t s = 0; s < mesh.splitCount_; ++s)
+    {
+        const VertexSplit& sp = forest.splits[s];
+        const SplitDependencies& d = dag.dependencies[s];
+        frontSplits[s] = {sp.parent, sp.child, sp.vl, sp.vr, d.parent, d.vl, d.vr, 0};
+    }
+
+    // Per-rank dispatch ranges from the CSR rank offsets (CPU-side; copied into a front at build).
+    // A zero-split forest has NO ranks (not one zero-count range) — the documented empty
+    // representation.
+    if (mesh.splitCount_ > 0)
+    {
+        mesh.rankRanges_.reserve(dag.maxRank + 1);
+        for (std::uint32_t r = 0; r <= dag.maxRank; ++r)
+        {
+            mesh.rankRanges_.push_back(
+                {dag.rankOffsets[r], dag.rankOffsets[r + 1] - dag.rankOffsets[r]});
+        }
+    }
+
+    if (!frontSplits.empty())
+    {
+        mesh.frontSplits_ = resources.createDeviceLocalStorageBuffer(
+            frontSplits.size() * sizeof(VdpmFrontSplitGpu), frontSplits.data());
+        mesh.binding_.frontSplitsAddress = resources.bufferAddress(mesh.frontSplits_);
+        requireAligned(mesh.binding_.frontSplitsAddress, 4, "frontSplits");
+    }
+    if (!dag.splitsByRank.empty())
+    {
+        mesh.splitsByRank_ = resources.createDeviceLocalStorageBuffer(
+            dag.splitsByRank.size() * sizeof(std::uint32_t), dag.splitsByRank.data());
+        mesh.binding_.splitsByRankAddress = resources.bufferAddress(mesh.splitsByRank_);
+        requireAligned(mesh.binding_.splitsByRankAddress, 4, "splitsByRank");
+    }
 }
 
 VdpmGpuMesh VdpmGpuMesh::build(Resources& resources, std::span<const Vertex> vertices,
@@ -298,6 +379,7 @@ VdpmGpuMesh VdpmGpuMesh::build(Resources& resources, std::span<const Vertex> ver
     const WedgeChoices wc = buildWedgeChoices(vertices, forest, weld);
     const std::vector<std::uint32_t> removalParent = buildRemovalParent(forest);
     const std::vector<std::uint32_t> indexVec{indices.begin(), indices.end()};
+    const DependencyDag dag = buildDependencyDag(forest); // throws on a cycle — before any upload
 
     // Reject an over-large static emit/score dispatch BEFORE allocating, so a mesh the device can't
     // dispatch never gets GPU buffers (the B5 selector queries this same predicate to pick the CPU
@@ -310,7 +392,7 @@ VdpmGpuMesh VdpmGpuMesh::build(Resources& resources, std::span<const Vertex> ver
 
     // Validation + derivation complete — now the uploads (nothing below throws for bad input).
     VdpmGpuMesh mesh;
-    uploadScoreData(mesh, resources, vertices, forest);
+    uploadScoreData(mesh, resources, vertices, forest, dag);
 
     auto uploadU32 = [&](const std::vector<std::uint32_t>& data, BufferHandle& handle,
                          std::uint64_t& address, const char* what)
@@ -543,6 +625,219 @@ void VdpmGpuFront::recordEmit(vk::CommandBuffer cmd, const VdpmEmitPipelines& pi
         cmd.dispatch(1, 1, 1);
     }
     // No consumer barrier — the caller synchronises the emitted-index / counters reads.
+}
+
+VdpmGpuFront VdpmGpuFront::buildWithFront(Resources& resources, const VdpmGpuMesh& mesh)
+{
+    VdpmGpuFront front;
+    front.binding_ = mesh.binding();
+    front.maxWorkGroupCountX_ = resources.maxComputeWorkGroupCountX();
+    front.hasFront_ = true;
+    front.rankRanges_.assign(mesh.rankRanges().begin(), mesh.rankRanges().end());
+
+    const VdpmGpuMeshBinding& b = front.binding_;
+
+    auto stateBuf = [&](std::size_t bytes, const void* init, BufferHandle& handle,
+                        std::uint64_t& address, const char* what)
+    {
+        if (bytes == 0)
+        {
+            return;
+        }
+        handle = resources.createDeviceLocalStorageBuffer(bytes, init,
+                                                          vk::BufferUsageFlagBits::eTransferSrc);
+        address = resources.bufferAddress(handle);
+        requireAligned(address, 4, what);
+    };
+
+    // The invariant-failure flags [refineFailure, underflow] are ALWAYS allocated (a fixed 2 uints,
+    // independent of mesh size) — the diagnostic is meaningful even for a split-free/empty front,
+    // and the harness reads it unconditionally.
+    const std::array<std::uint32_t, 2> zeroFlags{0, 0};
+    stateBuf(2 * sizeof(std::uint32_t), zeroFlags.data(), front.failFlags_, front.failFlagsAddress_,
+             "failFlags");
+    if (b.vertexCount == 0)
+    {
+        return front; // truly empty mesh: no per-vertex/per-split state, but failFlags exists
+    }
+
+    const std::size_t vBytes = static_cast<std::size_t>(b.vertexCount) * sizeof(std::uint32_t);
+    const std::size_t sBytes = static_cast<std::size_t>(b.splitCount) * sizeof(std::uint32_t);
+    const std::vector<std::uint32_t> zerosV(b.vertexCount, 0);
+    const std::vector<std::uint32_t> zerosS(b.splitCount, 0);
+
+    // Persistent state (readback-enabled): active = the coarsest front (roots), the rest zeroed.
+    stateBuf(vBytes, mesh.initialActive().data(), front.activeState_, front.activeStateAddress_,
+             "activeState");
+    stateBuf(vBytes, zerosV.data(), front.dependentsState_, front.dependentsStateAddress_,
+             "dependentsState");
+    stateBuf(sBytes, zerosS.data(), front.refinedState_, front.refinedStateAddress_,
+             "refinedState");
+    stateBuf(sBytes, zerosS.data(), front.requiredState_, front.requiredStateAddress_,
+             "requiredState");
+
+    // Per-split score input (host-visible + BDA, uploaded per applyView). Single-buffered for B3.
+    if (b.splitCount > 0)
+    {
+        const MappedBufferSet scores = resources.createMappedDeviceAddressBuffers(
+            static_cast<std::size_t>(b.splitCount) * sizeof(VdpmScoreOut));
+        front.scoresMapped_ = scores.mapped[0];
+        front.scoresAddress_ = resources.bufferAddress(scores.buffers[0]);
+        requireAligned(front.scoresAddress_, 4, "scores");
+    }
+    return front;
+}
+
+void VdpmGpuFront::recordCloseAndRefineRequired(vk::CommandBuffer cmd,
+                                                const VdpmRefinePipelines& pipelines)
+{
+    const std::uint32_t maxRank = binding_.maxRank;
+
+    // Leading barrier: the seed write (mark's `required`, or B4's detect) → the closure's read.
+    emitComputeBarrier(cmd);
+
+    // CLOSE in DESCENDING rank: each dispatch barriers after it (between close ranks, and the last
+    // serves as close→refine).
+    for (std::uint32_t r = maxRank + 1; r-- > 0;)
+    {
+        const RankRange& rr = rankRanges_[r];
+        const VdpmClosePush push{.splitsByRankAddress = binding_.splitsByRankAddress,
+                                 .frontSplitsAddress = binding_.frontSplitsAddress,
+                                 .requiredAddress = requiredStateAddress_,
+                                 .rankOffset = rr.offset,
+                                 .rankCount = rr.count};
+        cmd.bindPipeline(vk::PipelineBindPoint::eCompute, pipelines.close().pipeline());
+        cmd.pushConstants<VdpmClosePush>(pipelines.close().pipelineLayout(),
+                                         vk::ShaderStageFlagBits::eCompute, 0, push);
+        cmd.dispatch(emitGroups(rr.count), 1, 1);
+        emitComputeBarrier(cmd);
+    }
+
+    // REFINE in ASCENDING rank (dependencies first): barrier between ranks; a trailing barrier
+    // hands the refined state to the consumer (coarsen, or B4's next detect).
+    for (std::uint32_t r = 0; r <= maxRank; ++r)
+    {
+        const RankRange& rr = rankRanges_[r];
+        const VdpmRefinePush push{.splitsByRankAddress = binding_.splitsByRankAddress,
+                                  .frontSplitsAddress = binding_.frontSplitsAddress,
+                                  .requiredAddress = requiredStateAddress_,
+                                  .refinedAddress = refinedStateAddress_,
+                                  .activeAddress = activeStateAddress_,
+                                  .dependentsAddress = dependentsStateAddress_,
+                                  .failFlagsAddress = failFlagsAddress_,
+                                  .rankOffset = rr.offset,
+                                  .rankCount = rr.count};
+        cmd.bindPipeline(vk::PipelineBindPoint::eCompute, pipelines.refine().pipeline());
+        cmd.pushConstants<VdpmRefinePush>(pipelines.refine().pipelineLayout(),
+                                          vk::ShaderStageFlagBits::eCompute, 0, push);
+        cmd.dispatch(emitGroups(rr.count), 1, 1);
+        if (r < maxRank)
+        {
+            emitComputeBarrier(cmd);
+        }
+    }
+    emitComputeBarrier(cmd);
+}
+
+void VdpmGpuFront::recordApplyView(vk::CommandBuffer cmd, const VdpmRefinePipelines& pipelines,
+                                   Resources& resources, std::span<const VdpmScoreOut> scores,
+                                   float pixelBudget, float coarsenBudget)
+{
+    if (!hasFront_)
+    {
+        throw std::logic_error("VdpmGpuFront::recordApplyView: front has no refine/coarsen state");
+    }
+    if (scores.size() != binding_.splitCount)
+    {
+        throw std::runtime_error("VdpmGpuFront::recordApplyView: scores size != splitCount");
+    }
+    if (binding_.splitCount == 0)
+    {
+        return; // no splits: the front is fixed at the coarsest = finest state
+    }
+
+    // Defence-in-depth dispatch validation (build already rejected an ineligible mesh).
+    requireDispatchable(emitGroups(binding_.splitCount), maxWorkGroupCountX_, "mark");
+    for (const RankRange& rr : rankRanges_)
+    {
+        requireDispatchable(emitGroups(rr.count), maxWorkGroupCountX_, "rank");
+    }
+
+    // Upload the per-split scores (host-visible coherent → visible at queue submit).
+    writeMapped(scoresMapped_, scores.data(), scores.size_bytes());
+
+    // Leading barrier: order any PRIOR frame's compute writes (persistent state, `required`,
+    // `failFlags`) before this frame's failFlags clear (transfer) and mark (compute). This makes
+    // two recordApplyView calls back-to-back in ONE submit correctly serialised (the
+    // persistent-front contract — frame N+1 reads frame N's settled state); a no-op for the first
+    // call on a fresh front. (Cross-frame the caller must also keep the score buffer stable until
+    // the prior frame's reads complete — a compute-read→compute-write barrier, or per-frame score
+    // buffers, in B5.)
+    const vk::MemoryBarrier2 priorToThis{
+        .srcStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+        .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
+        .dstStageMask =
+            vk::PipelineStageFlagBits2::eComputeShader | vk::PipelineStageFlagBits2::eClear,
+        .dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead |
+                         vk::AccessFlagBits2::eShaderStorageWrite |
+                         vk::AccessFlagBits2::eTransferWrite,
+    };
+    cmd.pipelineBarrier2(
+        vk::DependencyInfo{.memoryBarrierCount = 1, .pMemoryBarriers = &priorToThis});
+
+    // Clear the invariant-failure flags for THIS frame (a persistent front would otherwise carry a
+    // prior frame's flag). fillBuffer is a CLEAR (eClear / eTransferWrite).
+    cmd.fillBuffer(resources.vulkanBuffer(failFlags_), 0, 2 * sizeof(std::uint32_t), 0);
+    const vk::MemoryBarrier2 clearToCompute{
+        .srcStageMask = vk::PipelineStageFlagBits2::eClear,
+        .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
+        .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+        .dstAccessMask =
+            vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite,
+    };
+    cmd.pipelineBarrier2(
+        vk::DependencyInfo{.memoryBarrierCount = 1, .pMemoryBarriers = &clearToCompute});
+
+    // (1) MARK — full-overwrite the required seed over all splits.
+    {
+        const VdpmMarkPush push{.scoresAddress = scoresAddress_,
+                                .requiredAddress = requiredStateAddress_,
+                                .splitCount = binding_.splitCount,
+                                .pixelBudget = pixelBudget};
+        cmd.bindPipeline(vk::PipelineBindPoint::eCompute, pipelines.mark().pipeline());
+        cmd.pushConstants<VdpmMarkPush>(pipelines.mark().pipelineLayout(),
+                                        vk::ShaderStageFlagBits::eCompute, 0, push);
+        cmd.dispatch(emitGroups(binding_.splitCount), 1, 1);
+    }
+
+    // (2) CLOSE + REFINE (the shared recorder owns its boundary barriers, incl. the trailing
+    // refine→consumer one that hands the refined state to coarsen below).
+    recordCloseAndRefineRequired(cmd, pipelines);
+
+    // (3) COARSEN in DESCENDING rank (dependents first), barrier between ranks; none after the last
+    // (the caller synchronises the state read-back).
+    for (std::uint32_t r = binding_.maxRank + 1; r-- > 0;)
+    {
+        const RankRange& rr = rankRanges_[r];
+        const VdpmCoarsenPush push{.splitsByRankAddress = binding_.splitsByRankAddress,
+                                   .frontSplitsAddress = binding_.frontSplitsAddress,
+                                   .scoresAddress = scoresAddress_,
+                                   .refinedAddress = refinedStateAddress_,
+                                   .activeAddress = activeStateAddress_,
+                                   .dependentsAddress = dependentsStateAddress_,
+                                   .failFlagsAddress = failFlagsAddress_,
+                                   .rankOffset = rr.offset,
+                                   .rankCount = rr.count,
+                                   .coarsenBudget = coarsenBudget};
+        cmd.bindPipeline(vk::PipelineBindPoint::eCompute, pipelines.coarsen().pipeline());
+        cmd.pushConstants<VdpmCoarsenPush>(pipelines.coarsen().pipelineLayout(),
+                                           vk::ShaderStageFlagBits::eCompute, 0, push);
+        cmd.dispatch(emitGroups(rr.count), 1, 1);
+        if (r > 0)
+        {
+            emitComputeBarrier(cmd);
+        }
+    }
 }
 
 void VdpmGpuFront::recordScore(vk::CommandBuffer cmd, const ComputePipeline& pipeline,

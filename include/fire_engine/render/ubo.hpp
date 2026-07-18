@@ -660,4 +660,136 @@ static_assert(alignof(VdpmEmitFinalizePush) == 8);
 static_assert(std::is_standard_layout_v<VdpmEmitFinalizePush>);
 static_assert(std::is_trivially_copyable_v<VdpmEmitFinalizePush>);
 
+// ---- VDPM GPU refine/coarsen (Stage B3) ----
+
+// Static per-split mutation topology for the GPU refine/coarsen passes (Stage B3). The VERTEX slots
+// (parent/vl/vr — vr may be the boundary sentinel `kInvalidVertex`) drive the `dependents` atomic
+// add/sub and the child activation; the DEPENDENCY-SPLIT slots (parentDep/vlDep/vrDep — `kNoSplit`
+// for a root/boundary) are the closure edges, mirroring `DependencyDag::dependencies` 1:1 (the
+// shared authority). Kept SEPARATE from the scoring ABI so neither bloats the other.
+struct VdpmFrontSplitGpu
+{
+    std::uint32_t parent{0};
+    std::uint32_t child{0};
+    std::uint32_t vl{0};
+    std::uint32_t vr{0};
+    std::uint32_t parentDep{0};
+    std::uint32_t vlDep{0};
+    std::uint32_t vrDep{0};
+    std::uint32_t pad{0};
+};
+static_assert(offsetof(VdpmFrontSplitGpu, parent) == 0);
+static_assert(offsetof(VdpmFrontSplitGpu, child) == 4);
+static_assert(offsetof(VdpmFrontSplitGpu, vl) == 8);
+static_assert(offsetof(VdpmFrontSplitGpu, vr) == 12);
+static_assert(offsetof(VdpmFrontSplitGpu, parentDep) == 16);
+static_assert(offsetof(VdpmFrontSplitGpu, vlDep) == 20);
+static_assert(offsetof(VdpmFrontSplitGpu, vrDep) == 24);
+static_assert(sizeof(VdpmFrontSplitGpu) == 32, "VdpmFrontSplitGpu std430 size/stride");
+static_assert(alignof(VdpmFrontSplitGpu) == 4);
+static_assert(std::is_standard_layout_v<VdpmFrontSplitGpu>);
+static_assert(std::is_trivially_copyable_v<VdpmFrontSplitGpu>);
+
+// Push for vdpm_mark.comp: over ALL splits, full-overwrite `required[s] = (backface == 0 && s >
+// pixelBudget)` where `s = max(geometry, uv, normal, tangent)` (straddle excluded, matching
+// VdpmSplitScore::score). No separate clear — this writes every entry.
+struct alignas(8) VdpmMarkPush
+{
+    std::uint64_t scoresAddress{0};
+    std::uint64_t requiredAddress{0};
+    std::uint32_t splitCount{0};
+    float pixelBudget{0.0f};
+};
+static_assert(offsetof(VdpmMarkPush, scoresAddress) == 0);
+static_assert(offsetof(VdpmMarkPush, requiredAddress) == 8);
+static_assert(offsetof(VdpmMarkPush, splitCount) == 16);
+static_assert(offsetof(VdpmMarkPush, pixelBudget) == 20);
+static_assert(sizeof(VdpmMarkPush) == 24);
+static_assert(alignof(VdpmMarkPush) == 8);
+static_assert(std::is_standard_layout_v<VdpmMarkPush>);
+static_assert(std::is_trivially_copyable_v<VdpmMarkPush>);
+
+// Push for vdpm_close.comp: one rank's splits (`splitsByRank[rankOffset .. rankOffset +
+// rankCount]`); each required split atomic-ORs its three dependency splits' `required`.
+struct alignas(8) VdpmClosePush
+{
+    std::uint64_t splitsByRankAddress{0};
+    std::uint64_t frontSplitsAddress{0};
+    std::uint64_t requiredAddress{0};
+    std::uint32_t rankOffset{0};
+    std::uint32_t rankCount{0};
+};
+static_assert(offsetof(VdpmClosePush, splitsByRankAddress) == 0);
+static_assert(offsetof(VdpmClosePush, frontSplitsAddress) == 8);
+static_assert(offsetof(VdpmClosePush, requiredAddress) == 16);
+static_assert(offsetof(VdpmClosePush, rankOffset) == 24);
+static_assert(offsetof(VdpmClosePush, rankCount) == 28);
+static_assert(sizeof(VdpmClosePush) == 32);
+static_assert(alignof(VdpmClosePush) == 8);
+static_assert(std::is_standard_layout_v<VdpmClosePush>);
+static_assert(std::is_trivially_copyable_v<VdpmClosePush>);
+
+// Push for vdpm_refine.comp: one rank's splits; a required, not-yet-refined split whose
+// parent/vl/vr are active refines (activate child + atomic-add `dependents` per vertex-slot). A
+// required refine with an inactive dependency sets `failFlags[0]` (refine failure) and does NOT
+// mutate — the GPU analogue of the CPU's "required refine must succeed".
+struct alignas(8) VdpmRefinePush
+{
+    std::uint64_t splitsByRankAddress{0};
+    std::uint64_t frontSplitsAddress{0};
+    std::uint64_t requiredAddress{0};
+    std::uint64_t refinedAddress{0};
+    std::uint64_t activeAddress{0};
+    std::uint64_t dependentsAddress{0};
+    std::uint64_t failFlagsAddress{0};
+    std::uint32_t rankOffset{0};
+    std::uint32_t rankCount{0};
+};
+static_assert(offsetof(VdpmRefinePush, splitsByRankAddress) == 0);
+static_assert(offsetof(VdpmRefinePush, frontSplitsAddress) == 8);
+static_assert(offsetof(VdpmRefinePush, requiredAddress) == 16);
+static_assert(offsetof(VdpmRefinePush, refinedAddress) == 24);
+static_assert(offsetof(VdpmRefinePush, activeAddress) == 32);
+static_assert(offsetof(VdpmRefinePush, dependentsAddress) == 40);
+static_assert(offsetof(VdpmRefinePush, failFlagsAddress) == 48);
+static_assert(offsetof(VdpmRefinePush, rankOffset) == 56);
+static_assert(offsetof(VdpmRefinePush, rankCount) == 60);
+static_assert(sizeof(VdpmRefinePush) == 64);
+static_assert(alignof(VdpmRefinePush) == 8);
+static_assert(std::is_standard_layout_v<VdpmRefinePush>);
+static_assert(std::is_trivially_copyable_v<VdpmRefinePush>);
+
+// Push for vdpm_coarsen.comp: one rank's splits; a refined split with (backface || s <
+// coarsenBudget) whose child is a leaf (`dependents[child] == 0`) coarsens (deactivate child +
+// atomic-sub `dependents` per vertex-slot). A dependent decrement whose old value is 0 sets
+// `failFlags[1]` (underflow).
+struct alignas(8) VdpmCoarsenPush
+{
+    std::uint64_t splitsByRankAddress{0};
+    std::uint64_t frontSplitsAddress{0};
+    std::uint64_t scoresAddress{0};
+    std::uint64_t refinedAddress{0};
+    std::uint64_t activeAddress{0};
+    std::uint64_t dependentsAddress{0};
+    std::uint64_t failFlagsAddress{0};
+    std::uint32_t rankOffset{0};
+    std::uint32_t rankCount{0};
+    float coarsenBudget{0.0f};
+    std::uint32_t pad{0};
+};
+static_assert(offsetof(VdpmCoarsenPush, splitsByRankAddress) == 0);
+static_assert(offsetof(VdpmCoarsenPush, frontSplitsAddress) == 8);
+static_assert(offsetof(VdpmCoarsenPush, scoresAddress) == 16);
+static_assert(offsetof(VdpmCoarsenPush, refinedAddress) == 24);
+static_assert(offsetof(VdpmCoarsenPush, activeAddress) == 32);
+static_assert(offsetof(VdpmCoarsenPush, dependentsAddress) == 40);
+static_assert(offsetof(VdpmCoarsenPush, failFlagsAddress) == 48);
+static_assert(offsetof(VdpmCoarsenPush, rankOffset) == 56);
+static_assert(offsetof(VdpmCoarsenPush, rankCount) == 60);
+static_assert(offsetof(VdpmCoarsenPush, coarsenBudget) == 64);
+static_assert(sizeof(VdpmCoarsenPush) == 72);
+static_assert(alignof(VdpmCoarsenPush) == 8);
+static_assert(std::is_standard_layout_v<VdpmCoarsenPush>);
+static_assert(std::is_trivially_copyable_v<VdpmCoarsenPush>);
+
 } // namespace fire_engine
