@@ -1,5 +1,6 @@
 #pragma once
 
+#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <type_traits>
@@ -524,5 +525,50 @@ struct VdpmScorePushConstants
 static_assert(sizeof(VdpmScorePushConstants) == 8);
 static_assert(std::is_standard_layout_v<VdpmScorePushConstants>);
 static_assert(std::is_trivially_copyable_v<VdpmScorePushConstants>);
+
+// ---- VDPM GPU exclusive prefix-sum (Stage B2 emit compaction) --------------------------------
+// The recursive hierarchical scan's block size — the number of elements ONE workgroup scans, and
+// MUST equal the `local_size_x` in vdpm_scan_block.comp / the block stride in vdpm_scan_add.comp.
+// Named by MEANING (elements per block) so the B±1 boundary tests stay correct if a shader later
+// processes more than one element per invocation.
+inline constexpr std::uint32_t kScanElementsPerBlock = 256;
+// The Blelloch up-/down-sweep requires a power-of-two block size.
+static_assert(std::has_single_bit(kScanElementsPerBlock));
+
+// Push for vdpm_scan_block.comp: exclusive-scan `input[count]` into `output` (may alias `input`)
+// and write each block's total to `blockSums[blockIndex]`. buffer_reference addresses (uint
+// arrays).
+struct alignas(8) VdpmScanBlockPush
+{
+    std::uint64_t inputAddress{0};
+    std::uint64_t outputAddress{0};
+    std::uint64_t blockSumsAddress{0};
+    std::uint32_t count{0};
+    std::uint32_t pad{0};
+};
+static_assert(offsetof(VdpmScanBlockPush, inputAddress) == 0);
+static_assert(offsetof(VdpmScanBlockPush, outputAddress) == 8);
+static_assert(offsetof(VdpmScanBlockPush, blockSumsAddress) == 16);
+static_assert(offsetof(VdpmScanBlockPush, count) == 24);
+static_assert(sizeof(VdpmScanBlockPush) == 32);
+static_assert(alignof(VdpmScanBlockPush) == 8);
+static_assert(std::is_standard_layout_v<VdpmScanBlockPush>);
+static_assert(std::is_trivially_copyable_v<VdpmScanBlockPush>);
+
+// Push for vdpm_scan_add.comp: output[i] += offsets[i / kScanElementsPerBlock] for i < count.
+struct alignas(8) VdpmScanAddPush
+{
+    std::uint64_t outputAddress{0};
+    std::uint64_t offsetsAddress{0};
+    std::uint32_t count{0};
+    std::uint32_t pad{0};
+};
+static_assert(offsetof(VdpmScanAddPush, outputAddress) == 0);
+static_assert(offsetof(VdpmScanAddPush, offsetsAddress) == 8);
+static_assert(offsetof(VdpmScanAddPush, count) == 16);
+static_assert(sizeof(VdpmScanAddPush) == 24);
+static_assert(alignof(VdpmScanAddPush) == 8);
+static_assert(std::is_standard_layout_v<VdpmScanAddPush>);
+static_assert(std::is_trivially_copyable_v<VdpmScanAddPush>);
 
 } // namespace fire_engine

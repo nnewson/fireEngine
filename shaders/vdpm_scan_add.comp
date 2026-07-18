@@ -1,0 +1,36 @@
+#version 450
+#extension GL_EXT_buffer_reference : require
+
+// Downward pass of the recursive VDPM scan: add each block's global offset back into the block's
+// within-block exclusive scan. `offsets[b]` is the GLOBAL exclusive prefix sum of the block totals
+// (produced by scanning the block sums a level up, then adding ITS offsets — processed top-down), so
+// output[i] += offsets[i / ELEMENTS_PER_BLOCK] turns the per-block scan into a global scan. Block 0
+// adds 0; every element in [0, count) is updated.
+
+const uint ELEMENTS_PER_BLOCK = 256; // MUST match kScanElementsPerBlock (render/ubo.hpp)
+
+layout(buffer_reference, std430, buffer_reference_align = 4) buffer UintBuf
+{
+    uint v[];
+};
+
+layout(push_constant) uniform Push
+{
+    UintBuf outputBuf;
+    UintBuf offsets;
+    uint count;
+    uint pad;
+}
+pc;
+
+layout(local_size_x = ELEMENTS_PER_BLOCK) in;
+
+void main()
+{
+    const uint gid = gl_GlobalInvocationID.x;
+    if (gid >= pc.count)
+    {
+        return;
+    }
+    pc.outputBuf.v[gid] += pc.offsets.v[gid / ELEMENTS_PER_BLOCK];
+}
