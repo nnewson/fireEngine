@@ -63,6 +63,11 @@ struct DependencyDag; // graphics/vdpm_parallel.hpp — the forest's refine-depe
 [[nodiscard]] ComputePipelineConfig vdpmRefinePipelineConfig();
 [[nodiscard]] ComputePipelineConfig vdpmCoarsenPipelineConfig();
 
+// The VDPM GPU repair pipeline configs (Stage B4): the per-face foldover/coverage detector and the
+// full-detail fallback seed. (The ancestor resolve reuses vdpmAncestorPipelineConfig.)
+[[nodiscard]] ComputePipelineConfig vdpmRepairDetectPipelineConfig();
+[[nodiscard]] ComputePipelineConfig vdpmRepairFallbackPipelineConfig();
+
 // A rank's contiguous range in `splitsByRank` — the CPU recorder issues one dispatch per rank over
 // `[offset, offset + count)`. Copied into the front at build (never a pointer into a movable mesh).
 struct RankRange
@@ -91,6 +96,14 @@ struct VdpmGpuMeshBinding
     std::uint32_t vertexCount{0};          // canonical vertex count (= forest.vertexCount)
     std::uint32_t maxDepth{0};             // deepest removal-parent chain (the ancestor loop bound)
     bool hasEmitData{false};
+
+    // Canonical finest faces (Stage B4 repair) — `canonicalFaces(weld, indices)`, the per-face
+    // detector's input. Full build only. `finestFaceCount` post-weld faces (degenerate faces
+    // dropped, so <= faceCount).
+    std::uint64_t finestFacesAddress{0}; // 3 * finestFaceCount canonical corner indices
+    std::uint64_t removingSplitAddress{
+        0}; // per canonical: the split that removes it (kNoSplit=root)
+    std::uint32_t finestFaceCount{0};
 
     // Refine/coarsen front topology (Stage B3) — built from the forest's dependency DAG in the base
     // build (so every mesh carries it); null/zero only for an empty (zero-split) forest.
@@ -187,6 +200,8 @@ private:
     BufferHandle removalParent_{NullBuffer};
     BufferHandle wedgeChoices_{NullBuffer};
     BufferHandle wedgeOffsets_{NullBuffer};
+    BufferHandle finestFaces_{NullBuffer};   // canonical faces (B4 repair detector input)
+    BufferHandle removingSplit_{NullBuffer}; // per canonical: its removing split (B4 mark target)
 
     // Refine/coarsen front topology (Stage B3), built in the base build; null/empty for a
     // zero-split forest. `rankRanges_`/`initialActive_` are CPU-side (copied into each front at
@@ -290,6 +305,43 @@ private:
     ComputePipeline coarsen_;
 };
 
+// The VDPM GPU repair pipelines built once and reused across instances (Stage B4): the shared
+// ancestor resolve + the per-face detector + the full-detail fallback. Descriptor-free; non-movable
+// (the pipelines hold pointers to `device`); construct one per device.
+class VdpmRepairPipelines
+{
+public:
+    explicit VdpmRepairPipelines(const Device& device)
+        : ancestor_(device, vdpmAncestorPipelineConfig()),
+          detect_(device, vdpmRepairDetectPipelineConfig()),
+          fallback_(device, vdpmRepairFallbackPipelineConfig())
+    {
+    }
+    VdpmRepairPipelines(const VdpmRepairPipelines&) = delete;
+    VdpmRepairPipelines& operator=(const VdpmRepairPipelines&) = delete;
+    VdpmRepairPipelines(VdpmRepairPipelines&&) = delete;
+    VdpmRepairPipelines& operator=(VdpmRepairPipelines&&) = delete;
+    ~VdpmRepairPipelines() = default;
+
+    [[nodiscard]] const ComputePipeline& ancestor() const noexcept
+    {
+        return ancestor_;
+    }
+    [[nodiscard]] const ComputePipeline& detect() const noexcept
+    {
+        return detect_;
+    }
+    [[nodiscard]] const ComputePipeline& fallback() const noexcept
+    {
+        return fallback_;
+    }
+
+private:
+    ComputePipeline ancestor_;
+    ComputePipeline detect_;
+    ComputePipeline fallback_;
+};
+
 // PER-INSTANCE GPU front state — the per-split score/backface output + the per-frame mapped params
 // block, and (full build only) the emit workspace + resident emitted-index buffer. References its
 // shared VdpmGpuMesh.
@@ -310,8 +362,12 @@ public:
     // input, the invariant-failure flags, and the per-rank dispatch ranges copied from the mesh.
     // State is initialized to the coarsest front (roots active, nothing refined, dependents 0).
     // Does NOT allocate the score-output/params or the emit workspace (B3 uploads scores directly).
-    // Copies the mesh's rank ranges (no pointer into it).
-    [[nodiscard]] static VdpmGpuFront buildWithFront(Resources& resources, const VdpmGpuMesh& mesh);
+    // Copies the mesh's rank ranges (no pointer into it). When the mesh carries repair data (a full
+    // build) it also allocates the B4 repair scratch; `withClassificationReadback` additionally
+    // allocates the per-face classification diagnostic buffer that `recordDetectClassify` needs —
+    // OFF by default so a PRODUCTION front spends no per-face memory on a test-only readback.
+    [[nodiscard]] static VdpmGpuFront buildWithFront(Resources& resources, const VdpmGpuMesh& mesh,
+                                                     bool withClassificationReadback = false);
 
     // Record ONLY the score dispatch for frame `frameIndex` (writes that slot's mapped params from
     // `view`, pushes its address, dispatches ceil(splitCount / 64)). NO barriers — the consumer
@@ -355,6 +411,35 @@ public:
                          Resources& resources, std::span<const VdpmScoreOut> scores,
                          float pixelBudget, float coarsenBudget);
 
+    // Record the GPU foldover ∪ coverage repair to a fixpoint (Stage B4) — the snapshot analogue of
+    // `ParallelFront::repairFront`, run AFTER recordApplyView has settled the front. Each round:
+    // clear `required`, resolve ancestors (shared pass, live front), DETECT per finest face (mark
+    // each violation's inactive-corner removing split), then recordCloseAndRefineRequired. After
+    // `roundBudget` snapshot rounds it runs ONE final detect and a **full-detail fallback**: if a
+    // violation still remains (no CPU readback — the fallback reads the GPU anyMarked flag), it
+    // seeds every unrefined split and refines to full detail (always hole-free), recording
+    // `repairControl[2]`. So normal fronts converge economically; a pathological convergence stays
+    // correct. The repair control buffer `{anyMarked, ancestorFailure, fallbackFired, pad}` is
+    // SEPARATE from B3's failFlags (clearing it here can't erase a B3 refine/underflow failure).
+    //
+    // SYNC: records a LEADING compute→(compute|clear) barrier (applyView's coarsen has no trailing
+    // one) and, per round, orders the prior close's `required` write → the clear → the next detect
+    // (compute→eClear→compute). Records NO consumer barrier after the final refine — the caller
+    // synchronises the state read-back. Uploads `params`. Throws std::logic_error without repair
+    // state (needs a full-mesh `buildWithFront`).
+    void recordRepair(vk::CommandBuffer cmd, const VdpmRefinePipelines& refinePipelines,
+                      const VdpmRepairPipelines& repairPipelines, Resources& resources,
+                      const VdpmRepairParams& params, std::uint32_t roundBudget);
+
+    // TEST-ONLY (Stage B4): record a SINGLE ancestor + detect against the current settled front,
+    // writing each finest face's packed classification (`kVdpmDetect*` bits) to
+    // `repairClassificationBuffer` — so a harness can cross-check the GPU classifier against the
+    // CPU `detail::` classifiers per face per BRANCH (not just the aggregate zero-violation
+    // result). Does NOT close/refine (the front is unchanged); marks `required` as a side effect.
+    // Clears repair control + required first (leading barrier). Throws without repair state.
+    void recordDetectClassify(vk::CommandBuffer cmd, const VdpmRepairPipelines& repairPipelines,
+                              Resources& resources, const VdpmRepairParams& params);
+
     // The device-local score output (one VdpmScoreOut per split), created with eTransferSrc so a
     // test can copy it back.
     [[nodiscard]] BufferHandle outputBuffer() const noexcept
@@ -379,6 +464,18 @@ public:
     [[nodiscard]] BufferHandle failFlagsBuffer() const noexcept
     {
         return failFlags_;
+    }
+    // The 4-uint repair-control buffer [anyMarked, ancestorFailure, fallbackFired, pad] (Stage B4);
+    // eTransferSrc so the harness reads back the ancestor-failure + fallback-fired diagnostics.
+    [[nodiscard]] BufferHandle repairControlBuffer() const noexcept
+    {
+        return repairControl_;
+    }
+    // Per-face packed classification from recordDetectClassify (test only); one uint per finest
+    // face.
+    [[nodiscard]] BufferHandle repairClassificationBuffer() const noexcept
+    {
+        return repairClassification_;
     }
     // The resident emitted-index buffer (3 * survivingFaces uint32; full build only) — storage +
     // BDA
@@ -451,6 +548,22 @@ private:
     std::span<std::byte> scoresMapped_{};
     std::uint64_t scoresAddress_{0};
     std::vector<RankRange> rankRanges_;
+
+    // Repair fixpoint (Stage B4; allocated by buildWithFront only when the mesh carries the
+    // emit/repair data — finest faces + removingSplit). `ancestorId/Depth` are the per-round
+    // ancestor cache; the host-visible `repairParams` is uploaded per repair; `repairControl` is
+    // device-local + readback + transfer-dst, SEPARATE from failFlags_.
+    bool hasRepair_{false};
+    BufferHandle repairAncestorId_{NullBuffer};
+    BufferHandle repairAncestorDepth_{NullBuffer};
+    BufferHandle repairControl_{NullBuffer};
+    BufferHandle repairClassification_{NullBuffer}; // per finest face, test-only readback
+    std::uint64_t repairAncestorIdAddress_{0};
+    std::uint64_t repairAncestorDepthAddress_{0};
+    std::uint64_t repairControlAddress_{0};
+    std::uint64_t repairClassificationAddress_{0};
+    std::span<std::byte> repairParamsMapped_{};
+    std::uint64_t repairParamsAddress_{0};
 
     // The shared close+refine recorder (Stage B3), reused by B4's repair round. Owns its boundary
     // barriers: a leading seed-write→closure-read barrier, barriers between close ranks and before

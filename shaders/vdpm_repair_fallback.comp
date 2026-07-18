@@ -1,0 +1,42 @@
+#version 450
+#extension GL_EXT_buffer_reference : require
+
+// VDPM GPU repair fallback (Stage B4): the correctness-preserving convergence guarantee. Run once
+// AFTER the bounded snapshot rounds + a final detection. Per split, FULL-OVERWRITE
+// `required[s] = (repairControl[0] != 0 && refined[s] == 0) ? 1 : 0`: if the final detect still
+// found a violation (anyMarked), seed EVERY unrefined split so the subsequent close+refine drives
+// to FULL DETAIL — always hole-free — instead of looping unbounded; otherwise required stays 0 (a
+// no-op, the normal converged path). One thread records `repairControl[2]` (fallback fired) as a
+// diagnostic. This is data-dependent on GPU state with NO CPU readback: normal cases converge
+// economically, pathological ones stay correct.
+
+layout(buffer_reference, std430, buffer_reference_align = 4) buffer UintBuf
+{
+    uint v[];
+};
+
+layout(push_constant) uniform Push
+{
+    UintBuf required;
+    UintBuf refined;
+    UintBuf repairControl;
+    uint splitCount;
+}
+pc;
+
+layout(local_size_x = 64) in;
+
+void main()
+{
+    const uint s = gl_GlobalInvocationID.x;
+    if (s >= pc.splitCount)
+    {
+        return;
+    }
+    const bool triggered = pc.repairControl.v[0] != 0u;
+    pc.required.v[s] = (triggered && pc.refined.v[s] == 0u) ? 1u : 0u;
+    if (triggered && s == 0u)
+    {
+        pc.repairControl.v[2] = 1u; // fallback fired (one writer)
+    }
+}
