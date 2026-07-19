@@ -14,6 +14,7 @@ namespace fire_engine
 
 class Material;
 class Resources;
+class VdpmGpuRegistry;
 
 class Geometry
 {
@@ -26,7 +27,13 @@ public:
     Geometry(Geometry&&) noexcept = default;
     Geometry& operator=(Geometry&&) noexcept = default;
 
-    void load(Resources& resources);
+    // `registry`, when non-null and the geometry carries a collapse stream, registers this
+    // geometry's static forest once with the GPU-driven VDPM backend and records the returned mesh
+    // handle (shared by every instance). Null, or a mesh the backend rejects, leaves
+    // vdpmMeshHandle() == NullVdpmMesh, so every instance stays on the CPU front. No default —
+    // every caller states its registration choice (pass Renderer::vdpmRegistry(), or nullptr for
+    // none).
+    void load(Resources& resources, VdpmGpuRegistry* registry);
 
     [[nodiscard]] bool loaded() const noexcept
     {
@@ -115,6 +122,14 @@ public:
         return !collapses_.empty();
     }
 
+    // GPU-driven VDPM mesh handle for this geometry (rendering-spine #3, Stage B5b), set by load()
+    // when a registry is supplied and the forest is GPU-eligible; NullVdpmMesh otherwise. Instances
+    // create their per-instance front over it via VdpmGpuRegistry::createFront.
+    [[nodiscard]] VdpmMeshHandle vdpmMeshHandle() const noexcept
+    {
+        return vdpmMeshHandle_;
+    }
+
     [[nodiscard]] bool castsShadow() const noexcept
     {
         return castsShadow_;
@@ -183,6 +198,7 @@ private:
     std::vector<GeometryLod> lods_;
     BufferHandle morphBuffer_{NullBuffer};
     std::vector<MeshCollapse> collapses_;
+    VdpmMeshHandle vdpmMeshHandle_{NullVdpmMesh};
     bool castsShadow_{true};
     bool storageVertices_{false};
 };

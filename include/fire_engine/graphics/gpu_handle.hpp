@@ -22,10 +22,24 @@ enum class PipelineHandle : uint32_t
 {
 };
 
+// GPU-driven VDPM identity handles (rendering-spine #3, Stage B5b). A *mesh* is the static
+// per-geometry forest shared by every instance of a geometry; a *front* is the per-instance active
+// front (its own transform/view/material policy), so fronts are never shared even when the mesh is.
+// Same generational packing as the resource handles above.
+enum class VdpmMeshHandle : uint32_t
+{
+};
+
+enum class VdpmFrontHandle : uint32_t
+{
+};
+
 inline constexpr auto NullBuffer = BufferHandle{std::numeric_limits<uint32_t>::max()};
 inline constexpr auto NullTexture = TextureHandle{std::numeric_limits<uint32_t>::max()};
 inline constexpr auto NullDescriptorSet = DescriptorSetHandle{std::numeric_limits<uint32_t>::max()};
 inline constexpr auto NullPipeline = PipelineHandle{std::numeric_limits<uint32_t>::max()};
+inline constexpr auto NullVdpmMesh = VdpmMeshHandle{std::numeric_limits<uint32_t>::max()};
+inline constexpr auto NullVdpmFront = VdpmFrontHandle{std::numeric_limits<uint32_t>::max()};
 
 // Handles pack a table index in the low bits and a generation counter in the high bits. The
 // index is what addresses the resource table / bindless array; the generation is bumped when a

@@ -109,11 +109,11 @@ void FireEngine::addFloorPlane()
     floorGeo.indices(std::move(indices));
     floorGeo.material(&mat);
     floorGeo.castsShadow(false);
-    floorGeo.load(renderer_->resources());
+    floorGeo.load(renderer_->resources(), renderer_->vdpmRegistry());
 
     Object floorObject;
     floorObject.addGeometry(floorGeo);
-    floorObject.load(renderer_->resources());
+    floorObject.load(renderer_->resources(), renderer_->vdpmRegistry());
 
     auto floorNode = std::make_unique<Node>("Floor");
     floorNode->component().emplace<Mesh>(std::move(floorObject));
@@ -227,10 +227,10 @@ void FireEngine::addClothDemo()
     Geometry& sphereGeo = assets_.addGeometry(Geometry{});
     buildUvSphere(sphereGeo, sphereRadius, 24, 32, Colour3{1.0f, 1.0f, 1.0f});
     sphereGeo.material(&sphereMat);
-    sphereGeo.load(renderer_->resources());
+    sphereGeo.load(renderer_->resources(), renderer_->vdpmRegistry());
     Object sphereObject;
     sphereObject.addGeometry(sphereGeo);
-    sphereObject.load(renderer_->resources());
+    sphereObject.load(renderer_->resources(), renderer_->vdpmRegistry());
     auto sphereNode = std::make_unique<Node>("ClothSphere");
     sphereNode->component().emplace<Mesh>(std::move(sphereObject));
     sphereNode->transform().position(sphereCenter);
@@ -263,11 +263,11 @@ void FireEngine::addClothDemo()
     clothGeo.indices(cloth.indices); // copy: addCloth still needs the indices
     clothGeo.material(&mat);
     clothGeo.storageVertices(true);
-    clothGeo.load(renderer_->resources());
+    clothGeo.load(renderer_->resources(), renderer_->vdpmRegistry());
 
     Object clothObject;
     clothObject.addGeometry(clothGeo);
-    clothObject.load(renderer_->resources());
+    clothObject.load(renderer_->resources(), renderer_->vdpmRegistry());
 
     // The solver writes the storage vertex buffer; cloth simulates in world space,
     // so the node transform stays identity.
@@ -296,11 +296,11 @@ void FireEngine::addCharacterDemo()
         Geometry& geo = assets_.addGeometry(Geometry{});
         buildBox(geo, half, Colour3{1.0f, 1.0f, 1.0f});
         geo.material(&mat);
-        geo.load(res);
+        geo.load(res, renderer_->vdpmRegistry());
 
         Object obj;
         obj.addGeometry(geo);
-        obj.load(res);
+        obj.load(res, renderer_->vdpmRegistry());
 
         auto node = std::make_unique<Node>(name);
         node->component().emplace<Mesh>(std::move(obj));
@@ -339,11 +339,11 @@ void FireEngine::addCharacterDemo()
     Geometry& charGeo = assets_.addGeometry(Geometry{});
     buildUvSphere(charGeo, 0.5f, 16, 24, Colour3{1.0f, 1.0f, 1.0f});
     charGeo.material(&charMat);
-    charGeo.load(res);
+    charGeo.load(res, renderer_->vdpmRegistry());
 
     Object charObject;
     charObject.addGeometry(charGeo);
-    charObject.load(res);
+    charObject.load(res, renderer_->vdpmRegistry());
 
     // Start grounded on the floor (top y = 0; capsule centre rests at height/2 = 0.9).
     const Vec3 start{2.0f, 0.9f, 0.0f};
@@ -373,11 +373,11 @@ void FireEngine::addQueryProbeDemo()
         Geometry& geo = assets_.addGeometry(Geometry{});
         buildUvSphere(geo, radius, 16, 24, Colour3{1.0f, 1.0f, 1.0f});
         geo.material(&mat);
-        geo.load(res);
+        geo.load(res, renderer_->vdpmRegistry());
 
         Object obj;
         obj.addGeometry(geo);
-        obj.load(res);
+        obj.load(res, renderer_->vdpmRegistry());
 
         auto node = std::make_unique<Node>(name);
         node->component().emplace<Mesh>(std::move(obj));
@@ -507,9 +507,9 @@ void FireEngine::loadScene(std::string_view scene_path)
     if (!scene_path.empty())
     {
         std::vector<GltfLoader::ClothRegistration> clothRegistrations;
-        activeCamera =
-            GltfLoader::loadScene(std::string(scene_path), scene_, renderer_->resources(), assets_,
-                                  physics_, &clothRegistrations, &ragdolls_);
+        activeCamera = GltfLoader::loadScene(
+            std::string(scene_path), scene_, renderer_->resources(), assets_, physics_,
+            &clothRegistrations, &ragdolls_, renderer_->vdpmRegistry());
 
         // Register any glTF `extras.Cloth` meshes with the soft-body solver. The
         // geometry (Assets-owned) keeps its storage vertex buffer; the solver writes it.

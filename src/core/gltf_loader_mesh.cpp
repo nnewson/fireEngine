@@ -456,7 +456,7 @@ Object GltfLoader::GltfSceneBuilder::loadMesh(const fastgltf::Mesh& mesh, std::s
         }
     }
 
-    object.load(context_.resources);
+    object.load(context_.resources, context_.vdpmRegistry);
     return object;
 }
 

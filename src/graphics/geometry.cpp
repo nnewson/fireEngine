@@ -5,13 +5,14 @@
 
 #include <fire_engine/core/log.hpp>
 #include <fire_engine/graphics/mesh_simplifier.hpp>
+#include <fire_engine/graphics/vdpm_gpu_registry.hpp>
 #include <fire_engine/graphics/vipm.hpp>
 #include <fire_engine/render/resources.hpp>
 
 namespace fire_engine
 {
 
-void Geometry::load(Resources& resources)
+void Geometry::load(Resources& resources, VdpmGpuRegistry* registry)
 {
     vertexBuffer_ = storageVertices_ ? resources.createStorageVertexBuffer(vertices_)
                                      : resources.createVertexBuffer(vertices_);
@@ -62,6 +63,15 @@ void Geometry::load(Resources& resources)
             // per instance and refined per frame into a dynamic index buffer.
             collapses_ = progressive.collapses;
         }
+    }
+
+    // GPU-driven VDPM (Stage B5b): register this geometry's forest with the GPU backend once, so
+    // every instance can create a per-instance front over the shared mesh. Registered after the
+    // collapse stream is populated; a null registry (CPU backend / unsupported device) or an
+    // ineligible mesh leaves vdpmMeshHandle_ == NullVdpmMesh.
+    if (registry != nullptr && hasVdpmData())
+    {
+        vdpmMeshHandle_ = registry->registerMesh(vertices_, indices_, collapses_);
     }
 }
 

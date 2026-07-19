@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdint>
+#include <vector>
 
 #include <fire_engine/graphics/gpu_handle.hpp>
 #include <fire_engine/graphics/gpu_limits.hpp>
@@ -11,6 +12,8 @@
 
 namespace fire_engine
 {
+
+struct VdpmWorkRequest; // graphics/vdpm_gpu_registry.hpp — the sink holds these by value
 
 // Pipeline handles covering the forward alpha variants. Object::render picks
 // one per geometry from the material's alphaMode flag: opaque and double-sided
@@ -51,6 +54,15 @@ struct FrameInfo
     float lodPixelErrorBudget{2.0f};
     // LOD strategy (from RenderTunables). Continuous enables the VIPM geomorph on the forward pass.
     LodMode lodMode{LodMode::Discrete};
+    // GPU-driven VDPM (rendering-spine #3, Stage B5b): the global CPU/GPU backend selector and the
+    // renderer-owned per-frame work-request sink. When `vdpmGpuBackend` is set and a binding
+    // carries a GPU front handle, Object appends its VdpmWorkRequest to `vdpmRequestSink` and tags
+    // the forward DrawCommand with the front handle; the renderer harvests the camera-visible
+    // forward draws and records their front compute. B5b-1 still draws the CPU-emitted index buffer
+    // (the GPU compute is a shadow run); B5b-2 flips the draw to the GPU output. Null sink / false
+    // selector ⇒ pure CPU front.
+    bool vdpmGpuBackend{false};
+    std::vector<VdpmWorkRequest>* vdpmRequestSink{nullptr};
     PipelineHandle shadowPipeline{NullPipeline};
     // Light-space view-projection matrices for every shadow caster — cascades,
     // spot lights, and the six faces of each point light. Layout matches

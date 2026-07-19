@@ -50,6 +50,14 @@ inline constexpr float kShadowLodBias = 3.0f;
 // cone straddles the edge-on direction (0 = uniform screen-space error). Keeps contours dense.
 inline constexpr float kVdpmSilhouetteBoost = 2.0f;
 
+// VDPM GPU repair round budget: the number of snapshot detect→apply rounds the GPU repair fixpoint
+// runs before its full-detail fallback (`vdpm_repair_fallback.comp`) seeds every unrefined split to
+// guarantee a hole-free front. It is therefore a COST/QUALITY knob, not a correctness bound — the
+// fallback closes any remainder regardless. Typical fronts converge in ≤ 2 rounds (docs/lod.md);
+// the cap is set generously so the fallback almost never fires while still bounding worst-case
+// cost.
+inline constexpr std::uint32_t kVdpmGpuRepairRoundBudget = 24;
+
 // VDPM UV channel scale: turns a collapse's cumulative UV-deviation radius into pixel-equivalent
 // screen error against the same pixel budget (a texel-density stand-in — per-material texture
 // resolution would refine it). The primary dial for texture fidelity vs triangle count; kept

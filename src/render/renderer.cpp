@@ -7,6 +7,7 @@
 #include <cstring>
 #include <span>
 
+#include <fire_engine/core/log.hpp>
 #include <fire_engine/graphics/frame_info.hpp>
 #include <fire_engine/graphics/frustum.hpp>
 #include <fire_engine/graphics/image.hpp>
@@ -19,6 +20,7 @@
 #include <fire_engine/render/render_target.hpp>
 #include <fire_engine/render/swapchain.hpp>
 #include <fire_engine/render/ubo.hpp>
+#include <fire_engine/render/vdpm_scan.hpp>
 #include <fire_engine/render/viewport.hpp>
 
 namespace fire_engine
@@ -176,6 +178,7 @@ Renderer::Renderer(const Window& window, std::string environmentPath, RendererDe
     tunables_.taaEnabled = debug.taa;
     tunables_.debugView = debug.view;
     tunables_.lodMode = debug.lodMode;
+    tunables_.vdpmGpuBackend = debug.vdpmGpuBackend;
     tunables_.noShadows = debug.noShadows;
     tunables_.debugDrawAabbs = debug.physicsDebug;
     tunables_.debugDrawColliders = debug.physicsDebug;
@@ -233,6 +236,22 @@ Renderer::Renderer(const Window& window, std::string environmentPath, RendererDe
         resources_.descriptors().createGlobalDescriptors(buildGlobalDescriptorRequest());
 
     imageTimelineValue_.assign(swapchain_.images().size(), 0);
+
+    // GPU-driven VDPM front manager (rendering-spine #3, Stage B5b). Built once here, gated ONLY on
+    // the device's compute/scan capability — never on the runtime backend selector — so toggling
+    // RenderTunables::vdpmGpuBackend at runtime works without a reload, and an unsupported device
+    // simply leaves the manager null (the CPU front stays usable; construction never fails). The
+    // per-mesh dispatch-limit fallback is handled inside the manager (logged once).
+    if (VdpmScan::deviceSupported(device_))
+    {
+        vdpmManager_ = std::make_unique<VdpmGpuManager>(device_, resources_);
+    }
+    else
+    {
+        log::info(log::category::render,
+                  "VDPM GPU backend unavailable: device does not meet the compute/scan limits; the "
+                  "view-dependent LOD front will run on the CPU");
+    }
 }
 
 GlobalDescriptorRequest Renderer::buildGlobalDescriptorRequest() const
@@ -778,6 +797,13 @@ const Renderer::DrawBuckets& Renderer::collectDrawCommands(RenderableScene& scen
     cameraData.previousViewProj = previousViewProj_;
     writeMapped(cameraUbo_.mapped[currentFrame_], cameraData);
 
+    // GPU-driven VDPM (Stage B5b): expose the per-frame request sink + the runtime backend selector
+    // so Object appends visible fronts during collection. The compute only runs when the manager
+    // exists (device capable) AND the selector is on; otherwise the sink stays unused and the CPU
+    // front drives the draw.
+    vdpmRequestScratch_.clear();
+    const bool vdpmGpuActive = vdpmManager_ != nullptr && tunables_.vdpmGpuBackend;
+
     const auto extent = swapchain_.extent();
     const AlphaPipelines pipelines{forwardOpaqueHandle_, forwardBlendHandle_};
     const FrameInfo frame{.currentFrame = currentFrame_,
@@ -794,6 +820,8 @@ const Renderer::DrawBuckets& Renderer::collectDrawCommands(RenderableScene& scen
                           .lodEnabled = tunables_.lodEnabled,
                           .lodPixelErrorBudget = tunables_.lodPixelErrorBudget,
                           .lodMode = tunables_.lodMode,
+                          .vdpmGpuBackend = vdpmGpuActive,
+                          .vdpmRequestSink = vdpmGpuActive ? &vdpmRequestScratch_ : nullptr,
                           .shadowPipeline = shadows_.pipelineHandle(),
                           .shadowViewProjs = shadowViewProjs_};
 
@@ -829,6 +857,34 @@ const Renderer::DrawBuckets& Renderer::collectDrawCommands(RenderableScene& scen
 
     assignSelfShadowSlots(drawCommandScratch_);
     buildDrawBuckets(drawCommandScratch_, drawBucketsScratch_);
+
+    // GPU-driven VDPM (Stage B5b): distil the request sink down to the fronts that are actually
+    // camera-visible this frame. Object appended a request for every front on a coarse-cull
+    // survivor (camera ∪ shadow), but only fronts whose FORWARD draw survived into the forward
+    // buckets should run their compute — a shadow-only instance must not. Collect the visible
+    // forward front handles, then hand both to selectVisibleVdpmRequests, which filters to the
+    // visible subset and dedups by handle (identical duplicate collapsed; conflicting params for
+    // one front throws). The actual recordRequests happens in drawFrame, after collection, before
+    // the consumers.
+    vdpmRecordScratch_.clear();
+    if (vdpmGpuActive && !vdpmRequestScratch_.empty())
+    {
+        vdpmVisibleScratch_.clear();
+        for (const std::vector<DrawCommand>* bucket :
+             {&drawBucketsScratch_.opaque, &drawBucketsScratch_.blend,
+              &drawBucketsScratch_.transmissive})
+        {
+            for (const DrawCommand& dc : *bucket)
+            {
+                if (dc.vdpmGpuFront != NullVdpmFront)
+                {
+                    vdpmVisibleScratch_.push_back(dc.vdpmGpuFront);
+                }
+            }
+        }
+        selectVisibleVdpmRequests(vdpmRequestScratch_, vdpmVisibleScratch_, vdpmRecordScratch_,
+                                  vdpmSelectScratch_);
+    }
 
     int triangles = 0;
     for (const std::vector<DrawCommand>* bucket :
@@ -937,6 +993,24 @@ void Renderer::drawFrame(Window& display, RenderableScene& scene, float dt)
 
     updateFrameLighting(scene, cameraPosition, cameraTarget);
     const DrawBuckets& buckets = collectDrawCommands(scene, cameraPosition, cameraTarget);
+
+    // GPU-driven VDPM (Stage B5b): record the front lifecycle (score → refine/coarsen → repair →
+    // emit) for each camera-visible front collected above. Recorded here after collection; the
+    // frame-global camera/viewport/budget come from the jitter-free view-projection (TAA jitter
+    // would thrash the coverage test). B5b-1 records NO consumer barrier — the compute is a shadow
+    // run whose output is not yet drawn (the CPU front still feeds the draw); B5b-2 adds the
+    // compute→(index + indirect read) barrier before the depth prepass and flips the draw.
+    if (vdpmManager_ != nullptr && !vdpmRecordScratch_.empty())
+    {
+        const VdpmFrameGlobals globals{.viewProj = currentViewProj_,
+                                       .cameraPos = cameraPosition,
+                                       .projScaleY = std::abs(unjitteredProj[1, 1]),
+                                       .viewportWidth = static_cast<float>(extent.width),
+                                       .viewportHeight = static_cast<float>(extent.height),
+                                       .pixelBudget = tunables_.lodPixelErrorBudget,
+                                       .frameIndex = currentFrame_};
+        vdpmManager_->recordRequests(cmd, vdpmRecordScratch_, globals);
+    }
 
     // Particles render un-jittered (after TAA); feed them the plain proj. The
     // overlay's emitter scales are applied to a local copy of the gather.

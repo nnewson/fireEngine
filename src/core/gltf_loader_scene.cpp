@@ -31,7 +31,7 @@ GltfLoader::GltfSceneBuilder::GltfSceneBuilder(GltfLoadContext context)
 Node* GltfLoader::loadScene(const std::string& path, SceneGraph& scene, Resources& resources,
                             Assets& assets, PhysicsWorld& physics,
                             std::vector<ClothRegistration>* clothRegistrations,
-                            std::vector<Ragdoll>* ragdolls)
+                            std::vector<Ragdoll>* ragdolls, VdpmGpuRegistry* vdpmRegistry)
 {
     auto gltfPath = std::filesystem::path(path);
     std::unordered_set<std::size_t> controllableNodeIndices;
@@ -58,6 +58,7 @@ Node* GltfLoader::loadScene(const std::string& path, SceneGraph& scene, Resource
     GltfLoadContext context(asset, gltfPath.parent_path().string(), resources, assets, physics,
                             std::move(controllableNodeIndices), std::move(physicsNodeConfigs),
                             std::move(clothNodeConfigs), std::move(ragdollNodeConfigs));
+    context.vdpmRegistry = vdpmRegistry;
     GltfSceneBuilder builder{std::move(context)};
     return builder.build(scene, clothRegistrations, ragdolls);
 }

@@ -711,6 +711,28 @@ per-region refinement. One recorded collapse stream feeds all three. The authori
   by the **local-only** `[.][gpu]` harness (`tests/render/test_vdpm_gpu.cpp`) — **run it with
   `./test_fire_engine "[gpu]"` from `build/`; normal CTest and CI skip it (no ICD).** The pure CPU
   scoring authority + ABI pack helpers are covered in normal CI (`[vdpm]`).
+- **GPU-front renderer integration (Stage B5b-1)** wires the combined runtime front (B5a) into the live
+  pipeline behind a Vulkan-free seam so `graphics/` never sees `render/`. `graphics/vdpm_gpu_registry.hpp`
+  declares `VdpmGpuRegistry` (register a geometry's forest → `VdpmMeshHandle`; create a per-instance
+  front → `VdpmFrontHandle`; both generational handles in `gpu_handle.hpp`) and the semantic
+  `VdpmWorkRequest`; `render::VdpmGpuManager` implements it, owning the pipeline bundles + the mesh/front
+  tables. **Cross-file invariant:** the manager is constructed by the Renderer ONLY past
+  `VdpmScan::deviceSupported` — an unsupported device leaves `Renderer::vdpmRegistry()` null and every
+  instance stays on the CPU front (construction never fails over a missing capability), and a per-mesh
+  dispatch-limit ineligibility falls back the same way (logged once). The registry threads the load path
+  (`GltfLoader::loadScene` → `Geometry::load` registers the shared forest once → `Object::load` creates
+  each instance's front); nothing per-frame calls the registry. **Cross-file invariant:** the compute is
+  recorded for a front only if its FORWARD `DrawCommand` (tagged with `vdpmGpuFront`) survives the camera
+  cull into the forward buckets — the Renderer filters the `FrameInfo::vdpmRequestSink` down to those,
+  dedups by handle, and records `VdpmGpuManager::recordRequests` after `collectDrawCommands` — so a
+  shadow-only instance never runs VDPM compute. The filter + dedup is the Vulkan-free
+`selectVisibleVdpmRequests` (CI-tested): identical duplicate requests for one front collapse, but
+CONFLICTING params for the same front throw (a front is one persistent GPU state — never scored
+twice a frame with different inputs, never silently first-wins). In B5b-1 this is a **shadow run**: the CPU front still
+  emits the drawn index/indirect buffers and there is no consumer barrier yet (B5b-2 flips the draw to
+  the GPU output and adds the compute→index/indirect barrier). Enable it with `--vdpm-gpu` (+ `--lod-mode
+  view-dependent`); the manager itself is covered by the local `[.][gpu]` `test_vdpm_gpu_manager.cpp`,
+  and `VdpmWorkRequest::sameParams` + handle packing by CI `test_vdpm_gpu_registry.cpp` (`[gpu-registry]`).
 - **Two dials** live in `mesh_simplifier.cpp`: `kUvWeightFactor` (UV fidelity vs simplification) and
   `kErrorCeilingFactor` (must only refuse *geometrically* un-simplifiable shapes — the cube via its
   boundary weight — not UV-costly seams). `kLodRatios` / `kLodPixelErrorBudget` / the `kVdpm*` dials

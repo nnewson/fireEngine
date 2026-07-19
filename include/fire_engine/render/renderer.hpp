@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -32,6 +33,7 @@
 #include <fire_engine/render/taa.hpp>
 #include <fire_engine/render/transmission.hpp>
 #include <fire_engine/render/ubo.hpp>
+#include <fire_engine/render/vdpm_gpu_manager.hpp>
 
 namespace fire_engine
 {
@@ -62,6 +64,10 @@ struct RendererDebug
     // RenderTunables; the overlay's LOD combo still switches at runtime. `view-dependent` activates
     // VDPM (and its indirect draws) at launch, so that path is exercisable without the overlay.
     LodMode lodMode{LodMode::Discrete};
+    // Start with the GPU-driven VDPM backend on (--vdpm-gpu), rendering-spine #3 Stage B5b. Only
+    // takes effect with lodMode view-dependent and a compute/scan-capable device; B5b-1 records the
+    // GPU front compute as a shadow run while the CPU front still feeds the draw. Off by default.
+    bool vdpmGpuBackend{false};
 };
 
 class Renderer
@@ -90,6 +96,17 @@ public:
     [[nodiscard]] const Device& device() const noexcept
     {
         return device_;
+    }
+
+    // The GPU-driven VDPM registration seam (rendering-spine #3, Stage B5b), or null ONLY when the
+    // device lacks the compute/scan capability (the manager is built whenever the device is
+    // capable, independent of the runtime RenderTunables::vdpmGpuBackend selector, so the backend
+    // can be toggled at runtime without a reload). The scene load path passes it to Geometry::load
+    // / Object::load so meshes/fronts register with the backend; a null return keeps every instance
+    // on the CPU front.
+    [[nodiscard]] VdpmGpuRegistry* vdpmRegistry() noexcept
+    {
+        return vdpmManager_.get();
     }
 
     [[nodiscard]] const Swapchain& swapchain() const noexcept
@@ -273,6 +290,22 @@ private:
     Ssao ssao_;
     DebugDraw debugDraw_;
     SoftBodySystem softBody_;
+    // GPU-driven VDPM front manager (rendering-spine #3, Stage B5b). Null ONLY when the device
+    // lacks the compute/scan capability; otherwise built in the ctor regardless of the runtime
+    // backend selector (so it can be toggled without a reload), and an unsupported device never
+    // fails Renderer construction. Behind a unique_ptr because it is non-movable (owns device-bound
+    // pipelines) and conditionally constructed.
+    std::unique_ptr<VdpmGpuManager> vdpmManager_;
+    // Per-frame VDPM work requests (Object appends camera+shadow-visible fronts during collection)
+    // and the deduped camera-visible subset the compute is recorded for. Members so they keep their
+    // capacity across frames.
+    std::vector<VdpmWorkRequest> vdpmRequestScratch_;
+    std::vector<VdpmWorkRequest> vdpmRecordScratch_;
+    // Camera-visible GPU-VDPM front handles harvested from the forward buckets, handed to
+    // selectVisibleVdpmRequests to filter + dedup the sink. Members (with vdpmSelectScratch_) so
+    // the whole per-frame selection retains capacity and allocates nothing steady-state.
+    std::vector<VdpmFrontHandle> vdpmVisibleScratch_;
+    VdpmRequestSelectScratch vdpmSelectScratch_;
     GpuProfiler profiler_;
     DebugOverlay overlay_;
     FrameStats stats_{};

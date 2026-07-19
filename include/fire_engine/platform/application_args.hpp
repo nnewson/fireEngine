@@ -146,6 +146,15 @@ struct ApplicationArgs
             args.debug.physicsDebug = true;
             continue;
         }
+        if (arg == "--vdpm-gpu")
+        {
+            // Enable the GPU-driven VDPM backend (rendering-spine #3 Stage B5b). Effective only
+            // with
+            // `--lod-mode view-dependent` on a compute/scan-capable device; lets the render smoke
+            // test exercise the compute path without the overlay.
+            args.debug.vdpmGpuBackend = true;
+            continue;
+        }
         if (arg == "--lod-mode")
         {
             // Select the initial LOD mode. `view-dependent` launches straight into VDPM (indirect

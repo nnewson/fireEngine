@@ -8,6 +8,7 @@
 #include <fire_engine/graphics/material.hpp>
 #include <fire_engine/graphics/material_binding.hpp>
 #include <fire_engine/graphics/skin.hpp>
+#include <fire_engine/graphics/vdpm_gpu_registry.hpp>
 #include <fire_engine/graphics/vdpm_material.hpp>
 #include <fire_engine/graphics/vipm.hpp>
 #include <fire_engine/math/constants.hpp>
@@ -118,7 +119,7 @@ void Object::addVariantMaterial(std::size_t geometryIndex, std::size_t variantIn
     binding.variantMaterials[variantIndex] = material;
 }
 
-void Object::load(Resources& resources)
+void Object::load(Resources& resources, VdpmGpuRegistry* registry)
 {
     resources_ = &resources;
     if (objectId_ == 0)
@@ -126,11 +127,11 @@ void Object::load(Resources& resources)
         objectId_ = resources.allocateObjectId();
     }
 
-    createForwardBindings(resources);
+    createForwardBindings(resources, registry);
     createShadowBindings(resources);
 }
 
-void Object::createForwardBindings(Resources& resources)
+void Object::createForwardBindings(Resources& resources, VdpmGpuRegistry* registry)
 {
     // Shared per-object UBO (model/view/proj), pushed as forward set-0 binding 0
     // per draw via VK_KHR_push_descriptor — no per-object descriptor set.
@@ -225,6 +226,16 @@ void Object::createForwardBindings(Resources& resources)
                 binding.vdpmIndexMapped[i] = indexSet.mapped[i];
                 binding.vdpmIndirectBufs[i] = indirectSet.buffers[i];
                 binding.vdpmIndirectMapped[i] = indirectSet.mapped[i];
+            }
+
+            // GPU-driven VDPM (Stage B5b): create this instance's GPU front over the geometry's
+            // registered mesh. In B5b-1 it runs alongside the CPU front above (the compute is a
+            // shadow run; the CPU output is still drawn). A null registry, an unsupported device,
+            // or a geometry the backend rejected leaves the geometry's mesh handle null, so
+            // createFront returns NullVdpmFront and the instance stays CPU-only.
+            if (registry != nullptr)
+            {
+                binding.vdpmGpuFront = registry->createFront(binding.geometry->vdpmMeshHandle());
             }
         }
     }
@@ -622,6 +633,29 @@ std::vector<DrawCommand> Object::buildDrawCommands(const FrameInfo& frame, const
             // stays set above for the triangle overlay. Offset 0 — one command per instance buffer.
             cmd.indirectBuffer = binding.vdpmIndirectBufs[frame.currentFrame];
             cmd.indirectOffset = 0;
+
+            // GPU-driven VDPM (Stage B5b): when the GPU backend is selected and this instance has a
+            // GPU front, tag the forward draw with its front handle and queue a work request. The
+            // renderer harvests the tag from the camera-visible forward buckets (a shadow-only
+            // instance's forward command never survives the camera cull, so its front's compute is
+            // not recorded) and records the deduped requests. B5b-1 still draws the CPU index
+            // buffer set above; the request/tag drive only the shadow-run compute.
+            if (frame.vdpmGpuBackend && binding.vdpmGpuFront != NullVdpmFront &&
+                frame.vdpmRequestSink != nullptr)
+            {
+                cmd.vdpmGpuFront = binding.vdpmGpuFront;
+                const Material& vmat = *binding.activeMaterial;
+                const VdpmChannelScales vscales = vdpmChannelScales(vmat);
+                const bool cullBackfaces =
+                    vmat.alphaMode() != AlphaMode::Blend && !vmat.doubleSided();
+                frame.vdpmRequestSink->push_back(
+                    VdpmWorkRequest{.front = binding.vdpmGpuFront,
+                                    .world = world,
+                                    .uvScale = vscales.uv,
+                                    .normalScale = vscales.normal,
+                                    .tangentScale = vscales.tangent,
+                                    .rasterBackfaceCulling = cullBackfaces});
+            }
         }
         // Discrete LOD: swap in a coarser index set (same vertex buffer) for distant/small static
         // meshes, chosen so the level's geometric error stays within the pixel budget.
@@ -674,9 +708,12 @@ std::vector<DrawCommand> Object::buildDrawCommands(const FrameInfo& frame, const
             shadowCmd.indexType = shadowGeometry->indexType();
             // Shadows keep discrete LOD and draw directly — clear the VDPM indirect handle the copy
             // inherited from the forward command, or the "non-null selects indirect" invariant
-            // would point the shadow draw at the forward index count.
+            // would point the shadow draw at the forward index count. Clear the GPU-front handle
+            // too: VDPM is forward-only, so a shadow command must never carry a front (a future
+            // generic front resolver would otherwise pick it up from the shadow bucket).
             shadowCmd.indirectBuffer = NullBuffer;
             shadowCmd.indirectOffset = 0;
+            shadowCmd.vdpmGpuFront = NullVdpmFront;
             // Shadows tolerate a coarser LOD than the main view (silhouette detail matters less).
             if (frame.lodEnabled && shadowGeometry->lods().size() > 1)
             {
