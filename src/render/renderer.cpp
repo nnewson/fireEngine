@@ -1029,7 +1029,8 @@ void Renderer::drawFrame(Window& display, RenderableScene& scene, float dt)
                                        .viewportWidth = static_cast<float>(extent.width),
                                        .viewportHeight = static_cast<float>(extent.height),
                                        .pixelBudget = tunables_.lodPixelErrorBudget,
-                                       .frameIndex = currentFrame_};
+                                       .frameIndex = currentFrame_,
+                                       .stageProfiler = &profiler_};
         // Perf instrumentation (no behaviour change): GPU timestamps around the compute
         // (ProfilePass::VdpmCompute) + CPU wall time of the recording itself (the MoltenVK
         // command-translation cost this arc suspects rivals shader time) + the analytic command
@@ -1069,6 +1070,20 @@ void Renderer::drawFrame(Window& display, RenderableScene& scene, float dt)
                 stats_.vdpmRecordCpuMs, gpuMs, stats_.gpuValid, stats_.vdpmFrontsRecorded,
                 stats_.vdpmAnalyticDispatches, stats_.vdpmRepairMarkedRounds,
                 stats_.vdpmRepairRoundBudget);
+            // Per-stage breakdown (apply-kernel checkpoint). CPU ms is summed over the frame's
+            // fronts (any count); GPU ms is meaningful only when ONE front recorded (single-shot
+            // query slots) — it reads 0 otherwise. Confirms which stage owns the GPU time before
+            // the kernel.
+            const auto& scpu = vdpmManager_->lastComputeStats().stageCpuMs;
+            auto stageGpu = [&](ProfilePass p)
+            { return stats_.passMs[static_cast<std::size_t>(p)]; };
+            log::debug(
+                log::category::render,
+                "VDPM GPU per-stage: CPU score {:.3f} apply {:.3f} repair {:.3f} emit {:.3f} "
+                "ms | GPU (1-front) score {:.3f} apply {:.3f} repair {:.3f} emit {:.3f} ms",
+                scpu[0], scpu[1], scpu[2], scpu[3], stageGpu(ProfilePass::VdpmScore),
+                stageGpu(ProfilePass::VdpmApply), stageGpu(ProfilePass::VdpmRepair),
+                stageGpu(ProfilePass::VdpmEmit));
         }
     }
 

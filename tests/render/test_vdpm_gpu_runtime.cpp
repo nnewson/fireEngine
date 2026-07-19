@@ -194,7 +194,7 @@ public:
             front_.recordFrame(*cmd, scorePipeline_, refinePipelines_, repairPipelines_,
                                emitPipelines_, resources_, f.frameIndex, f.scoreView,
                                f.repairParams, f.budget, f.coarsen, f.roundBudget,
-                               /*repairKernel=*/nullptr);
+                               /*repairKernel=*/nullptr, /*stageProfile=*/nullptr);
         }
 
         // Compute-write → transfer-read; counters/state are compute- and clear-written.

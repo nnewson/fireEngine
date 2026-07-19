@@ -40,6 +40,11 @@ struct VdpmFrameGlobals
     float viewportHeight{0.0f};
     float pixelBudget{0.0f};
     std::uint32_t frameIndex{0};
+    // Optional per-stage timing (apply-kernel arc checkpoint). When set, recordRequests measures
+    // each front's score/apply/repair/emit CPU record cost, and — ONLY when a single front is
+    // recorded — writes GPU timestamps into the VdpmScore/Apply/Repair/Emit profiler passes.
+    // nullptr ⇒ off.
+    const GpuProfiler* stageProfiler{nullptr};
 };
 
 // Owns every Vulkan object the GPU-driven VDPM front needs — the reusable pipeline bundles (score /
@@ -94,6 +99,10 @@ public:
         std::uint32_t roundBudget{0};
         std::uint32_t analyticDispatches{0};
         std::uint32_t analyticBarriers{0};
+        // Per-stage CPU record ms summed across the fronts recorded this frame ([score, apply,
+        // repair, emit]) — the apply-kernel checkpoint's CPU evidence; populated when
+        // VdpmFrameGlobals::stageProfiler is set. GPU per-stage ms come from the profiler passes.
+        std::array<float, 4> stageCpuMs{};
     };
     [[nodiscard]] const ComputeStats& lastComputeStats() const noexcept
     {
