@@ -667,12 +667,26 @@ at a fraction of the triangles. The remaining residuals and follow-ons, in rough
   tags each camera-visible forward `DrawCommand` with its `VdpmFrontHandle` and appends a
   `VdpmWorkRequest` to the renderer-owned sink; the Renderer distils the sink to the fronts whose
   FORWARD draw survived the camera cull (a shadow-only instance never runs compute), dedups by handle,
-  and records `VdpmGpuManager::recordRequests` after `collectDrawCommands`. In B5b-1 the compute is a
-  **shadow run** — the CPU front still emits the drawn index/indirect buffers; the compute integrates
-  0-VUID (verified on the helmet) with no consumer barrier yet. Next: B5b-2 — resolve the front handle
-  to the GPU emitted index/indirect buffers, add the compute→(index + indirect read) barrier before the
-  depth prepass, and flip the draw off the CPU output → B5c — delayed diagnostics + the deferred helmet
-  wedge/rank-count evidence (Vulkan glTF path) + a possible GPU flip.
+  and records `VdpmGpuManager::recordRequests` after `collectDrawCommands`. In B5b-1 the compute was a
+  **shadow run** — the CPU front still emitted the drawn buffers. **B5b-2 flipped the draw to the GPU
+  output.** For a GPU-backed instance (backend selected + a live front) `writeForwardUniforms` now SKIPS
+  the CPU `refineForView`/`repairFront`/`emitActiveIndices` lifecycle (the per-instance CPU cost this
+  arc set out to retire); `buildDrawCommands` tags the forward `DrawCommand` with the front handle, sets
+  `indexType = UInt32` (the GPU stream is always uint32) + `indexCount = 0` (GPU-only, overlay shows it
+  once B5c adds delayed diagnostics), and emits the work request. The Renderer, in the same forward-bucket
+  walk that harvests handles, calls `VdpmGpuManager::resolveDrawBuffers(front, frame)` — ONE handle lookup
+  returning the GPU-emitted index + indirect ring buffers, **throwing `std::logic_error` if a tagged front
+  doesn't resolve** (an invariant violation: eligibility was decided at registration, and a zero-`indexCount`
+  draw must never slip through) — and points `indexBuffer`/`indirectBuffer` at them; the shared
+  `recordIndexedDraw` (prepass / forward / transmission) is UNCHANGED. The compute→(index-read +
+  indirect-read) barrier (`eComputeShader`/`eShaderStorageWrite` → `eIndexInput|eDrawIndirect`/
+  `eIndexRead|eIndirectCommandRead`) is delayed to just before the depth prepass, AFTER the shadow pass
+  (shadows keep discrete/direct + their draw copies clear `vdpmGpuFront`, so shadow-pass GPU work overlaps
+  the compute). Per-mesh fallback instances (ineligible mesh → NullVdpmFront) keep the CPU path; stale CPU
+  repair/channel stats for GPU instances are suppressed via a per-binding `vdpmCpuRanThisFrame` flag until
+  B5c. Verified 0-VUID drawing GPU output on the helmet (opaque + prepass) and TransmissionTest (13 fronts,
+  transmission path). Next: B5c — delayed triangle/repair diagnostics + the deferred helmet wedge/rank-count
+  evidence (Vulkan glTF path) + a possible default flip to GPU after parity sign-off.
 - **7 forest skips.** `buildVertexForest` skips collapses whose edge diverged from its adjacency
   replay (7 of ~6800 on the helmet); past the first skip the forest is slightly unfaithful. The repairs
   cover the visible symptoms; truncating the stream at the first skip would be the clean structural fix.

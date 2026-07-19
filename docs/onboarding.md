@@ -728,11 +728,21 @@ per-region refinement. One recorded collapse stream feeds all three. The authori
   shadow-only instance never runs VDPM compute. The filter + dedup is the Vulkan-free
 `selectVisibleVdpmRequests` (CI-tested): identical duplicate requests for one front collapse, but
 CONFLICTING params for the same front throw (a front is one persistent GPU state — never scored
-twice a frame with different inputs, never silently first-wins). In B5b-1 this is a **shadow run**: the CPU front still
-  emits the drawn index/indirect buffers and there is no consumer barrier yet (B5b-2 flips the draw to
-  the GPU output and adds the compute→index/indirect barrier). Enable it with `--vdpm-gpu` (+ `--lod-mode
-  view-dependent`); the manager itself is covered by the local `[.][gpu]` `test_vdpm_gpu_manager.cpp`,
-  and `VdpmWorkRequest::sameParams` + handle packing by CI `test_vdpm_gpu_registry.cpp` (`[gpu-registry]`).
+twice a frame with different inputs, never silently first-wins). **B5b-2 flips the draw to the GPU
+  output:** for a GPU-backed instance `writeForwardUniforms` SKIPS the CPU front lifecycle (the
+  per-instance CPU-cost win), `buildDrawCommands` tags the forward draw + sets `indexType UInt32` /
+  `indexCount 0`, and the Renderer resolves each tag to the GPU-emitted index+indirect ring via
+  `VdpmGpuManager::resolveDrawBuffers` before the consumers. **Cross-file invariant:** a GPU-backed draw
+  carries `indexCount 0` and its buffers come only from `resolveDrawBuffers`, which THROWS on an
+  unresolvable tag — a tagged front is a live registration, never a silent miss (which would issue a
+  zero-count draw). **Cross-file invariant:** the compute→(index+indirect read) barrier must sit AFTER
+  the shadow pass and BEFORE the depth prepass — the shadow pass never reads VDPM output (discrete/direct,
+  and shadow draw copies clear `vdpmGpuFront`), so it overlaps the compute, and the prepass is the first
+  real consumer. Per-mesh fallback (ineligible mesh → NullVdpmFront) keeps the CPU path; the CPU front is
+  still built for every VDPM instance so a fallback is instant. Enable with `--vdpm-gpu` (+ `--lod-mode
+  view-dependent`); covered by the local `[.][gpu]` `test_vdpm_gpu_manager.cpp` (registration /
+  resolve-or-throw / record) and CI `test_vdpm_gpu_registry.cpp` (`[gpu-registry]` — sameParams / handle
+  packing / filter+dedup+conflict).
 - **Two dials** live in `mesh_simplifier.cpp`: `kUvWeightFactor` (UV fidelity vs simplification) and
   `kErrorCeilingFactor` (must only refuse *geometrically* un-simplifiable shapes — the cube via its
   boundary weight — not UV-costly seams). `kLodRatios` / `kLodPixelErrorBudget` / the `kVdpm*` dials

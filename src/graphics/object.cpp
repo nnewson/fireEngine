@@ -3,6 +3,7 @@
 
 #include <cmath>
 #include <cstring>
+#include <stdexcept>
 
 #include <fire_engine/graphics/geometry.hpp>
 #include <fire_engine/graphics/material.hpp>
@@ -401,11 +402,33 @@ std::vector<DrawCommand> Object::render(const FrameInfo& frame, const Mat4& worl
     return buildDrawCommands(frame, world, hasSkin, shadowBounds);
 }
 
+bool Object::vdpmGpuDrives(const FrameInfo& frame, const GeometryBindings& binding)
+{
+    if (!frame.vdpmGpuBackend || binding.vdpmGpuFront == NullVdpmFront)
+    {
+        return false;
+    }
+    // Backend on + a live front ⇒ the sink MUST be present (the Renderer sets them together). A
+    // null sink here would let writeForwardUniforms skip the CPU emit while buildDrawCommands falls
+    // back to the (now unwritten) CPU buffers — a construction bug, not a runtime condition to
+    // tolerate.
+    if (frame.vdpmRequestSink == nullptr)
+    {
+        throw std::logic_error(
+            "VDPM GPU backend enabled but FrameInfo carries no request sink (the Renderer must set "
+            "vdpmGpuBackend and vdpmRequestSink together)");
+    }
+    return true;
+}
+
 void Object::addVdpmRepairCounts(uint32_t& foldovers, uint32_t& coverage) const
 {
     for (const auto& binding : bindings_)
     {
-        if (binding.vdpmFront)
+        // Only CPU-driven fronts that actually ran this frame contribute; a GPU-backed instance's
+        // CPU counters are stale (its lifecycle was skipped), so suppress them until B5c's delayed
+        // GPU diagnostics.
+        if (binding.vdpmFront && binding.vdpmCpuRanThisFrame)
         {
             foldovers += binding.vdpmFront->foldoversRepaired();
             coverage += binding.vdpmFront->coverageRepaired();
@@ -417,7 +440,8 @@ void Object::addVdpmChannelStats(VdpmChannelStats& out) const
 {
     for (const auto& binding : bindings_)
     {
-        if (binding.vdpmFront)
+        // As addVdpmRepairCounts: skip GPU-backed instances whose CPU front didn't run this frame.
+        if (binding.vdpmFront && binding.vdpmCpuRanThisFrame)
         {
             const ActiveFront::ChannelStats& cs = binding.vdpmFront->channelStats();
             // Triggers accumulate across instances (a scene total); the max ratios MAX-reduce (the
@@ -488,6 +512,12 @@ void Object::writeForwardUniforms(const FrameInfo& frame, const Mat4& world,
 
     for (auto& binding : bindings_)
     {
+        // Reset the CPU-VDPM-ran flag for this binding update; it is set true only immediately
+        // before the CPU front lifecycle runs below. When the GPU backend drives this instance (or
+        // it isn't a VDPM draw) the CPU front is skipped and the flag stays false, so the overlay
+        // suppresses this binding's now-stale CPU repair/channel stats (real GPU diagnostics: B5c).
+        binding.vdpmCpuRanThisFrame = false;
+
         // Material data is bindless (global set 2 materials[] SSBO); a draw selects
         // its material by index (buildDrawCommands → registerMaterial), so a variant
         // switch is just a different index — nothing to write per object here.
@@ -522,9 +552,15 @@ void Object::writeForwardUniforms(const FrameInfo& frame, const Mat4& world,
 
         // VDPM (View-dependent LOD, forward pass — shadow keeps discrete): refine this instance's
         // active front for the camera and rebuild its dynamic index buffer. buildDrawCommands then
-        // points the draw at the freshly-uploaded index set.
-        if (frame.lodMode == LodMode::ViewDependent && frame.lodEnabled && binding.vdpmFront)
+        // points the draw at the freshly-uploaded index set. SKIPPED when the GPU backend drives
+        // this instance (backend selected + a live GPU front): the GPU runs the whole score →
+        // refine → repair → emit lifecycle in compute (VdpmGpuManager), so the ~per-instance CPU
+        // cost is retired. A per-mesh fallback instance (ineligible mesh → NullVdpmFront) keeps the
+        // CPU path.
+        if (frame.lodMode == LodMode::ViewDependent && frame.lodEnabled && binding.vdpmFront &&
+            !vdpmGpuDrives(frame, binding))
         {
+            binding.vdpmCpuRanThisFrame = true;
             // Material-aware channel scales: disable the channels this material can't show (unlit →
             // no shading/tangent; no normal map → no tangent frame; no textures → no UV) and
             // tighten the normal channel for glossy materials. Derived here at refine time so the
@@ -627,23 +663,21 @@ std::vector<DrawCommand> Object::buildDrawCommands(const FrameInfo& frame, const
         // uploaded in writeForwardUniforms this frame). Takes precedence over discrete/VIPM.
         if (frame.lodMode == LodMode::ViewDependent && frame.lodEnabled && binding.vdpmFront)
         {
-            cmd.indexBuffer = binding.vdpmIndexBufs[frame.currentFrame];
-            cmd.indexCount = binding.vdpmIndexCount;
-            // Draw indirect: the renderer reads the count from the GPU buffer (Stage A). indexCount
-            // stays set above for the triangle overlay. Offset 0 — one command per instance buffer.
-            cmd.indirectBuffer = binding.vdpmIndirectBufs[frame.currentFrame];
-            cmd.indirectOffset = 0;
-
-            // GPU-driven VDPM (Stage B5b): when the GPU backend is selected and this instance has a
-            // GPU front, tag the forward draw with its front handle and queue a work request. The
-            // renderer harvests the tag from the camera-visible forward buckets (a shadow-only
-            // instance's forward command never survives the camera cull, so its front's compute is
-            // not recorded) and records the deduped requests. B5b-1 still draws the CPU index
-            // buffer set above; the request/tag drive only the shadow-run compute.
-            if (frame.vdpmGpuBackend && binding.vdpmGpuFront != NullVdpmFront &&
-                frame.vdpmRequestSink != nullptr)
+            if (vdpmGpuDrives(frame, binding))
             {
+                // GPU-driven VDPM (Stage B5b-2): tag the forward draw with its front handle and
+                // queue a work request; the renderer harvests the tag from the camera-visible
+                // forward buckets (a shadow-only instance's forward command never survives the
+                // camera cull, so its front's compute is not recorded), records the deduped
+                // requests, and RESOLVES indexBuffer/indirectBuffer to the GPU-emitted ring for
+                // this frame after collection. The GPU-emitted index stream is ALWAYS uint32,
+                // independent of the source geometry's index representation. The CPU vdpm* buffers
+                // are not written (the CPU front was skipped in writeForwardUniforms), so
+                // indexCount is GPU-only — left 0 for the triangle overlay until B5c's delayed
+                // diagnostics.
                 cmd.vdpmGpuFront = binding.vdpmGpuFront;
+                cmd.indexType = DrawIndexType::UInt32;
+                cmd.indexCount = 0;
                 const Material& vmat = *binding.activeMaterial;
                 const VdpmChannelScales vscales = vdpmChannelScales(vmat);
                 const bool cullBackfaces =
@@ -655,6 +689,18 @@ std::vector<DrawCommand> Object::buildDrawCommands(const FrameInfo& frame, const
                                     .normalScale = vscales.normal,
                                     .tangentScale = vscales.tangent,
                                     .rasterBackfaceCulling = cullBackfaces});
+            }
+            else
+            {
+                // CPU front (per-mesh fallback, or GPU backend off): draw the per-instance active
+                // front's dynamic index set refined + uploaded in writeForwardUniforms this frame.
+                cmd.indexBuffer = binding.vdpmIndexBufs[frame.currentFrame];
+                cmd.indexCount = binding.vdpmIndexCount;
+                // Draw indirect: the renderer reads the count from the GPU buffer (Stage A).
+                // indexCount stays set above for the triangle overlay. Offset 0 — one command per
+                // instance buffer.
+                cmd.indirectBuffer = binding.vdpmIndirectBufs[frame.currentFrame];
+                cmd.indirectOffset = 0;
             }
         }
         // Discrete LOD: swap in a coarser index set (same vertex buffer) for distant/small static

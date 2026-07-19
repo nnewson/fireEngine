@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <stdexcept>
 #include <vector>
 
 #include <fire_engine/graphics/draw_command.hpp>
@@ -105,6 +106,16 @@ TEST_CASE("VdpmGpuManager registers meshes/fronts and records a frame", "[.][gpu
     REQUIRE(manager.frontIndexBuffer(NullVdpmFront, 0) == NullBuffer);
     const VdpmFrontHandle stale = makeHandle<VdpmFrontHandle>(handleIndex(front), 99);
     REQUIRE(manager.frontIndexBuffer(stale, 0) == NullBuffer);
+
+    // resolveDrawBuffers (the B5b-2 draw switch): a live front yields a non-null index + indirect
+    // pair, but a stale / null handle is an INVARIANT VIOLATION (a GPU-backed draw carries
+    // indexCount 0, so a silent miss would issue a zero-count draw) and throws — never resolves to
+    // null.
+    const VdpmGpuManager::DrawBuffers db = manager.resolveDrawBuffers(front, 0);
+    REQUIRE(db.index != NullBuffer);
+    REQUIRE(db.indirect != NullBuffer);
+    REQUIRE_THROWS_AS(manager.resolveDrawBuffers(stale, 0), std::logic_error);
+    REQUIRE_THROWS_AS(manager.resolveDrawBuffers(NullVdpmFront, 0), std::logic_error);
 
     // createFront on a null / bogus mesh yields a null front (CPU fallback).
     REQUIRE(manager.createFront(NullVdpmMesh) == NullVdpmFront);
