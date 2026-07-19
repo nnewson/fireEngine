@@ -1055,6 +1055,21 @@ void Renderer::drawFrame(Window& display, RenderableScene& scene, float dt)
         stats_.vdpmRepairMarkedRounds = diag.valid ? static_cast<int>(diag.markedRounds) : -1;
         stats_.vdpmRepairFallbackFired = diag.fallbackFired != 0;
         stats_.vdpmEmittedIndexCount = static_cast<int>(diag.emittedIndexCount);
+
+        // Periodic perf sample (headless baseline complement to the overlay). CPU record ms is this
+        // frame's; the GPU VdpmCompute ms was resolved from a ring-cycle ago (0 / invalid if the
+        // device lacks timestamp support).
+        if (++vdpmPerfLogCounter_ % 120 == 0)
+        {
+            const float gpuMs = stats_.passMs[static_cast<std::size_t>(ProfilePass::VdpmCompute)];
+            log::debug(
+                log::category::render,
+                "VDPM GPU perf: record {:.3f} ms CPU | compute {:.3f} ms GPU (valid {}) | {} "
+                "front(s), ~{} dispatches, converged {}/{} rounds",
+                stats_.vdpmRecordCpuMs, gpuMs, stats_.gpuValid, stats_.vdpmFrontsRecorded,
+                stats_.vdpmAnalyticDispatches, stats_.vdpmRepairMarkedRounds,
+                stats_.vdpmRepairRoundBudget);
+        }
     }
 
     // Particles render un-jittered (after TAA); feed them the plain proj. The

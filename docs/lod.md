@@ -701,11 +701,23 @@ at a fraction of the triangles. The remaining residuals and follow-ons, in rough
   prefix, fallback never fires) — so ~22 rounds (~87% of the dispatches) do nothing. A repair-budget sweep
   confirms it: budget **2 emits the IDENTICAL front** (38970 indices, no fallback) at **~178 dispatches vs
   ~1014 — 5.7×** fewer; budget 1 is insufficient (a violation remains → fallback fires → over-refines to
-  full detail 46356). **Next: the repair-scheduling arc** — early-out on GPU-resident convergence (detection produces
-  work; no work ⇒ no closure/refine sequence runs) + a work-queue/wave scheduler consuming a compact queue
-  in few dispatches (not 2R/round), then batch same-mesh instances by rank; hoist the per-rank pipeline
-  binds as a quick win. THEN resume B5c — delayed triangle/repair diagnostics + the deferred helmet
-  wedge/rank-count evidence (Vulkan glTF path) + a possible default flip to GPU after parity sign-off.
+  full detail 46356). **Wall-time baseline** (helmet, MoltenVK, timestamps valid): at B=24 the VDPM
+  compute is **~17 ms GPU + ~2.2 ms CPU record** — it alone blows the 16.7 ms vsync budget (the 60→30
+  drop); at B=2 it is **~3.6 ms GPU + ~0.5 ms CPU**. GPU compute dominates CPU record ~8:1, so most of the
+  cost is the GPU serialising across ~1000 barriers between tiny dispatches, not just MoltenVK command
+  translation — both fall ~4–5× at B=2. **Next: the repair-scheduling arc — NOT a fixed lower budget and
+  NOT dispatchIndirect early-out alone (which still leaves ~1000 commands to translate + barrier).** The
+  fix is a **scheduler replacement** that folds convergence in: one persistent workgroup per front (clear
+  → resolve/classify in strided loops → shared-memory reduce anyMarked → uniform exit when clean → process
+  ranks in-workgroup with barrier()/memoryBarrierBuffer() → final detect + the existing full-detail
+  fallback), batched across all fronts in ONE dispatch — turning ~1000 commands into one while keeping
+  genuine GPU-resident convergence; graduate to a multi-workgroup queue/wave design only if one workgroup
+  is too serial for large meshes. Implications: upload the rank offsets (currently CPU-side), share the
+  GLSL coverage/foldover classifier between the existing detector and the new kernel, keep the current
+  recorder as the tested reference/fallback until invariants + output match. Hoisting the per-rank
+  pipeline binds is now only a small cleanup to that retained reference path, not a priority. THEN resume
+  B5c — delayed triangle/repair diagnostics + the deferred helmet wedge/rank-count evidence (Vulkan glTF
+  path) + a possible default flip to GPU after parity sign-off.
 - **7 forest skips.** `buildVertexForest` skips collapses whose edge diverged from its adjacency
   replay (7 of ~6800 on the helmet); past the first skip the forest is slightly unfaithful. The repairs
   cover the visible symptoms; truncating the stream at the first skip would be the clean structural fix.

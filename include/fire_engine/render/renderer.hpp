@@ -306,6 +306,9 @@ private:
     // the whole per-frame selection retains capacity and allocates nothing steady-state.
     std::vector<VdpmFrontHandle> vdpmVisibleScratch_;
     VdpmRequestSelectScratch vdpmSelectScratch_;
+    // Throttle for the periodic VDPM perf sample log (CPU record vs GPU compute ms) — the headless
+    // baseline complement to the overlay's live readout.
+    std::uint32_t vdpmPerfLogCounter_{0};
     GpuProfiler profiler_;
     DebugOverlay overlay_;
     FrameStats stats_{};
