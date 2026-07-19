@@ -722,7 +722,14 @@ at a fraction of the triangles. The remaining residuals and follow-ons, in rough
   byte-identical, the classification `[.][gpu]` test unchanged), and the per-rank `RankRange{offset,count}`
   list is uploaded device-local (`binding.rankRangesAddress`, the `VdpmRankRangeGpu` ABI in ubo.hpp,
   derived + validated as a contiguous partition of `splitsByRank` at the build boundary BEFORE any upload;
-  a `[vdpm]` CI test pins the reject branches). THEN resume
+  a `[vdpm]` CI test pins the reject branches). **Stage 2 (the persistent-workgroup kernel) has landed
+  too:** `shaders/vdpm_repair_kernel.comp` runs the whole repair fixpoint for one front in ONE workgroup /
+  ONE dispatch (the `VdpmRepairJobGpu` batch ABI in ubo.hpp; `s_anyMarked` shared reduction for the
+  uniform convergence exit; `VdpmRepairKernel` capability-gated; `VdpmGpuFront::makeRepairJob` +
+  `recordRepairKernel`), built beside the recorder and exercised by 6 `[.][gpu]` control-flow fixtures —
+  NOT yet flipped into `recordFrame`. NEXT: Stage 3 cross-checks the kernel vs the recorder + CPU oracle,
+  flips `recordFrame`'s repair to it (recorder retained as reference/fallback), and remeasures; then Stage
+  4 batches N fronts into one dispatch. THEN resume
   B5c — delayed triangle/repair diagnostics + the deferred helmet wedge/rank-count evidence (Vulkan glTF
   path) + a possible default flip to GPU after parity sign-off.
 - **7 forest skips.** `buildVertexForest` skips collapses whose edge diverged from its adjacency

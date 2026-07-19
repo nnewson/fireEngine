@@ -225,6 +225,39 @@ ComputePipelineConfig vdpmRepairFallbackPipelineConfig()
     return emitConfig<VdpmRepairFallbackPush>("vdpm_repair_fallback.comp.spv");
 }
 
+ComputePipelineConfig vdpmRepairKernelPipelineConfig()
+{
+    return emitConfig<VdpmRepairKernelPush>("vdpm_repair_kernel.comp.spv");
+}
+
+bool VdpmRepairKernel::deviceSupported(const Device& device)
+{
+    const vk::PhysicalDeviceLimits& limits = device.physicalDevice().getProperties().limits;
+    return limits.maxComputeWorkGroupInvocations >= kLocalSize &&
+           limits.maxComputeWorkGroupSize[0] >= kLocalSize &&
+           limits.maxComputeSharedMemorySize >= sizeof(std::uint32_t); // s_anyMarked
+}
+
+VdpmRepairKernel::Checked VdpmRepairKernel::requireSupported(const Device& device)
+{
+    if (!deviceSupported(device))
+    {
+        throw std::runtime_error(
+            "VDPM repair kernel: device does not meet the workgroup/shared-memory limits (256)");
+    }
+    return {};
+}
+
+VdpmRepairKernel::VdpmRepairKernel(const Device& device)
+    : VdpmRepairKernel(device, requireSupported(device))
+{
+}
+
+VdpmRepairKernel::VdpmRepairKernel(const Device& device, Checked)
+    : pipeline_(device, vdpmRepairKernelPipelineConfig())
+{
+}
+
 VdpmGpuMesh VdpmGpuMesh::build(Resources& resources, std::span<const Vertex> vertices,
                                const VertexForest& forest)
 {
@@ -922,7 +955,95 @@ VdpmGpuFront VdpmGpuFront::buildRuntime(Resources& resources, const VdpmGpuMesh&
         front.repairParamsRingAddress_[i] = resources.bufferAddress(repairParams.buffers[i]);
         requireAligned(front.repairParamsRingAddress_[i], 16, "repairParams");
     }
+    // Persistent-kernel job ring (Stage 2): one host-visible VdpmRepairJobGpu per frame slot.
+    const MappedBufferSet jobs =
+        resources.createMappedDeviceAddressBuffers(sizeof(VdpmRepairJobGpu));
+    for (int i = 0; i < kMaxFramesInFlight; ++i)
+    {
+        front.jobRing_[i] = jobs.mapped[i];
+        front.jobRingAddress_[i] = resources.bufferAddress(jobs.buffers[i]);
+        requireAligned(front.jobRingAddress_[i], 8, "repairJob");
+    }
     return front;
+}
+
+VdpmRepairJobGpu VdpmGpuFront::makeRepairJob(std::uint32_t frameIndex,
+                                             std::uint32_t roundBudget) const
+{
+    if (!hasRuntime_ || !hasRepair_)
+    {
+        throw std::logic_error("VdpmGpuFront::makeRepairJob: not a runtime repair front");
+    }
+    if (roundBudget > kVdpmGpuRepairRoundBudget)
+    {
+        throw std::logic_error("VdpmGpuFront::makeRepairJob: roundBudget exceeds history capacity");
+    }
+    const std::uint32_t rankCount = static_cast<std::uint32_t>(rankRanges_.size());
+    return VdpmRepairJobGpu{.activeAddress = activeStateAddress_,
+                            .refinedAddress = refinedStateAddress_,
+                            .requiredAddress = requiredStateAddress_,
+                            .dependentsAddress = dependentsStateAddress_,
+                            .failFlagsAddress = failFlagsAddress_,
+                            .ancestorIdAddress = repairAncestorIdAddress_,
+                            .ancestorDepthAddress = repairAncestorDepthAddress_,
+                            .repairControlAddress = repairControlAddress_,
+                            .roundHistoryAddress = roundHistoryAddress_,
+                            .finestFacesAddress = binding_.finestFacesAddress,
+                            .positionsAddress = binding_.positionsAddress,
+                            .removalParentAddress = binding_.removalParentAddress,
+                            .removingSplitAddress = binding_.removingSplitAddress,
+                            .frontSplitsAddress = binding_.frontSplitsAddress,
+                            .splitsByRankAddress = binding_.splitsByRankAddress,
+                            .rankRangesAddress = binding_.rankRangesAddress,
+                            .paramsAddress = repairParamsRingAddress_[frameIndex],
+                            .vertexCount = binding_.vertexCount,
+                            .finestFaceCount = binding_.finestFaceCount,
+                            .splitCount = binding_.splitCount,
+                            .maxDepth = binding_.maxDepth,
+                            .rankCount = rankCount,
+                            .roundBudget = roundBudget,
+                            .roundHistoryCapacity = kVdpmGpuRepairRoundBudget,
+                            .pad = 0};
+}
+
+void VdpmGpuFront::recordRepairKernel(vk::CommandBuffer cmd, const VdpmRepairKernel& kernel,
+                                      std::uint32_t frameIndex, const VdpmRepairParams& params,
+                                      std::uint32_t roundBudget)
+{
+    if (!hasRuntime_ || !hasRepair_)
+    {
+        throw std::logic_error("VdpmGpuFront::recordRepairKernel: not a runtime repair front");
+    }
+    if (binding_.splitCount == 0 || binding_.finestFaceCount == 0)
+    {
+        return; // nothing to repair (no splits / no faces)
+    }
+
+    // Host-upload the params + the packed job (persistent mapping; the submit makes the writes
+    // available to the dispatch, exactly like the CPU indirect write). The kernel reaches every
+    // buffer via BDA, so no Resources needed here.
+    writeMapped(repairParamsRing_[frameIndex], params);
+    const VdpmRepairJobGpu job = makeRepairJob(frameIndex, roundBudget);
+    writeMapped(jobRing_[frameIndex], job);
+
+    // Leading barrier: applyView's coarsen (compute, no trailing barrier) → the kernel's reads of
+    // the settled front state. recordFrame owns the cross-frame lifecycle barrier.
+    const vk::MemoryBarrier2 lead{
+        .srcStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+        .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
+        .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+        .dstAccessMask =
+            vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite,
+    };
+    cmd.pipelineBarrier2(vk::DependencyInfo{.memoryBarrierCount = 1, .pMemoryBarriers = &lead});
+
+    const VdpmRepairKernelPush push{
+        .jobsAddress = jobRingAddress_[frameIndex], .jobCount = 1, .pad = 0};
+    cmd.bindPipeline(vk::PipelineBindPoint::eCompute, kernel.pipeline().pipeline());
+    cmd.pushConstants<VdpmRepairKernelPush>(kernel.pipeline().pipelineLayout(),
+                                            vk::ShaderStageFlagBits::eCompute, 0, push);
+    cmd.dispatch(1, 1, 1); // ONE workgroup — the whole repair fixpoint
+    // No consumer barrier — the caller synchronises the state read-back.
 }
 
 void VdpmGpuFront::recordFrame(vk::CommandBuffer cmd, const ComputePipeline& scorePipeline,

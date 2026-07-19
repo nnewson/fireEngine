@@ -68,6 +68,11 @@ struct DependencyDag; // graphics/vdpm_parallel.hpp — the forest's refine-depe
 [[nodiscard]] ComputePipelineConfig vdpmRepairDetectPipelineConfig();
 [[nodiscard]] ComputePipelineConfig vdpmRepairFallbackPipelineConfig();
 
+// The persistent repair kernel config (perf arc, Stage 2): `shaders/vdpm_repair_kernel.comp` runs
+// the whole repair fixpoint for one front in ONE workgroup. Descriptor-free; push =
+// VdpmRepairKernelPush (job-array address + count).
+[[nodiscard]] ComputePipelineConfig vdpmRepairKernelPipelineConfig();
+
 // A rank's contiguous range in `splitsByRank` — the CPU recorder issues one dispatch per rank over
 // `[offset, offset + count)`, and an array of these is uploaded device-local for the persistent
 // repair kernel (binding.rankRangesAddress). The shared GPU ABI struct lives in ubo.hpp (the
@@ -349,6 +354,50 @@ private:
     ComputePipeline fallback_;
 };
 
+// The persistent repair kernel (perf arc, Stage 2): one workgroup per front runs the whole repair
+// fixpoint in a single dispatch, replacing the ~1000-command recorder. Descriptor-free; non-movable
+// (holds a device pointer). Capability-gated INDEPENDENTLY of the rest of the GPU front — the
+// manager builds it only when `deviceSupported`, else it keeps the multi-dispatch recorder.
+class VdpmRepairKernel
+{
+public:
+    // The kernel's fixed workgroup size (local_size_x in vdpm_repair_kernel.comp).
+    static constexpr std::uint32_t kLocalSize = 256;
+
+    // Throws std::runtime_error if !deviceSupported. The check runs BEFORE the pipeline is
+    // constructed (the public ctor delegates through requireSupported, whose result is evaluated
+    // first), so a caller that forgot deviceSupported() fails loudly here — not at pipeline
+    // creation.
+    explicit VdpmRepairKernel(const Device& device);
+
+    VdpmRepairKernel(const VdpmRepairKernel&) = delete;
+    VdpmRepairKernel& operator=(const VdpmRepairKernel&) = delete;
+    VdpmRepairKernel(VdpmRepairKernel&&) = delete;
+    VdpmRepairKernel& operator=(VdpmRepairKernel&&) = delete;
+    ~VdpmRepairKernel() = default;
+
+    // True when the device can run the kernel: a workgroup of kLocalSize invocations (size[0] +
+    // invocations) plus the shared-memory reduction word. The 1-D workgroup COUNT cap (relevant
+    // once Stage 4 dispatches N fronts) is checked per-dispatch.
+    [[nodiscard]] static bool deviceSupported(const Device& device);
+
+    [[nodiscard]] const ComputePipeline& pipeline() const noexcept
+    {
+        return pipeline_;
+    }
+
+private:
+    // Token proving deviceSupported ran before the pipeline member is constructed (the delegating
+    // ctor evaluates requireSupported first).
+    struct Checked
+    {
+    };
+    [[nodiscard]] static Checked requireSupported(const Device& device);
+    VdpmRepairKernel(const Device& device, Checked);
+
+    ComputePipeline pipeline_;
+};
+
 // PER-INSTANCE GPU front state — the per-split score/backface output + the per-frame mapped params
 // block, and (full build only) the emit workspace + resident emitted-index buffer. References its
 // shared VdpmGpuMesh.
@@ -474,6 +523,24 @@ public:
     void recordRepair(vk::CommandBuffer cmd, const VdpmRefinePipelines& refinePipelines,
                       const VdpmRepairPipelines& repairPipelines, Resources& resources,
                       const VdpmRepairParams& params, std::uint32_t roundBudget);
+
+    // Pack this front's complete repair job (perf arc, Stage 2) for frame slot `frameIndex` under
+    // `roundBudget` — the single assembly authority Stage 4 reuses to fill its N-job manager array.
+    // Points `paramsAddress` at the frame slot's repair-params ring (the caller uploads the params
+    // there first). Requires a runtime front with repair data (buildRuntime full build); throws
+    // std::logic_error otherwise. `roundBudget` must be <= the allocated roundHistory capacity.
+    [[nodiscard]] VdpmRepairJobGpu makeRepairJob(std::uint32_t frameIndex,
+                                                 std::uint32_t roundBudget) const;
+
+    // Record the persistent-kernel repair for frame slot `frameIndex`: upload `params`, pack +
+    // upload the 1-element job, a leading apply/coarsen→repair compute barrier (recordFrame owns
+    // the cross-frame lifecycle barrier), then ONE dispatch of ONE workgroup. Records NO consumer
+    // barrier — the caller synchronises the state read-back. The whole repair fixpoint is this one
+    // dispatch. Throws std::logic_error without a runtime repair front, or if roundBudget exceeds
+    // the history capacity.
+    void recordRepairKernel(vk::CommandBuffer cmd, const VdpmRepairKernel& kernel,
+                            std::uint32_t frameIndex, const VdpmRepairParams& params,
+                            std::uint32_t roundBudget);
 
     // TEST-ONLY (Stage B4): record a SINGLE ancestor + detect against the current settled front,
     // writing each finest face's packed classification (`kVdpmDetect*` bits) to
@@ -726,6 +793,10 @@ private:
     std::array<FrameOutput, kMaxFramesInFlight> frameOutputs_{};
     std::array<std::span<std::byte>, kMaxFramesInFlight> repairParamsRing_{};
     std::array<std::uint64_t, kMaxFramesInFlight> repairParamsRingAddress_{};
+    // Persistent-kernel job ring (perf arc, Stage 2): one host-visible VdpmRepairJobGpu per frame
+    // slot, packed + uploaded per repair and read by the kernel via its device address.
+    std::array<std::span<std::byte>, kMaxFramesInFlight> jobRing_{};
+    std::array<std::uint64_t, kMaxFramesInFlight> jobRingAddress_{};
 };
 
 } // namespace fire_engine

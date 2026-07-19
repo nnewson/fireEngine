@@ -903,4 +903,65 @@ static_assert(alignof(VdpmRepairFallbackPush) == 8);
 static_assert(std::is_standard_layout_v<VdpmRepairFallbackPush>);
 static_assert(std::is_trivially_copyable_v<VdpmRepairFallbackPush>);
 
+// One front's complete repair job (Stage 2 persistent-kernel ABI). An array of these is the batch
+// vehicle: the kernel reads `jobs[gl_WorkGroupID.x]` and runs the whole GPU-resident repair
+// fixpoint for that front in ONE workgroup. Stage 2 uploads a 1-element array + dispatches 1
+// workgroup; Stage 4 fills N + dispatches N — the shader/ABI unchanged. All *Address fields are BDA
+// device addresses; the counts drive the strided loops. `rankCount` (not maxRank) is the length of
+// the rankRanges array (0 for a zero-split front); `roundHistoryCapacity` is the ALLOCATED history
+// length
+// (>= roundBudget), which the kernel clears IN FULL so a shorter budget leaves no stale tail.
+struct alignas(8) VdpmRepairJobGpu
+{
+    std::uint64_t activeAddress{0};        // per canonical: 0/1
+    std::uint64_t refinedAddress{0};       // per split
+    std::uint64_t requiredAddress{0};      // per split
+    std::uint64_t dependentsAddress{0};    // per canonical
+    std::uint64_t failFlagsAddress{0};     // 2 uint (close/refine failure flags)
+    std::uint64_t ancestorIdAddress{0};    // per canonical (repair ancestor cache)
+    std::uint64_t ancestorDepthAddress{0}; // per canonical
+    std::uint64_t repairControlAddress{
+        0};                               // 4 uint [anyMarked, ancestorFailure, fallbackFired, pad]
+    std::uint64_t roundHistoryAddress{0}; // roundHistoryCapacity uint
+    std::uint64_t finestFacesAddress{0};  // 3 * finestFaceCount canonical corners
+    std::uint64_t positionsAddress{0};    // per canonical vec4
+    std::uint64_t removalParentAddress{0}; // per canonical (ancestor walk)
+    std::uint64_t removingSplitAddress{0}; // per canonical (mark target)
+    std::uint64_t frontSplitsAddress{0};   // VdpmFrontSplitGpu per split
+    std::uint64_t splitsByRankAddress{0};  // uint per split, packed by ascending rank
+    std::uint64_t rankRangesAddress{0};    // VdpmRankRangeGpu[rankCount]
+    std::uint64_t paramsAddress{0};        // VdpmRepairParams
+    std::uint32_t vertexCount{0};
+    std::uint32_t finestFaceCount{0};
+    std::uint32_t splitCount{0};
+    std::uint32_t maxDepth{0};
+    std::uint32_t rankCount{0};
+    std::uint32_t roundBudget{0};
+    std::uint32_t roundHistoryCapacity{0};
+    std::uint32_t pad{0};
+};
+static_assert(offsetof(VdpmRepairJobGpu, activeAddress) == 0);
+static_assert(offsetof(VdpmRepairJobGpu, paramsAddress) == 128); // 17th uint64 (index 16)
+static_assert(offsetof(VdpmRepairJobGpu, vertexCount) == 136);
+static_assert(offsetof(VdpmRepairJobGpu, roundHistoryCapacity) == 160);
+static_assert(sizeof(VdpmRepairJobGpu) == 168, "VdpmRepairJobGpu std430 size/stride");
+static_assert(alignof(VdpmRepairJobGpu) == 8);
+static_assert(std::is_standard_layout_v<VdpmRepairJobGpu>);
+static_assert(std::is_trivially_copyable_v<VdpmRepairJobGpu>);
+
+// Push constant for the persistent repair kernel: only the job-array address + count (pin 6 — never
+// push the per-front addresses). The kernel dispatches `jobCount` workgroups, one per front.
+struct alignas(8) VdpmRepairKernelPush
+{
+    std::uint64_t jobsAddress{0};
+    std::uint32_t jobCount{0};
+    std::uint32_t pad{0};
+};
+static_assert(offsetof(VdpmRepairKernelPush, jobsAddress) == 0);
+static_assert(offsetof(VdpmRepairKernelPush, jobCount) == 8);
+static_assert(sizeof(VdpmRepairKernelPush) == 16);
+static_assert(alignof(VdpmRepairKernelPush) == 8);
+static_assert(std::is_standard_layout_v<VdpmRepairKernelPush>);
+static_assert(std::is_trivially_copyable_v<VdpmRepairKernelPush>);
+
 } // namespace fire_engine
