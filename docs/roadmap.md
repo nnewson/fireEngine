@@ -397,13 +397,21 @@ Candidates" section folds in here:
   Renderer sets the sink + selector on `FrameInfo`; `Object` tags each camera-visible forward
   `DrawCommand` with its front handle and appends a `VdpmWorkRequest`; the Renderer filters the sink to
   fronts whose forward draw survived the camera cull (shadow-only instances never run compute), dedups
-  by handle, and records `recordRequests` after `collectDrawCommands`. The compute is a **shadow run** —
-  the CPU front still emits the drawn buffers, no consumer barrier yet — verified 0-VUID on the helmet
-  (`--lod-mode view-dependent --vdpm-gpu`), with a `[.][gpu]` manager test + a CI `sameParams`/handle
-  test. Still ahead: **B5b-2** — resolve the front handle to the GPU emitted index/indirect buffers, add
-  the compute→(index-read + indirect-read) barrier before the depth prepass, flip the draw off the CPU
-  output (**default CPU** selector retained); **B5c** — completed-frame delayed diagnostics, the deferred
-  helmet wedge/rank-count evidence (Vulkan glTF path), and a possible default flip to GPU after parity +
+  by handle, and records `recordRequests` after `collectDrawCommands`. The compute was a **shadow run** —
+  the CPU front still emitted the drawn buffers. **B5b-2 flipped the draw to the GPU output**
+  *(branch `cr-vdpm-gpu-render-2`)*: a GPU-backed instance (backend selected + live front) SKIPS the CPU
+  `refineForView`/`repairFront`/`emitActiveIndices` lifecycle in `writeForwardUniforms` (the per-instance
+  CPU cost this arc set out to retire); `buildDrawCommands` tags the forward `DrawCommand` + sets
+  `indexType UInt32` / `indexCount 0`; the Renderer resolves each tag to the GPU-emitted index+indirect
+  ring via `VdpmGpuManager::resolveDrawBuffers` (one lookup, THROWS on an unresolvable tag — a
+  zero-`indexCount` draw must never slip through) and points the draw at it (`recordIndexedDraw`
+  unchanged); the compute→(index+indirect read) barrier is delayed to just before the depth prepass, after
+  the shadow pass (which overlaps the compute). Per-mesh fallback keeps the CPU path; stale CPU stats for
+  GPU instances are suppressed via `vdpmCpuRanThisFrame` until B5c. **Default CPU** selector retained.
+  Verified 0-VUID drawing GPU output on the helmet (opaque+prepass) + TransmissionTest (13 fronts,
+  transmission); CPU path unaffected; `[.][gpu]` manager test extended with the resolve-or-throw contract.
+  Still ahead: **B5c** — completed-frame delayed triangle/repair diagnostics, the deferred helmet
+  wedge/rank-count evidence (Vulkan glTF path), and a possible default flip to GPU after visual parity +
   zero-VUID + no unexpected fallbacks.
 - ✅ **Static GPU residency** — device-local static asset upload split from dynamic mapped buffers.
   Landed in block B (`createDeviceLocalBuffer` for static vertices/indices/LODs/VIPM), and the batching

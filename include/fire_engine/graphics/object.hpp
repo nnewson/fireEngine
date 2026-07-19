@@ -116,10 +116,14 @@ private:
         // current frame's emitted index count.
         std::optional<ActiveFront> vdpmFront;
         // GPU-driven VDPM front handle for this instance (Stage B5b), created at load when a
-        // registry is supplied and the geometry has a GPU mesh. In B5b-1 it runs alongside the CPU
-        // vdpmFront (the compute is a shadow run; the CPU output above is still drawn).
-        // NullVdpmFront ⇒ CPU only.
+        // registry is supplied and the geometry has a GPU mesh. When the backend is selected this
+        // front drives the draw (B5b-2) and the CPU vdpmFront lifecycle is skipped; NullVdpmFront ⇒
+        // CPU only (per-mesh fallback).
         VdpmFrontHandle vdpmGpuFront{NullVdpmFront};
+        // True only on frames this binding's CPU VDPM front actually ran (skipped when the GPU
+        // backend drives it). The overlay reads it to suppress now-stale CPU repair/channel stats
+        // for GPU-driven instances until B5c adds delayed GPU diagnostics.
+        bool vdpmCpuRanThisFrame{false};
         std::array<BufferHandle, kMaxFramesInFlight> vdpmIndexBufs{NullBuffer, NullBuffer};
         std::array<std::span<std::byte>, kMaxFramesInFlight> vdpmIndexMapped{};
         uint32_t vdpmIndexCount{0};
@@ -145,6 +149,15 @@ private:
     // sets); the shadow draw reuses the forward skin/morph/morphSsbo buffers.
     void createForwardBindings(Resources& resources, VdpmGpuRegistry* registry);
     void createShadowBindings(Resources& resources);
+
+    // Single predicate for "the GPU-driven VDPM backend drives this binding this frame" (backend
+    // selected + a live GPU front), shared by writeForwardUniforms (skip the CPU lifecycle) and
+    // buildDrawCommands (tag + let the renderer resolve GPU buffers) so the two can never disagree
+    // — a disagreement would skip the CPU emit then draw the stale CPU buffers. The Renderer sets
+    // vdpmGpuBackend + vdpmRequestSink as a unit, so the backend being on with a null sink is a
+    // construction bug: this THROWS std::logic_error rather than silently desyncing.
+    [[nodiscard]] static bool vdpmGpuDrives(const FrameInfo& frame,
+                                            const GeometryBindings& binding);
 
     // render() phases: write the per-frame UBOs (shared/skin/material/morph),
     // write the shadow UBO, then assemble forward + shadow draw commands.

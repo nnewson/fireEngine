@@ -454,3 +454,23 @@ index count the direct path used), and the validation layers must stay **silent*
 `grep -icE 'VUID|validation error'` on the backgrounded run's stderr should print `0`. DamagedHelmet
 exercises the forward + depth-prepass sites; TransmissionTest's dense transmissive meshes exercise the
 transmission site. This is the MoltenVK `drawIndexedIndirect` de-risk.
+
+#### VDPM GPU-driven front (Stage B5b) — CPU↔GPU backend A/B
+Add `--vdpm-gpu` to run the whole per-frame front lifecycle (score → refine/coarsen → repair → emit) on
+the GPU and draw from the GPU-emitted index/indirect buffers; omit it for the CPU front. Both need
+`--lod-mode view-dependent` and a compute/scan-capable device. Confirm the GPU path is live with
+`FE_LOG=render:debug` (prints `VDPM GPU: now recording N front(s) per frame`; the CPU path prints
+nothing). Smoke each **consumer path** — the image must be **equivalent + hole-free** to the CPU
+backend (exact only where off-threshold), and `grep -icE 'VUID|validation error'` must print `0`:
+```bash
+# Opaque forward + depth-prepass
+./fireEngineApp DamagedHelmet/DamagedHelmet.gltf skybox.hdr --lod-mode view-dependent --vdpm-gpu
+# Blend + double-sided (no depth-prepass consumer, cull none, blend bucket/pipeline) — a dense
+# DamagedHelmet copy re-materialised alphaMode BLEND + doubleSided (reuses the same .bin + textures)
+./fireEngineApp DamagedHelmet/DamagedHelmetBlend.gltf skybox.hdr --lod-mode view-dependent --vdpm-gpu
+# Transmission path (13 dense transmissive instances)
+./fireEngineApp TransmissionTest/TransmissionTest.gltf skybox.hdr --lod-mode view-dependent --vdpm-gpu
+```
+A/B against the same command **without** `--vdpm-gpu` to confirm equivalence. (B5b-2 note: the overlay
+"Triangles drawn" reads 0 for GPU-driven instances — the count is GPU-only until B5c adds delayed
+diagnostics — so judge parity visually, not by the triangle readout.)

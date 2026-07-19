@@ -1,6 +1,7 @@
 #include <fire_engine/render/vdpm_gpu_manager.hpp>
 
 #include <optional>
+#include <stdexcept>
 #include <utility>
 
 #include <fire_engine/core/log.hpp>
@@ -169,6 +170,27 @@ void VdpmGpuManager::recordRequests(vk::CommandBuffer cmd,
                            resources_, globals.frameIndex, view, repair, globals.pixelBudget,
                            coarsenBudget, kVdpmGpuRepairRoundBudget);
     }
+}
+
+VdpmGpuManager::DrawBuffers VdpmGpuManager::resolveDrawBuffers(VdpmFrontHandle front,
+                                                               std::uint32_t frameIndex) const
+{
+    const VdpmGpuFront* f = resolveFront(front);
+    if (f == nullptr)
+    {
+        throw std::logic_error(
+            "VdpmGpuManager::resolveDrawBuffers: front handle did not resolve to a live front (a "
+            "GPU-backed draw was tagged with a stale/invalid handle)");
+    }
+    const DrawBuffers out{.index = f->emittedIndicesBuffer(frameIndex),
+                          .indirect = f->emittedIndirectBuffer(frameIndex)};
+    if (out.index == NullBuffer || out.indirect == NullBuffer)
+    {
+        throw std::logic_error(
+            "VdpmGpuManager::resolveDrawBuffers: a live front has a null draw buffer (its runtime "
+            "ring was not allocated)");
+    }
+    return out;
 }
 
 BufferHandle VdpmGpuManager::frontIndexBuffer(VdpmFrontHandle front, std::uint32_t frameIndex) const

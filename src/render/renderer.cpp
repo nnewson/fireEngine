@@ -859,26 +859,35 @@ const Renderer::DrawBuckets& Renderer::collectDrawCommands(RenderableScene& scen
     buildDrawBuckets(drawCommandScratch_, drawBucketsScratch_);
 
     // GPU-driven VDPM (Stage B5b): distil the request sink down to the fronts that are actually
-    // camera-visible this frame. Object appended a request for every front on a coarse-cull
-    // survivor (camera ∪ shadow), but only fronts whose FORWARD draw survived into the forward
-    // buckets should run their compute — a shadow-only instance must not. Collect the visible
-    // forward front handles, then hand both to selectVisibleVdpmRequests, which filters to the
-    // visible subset and dedups by handle (identical duplicate collapsed; conflicting params for
-    // one front throws). The actual recordRequests happens in drawFrame, after collection, before
-    // the consumers.
+    // camera-visible this frame, and (B5b-2) resolve each visible forward draw's buffers to the GPU
+    // output. Object appended a request for every front on a coarse-cull survivor (camera ∪
+    // shadow), but only fronts whose FORWARD draw survived into the forward buckets should run
+    // their compute — a shadow-only instance must not. Walk the forward buckets: collect the
+    // visible handles and point each tagged command at its front's GPU-emitted index + indirect
+    // ring for this frame (resolveDrawBuffers throws if a tagged front doesn't resolve — an
+    // invariant violation, since a GPU-backed draw carries indexCount 0 and a silent miss would
+    // issue a zero-count draw). Then selectVisibleVdpmRequests filters the sink to the visible
+    // subset and dedups (identical duplicate collapsed; conflicting params for one front throws).
+    // The compute is recorded in drawFrame after collection; the compute→(index + indirect read)
+    // barrier is delayed to just before the depth prepass so the shadow pass overlaps it.
     vdpmRecordScratch_.clear();
     if (vdpmGpuActive && !vdpmRequestScratch_.empty())
     {
         vdpmVisibleScratch_.clear();
-        for (const std::vector<DrawCommand>* bucket :
+        for (std::vector<DrawCommand>* bucket :
              {&drawBucketsScratch_.opaque, &drawBucketsScratch_.blend,
               &drawBucketsScratch_.transmissive})
         {
-            for (const DrawCommand& dc : *bucket)
+            for (DrawCommand& dc : *bucket)
             {
                 if (dc.vdpmGpuFront != NullVdpmFront)
                 {
                     vdpmVisibleScratch_.push_back(dc.vdpmGpuFront);
+                    const VdpmGpuManager::DrawBuffers bufs =
+                        vdpmManager_->resolveDrawBuffers(dc.vdpmGpuFront, currentFrame_);
+                    dc.indexBuffer = bufs.index;
+                    dc.indirectBuffer = bufs.indirect;
+                    dc.indirectOffset = 0;
                 }
             }
         }
@@ -995,11 +1004,12 @@ void Renderer::drawFrame(Window& display, RenderableScene& scene, float dt)
     const DrawBuckets& buckets = collectDrawCommands(scene, cameraPosition, cameraTarget);
 
     // GPU-driven VDPM (Stage B5b): record the front lifecycle (score → refine/coarsen → repair →
-    // emit) for each camera-visible front collected above. Recorded here after collection; the
-    // frame-global camera/viewport/budget come from the jitter-free view-projection (TAA jitter
-    // would thrash the coverage test). B5b-1 records NO consumer barrier — the compute is a shadow
-    // run whose output is not yet drawn (the CPU front still feeds the draw); B5b-2 adds the
-    // compute→(index + indirect read) barrier before the depth prepass and flips the draw.
+    // emit) for each camera-visible front collected above. Recorded here after collection, BEFORE
+    // the shadow pass; the frame-global camera/viewport/budget come from the jitter-free
+    // view-projection (TAA jitter would thrash the coverage test). recordRequests adds NO consumer
+    // barrier — the collectDrawCommands walk pointed each tagged draw at this front's GPU output
+    // (resolveDrawBuffers), and the compute→(index + indirect read) barrier is recorded separately
+    // just before the depth prepass (after the shadow pass, so shadow work overlaps the compute).
     if (vdpmManager_ != nullptr && !vdpmRecordScratch_.empty())
     {
         const VdpmFrameGlobals globals{.viewProj = currentViewProj_,
@@ -1026,6 +1036,27 @@ void Renderer::drawFrame(Window& display, RenderableScene& scene, float dt)
     profiler_.begin(cmd, currentFrame_, ProfilePass::Shadow);
     recordShadowPass(cmd, buckets);
     profiler_.end(cmd, currentFrame_, ProfilePass::Shadow);
+
+    // GPU-driven VDPM (Stage B5b-2): the VDPM compute (recorded above, after collection) wrote each
+    // visible front's emitted index stream (scatter) + indirect command (finalize). The depth
+    // prepass is the FIRST consumer (index assembly + drawIndexedIndirect), so order the compute
+    // writes before it here — delayed until after the shadow pass (which never reads the VDPM
+    // output: shadows keep discrete/direct and their draw copies cleared vdpmGpuFront) so
+    // shadow-pass GPU work overlaps the compute. One global barrier covers both consumed buffers
+    // for the prepass, forward, and transmission reads that follow.
+    if (vdpmManager_ != nullptr && !vdpmRecordScratch_.empty())
+    {
+        const vk::MemoryBarrier2 computeToDraw{
+            .srcStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+            .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
+            .dstStageMask =
+                vk::PipelineStageFlagBits2::eIndexInput | vk::PipelineStageFlagBits2::eDrawIndirect,
+            .dstAccessMask =
+                vk::AccessFlagBits2::eIndexRead | vk::AccessFlagBits2::eIndirectCommandRead,
+        };
+        cmd.pipelineBarrier2(
+            vk::DependencyInfo{.memoryBarrierCount = 1, .pMemoryBarriers = &computeToDraw});
+    }
 
     profiler_.begin(cmd, currentFrame_, ProfilePass::DepthPrepass);
     recordDepthPrepass(cmd, buckets);

@@ -98,15 +98,18 @@ struct DrawCommand
     // at `indirectOffset` in that buffer, instead of `drawIndexed(indexCount, ...)`. Only the VDPM
     // (view-dependent LOD) draws set it; every other path (static / discrete LOD / VIPM / skybox /
     // shadow) leaves it null and draws directly. `indexCount` stays populated for the triangle
-    // overlay even on indirect draws. `indirectOffset` is a Vulkan-free byte offset (no Vulkan type
-    // in this layer).
+    // overlay on the CPU-front indirect path; a GPU-driven-front draw (vdpmGpuFront set)
+    // deliberately leaves it 0 — the real count lives only in the GPU indirect command until B5c
+    // adds delayed triangle diagnostics. `indirectOffset` is a Vulkan-free byte offset (no Vulkan
+    // type here).
     BufferHandle indirectBuffer{NullBuffer};
     uint64_t indirectOffset{0};
     // GPU-driven VDPM front for this instance (rendering-spine #3, Stage B5b). Non-null only on a
-    // forward VDPM draw whose front runs on the GPU backend. B5b-1 records the compute for it but
-    // still draws the CPU-emitted `indirectBuffer` above; B5b-2 resolves this handle to the GPU
-    // emitted index/indirect buffers and points the draw at them. The renderer harvests it from the
-    // camera-visible forward buckets to decide which fronts' compute to record.
+    // forward VDPM draw whose front runs on the GPU backend. The renderer harvests it from the
+    // camera-visible forward buckets to decide which fronts' compute to record, and resolves it to
+    // the GPU-emitted index/indirect ring for this frame (VdpmGpuManager::resolveDrawBuffers) — the
+    // draw then reads those buffers, so a tagged command's `indexBuffer`/`indirectBuffer` above are
+    // set by the renderer, not by Object. Shadow copies must clear this (VDPM is forward-only).
     VdpmFrontHandle vdpmGpuFront{NullVdpmFront};
 };
 

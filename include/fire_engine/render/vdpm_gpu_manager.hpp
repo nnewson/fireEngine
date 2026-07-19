@@ -80,9 +80,27 @@ public:
     void recordRequests(vk::CommandBuffer cmd, std::span<const VdpmWorkRequest> requests,
                         const VdpmFrameGlobals& globals);
 
-    // Resolve a live front's draw-consumed buffers for `frameIndex` (the B5b-2 draw switch reads
-    // these; B5b-1 records the compute but still draws the CPU output). Returns NullBuffer on a
-    // stale/invalid handle. The emitted index count lives in the indirect command, not returned.
+    // A GPU-driven front's draw-consumed buffers for one frame slot: the GPU-emitted index stream
+    // (always uint32) + the GPU-written indirect command. The count lives in the indirect command.
+    struct DrawBuffers
+    {
+        BufferHandle index{NullBuffer};
+        BufferHandle indirect{NullBuffer};
+    };
+
+    // Resolve a GPU-driven front's draw buffers for `frameIndex` in ONE handle lookup — the B5b-2
+    // draw switch points a tagged forward DrawCommand at these. The handle came from createFront,
+    // so it MUST resolve to a live front with allocated buffers: a null lookup or a null buffer is
+    // an INVARIANT VIOLATION (eligibility was decided at registration, and a GPU-backed draw
+    // carries indexCount 0 — a silent miss would issue a zero-count draw, not a finest fallback).
+    // So this THROWS std::logic_error rather than letting that through. Legitimate CPU fallback is
+    // chosen upstream in Object (a NullVdpmFront binding never reaches here). frameIndex must be a
+    // valid frame-in-flight slot.
+    [[nodiscard]] DrawBuffers resolveDrawBuffers(VdpmFrontHandle front,
+                                                 std::uint32_t frameIndex) const;
+
+    // Soft query of a front's ring buffers for `frameIndex` — returns NullBuffer on a stale/invalid
+    // handle (the resolve-or-throw contract lives in resolveDrawBuffers). Kept for tests + probing.
     [[nodiscard]] BufferHandle frontIndexBuffer(VdpmFrontHandle front,
                                                 std::uint32_t frameIndex) const;
     [[nodiscard]] BufferHandle frontIndirectBuffer(VdpmFrontHandle front,
