@@ -1,5 +1,6 @@
 #include <fire_engine/render/vdpm_gpu_manager.hpp>
 
+#include <optional>
 #include <utility>
 
 #include <fire_engine/core/log.hpp>
@@ -62,12 +63,19 @@ VdpmFrontHandle VdpmGpuManager::createFront(VdpmMeshHandle mesh)
         return NullVdpmFront;
     }
     const std::uint32_t mi = handleIndex(mesh);
-    if (!meshPool_.valid(mi, handleGeneration(mesh)) || mi >= meshes_.size() || !meshes_[mi])
+    if (!meshPool_.valid(mi, handleGeneration(mesh)) || mi >= meshes_.size())
+    {
+        return NullVdpmFront;
+    }
+    // Separate has_value() guard before the dereference — the optional-access checker can't track
+    // the check through the compound condition above.
+    const std::optional<VdpmGpuMesh>& meshSlot = meshes_[mi];
+    if (!meshSlot.has_value())
     {
         return NullVdpmFront;
     }
 
-    VdpmGpuFront front = VdpmGpuFront::buildRuntime(resources_, *meshes_[mi]);
+    VdpmGpuFront front = VdpmGpuFront::buildRuntime(resources_, *meshSlot);
     const GenerationalSlotPool::Slot slot = frontPool_.acquire();
     if (slot.index >= fronts_.size())
     {
@@ -85,11 +93,14 @@ VdpmGpuFront* VdpmGpuManager::resolveFront(VdpmFrontHandle front) noexcept
         return nullptr;
     }
     const std::uint32_t i = handleIndex(front);
-    if (i >= fronts_.size() || !frontPool_.valid(i, handleGeneration(front)) || !fronts_[i].front)
+    if (i >= fronts_.size() || !frontPool_.valid(i, handleGeneration(front)))
     {
         return nullptr;
     }
-    return &*fronts_[i].front;
+    // Separate has_value() guard immediately before the dereference — the optional-access checker
+    // can't track the check through the compound condition above.
+    std::optional<VdpmGpuFront>& slot = fronts_[i].front;
+    return slot.has_value() ? &*slot : nullptr;
 }
 
 const VdpmGpuFront* VdpmGpuManager::resolveFront(VdpmFrontHandle front) const noexcept
@@ -99,11 +110,14 @@ const VdpmGpuFront* VdpmGpuManager::resolveFront(VdpmFrontHandle front) const no
         return nullptr;
     }
     const std::uint32_t i = handleIndex(front);
-    if (i >= fronts_.size() || !frontPool_.valid(i, handleGeneration(front)) || !fronts_[i].front)
+    if (i >= fronts_.size() || !frontPool_.valid(i, handleGeneration(front)))
     {
         return nullptr;
     }
-    return &*fronts_[i].front;
+    // Separate has_value() guard immediately before the dereference — the optional-access checker
+    // can't track the check through the compound condition above.
+    const std::optional<VdpmGpuFront>& slot = fronts_[i].front;
+    return slot.has_value() ? &*slot : nullptr;
 }
 
 void VdpmGpuManager::recordRequests(vk::CommandBuffer cmd,
