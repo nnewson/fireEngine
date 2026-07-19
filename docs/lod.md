@@ -726,12 +726,30 @@ at a fraction of the triangles. The remaining residuals and follow-ons, in rough
   too:** `shaders/vdpm_repair_kernel.comp` runs the whole repair fixpoint for one front in ONE workgroup /
   ONE dispatch (the `VdpmRepairJobGpu` batch ABI in ubo.hpp; `s_anyMarked` shared reduction for the
   uniform convergence exit; `VdpmRepairKernel` capability-gated; `VdpmGpuFront::makeRepairJob` +
-  `recordRepairKernel`), built beside the recorder and exercised by 6 `[.][gpu]` control-flow fixtures —
-  NOT yet flipped into `recordFrame`. NEXT: Stage 3 cross-checks the kernel vs the recorder + CPU oracle,
-  flips `recordFrame`'s repair to it (recorder retained as reference/fallback), and remeasures; then Stage
-  4 batches N fronts into one dispatch. THEN resume
-  B5c — delayed triangle/repair diagnostics + the deferred helmet wedge/rank-count evidence (Vulkan glTF
-  path) + a possible default flip to GPU after parity sign-off.
+  `recordRepairKernel`), built beside the recorder and exercised by 6 `[.][gpu]` control-flow fixtures.
+  **Stage 3 (the flip) has landed too:** `recordFrame` now drives repair through the kernel when the
+  device supports it (`VdpmGpuManager` holds a `std::optional<VdpmRepairKernel>`, emplaced iff
+  `deviceSupported`; `recordFrame` takes a nullable `const VdpmRepairKernel*` and falls back to the
+  recorder — now `recordRepairRuntime` — when null), with an explicit kernel→emit compute barrier
+  (the emit counter clear only orders the counter, not the kernel's active-front writes). It has no
+  default, so the repair path is chosen explicitly at every call site (a forgotten argument can't
+  silently pick the ~1000-command recorder). `analyticComputeCost(rank, faceCount, roundBudget,
+  persistentRepair)` is now EXACT: the always-present lifecycle barrier + emit are counted (emit runs
+  over FACES, so a zero-rank front is not free), and the emit's scan cost is derived from `faceCount`
+  (K internal levels → `{2K+1, 2K}`) instead of assuming one hierarchy — the two-level helmet (R=18)
+  still gives persistent **64/65** vs recorder ~1014/1066; a `[vdpm]` CI test pins BOTH paths across
+  scan tiers + the zero-rank case so a recorder change can't silently stale the overlay. **Cross-check gate (`[.][gpu]`):** two `buildRuntime` fronts settle from
+  one mesh to a bit-identical pre-repair state (proven by reading back active/refined/dependents/required/
+  failFlags), then one is repaired by the kernel and one by the recorder; post-repair front + emitted
+  indices + control/history diagnostics + zero failure flags match **exactly** across normal-convergence,
+  forced-fallback, reflected+cull, and non-uniform/no-cull cases — plus a CPU-oracle gate on the kernel
+  front (`validateFrontInvariants`, `foldoverCount == 0`, `coverageFailures == 0`, emitted ≤ finest). This
+  is GPU-vs-GPU **exact** on the tested fixtures; it does NOT claim universal visual parity (screen-space FP
+  can still diverge from the CPU oracle at thresholds). **Measured (helmet, R=18): CPU record 2.1 → 0.26 ms
+  (~8×), GPU compute ~17.5 → ~2.4 ms (~7×), 1014 → 64 dispatches** — single-workgroup occupancy did NOT cap
+  the win. NEXT: Stage 4 batches N fronts into one dispatch (fill N jobs, dispatch N; kernel/ABI unchanged),
+  THEN resume B5c — delayed triangle/repair diagnostics + the deferred helmet wedge/rank-count evidence
+  (Vulkan glTF path) + a possible default flip to GPU after parity sign-off.
 - **7 forest skips.** `buildVertexForest` skips collapses whose edge diverged from its adjacency
   replay (7 of ~6800 on the helmet); past the first skip the forest is slightly unfaithful. The repairs
   cover the visible symptoms; truncating the stream at the first skip would be the clean structural fix.

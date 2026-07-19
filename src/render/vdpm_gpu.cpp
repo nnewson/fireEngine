@@ -896,7 +896,10 @@ VdpmGpuFront VdpmGpuFront::buildRuntime(Resources& resources, const VdpmGpuMesh&
         "dependentsState");
     dev(sBytes, zerosS.data(), front.refinedState_, front.refinedStateAddress_, srcFlag,
         "refinedState");
-    dev(sBytes, zerosS.data(), front.requiredState_, front.requiredStateAddress_, {},
+    // requiredState is readback-enabled on the runtime front so the Stage-3 cross-check can compare
+    // the two fronts' pre-repair `required` too (it's transient mark scratch, but proving it
+    // matches strengthens the identical-pre-state gate).
+    dev(sBytes, zerosS.data(), front.requiredState_, front.requiredStateAddress_, srcFlag,
         "requiredState");
     const std::array<std::uint32_t, 2> zeroFlags{0, 0};
     dev(2 * sizeof(std::uint32_t), zeroFlags.data(), front.failFlags_, front.failFlagsAddress_,
@@ -1046,13 +1049,29 @@ void VdpmGpuFront::recordRepairKernel(vk::CommandBuffer cmd, const VdpmRepairKer
     // No consumer barrier — the caller synchronises the state read-back.
 }
 
+void VdpmGpuFront::recordRepairRuntime(vk::CommandBuffer cmd,
+                                       const VdpmRefinePipelines& refinePipelines,
+                                       const VdpmRepairPipelines& repairPipelines,
+                                       Resources& resources, std::uint32_t frameIndex,
+                                       const VdpmRepairParams& params, std::uint32_t roundBudget)
+{
+    if (!hasRuntime_ || !hasRepair_)
+    {
+        throw std::logic_error("VdpmGpuFront::recordRepairRuntime: not a runtime repair front");
+    }
+    writeMapped(repairParamsRing_[frameIndex], params);
+    recordRepairImpl(cmd, refinePipelines, repairPipelines, resources,
+                     repairParamsRingAddress_[frameIndex], roundBudget);
+}
+
 void VdpmGpuFront::recordFrame(vk::CommandBuffer cmd, const ComputePipeline& scorePipeline,
                                const VdpmRefinePipelines& refinePipelines,
                                const VdpmRepairPipelines& repairPipelines,
                                const VdpmEmitPipelines& emitPipelines, Resources& resources,
                                std::uint32_t frameIndex, const VdpmViewParams& scoreView,
                                const VdpmRepairParams& repairParams, float pixelBudget,
-                               float coarsenBudget, std::uint32_t repairRoundBudget)
+                               float coarsenBudget, std::uint32_t repairRoundBudget,
+                               const VdpmRepairKernel* repairKernel)
 {
     if (!hasRuntime_)
     {
@@ -1082,10 +1101,31 @@ void VdpmGpuFront::recordFrame(vk::CommandBuffer cmd, const ComputePipeline& sco
     recordScore(cmd, scorePipeline, frameIndex, scoreView);
     // (2) Refine/coarsen reading that GPU score output (no host round-trip).
     recordApplyScoredView(cmd, refinePipelines, resources, pixelBudget, coarsenBudget);
-    // (3) Repair, reading this frame's ring repair params.
-    writeMapped(repairParamsRing_[frameIndex], repairParams);
-    recordRepairImpl(cmd, refinePipelines, repairPipelines, resources,
-                     repairParamsRingAddress_[frameIndex], repairRoundBudget);
+    // (3) Repair, reading this frame's ring repair params. The single-dispatch kernel (when the
+    // device supports it) or the multi-dispatch recorder.
+    if (repairKernel != nullptr)
+    {
+        recordRepairKernel(cmd, *repairKernel, frameIndex, repairParams, repairRoundBudget);
+        // The kernel records no consumer barrier, and recordEmitFromFront's leading fillBuffer +
+        // clearToCompute orders only the counter CLEAR — not the kernel's active-front writes. So
+        // order the kernel's compute writes (active/refined/dependents) before emit's ancestor
+        // read.
+        const vk::MemoryBarrier2 kernelToEmit{
+            .srcStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+            .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
+            .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+            .dstAccessMask =
+                vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite,
+        };
+        cmd.pipelineBarrier2(
+            vk::DependencyInfo{.memoryBarrierCount = 1, .pMemoryBarriers = &kernelToEmit});
+    }
+    else
+    {
+        // The recorder's trailing close/refine barrier already orders repair→emit, so no extra one.
+        recordRepairRuntime(cmd, refinePipelines, repairPipelines, resources, frameIndex,
+                            repairParams, repairRoundBudget);
+    }
     // (4) Emit the live settled front into this frame's ring output. No consumer barrier — the
     // caller (renderer) adds the compute→(index-read + indirect-read) barrier before the draw.
     recordEmitFromFront(cmd, emitPipelines, resources, frameIndex);

@@ -37,6 +37,15 @@ VdpmGpuManager::VdpmGpuManager(const Device& device, Resources& resources)
     // repairControl[0..4), counters[0..3)] per frame slot.
     diagReadback_ =
         resources_.createMappedReadbackBuffers(kVdpmDiagWordCount * sizeof(std::uint32_t));
+
+    // The single-dispatch persistent repair kernel (Stage 3) — built only when the device supports
+    // it (checked independently of the VdpmScan gate that let this manager be constructed).
+    // Unsupported hardware leaves it empty and every front repairs through the multi-dispatch
+    // recorder.
+    if (VdpmRepairKernel::deviceSupported(device))
+    {
+        repairKernel_.emplace(device);
+    }
 }
 
 VdpmMeshHandle VdpmGpuManager::registerMesh(std::span<const Vertex> vertices,
@@ -183,13 +192,15 @@ void VdpmGpuManager::recordRequests(vk::CommandBuffer cmd,
         repair.viewport[1] = globals.viewportHeight;
         repair.viewport[2] = req.rasterBackfaceCulling ? 1.0f : 0.0f;
 
+        const VdpmRepairKernel* const kernel = repairKernel_ ? &*repairKernel_ : nullptr;
         front->recordFrame(cmd, scorePipeline_, refinePipelines_, repairPipelines_, emitPipelines_,
                            resources_, globals.frameIndex, view, repair, globals.pixelBudget,
-                           coarsenBudget, kVdpmGpuRepairRoundBudget);
+                           coarsenBudget, kVdpmGpuRepairRoundBudget, kernel);
 
         const std::uint32_t rank = front->rankCount();
         const VdpmGpuFront::ComputeCost cost =
-            VdpmGpuFront::analyticComputeCost(rank, kVdpmGpuRepairRoundBudget);
+            VdpmGpuFront::analyticComputeCost(rank, front->faceCount(), kVdpmGpuRepairRoundBudget,
+                                              /*persistentRepair=*/kernel != nullptr);
         ++lastComputeStats_.frontsRecorded;
         lastComputeStats_.maxRankCount = std::max(lastComputeStats_.maxRankCount, rank);
         lastComputeStats_.analyticDispatches += cost.dispatches;

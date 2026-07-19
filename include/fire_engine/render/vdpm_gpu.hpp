@@ -439,13 +439,21 @@ public:
     // (only the score view params + repair params are host-written, into their ring slots). Records
     // NO consumer barrier after emit — the caller (renderer) adds the compute→(index-read +
     // indirect-read) barrier before the draw. Throws std::logic_error on a non-runtime front.
+    //
+    // `repairKernel` (Stage 3): when non-null the single-dispatch persistent kernel does the
+    // repair, followed by an explicit kernel→emit compute barrier; when null the multi-dispatch
+    // recorder (recordRepairRuntime) does it. The manager passes its kernel when the device
+    // supports it, else nullptr — so an unsupported device transparently keeps the recorder. NO
+    // default: the repair path is an explicit choice at every call site (a forgotten argument must
+    // not silently select the ~1000-command fallback). Tests pass nullptr explicitly to exercise
+    // it.
     void recordFrame(vk::CommandBuffer cmd, const ComputePipeline& scorePipeline,
                      const VdpmRefinePipelines& refinePipelines,
                      const VdpmRepairPipelines& repairPipelines,
                      const VdpmEmitPipelines& emitPipelines, Resources& resources,
                      std::uint32_t frameIndex, const VdpmViewParams& scoreView,
                      const VdpmRepairParams& repairParams, float pixelBudget, float coarsenBudget,
-                     std::uint32_t repairRoundBudget);
+                     std::uint32_t repairRoundBudget, const VdpmRepairKernel* repairKernel);
 
     // Record ONLY the score dispatch for frame `frameIndex` (writes that slot's mapped params from
     // `view`, pushes its address, dispatches ceil(splitCount / 64)). NO barriers — the consumer
@@ -542,6 +550,17 @@ public:
                             std::uint32_t frameIndex, const VdpmRepairParams& params,
                             std::uint32_t roundBudget);
 
+    // The MULTI-DISPATCH recorder equivalent for a runtime front (Stage 3 reference/fallback):
+    // upload `params` to the frame ring slot, then recordRepairImpl. Symmetric with
+    // recordRepairKernel so recordFrame picks between them by a nullable kernel and the cross-check
+    // test drives both from one settled state. Unlike the kernel, its close/refine trailing barrier
+    // orders repair→emit, so recordFrame adds NO extra barrier on this path. Throws without a
+    // runtime repair front.
+    void recordRepairRuntime(vk::CommandBuffer cmd, const VdpmRefinePipelines& refinePipelines,
+                             const VdpmRepairPipelines& repairPipelines, Resources& resources,
+                             std::uint32_t frameIndex, const VdpmRepairParams& params,
+                             std::uint32_t roundBudget);
+
     // TEST-ONLY (Stage B4): record a SINGLE ancestor + detect against the current settled front,
     // writing each finest face's packed classification (`kVdpmDetect*` bits) to
     // `repairClassificationBuffer` — so a harness can cross-check the GPU classifier against the
@@ -570,6 +589,12 @@ public:
     [[nodiscard]] BufferHandle dependentsStateBuffer() const noexcept
     {
         return dependentsState_;
+    }
+    // The per-split `required` mark scratch — readback-enabled on the runtime front (Stage-3
+    // cross-check) so the two fronts' pre-repair state can be compared in full.
+    [[nodiscard]] BufferHandle requiredStateBuffer() const noexcept
+    {
+        return requiredState_;
     }
     // The 2-uint invariant-failure flags [refineFailure, dependentsUnderflow]; must read back as 0.
     [[nodiscard]] BufferHandle failFlagsBuffer() const noexcept
@@ -651,32 +676,77 @@ public:
         return static_cast<std::uint32_t>(rankRanges_.size());
     }
 
-    // Analytic per-frame compute-dispatch + pipeline-barrier count for a front with `rankCount`
-    // ranks under repair round budget `roundBudget` (perf instrumentation, B5b-perf). Mirrors the
-    // recorder structure exactly: score (1 dispatch) + apply mark/close/refine/coarsen (3R+1
-    // dispatches, 3R+2 barriers) + the bounded repair — B rounds of reset→ancestor→detect→close→
-    // refine ((2R+2) dispatches, (2R+4) barriers each) plus a final detect + fallback + a full
-    // close/refine ((2R+3) dispatches, (2R+7) barriers) — + emit (~7 dispatches, 4 barriers) + the
-    // frame lifecycle barrier (1). So dispatches = B(2R+2) + 5R + 12, barriers = B(2R+4) + 5R + 16.
-    // The ~94%-of-work repair term B(2R+2) is why an early-out on convergence is the target.
-    // Returns {0,0} for a zero-split front. KEEP IN SYNC with recordFrame's recorders if they
-    // change.
+    // EXACT (not estimated) per-frame compute-dispatch + pipeline-barrier count recordFrame emits
+    // for a front with `rankCount` ranks and `faceCount` finest faces under repair round budget
+    // `roundBudget` (perf instrumentation). Every term below matches a specific recorder:
+    //  - LIFECYCLE barrier (1): always — recordFrame's leading boundary barrier (also the sole sync
+    //    on a zero-split front).
+    //  - EMIT ({4 + scanD, 4 + scanB}): ALWAYS recorded — recordEmitImpl dispatches over FACES, not
+    //    splits. Fixed part = ancestor + survival + scatter + finalize (4 dispatches) and
+    //    clear→compute + after-ancestor + after-survival + after-scan (4 barriers) around the scan.
+    //    The SCAN cost is faceCount-dependent (VdpmScan::recordScan, block kScanElementsPerBlock):
+    //    K internal levels ⇒ {0,0} for faceCount 0, {1,0} for K==0 (faceCount ≤ block), {2K+1, 2K}
+    //    for K ≥ 1 — so a two-level scan (K=1) gives the emit its familiar {7, 6}, but
+    //    smaller/larger meshes differ. This is why the count must take faceCount, not assume one
+    //    scan hierarchy.
+    //  - When rankCount == 0 the score/apply/repair recorders ALL early-out (splitCount == 0), so
+    //    the cost is exactly lifecycle + emit — NOT {0,0}.
+    //  - When rankCount == R > 0: + score (1 dispatch) + apply mark/close/refine/coarsen (3R+1
+    //    dispatches, 3R+2 barriers) + the repair term:
+    //     · PERSISTENT KERNEL: ONE dispatch + TWO barriers (leading apply→kernel + kernel→emit).
+    //     · RECORDER: B rounds of reset→ancestor→detect→close→refine ((2R+2) dispatches, (2R+4)
+    //       barriers each) + a final detect + fallback + full close/refine ((2R+3) dispatches,
+    //       (2R+7) barriers) = B(2R+2)+2R+3 dispatches, B(2R+4)+2R+7 barriers. The ~94% B(2R+2)
+    //       dispatch term is what the kernel retires.
+    // For the two-level-scan helmet (R=18, faceCount in (256, 65536]): persistent {64, 65} vs the
+    // recorder's {1014, 1066}. KEEP IN SYNC with recordFrame + recordEmitImpl +
+    // VdpmScan::recordScan (pinned by test_vdpm_gpu.cpp `[vdpm]`).
     struct ComputeCost
     {
         std::uint32_t dispatches{0};
         std::uint32_t barriers{0};
     };
-    [[nodiscard]] static constexpr ComputeCost
-    analyticComputeCost(std::uint32_t rankCount, std::uint32_t roundBudget) noexcept
+    [[nodiscard]] static constexpr ComputeCost analyticComputeCost(std::uint32_t rankCount,
+                                                                   std::uint32_t faceCount,
+                                                                   std::uint32_t roundBudget,
+                                                                   bool persistentRepair) noexcept
     {
+        // Scan command count for `faceCount` elements (K = internal-level count).
+        std::uint32_t scanDispatches = 0;
+        std::uint32_t scanBarriers = 0;
+        if (faceCount != 0)
+        {
+            std::uint32_t k = 0;
+            std::uint32_t n = faceCount;
+            while (n > kScanElementsPerBlock)
+            {
+                n = (n + kScanElementsPerBlock - 1) / kScanElementsPerBlock;
+                ++k;
+            }
+            scanDispatches = (k == 0) ? 1 : 2 * k + 1;
+            scanBarriers = (k == 0) ? 0 : 2 * k;
+        }
+        // Lifecycle barrier (always) + emit (always — over faces).
+        ComputeCost cost{.dispatches = 4 + scanDispatches, .barriers = 1 + 4 + scanBarriers};
         if (rankCount == 0)
         {
-            return {};
+            return cost; // score/apply/repair all early-out at splitCount == 0
         }
         const std::uint32_t r = rankCount;
-        const std::uint32_t b = roundBudget;
-        return {.dispatches = b * (2 * r + 2) + 5 * r + 12,
-                .barriers = b * (2 * r + 4) + 5 * r + 16};
+        cost.dispatches += 1 + (3 * r + 1); // score + apply
+        cost.barriers += 3 * r + 2;         // apply
+        if (persistentRepair)
+        {
+            cost.dispatches += 1; // one kernel dispatch
+            cost.barriers += 2;   // leading apply→kernel + kernel→emit
+        }
+        else
+        {
+            const std::uint32_t b = roundBudget;
+            cost.dispatches += b * (2 * r + 2) + (2 * r + 3);
+            cost.barriers += b * (2 * r + 4) + (2 * r + 7);
+        }
+        return cost;
     }
 
 private:
