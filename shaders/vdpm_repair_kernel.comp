@@ -1,0 +1,408 @@
+#version 450
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_buffer_reference_uvec2 : require
+
+// VDPM persistent-workgroup repair kernel (perf arc, Stage 2). ONE workgroup per front runs the whole
+// GPU-resident repair fixpoint — the exact sequence the multi-dispatch recorder (recordRepairImpl)
+// records, but with in-workgroup barriers instead of ~1000 global barriers/dispatches. The batch
+// vehicle is a job array: this reads `jobs[gl_WorkGroupID.x]` (one VdpmRepairJobGpu, see ubo.hpp) and
+// touches only that front's disjoint state, so separate workgroups need no cross-workgroup sync. Stage
+// 2 dispatches 1 workgroup (1 job); Stage 4 dispatches N — unchanged shader. The foldover/coverage
+// policy is the shared pure classifier (vdpm_repair_classify.glsl); ancestor/close/refine/fallback are
+// faithful ports of the standalone passes. BDA addresses ride as uvec2 (no shader int64).
+
+#include "vdpm_repair_classify.glsl"
+
+const uint kInvalid = 0xFFFFFFFFu;       // ancestor sentinel
+const uint kNoSplit = 0xFFFFFFFFu;       // dependency-split sentinel (root/boundary)
+const uint kInvalidVertex = 0xFFFFFFFFu; // vr sentinel (no vr)
+
+layout(buffer_reference, std430, buffer_reference_align = 4) buffer UintBuf
+{
+    uint v[];
+};
+layout(buffer_reference, std430, buffer_reference_align = 16) buffer PosBuf
+{
+    vec4 v[];
+};
+layout(buffer_reference, std430, buffer_reference_align = 16) buffer ParamBuf
+{
+    mat4 world;
+    mat4 viewProj;
+    vec4 cameraPos; // xyz
+    vec4 viewport;  // x=width, y=height, z=rasterBackfaceCulling(0/1), w=pad
+};
+struct FrontSplit
+{
+    uint parent;
+    uint child;
+    uint vl;
+    uint vr;
+    uint parentDep;
+    uint vlDep;
+    uint vrDep;
+    uint pad;
+};
+layout(buffer_reference, std430, buffer_reference_align = 4) buffer FrontSplitBuf
+{
+    FrontSplit v[];
+};
+struct RankRange
+{
+    uint offset;
+    uint count;
+};
+layout(buffer_reference, std430, buffer_reference_align = 4) buffer RankRangeBuf
+{
+    RankRange v[]; // base align 4 (VdpmRankRangeGpu is alignas(4)); array stride is 8
+};
+
+// One front's job — layout mirrors VdpmRepairJobGpu (17 addresses as uvec2 + 8 uint counts). Field
+// names carry an `Address` suffix (GLSL reserves `active` etc.); only the LAYOUT must match the C++.
+struct RepairJob
+{
+    uvec2 activeAddress;
+    uvec2 refinedAddress;
+    uvec2 requiredAddress;
+    uvec2 dependentsAddress;
+    uvec2 failFlagsAddress;
+    uvec2 ancestorIdAddress;
+    uvec2 ancestorDepthAddress;
+    uvec2 repairControlAddress;
+    uvec2 roundHistoryAddress;
+    uvec2 finestFacesAddress;
+    uvec2 positionsAddress;
+    uvec2 removalParentAddress;
+    uvec2 removingSplitAddress;
+    uvec2 frontSplitsAddress;
+    uvec2 splitsByRankAddress;
+    uvec2 rankRangesAddress;
+    uvec2 paramsAddress;
+    uint vertexCount;
+    uint finestFaceCount;
+    uint splitCount;
+    uint maxDepth;
+    uint rankCount;
+    uint roundBudget;
+    uint roundHistoryCapacity;
+    uint pad;
+};
+layout(buffer_reference, std430, buffer_reference_align = 8) buffer JobBuf
+{
+    RepairJob v[];
+};
+
+layout(push_constant) uniform Push
+{
+    JobBuf jobs;
+    uint jobCount;
+    uint pad;
+}
+pc;
+
+layout(local_size_x = 256) in;
+
+shared uint s_anyMarked;
+
+// ---- The job's buffer references + counts, resolved once in main() and shared with the helpers via
+// file-scope globals (GLSL has no closures; passing 17 references to each helper is noise). ----
+UintBuf g_active;
+UintBuf g_refined;
+UintBuf g_required;
+UintBuf g_dependents;
+UintBuf g_failFlags;
+UintBuf g_ancestorId;
+UintBuf g_ancestorDepth;
+UintBuf g_repairControl;
+UintBuf g_finestFaces;
+PosBuf g_positions;
+UintBuf g_removalParent;
+UintBuf g_removingSplit;
+FrontSplitBuf g_frontSplits;
+UintBuf g_splitsByRank;
+RankRangeBuf g_rankRanges;
+ParamBuf g_params;
+uint g_tid;
+uint g_stride;
+uint g_vertexCount;
+uint g_finestFaceCount;
+uint g_splitCount;
+uint g_maxDepth;
+uint g_rankCount;
+bool g_cull;
+
+// The ONE synchronisation helper (pin 4): BOTH memory domains (the SSBO front state + the shared
+// convergence word) made visible, plus the workgroup execution barrier — between EVERY phase. The
+// extra shared barrier in buffer-only phases is harmless; making the helper cover both domains is
+// what keeps "one synchronisation helper" honest (detect() writes g_required via SSBO atomics AND
+// s_anyMarked in shared, and closure reads g_required, so both must be published before it).
+void wgsync()
+{
+    memoryBarrierBuffer();
+    memoryBarrierShared();
+    barrier();
+}
+
+vec3 worldPos(uint canonical)
+{
+    return (g_params.world * vec4(g_positions.v[canonical].xyz, 1.0)).xyz;
+}
+
+void clearRequired()
+{
+    for (uint s = g_tid; s < g_splitCount; s += g_stride)
+    {
+        g_required.v[s] = 0u;
+    }
+}
+
+// Per canonical vertex: walk removalParent to the active ancestor within maxDepth TRANSITIONS;
+// failures → INVALID + repairControl[1] (matches vdpm_ancestor.comp exactly).
+void ancestorResolve()
+{
+    for (uint c = g_tid; c < g_vertexCount; c += g_stride)
+    {
+        uint anc = c;
+        uint depth = 0u;
+        for (;;)
+        {
+            if (g_active.v[anc] != 0u)
+            {
+                g_ancestorId.v[c] = anc;
+                g_ancestorDepth.v[c] = depth;
+                break;
+            }
+            const uint parent = g_removalParent.v[anc];
+            if (parent == anc || depth == g_maxDepth)
+            {
+                g_ancestorId.v[c] = kInvalid;
+                g_ancestorDepth.v[c] = 0u;
+                atomicAdd(g_repairControl.v[1], 1u);
+                break;
+            }
+            anc = parent;
+            ++depth;
+        }
+    }
+}
+
+void markInactiveCorner(uint corner)
+{
+    if (g_active.v[corner] == 0u)
+    {
+        atomicOr(g_required.v[g_removingSplit.v[corner]], 1u);
+        atomicOr(s_anyMarked, 1u);
+    }
+}
+
+// Detect: per canonical finest face, classify (shared pure include) and mark each violation's
+// inactive-corner removing split into `required` + shared anyMarked. Foldover and coverage are
+// INDEPENDENT — both apply (markInactiveCorner is idempotent). Caller resets s_anyMarked + barriers.
+void detect()
+{
+    for (uint f = g_tid; f < g_finestFaceCount; f += g_stride)
+    {
+        const uint c0 = g_finestFaces.v[3u * f + 0u];
+        const uint c1 = g_finestFaces.v[3u * f + 1u];
+        const uint c2 = g_finestFaces.v[3u * f + 2u];
+        const uint a0 = g_ancestorId.v[c0];
+        const uint a1 = g_ancestorId.v[c1];
+        const uint a2 = g_ancestorId.v[c2];
+        if (a0 == kInvalid || a1 == kInvalid || a2 == kInvalid)
+        {
+            continue;
+        }
+        const bool degenerate = (a0 == a1 || a1 == a2 || a0 == a2);
+        const RepairClassification rc = classifyRepairFace(
+            worldPos(c0), worldPos(c1), worldPos(c2), worldPos(a0), worldPos(a1), worldPos(a2),
+            g_active.v[c0] != 0u, g_active.v[c1] != 0u, g_active.v[c2] != 0u, degenerate,
+            g_params.viewProj, g_params.cameraPos.xyz, g_params.viewport.xy, g_cull);
+        if (rc.foldover)
+        {
+            markInactiveCorner(c0);
+            markInactiveCorner(c1);
+            markInactiveCorner(c2);
+        }
+        if (rc.coverageKind == kRepairCoverageAllInactive)
+        {
+            markInactiveCorner(c0);
+            markInactiveCorner(c1);
+            markInactiveCorner(c2);
+        }
+        else if (rc.coverageKind == kRepairCoverageWorst)
+        {
+            markInactiveCorner((rc.worstLocal == 0u) ? c0 : (rc.worstLocal == 1u ? c1 : c2));
+        }
+    }
+}
+
+// Ancestor resolve → reset shared anyMarked → detect, with the barriers each transition needs. Leaves
+// the marked `required` + s_anyMarked settled for the caller (which reads s_anyMarked after a barrier).
+void ancestorThenDetect()
+{
+    ancestorResolve();
+    wgsync();
+    if (g_tid == 0u)
+    {
+        s_anyMarked = 0u;
+    }
+    wgsync(); // publish the s_anyMarked reset before detect() atomic-ORs it
+    detect();
+    wgsync(); // publish BOTH detect()'s g_required SSBO writes AND s_anyMarked before closure reads
+}
+
+// Close (DESCENDING rank) then refine (ASCENDING rank) — the marked `required` set drives the front to
+// its settled state. wgsync between every rank (pin 4).
+void closeAndRefine()
+{
+    for (uint rank = g_rankCount; rank-- > 0u;)
+    {
+        const RankRange rr = g_rankRanges.v[rank];
+        for (uint i = g_tid; i < rr.count; i += g_stride)
+        {
+            const uint s = g_splitsByRank.v[rr.offset + i];
+            if (g_required.v[s] == 0u)
+            {
+                continue;
+            }
+            const FrontSplit fs = g_frontSplits.v[s];
+            if (fs.parentDep != kNoSplit)
+            {
+                atomicOr(g_required.v[fs.parentDep], 1u);
+            }
+            if (fs.vlDep != kNoSplit)
+            {
+                atomicOr(g_required.v[fs.vlDep], 1u);
+            }
+            if (fs.vrDep != kNoSplit)
+            {
+                atomicOr(g_required.v[fs.vrDep], 1u);
+            }
+        }
+        wgsync();
+    }
+    for (uint rank = 0u; rank < g_rankCount; ++rank)
+    {
+        const RankRange rr = g_rankRanges.v[rank];
+        for (uint i = g_tid; i < rr.count; i += g_stride)
+        {
+            const uint s = g_splitsByRank.v[rr.offset + i];
+            if (g_required.v[s] == 0u || g_refined.v[s] != 0u)
+            {
+                continue;
+            }
+            const FrontSplit fs = g_frontSplits.v[s];
+            const bool depsActive = g_active.v[fs.parent] != 0u && g_active.v[fs.vl] != 0u &&
+                                    (fs.vr == kInvalidVertex || g_active.v[fs.vr] != 0u);
+            if (!depsActive)
+            {
+                atomicOr(g_failFlags.v[0], 1u);
+                continue;
+            }
+            g_refined.v[s] = 1u;
+            g_active.v[fs.child] = 1u;
+            atomicAdd(g_dependents.v[fs.parent], 1u);
+            atomicAdd(g_dependents.v[fs.vl], 1u);
+            if (fs.vr != kInvalidVertex)
+            {
+                atomicAdd(g_dependents.v[fs.vr], 1u);
+            }
+        }
+        wgsync();
+    }
+}
+
+void main()
+{
+    // Uniform-return guard BEFORE any barrier (a per-workgroup early-out must precede all barriers so
+    // no invocation waits on a barrier its peers skip).
+    if (gl_WorkGroupID.x >= pc.jobCount)
+    {
+        return;
+    }
+
+    const RepairJob job = pc.jobs.v[gl_WorkGroupID.x];
+    g_tid = gl_LocalInvocationID.x;
+    g_stride = gl_WorkGroupSize.x;
+    g_active = UintBuf(job.activeAddress);
+    g_refined = UintBuf(job.refinedAddress);
+    g_required = UintBuf(job.requiredAddress);
+    g_dependents = UintBuf(job.dependentsAddress);
+    g_failFlags = UintBuf(job.failFlagsAddress);
+    g_ancestorId = UintBuf(job.ancestorIdAddress);
+    g_ancestorDepth = UintBuf(job.ancestorDepthAddress);
+    g_repairControl = UintBuf(job.repairControlAddress);
+    UintBuf roundHistory = UintBuf(job.roundHistoryAddress);
+    g_finestFaces = UintBuf(job.finestFacesAddress);
+    g_positions = PosBuf(job.positionsAddress);
+    g_removalParent = UintBuf(job.removalParentAddress);
+    g_removingSplit = UintBuf(job.removingSplitAddress);
+    g_frontSplits = FrontSplitBuf(job.frontSplitsAddress);
+    g_splitsByRank = UintBuf(job.splitsByRankAddress);
+    g_rankRanges = RankRangeBuf(job.rankRangesAddress);
+    g_params = ParamBuf(job.paramsAddress);
+    g_vertexCount = job.vertexCount;
+    g_finestFaceCount = job.finestFaceCount;
+    g_splitCount = job.splitCount;
+    g_maxDepth = job.maxDepth;
+    g_rankCount = job.rankCount;
+    g_cull = g_params.viewport.z != 0.0;
+
+    // pin 3: cooperatively FULL-OVERWRITE all transient state at entry — required, the ENTIRE history
+    // capacity (not just roundBudget, else a short budget leaves a stale tail), and all four
+    // repair-control words. No external fillBuffer, so the whole repair is one dispatch.
+    clearRequired();
+    for (uint h = g_tid; h < job.roundHistoryCapacity; h += g_stride)
+    {
+        roundHistory.v[h] = 0u;
+    }
+    if (g_tid < 4u)
+    {
+        g_repairControl.v[g_tid] = 0u;
+    }
+    wgsync();
+
+    // Bounded snapshot rounds: clear required → detect → record history → uniform exit if clean →
+    // close + refine.
+    for (uint round = 0u; round < job.roundBudget; ++round)
+    {
+        clearRequired();
+        wgsync();
+        ancestorThenDetect();
+        if (g_tid == 0u)
+        {
+            roundHistory.v[round] = s_anyMarked;
+        }
+        if (s_anyMarked == 0u)
+        {
+            return; // workgroup-uniform convergence — the ONLY early return past a barrier
+        }
+        closeAndRefine();
+    }
+
+    // Final detect: its anyMarked drives the fallback and is the diagnostic's repairControl[0].
+    clearRequired();
+    wgsync();
+    ancestorThenDetect();
+    if (g_tid == 0u)
+    {
+        g_repairControl.v[0] = s_anyMarked;
+    }
+    if (s_anyMarked == 0u)
+    {
+        return;
+    }
+
+    // Full-detail fallback (FULL OVERWRITE, adjustment 3): every unrefined split → required, every
+    // refined split → cleared. Then close + refine drive to full detail (guaranteed hole-free).
+    for (uint s = g_tid; s < g_splitCount; s += g_stride)
+    {
+        g_required.v[s] = (g_refined.v[s] == 0u) ? 1u : 0u;
+    }
+    if (g_tid == 0u)
+    {
+        g_repairControl.v[2] = 1u; // fallbackFired
+    }
+    wgsync();
+    closeAndRefine();
+}
