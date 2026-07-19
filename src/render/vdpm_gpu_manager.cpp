@@ -160,6 +160,28 @@ void VdpmGpuManager::recordRequests(vk::CommandBuffer cmd,
     lastComputeStats_ = ComputeStats{.roundBudget = kVdpmGpuRepairRoundBudget};
     diagFront_ = nullptr; // set to the first resolved front for the delayed convergence readback
 
+    // Per-stage timing (apply-kernel checkpoint), off unless the renderer supplied a profiler. GPU
+    // timestamps use one-shot query slots, so they're only meaningful when a SINGLE front records
+    // this frame (N>1 would double-write them) — precount the resolvable fronts and gate the GPU
+    // side on exactly one. CPU per-stage timing accumulates and is valid for any count.
+    std::uint32_t resolvableFronts = 0;
+    if (globals.stageProfiler != nullptr)
+    {
+        for (const VdpmWorkRequest& req : requests)
+        {
+            if (resolveFront(req.front) != nullptr)
+            {
+                ++resolvableFronts;
+            }
+        }
+    }
+    const VdpmStageProfile stageProfile{.gpu = (resolvableFronts == 1) ? globals.stageProfiler
+                                                                       : nullptr,
+                                        .gpuFrameIndex = globals.frameIndex,
+                                        .cpuMs = &lastComputeStats_.stageCpuMs};
+    const VdpmStageProfile* const stageProfilePtr =
+        globals.stageProfiler != nullptr ? &stageProfile : nullptr;
+
     for (const VdpmWorkRequest& req : requests)
     {
         VdpmGpuFront* front = resolveFront(req.front);
@@ -195,7 +217,7 @@ void VdpmGpuManager::recordRequests(vk::CommandBuffer cmd,
         const VdpmRepairKernel* const kernel = repairKernel_ ? &*repairKernel_ : nullptr;
         front->recordFrame(cmd, scorePipeline_, refinePipelines_, repairPipelines_, emitPipelines_,
                            resources_, globals.frameIndex, view, repair, globals.pixelBudget,
-                           coarsenBudget, kVdpmGpuRepairRoundBudget, kernel);
+                           coarsenBudget, kVdpmGpuRepairRoundBudget, kernel, stageProfilePtr);
 
         const std::uint32_t rank = front->rankCount();
         const VdpmGpuFront::ComputeCost cost =

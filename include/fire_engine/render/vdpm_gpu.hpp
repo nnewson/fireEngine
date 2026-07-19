@@ -19,6 +19,7 @@
 namespace fire_engine
 {
 
+class GpuProfiler; // render/gpu_profiler.hpp — per-pass GPU timestamps (recordFrame stage timing)
 struct DependencyDag; // graphics/vdpm_parallel.hpp — the forest's refine-dependency DAG (B3
                       // topology)
 
@@ -398,6 +399,21 @@ private:
     ComputePipeline pipeline_;
 };
 
+// Optional per-stage instrumentation for recordFrame (apply-kernel arc checkpoint). Passed
+// non-null, recordFrame times each of its four stages (score / apply / repair / emit):
+//  - `cpuMs` (if set) accumulates the CPU record cost per stage; valid for ANY front count (the
+//    manager sums it across fronts).
+//  - `gpu` (if set) writes GPU begin/end timestamps into the VdpmScore/Apply/Repair/Emit profiler
+//    passes. Pass it ONLY when a SINGLE front is recorded this frame — the query slots are one-shot
+//    per frame, so bracketing N>1 fronts would double-write them.
+// A null VdpmStageProfile* (production) records exactly as before, with zero overhead.
+struct VdpmStageProfile
+{
+    const GpuProfiler* gpu{nullptr};
+    std::uint32_t gpuFrameIndex{0};
+    std::array<float, 4>* cpuMs{nullptr}; // [score, apply, repair, emit] accumulated record ms
+};
+
 // PER-INSTANCE GPU front state — the per-split score/backface output + the per-frame mapped params
 // block, and (full build only) the emit workspace + resident emitted-index buffer. References its
 // shared VdpmGpuMesh.
@@ -447,13 +463,17 @@ public:
     // default: the repair path is an explicit choice at every call site (a forgotten argument must
     // not silently select the ~1000-command fallback). Tests pass nullptr explicitly to exercise
     // it.
+    //
+    // `stageProfile` (nullptr in production): optional per-stage CPU/GPU timing — see
+    // VdpmStageProfile. A pure observer; a null value records identically with zero overhead.
     void recordFrame(vk::CommandBuffer cmd, const ComputePipeline& scorePipeline,
                      const VdpmRefinePipelines& refinePipelines,
                      const VdpmRepairPipelines& repairPipelines,
                      const VdpmEmitPipelines& emitPipelines, Resources& resources,
                      std::uint32_t frameIndex, const VdpmViewParams& scoreView,
                      const VdpmRepairParams& repairParams, float pixelBudget, float coarsenBudget,
-                     std::uint32_t repairRoundBudget, const VdpmRepairKernel* repairKernel);
+                     std::uint32_t repairRoundBudget, const VdpmRepairKernel* repairKernel,
+                     const VdpmStageProfile* stageProfile);
 
     // Record ONLY the score dispatch for frame `frameIndex` (writes that slot's mapped params from
     // `view`, pushes its address, dispatches ceil(splitCount / 64)). NO barriers — the consumer

@@ -21,6 +21,14 @@ class Device;
 enum class ProfilePass : uint32_t
 {
     VdpmCompute, // GPU-driven VDPM front lifecycle (recorded before the shadow pass)
+    // Per-stage breakdown of VdpmCompute (score/apply/repair/emit), written by recordFrame ONLY
+    // when a single front is recorded (the query slots are one-shot per frame, so bracketing N>1
+    // fronts would double-write them). Report 0 on frames with 0 or >1 fronts. The apply-kernel
+    // arc's checkpoint measures which stage dominates GPU time.
+    VdpmScore,
+    VdpmApply,
+    VdpmRepair,
+    VdpmEmit,
     Shadow,
     DepthPrepass,
     Ssao,
@@ -111,6 +119,14 @@ public:
     void beginFrame(vk::CommandBuffer cmd, uint32_t frameIndex);
     void begin(vk::CommandBuffer cmd, uint32_t frameIndex, ProfilePass pass) const;
     void end(vk::CommandBuffer cmd, uint32_t frameIndex, ProfilePass pass) const;
+
+    // Write a pass's begin (`end`=false) or end (`end`=true) query at BOTTOM-of-pipe. begin() uses
+    // top-of-pipe, which is fine for a coarse whole-pass span but bleeds badly across adjacent
+    // SUB-millisecond stages (a stage's top-of-pipe begin fires while the prior stage is still
+    // draining). For the VDPM per-stage breakdown the boundaries are stamped bottom-of-pipe on BOTH
+    // sides — the shared boundary written as one stage's end AND the next stage's begin — so each
+    // resolved passMs is a clean consecutive delta. resolve() is unchanged (end − begin per pass).
+    void stampBottom(vk::CommandBuffer cmd, uint32_t frameIndex, ProfilePass pass, bool end) const;
 
     // Read back the results currently held in `frameIndex`'s slot (written a full
     // ring-cycle ago) into out.passMs / gpuTotalMs / gpuValid. No-op when timing

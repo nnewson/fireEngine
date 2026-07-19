@@ -1,6 +1,7 @@
 #include <fire_engine/render/vdpm_gpu.hpp>
 
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <limits>
 #include <stdexcept>
@@ -13,6 +14,7 @@
 #include <fire_engine/graphics/mesh_topology.hpp>
 #include <fire_engine/graphics/vdpm_parallel.hpp>
 #include <fire_engine/graphics/vdpm_wedge_choices.hpp>
+#include <fire_engine/render/gpu_profiler.hpp>
 
 namespace fire_engine
 {
@@ -1071,12 +1073,37 @@ void VdpmGpuFront::recordFrame(vk::CommandBuffer cmd, const ComputePipeline& sco
                                std::uint32_t frameIndex, const VdpmViewParams& scoreView,
                                const VdpmRepairParams& repairParams, float pixelBudget,
                                float coarsenBudget, std::uint32_t repairRoundBudget,
-                               const VdpmRepairKernel* repairKernel)
+                               const VdpmRepairKernel* repairKernel,
+                               const VdpmStageProfile* stageProfile)
 {
     if (!hasRuntime_)
     {
         throw std::logic_error("VdpmGpuFront::recordFrame: front is not a runtime front");
     }
+
+    // Per-stage timing (no-ops unless stageProfile is set). The GPU boundaries are stamped
+    // BOTTOM-of-pipe and SHARED — the timestamp after stage i is written as both stage i's end and
+    // stage i+1's begin — so each resolved passMs is a clean consecutive delta with no top-of-pipe
+    // bleed across these sub-millisecond stages. `gpuBoundary(pass, end)` writes one such stamp
+    // (only when a single front is recorded — the query slots are one-shot per frame). CPU timing
+    // is independent: steady_clock around each record call, accumulated into cpuMs[idx].
+    const bool gpuStage = stageProfile != nullptr && stageProfile->gpu != nullptr;
+    auto gpuBoundary = [&](ProfilePass pass, bool end)
+    {
+        if (gpuStage)
+        {
+            stageProfile->gpu->stampBottom(cmd, stageProfile->gpuFrameIndex, pass, end);
+        }
+    };
+    auto cpuAccumulate = [&](std::size_t idx, std::chrono::steady_clock::time_point t0)
+    {
+        if (stageProfile != nullptr && stageProfile->cpuMs != nullptr)
+        {
+            (*stageProfile->cpuMs)[idx] +=
+                std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - t0)
+                    .count();
+        }
+    };
     // LIFECYCLE BOUNDARY barrier: the score buffer + the internal emit scratch are SINGLE-buffered
     // (only the draw-consumed outputs ring), so a prior frame's mark/coarsen READS of the score
     // output (and its emit-scratch reads/writes) must be ordered before THIS frame's recordScore
@@ -1095,40 +1122,70 @@ void VdpmGpuFront::recordFrame(vk::CommandBuffer cmd, const ComputePipeline& sco
     cmd.pipelineBarrier2(
         vk::DependencyInfo{.memoryBarrierCount = 1, .pMemoryBarriers = &lifecycleBoundary});
 
+    // Boundary b0: bottom-of-pipe before the score dispatch (VdpmScore's begin).
+    gpuBoundary(ProfilePass::VdpmScore, /*end=*/false);
     // (1) Score → the front's score output (score params written to this frame's ring slot). No
     // barrier here — recordApplyScoredView's leading barrier orders the score write → the mark
     // read.
-    recordScore(cmd, scorePipeline, frameIndex, scoreView);
+    {
+        const auto t = std::chrono::steady_clock::now();
+        recordScore(cmd, scorePipeline, frameIndex, scoreView);
+        cpuAccumulate(0, t);
+    }
+    // Boundary b1 (after score): VdpmScore's end AND VdpmApply's begin.
+    gpuBoundary(ProfilePass::VdpmScore, /*end=*/true);
+    gpuBoundary(ProfilePass::VdpmApply, /*end=*/false);
     // (2) Refine/coarsen reading that GPU score output (no host round-trip).
-    recordApplyScoredView(cmd, refinePipelines, resources, pixelBudget, coarsenBudget);
+    {
+        const auto t = std::chrono::steady_clock::now();
+        recordApplyScoredView(cmd, refinePipelines, resources, pixelBudget, coarsenBudget);
+        cpuAccumulate(1, t);
+    }
+    // Boundary b2 (after apply): VdpmApply's end AND VdpmRepair's begin.
+    gpuBoundary(ProfilePass::VdpmApply, /*end=*/true);
+    gpuBoundary(ProfilePass::VdpmRepair, /*end=*/false);
     // (3) Repair, reading this frame's ring repair params. The single-dispatch kernel (when the
     // device supports it) or the multi-dispatch recorder.
-    if (repairKernel != nullptr)
     {
-        recordRepairKernel(cmd, *repairKernel, frameIndex, repairParams, repairRoundBudget);
-        // The kernel records no consumer barrier, and recordEmitFromFront's leading fillBuffer +
-        // clearToCompute orders only the counter CLEAR — not the kernel's active-front writes. So
-        // order the kernel's compute writes (active/refined/dependents) before emit's ancestor
-        // read.
-        const vk::MemoryBarrier2 kernelToEmit{
-            .srcStageMask = vk::PipelineStageFlagBits2::eComputeShader,
-            .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
-            .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
-            .dstAccessMask =
-                vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite,
-        };
-        cmd.pipelineBarrier2(
-            vk::DependencyInfo{.memoryBarrierCount = 1, .pMemoryBarriers = &kernelToEmit});
+        const auto t = std::chrono::steady_clock::now();
+        if (repairKernel != nullptr)
+        {
+            recordRepairKernel(cmd, *repairKernel, frameIndex, repairParams, repairRoundBudget);
+            // The kernel records no consumer barrier, and recordEmitFromFront's leading fillBuffer
+            // + clearToCompute orders only the counter CLEAR — not the kernel's active-front
+            // writes. So order the kernel's compute writes (active/refined/dependents) before
+            // emit's ancestor read.
+            const vk::MemoryBarrier2 kernelToEmit{
+                .srcStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+                .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
+                .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+                .dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead |
+                                 vk::AccessFlagBits2::eShaderStorageWrite,
+            };
+            cmd.pipelineBarrier2(
+                vk::DependencyInfo{.memoryBarrierCount = 1, .pMemoryBarriers = &kernelToEmit});
+        }
+        else
+        {
+            // The recorder's trailing close/refine barrier already orders repair→emit, no extra
+            // one.
+            recordRepairRuntime(cmd, refinePipelines, repairPipelines, resources, frameIndex,
+                                repairParams, repairRoundBudget);
+        }
+        cpuAccumulate(2, t);
     }
-    else
-    {
-        // The recorder's trailing close/refine barrier already orders repair→emit, so no extra one.
-        recordRepairRuntime(cmd, refinePipelines, repairPipelines, resources, frameIndex,
-                            repairParams, repairRoundBudget);
-    }
+    // Boundary b3 (after repair): VdpmRepair's end AND VdpmEmit's begin.
+    gpuBoundary(ProfilePass::VdpmRepair, /*end=*/true);
+    gpuBoundary(ProfilePass::VdpmEmit, /*end=*/false);
     // (4) Emit the live settled front into this frame's ring output. No consumer barrier — the
     // caller (renderer) adds the compute→(index-read + indirect-read) barrier before the draw.
-    recordEmitFromFront(cmd, emitPipelines, resources, frameIndex);
+    {
+        const auto t = std::chrono::steady_clock::now();
+        recordEmitFromFront(cmd, emitPipelines, resources, frameIndex);
+        cpuAccumulate(3, t);
+    }
+    // Boundary b4: bottom-of-pipe after emit (VdpmEmit's end).
+    gpuBoundary(ProfilePass::VdpmEmit, /*end=*/true);
 }
 
 void VdpmGpuFront::recordCloseAndRefineRequired(vk::CommandBuffer cmd,

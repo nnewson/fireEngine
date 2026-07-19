@@ -747,9 +747,25 @@ at a fraction of the triangles. The remaining residuals and follow-ons, in rough
   is GPU-vs-GPU **exact** on the tested fixtures; it does NOT claim universal visual parity (screen-space FP
   can still diverge from the CPU oracle at thresholds). **Measured (helmet, R=18): CPU record 2.1 → 0.26 ms
   (~8×), GPU compute ~17.5 → ~2.4 ms (~7×), 1014 → 64 dispatches** — single-workgroup occupancy did NOT cap
-  the win. NEXT: Stage 4 batches N fronts into one dispatch (fill N jobs, dispatch N; kernel/ABI unchanged),
-  THEN resume B5c — delayed triangle/repair diagnostics + the deferred helmet wedge/rank-count evidence
-  (Vulkan glTF path) + a possible default flip to GPU after parity sign-off.
+  the win.
+- 🔨 **Apply persistent-kernel arc (in progress) — checkpoint 0 done.** After Stage 3 moved the
+  bottleneck, `recordFrame` gained opt-in per-stage timing (CPU `steady_clock` around each of
+  score/apply/repair/emit + GPU bottom-of-pipe boundary timestamps into new `ProfilePass::Vdpm{Score,
+  Apply,Repair,Emit}`, written only when a SINGLE front records — the query slots are one-shot; a null
+  `VdpmStageProfile*` is zero-overhead in production). **Measured per-stage** (`FE_LOG=render:debug`):
+  *helmet, 1 front* — GPU score ~0.02 / **apply ~1.2 (~58%)** / **repair ~0.7 (~35%)** / emit ~0.06 ms
+  (of ~2.0 ms VdpmCompute); CPU-record **apply ~0.17 (~80%)** / rest tiny. *TransmissionTest, 13 fronts*
+  — CPU-record **apply ~2.0 (~89%)** of ~2.24 ms (GPU per-stage n/a for >1 front). **Conclusions:**
+  apply dominates BOTH CPU-record and GPU time ⇒ the apply persistent-kernel (mark/close/refine/coarsen
+  in one workgroup, reusing the repair kernel's rank loop) is justified — it sheds apply's ~54 barriers
+  (the CPU-record cost + most of the 1.2 ms GPU). **Surprise the checkpoint caught:** the persistent
+  *repair* kernel, though ONE dispatch, still costs ~0.7 ms / 35% GPU — a single workgroup is
+  occupancy-bound. So the apply kernel (also one workgroup) will land near a repair-like floor, not
+  free; expect a solid but not proportional GPU drop, and the emerging frontier past the apply kernel is
+  single-workgroup occupancy / **front-batching** (N fronts = N workgroups fill the GPU — which is why
+  the job ABI is kept batch-ready). NEXT: build the apply kernel; THEN reconsider whole-lifecycle
+  batching; THEN resume B5c — delayed triangle/repair diagnostics + the deferred helmet wedge/rank-count
+  evidence (Vulkan glTF path) + a possible default flip to GPU after parity sign-off.
 - **7 forest skips.** `buildVertexForest` skips collapses whose edge diverged from its adjacency
   replay (7 of ~6800 on the helmet); past the first skip the forest is slightly unfaithful. The repairs
   cover the visible symptoms; truncating the stream at the first skip would be the clean structural fix.

@@ -60,6 +60,17 @@ void GpuProfiler::end(vk::CommandBuffer cmd, uint32_t frameIndex, ProfilePass pa
                         queryIndex(frameIndex, pass, true));
 }
 
+void GpuProfiler::stampBottom(vk::CommandBuffer cmd, uint32_t frameIndex, ProfilePass pass,
+                              bool end) const
+{
+    if (!enabled_)
+    {
+        return;
+    }
+    cmd.writeTimestamp2(vk::PipelineStageFlagBits2::eBottomOfPipe, *pool_,
+                        queryIndex(frameIndex, pass, end));
+}
+
 void GpuProfiler::resolve(uint32_t frameIndex, FrameStats& out) const
 {
     out.gpuValid = false;
