@@ -80,8 +80,8 @@ void DebugOverlay::buildUi(const FrameStats& stats, RenderTunables& tunables)
     }
 
     static constexpr std::array<const char*, kProfilePassCount> kPassNames{
-        "Shadow", "Depth",     "SSAO",  "Forward", "Transmission",
-        "TAA",    "Particles", "Debug", "Bloom",   "Post"};
+        "VDPM compute", "Shadow",    "Depth", "SSAO",  "Forward", "Transmission",
+        "TAA",          "Particles", "Debug", "Bloom", "Post"};
 
     ImGui::Begin("Fire Engine - Debug");
 
@@ -173,6 +173,30 @@ void DebugOverlay::buildUi(const FrameStats& stats, RenderTunables& tunables)
                         static_cast<double>(stats.vdpmMaxUvRatio),
                         static_cast<double>(stats.vdpmMaxNormalRatio),
                         static_cast<double>(stats.vdpmMaxTangentRatio));
+            // GPU-driven-front (B5b) command-count instrumentation. The compute cost is dispatch-
+            // bound: the analytic total is dominated by the repair term B·(2R+2), so the CPU record
+            // time (MoltenVK command translation) tracks it. Compare with the "VDPM compute" GPU
+            // pass above. Only populated with --vdpm-gpu.
+            if (stats.vdpmFrontsRecorded > 0)
+            {
+                ImGui::Text("VDPM GPU: %d front(s), %d ranks, repairBudget %d",
+                            stats.vdpmFrontsRecorded, stats.vdpmMaxRankCount,
+                            stats.vdpmRepairRoundBudget);
+                ImGui::Text(
+                    "VDPM GPU: record %.3f ms CPU | ~%d dispatches, ~%d barriers (analytic)",
+                    static_cast<double>(stats.vdpmRecordCpuMs), stats.vdpmAnalyticDispatches,
+                    stats.vdpmAnalyticBarriers);
+                // Delayed convergence readback (a representative front, a few frames late): how
+                // many of the budgeted repair rounds actually found work. A small number vs the
+                // budget is the wasted-round evidence.
+                if (stats.vdpmRepairMarkedRounds >= 0)
+                {
+                    ImGui::Text("VDPM GPU repair: %d/%d rounds did work%s | emitted %d idx",
+                                stats.vdpmRepairMarkedRounds, stats.vdpmRepairRoundBudget,
+                                stats.vdpmRepairFallbackFired ? " (fallback FIRED)" : "",
+                                stats.vdpmEmittedIndexCount);
+                }
+            }
         }
         ImGui::TextDisabled("View > 'LOD tint' colours by level (green/yellow/red)");
     }

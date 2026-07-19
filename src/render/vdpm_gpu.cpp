@@ -8,6 +8,7 @@
 #include <vector>
 
 #include <fire_engine/graphics/draw_command.hpp>
+#include <fire_engine/graphics/lod.hpp>
 #include <fire_engine/graphics/mapped_buffer.hpp>
 #include <fire_engine/graphics/mesh_topology.hpp>
 #include <fire_engine/graphics/vdpm_parallel.hpp>
@@ -859,6 +860,12 @@ VdpmGpuFront VdpmGpuFront::buildRuntime(Resources& resources, const VdpmGpuMesh&
     const std::array<std::uint32_t, 4> zeroCtrl{0, 0, 0, 0};
     dev(4 * sizeof(std::uint32_t), zeroCtrl.data(), front.repairControl_,
         front.repairControlAddress_, srcFlag, "repairControl");
+    // Per-round convergence history (perf instrumentation) — kVdpmGpuRepairRoundBudget slots, one
+    // per bounded repair round; each round's detect atomic-ORs its anyMarked here via address
+    // redirection (see recordRepairImpl). Readback-enabled for the manager's delayed diagnostics.
+    const std::vector<std::uint32_t> zeroHistory(kVdpmGpuRepairRoundBudget, 0);
+    dev(kVdpmGpuRepairRoundBudget * sizeof(std::uint32_t), zeroHistory.data(), front.roundHistory_,
+        front.roundHistoryAddress_, srcFlag, "roundHistory");
 
     // RINGED draw-consumed outputs (emitted indices / counters / indirect) + host-written repair
     // params — one per frame-in-flight, so a draw can read slot N while slot N+1 is computed.
@@ -1181,8 +1188,12 @@ void VdpmGpuFront::recordRepairImpl(vk::CommandBuffer cmd,
     };
 
     // Ancestor resolve (live front → cache) + detect (mark violations). NO trailing barrier — the
-    // caller adds detect→consumer (close, or the fallback).
-    auto ancestorThenDetect = [&]()
+    // caller adds detect→consumer (close, or the fallback). `anyMarkedAddress` is where the
+    // detect's atomic `anyMarked` OR lands — repairControl[0] normally, or a per-round history slot
+    // for the bounded rounds (perf instrumentation, via address redirection; the SAME atomic the
+    // round already did, just aimed at its own slot — the accumulated bounded value in
+    // repairControl[0] was unused; only the final detect drives the fallback).
+    auto ancestorThenDetect = [&](std::uint64_t anyMarkedAddress)
     {
         recordAncestorResolve(
             cmd, repairPipelines.ancestor(),
@@ -1201,7 +1212,7 @@ void VdpmGpuFront::recordRepairImpl(vk::CommandBuffer cmd,
                                         .ancestorIdAddress = repairAncestorIdAddress_,
                                         .removingSplitAddress = binding_.removingSplitAddress,
                                         .requiredAddress = requiredStateAddress_,
-                                        .repairControlAddress = repairControlAddress_,
+                                        .repairControlAddress = anyMarkedAddress,
                                         .paramsAddress = paramsAddress,
                                         .classificationAddress = 0, // production: no classification
                                         .faceCount = binding_.finestFaceCount,
@@ -1212,12 +1223,29 @@ void VdpmGpuFront::recordRepairImpl(vk::CommandBuffer cmd,
         cmd.dispatch(emitGroups(binding_.finestFaceCount), 1, 1);
     };
 
+    // Clear the per-round convergence history once (runtime front only), before the bounded rounds
+    // redirect their detect atomic into per-round slots. eClear→compute so the first round's detect
+    // sees a defined slot.
+    const bool captureHistory = roundHistoryAddress_ != 0;
+    if (captureHistory)
+    {
+        cmd.fillBuffer(resources.vulkanBuffer(roundHistory_), 0,
+                       kVdpmGpuRepairRoundBudget * sizeof(std::uint32_t), 0);
+        cmd.pipelineBarrier2(
+            vk::DependencyInfo{.memoryBarrierCount = 1, .pMemoryBarriers = &clearToCompute});
+    }
+
     // Bounded snapshot rounds: reset required → detect → close+refine (the shared recorder barriers
-    // detect→close and refine→consumer).
+    // detect→close and refine→consumer). The detect's anyMarked goes to this round's history slot
+    // (or repairControl[0] on an isolated front / a budget past the history size).
     for (std::uint32_t round = 0; round < roundBudget; ++round)
     {
         resetRequired();
-        ancestorThenDetect();
+        const std::uint64_t anyMarkedAddress =
+            (captureHistory && round < kVdpmGpuRepairRoundBudget)
+                ? roundHistoryAddress_ + static_cast<std::uint64_t>(round) * sizeof(std::uint32_t)
+                : repairControlAddress_;
+        ancestorThenDetect(anyMarkedAddress);
         recordCloseAndRefineRequired(cmd, refinePipelines);
     }
 
@@ -1237,8 +1265,9 @@ void VdpmGpuFront::recordRepairImpl(vk::CommandBuffer cmd,
             vk::DependencyInfo{.memoryBarrierCount = 1, .pMemoryBarriers = &clearToCompute});
     }
     resetRequired();
-    ancestorThenDetect();
-    emitComputeBarrier(cmd); // detect (anyMarked + required) → fallback reads
+    ancestorThenDetect(
+        repairControlAddress_); // final detect → repairControl[0] (fallback reads it)
+    emitComputeBarrier(cmd);    // detect (anyMarked + required) → fallback reads
 
     // Fallback: seed every unrefined split iff anyMarked, else clear required — then close+refine
     // drives to full detail (guaranteed hole-free) or no-ops.

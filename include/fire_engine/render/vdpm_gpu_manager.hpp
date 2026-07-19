@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <optional>
 #include <span>
@@ -8,10 +9,12 @@
 #include <vulkan/vulkan_raii.hpp>
 
 #include <fire_engine/graphics/generational_slot_pool.hpp>
+#include <fire_engine/graphics/gpu_limits.hpp>
 #include <fire_engine/graphics/vdpm_gpu_registry.hpp>
 #include <fire_engine/math/mat4.hpp>
 #include <fire_engine/math/vec3.hpp>
 #include <fire_engine/render/compute_pipeline.hpp>
+#include <fire_engine/render/descriptors.hpp>
 #include <fire_engine/render/vdpm_gpu.hpp>
 
 namespace fire_engine
@@ -80,6 +83,51 @@ public:
     void recordRequests(vk::CommandBuffer cmd, std::span<const VdpmWorkRequest> requests,
                         const VdpmFrameGlobals& globals);
 
+    // Per-frame compute-command instrumentation from the most recent recordRequests (perf arc, no
+    // behaviour change): how many fronts recorded, the largest rank count among them, the repair
+    // round budget those dispatches assumed, and the ANALYTIC dispatch/barrier totals (Σ over
+    // fronts of VdpmGpuFront::analyticComputeCost). Zeroed at the top of each recordRequests.
+    struct ComputeStats
+    {
+        std::uint32_t frontsRecorded{0};
+        std::uint32_t maxRankCount{0};
+        std::uint32_t roundBudget{0};
+        std::uint32_t analyticDispatches{0};
+        std::uint32_t analyticBarriers{0};
+    };
+    [[nodiscard]] const ComputeStats& lastComputeStats() const noexcept
+    {
+        return lastComputeStats_;
+    }
+
+    // Record the delayed diagnostic readback for a representative front (perf arc, item 4). Called
+    // by the Renderer AFTER the VdpmCompute profiler pass ends (so the tiny copies don't perturb
+    // the compute timestamp): it parses the ring slot written a full frames-in-flight cycle ago
+    // (already complete — no stall) into lastDiagnostics(), then records the copy of this frame's
+    // front convergence buffers into that slot. No-op if no front recorded this frame.
+    void recordDiagnosticReadback(vk::CommandBuffer cmd, std::uint32_t frameIndex);
+
+    // The most recently READ-BACK per-round convergence diagnostics (from ~kMaxFramesInFlight
+    // frames ago). `valid` is false until the first slot completes. `markedRounds` is the count of
+    // leading repair rounds whose detect found a violation (the convergence point); `cleanPrefix`
+    // is false if a marked round followed a clean one (a repair/sync bug under a fixed view).
+    // finalAnyMarked = the post-budget detect still found a violation; fallbackFired = the
+    // full-detail seed ran; emittedIndexCount = the drawn index count.
+    struct Diagnostics
+    {
+        bool valid{false};
+        std::uint32_t roundBudget{0};
+        std::uint32_t markedRounds{0};
+        bool cleanPrefix{true};
+        std::uint32_t finalAnyMarked{0};
+        std::uint32_t fallbackFired{0};
+        std::uint32_t emittedIndexCount{0};
+    };
+    [[nodiscard]] const Diagnostics& lastDiagnostics() const noexcept
+    {
+        return lastDiagnostics_;
+    }
+
     // A GPU-driven front's draw-consumed buffers for one frame slot: the GPU-emitted index stream
     // (always uint32) + the GPU-written indirect command. The count lives in the indirect command.
     struct DrawBuffers
@@ -130,6 +178,19 @@ private:
     std::vector<std::optional<VdpmGpuMesh>> meshes_;
     GenerationalSlotPool frontPool_;
     std::vector<FrontSlot> fronts_;
+
+    ComputeStats lastComputeStats_{};
+
+    // Delayed per-round convergence diagnostics (perf arc, item 4). `diagReadback_` is a
+    // host-visible ring (one slot per frame-in-flight) each holding [roundHistory[0..B),
+    // repairControl[0..4), counters[0..3)] copied from `diagFront_` — the first front recorded this
+    // frame; reading slot `frameIndex` recovers the copy from a full cycle ago (already complete).
+    // Parsed into lastDiagnostics_.
+    MappedBufferSet diagReadback_{};
+    VdpmGpuFront* diagFront_{nullptr};
+    std::array<bool, kMaxFramesInFlight> diagSlotWritten_{}; // slot has real data to parse
+    Diagnostics lastDiagnostics_{};
+    std::uint32_t lastLoggedMarkedRounds_{static_cast<std::uint32_t>(-1)};
 
     // Log a dispatch-limit ineligibility fallback only once (else one line per ineligible mesh).
     bool loggedDispatchFallback_{false};

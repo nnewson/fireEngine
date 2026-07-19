@@ -685,8 +685,39 @@ at a fraction of the triangles. The remaining residuals and follow-ons, in rough
   the compute). Per-mesh fallback instances (ineligible mesh → NullVdpmFront) keep the CPU path; stale CPU
   repair/channel stats for GPU instances are suppressed via a per-binding `vdpmCpuRanThisFrame` flag until
   B5c. Verified 0-VUID drawing GPU output on the helmet (opaque + prepass) and TransmissionTest (13 fronts,
-  transmission path). Next: B5c — delayed triangle/repair diagnostics + the deferred helmet wedge/rank-count
-  evidence (Vulkan glTF path) + a possible default flip to GPU after parity sign-off.
+  transmission path). **Perf arc opened (B5c/default-flip paused):** the GPU backend is **dispatch-bound,
+  not triangle-bound** — the front lifecycle records ≈ `B·(2R+2) + 5R + 12` compute dispatches + a matching
+  barrier count per instance per frame (R = rank count, B = repair round budget = 24), ~94% of it the
+  fixed-round repair that records ALL 24 rounds even after round-1 convergence (plus a full close/refine
+  after the fallback). Instrumented (no behaviour change): `ProfilePass::VdpmCompute` GPU timestamp, CPU
+  wall time around `recordRequests`, and the analytic dispatch/barrier tally per front
+  (`VdpmGpuFront::analyticComputeCost`, `VdpmGpuManager::ComputeStats`, overlay + `FE_LOG=render:debug`).
+  Measured: the 15k-tri helmet is **~1014 dispatches + ~1066 barriers/frame** (1 front, 18 ranks);
+  TransmissionTest **~19,700 dispatches + ~20,400 barriers/frame** (13 fronts). MoltenVK's per-command
+  Metal translation makes CPU recording rival shader time; vsync turns the 16.7ms crossing into an abrupt
+  60→30. **The per-round convergence evidence is decisive** (captured GPU-resident via address
+  redirection — each bounded detect atomic-ORs its `anyMarked` into a per-round history slot, no shader
+  change, delayed readback): the helmet repair **converges in 2 of the 24 rounds** (marked-then-clean
+  prefix, fallback never fires) — so ~22 rounds (~87% of the dispatches) do nothing. A repair-budget sweep
+  confirms it: budget **2 emits the IDENTICAL front** (38970 indices, no fallback) at **~178 dispatches vs
+  ~1014 — 5.7×** fewer; budget 1 is insufficient (a violation remains → fallback fires → over-refines to
+  full detail 46356). **Wall-time baseline** (helmet, MoltenVK, timestamps valid): at B=24 the VDPM
+  compute is **~17 ms GPU + ~2.2 ms CPU record** — it alone blows the 16.7 ms vsync budget (the 60→30
+  drop); at B=2 it is **~3.6 ms GPU + ~0.5 ms CPU**. GPU compute dominates CPU record ~8:1, so most of the
+  cost is the GPU serialising across ~1000 barriers between tiny dispatches, not just MoltenVK command
+  translation — both fall ~4–5× at B=2. **Next: the repair-scheduling arc — NOT a fixed lower budget and
+  NOT dispatchIndirect early-out alone (which still leaves ~1000 commands to translate + barrier).** The
+  fix is a **scheduler replacement** that folds convergence in: one persistent workgroup per front (clear
+  → resolve/classify in strided loops → shared-memory reduce anyMarked → uniform exit when clean → process
+  ranks in-workgroup with barrier()/memoryBarrierBuffer() → final detect + the existing full-detail
+  fallback), batched across all fronts in ONE dispatch — turning ~1000 commands into one while keeping
+  genuine GPU-resident convergence; graduate to a multi-workgroup queue/wave design only if one workgroup
+  is too serial for large meshes. Implications: upload the rank offsets (currently CPU-side), share the
+  GLSL coverage/foldover classifier between the existing detector and the new kernel, keep the current
+  recorder as the tested reference/fallback until invariants + output match. Hoisting the per-rank
+  pipeline binds is now only a small cleanup to that retained reference path, not a priority. THEN resume
+  B5c — delayed triangle/repair diagnostics + the deferred helmet wedge/rank-count evidence (Vulkan glTF
+  path) + a possible default flip to GPU after parity sign-off.
 - **7 forest skips.** `buildVertexForest` skips collapses whose edge diverged from its adjacency
   replay (7 of ~6800 on the helmet); past the first skip the forest is slightly unfaithful. The repairs
   cover the visible symptoms; truncating the stream at the first skip would be the clean structural fix.

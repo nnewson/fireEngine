@@ -508,6 +508,17 @@ public:
     {
         return repairControl_;
     }
+    // Per-round convergence history (perf instrumentation): one uint per bounded repair round, each
+    // atomic-OR'd with that round's detect `anyMarked` (via address redirection — the SAME atomic
+    // the round already recorded, just aimed at its own slot; the accumulated bounded value in
+    // repairControl[0] was unused, only the final detect drives the fallback). Cleared once per
+    // recordFrame. Reads as a marked-then-clean prefix; a marked round after a clean one (view
+    // fixed) would flag a repair/sync bug. Empty on isolated (non-runtime) fronts. eTransferSrc for
+    // the delayed readback.
+    [[nodiscard]] BufferHandle roundHistoryBuffer() const noexcept
+    {
+        return roundHistory_;
+    }
     // Per-face packed classification from recordDetectClassify (test only); one uint per finest
     // face.
     [[nodiscard]] BufferHandle repairClassificationBuffer() const noexcept
@@ -556,6 +567,42 @@ public:
     [[nodiscard]] std::uint32_t faceCount() const noexcept
     {
         return binding_.faceCount;
+    }
+
+    // Rank count R = maxRank + 1 = the number of per-rank dispatch waves the refine/coarsen/repair
+    // passes fan into (0 for a zero-split front, which records nothing). The dominant driver of the
+    // per-frame command count — see analyticComputeCost.
+    [[nodiscard]] std::uint32_t rankCount() const noexcept
+    {
+        return static_cast<std::uint32_t>(rankRanges_.size());
+    }
+
+    // Analytic per-frame compute-dispatch + pipeline-barrier count for a front with `rankCount`
+    // ranks under repair round budget `roundBudget` (perf instrumentation, B5b-perf). Mirrors the
+    // recorder structure exactly: score (1 dispatch) + apply mark/close/refine/coarsen (3R+1
+    // dispatches, 3R+2 barriers) + the bounded repair — B rounds of reset→ancestor→detect→close→
+    // refine ((2R+2) dispatches, (2R+4) barriers each) plus a final detect + fallback + a full
+    // close/refine ((2R+3) dispatches, (2R+7) barriers) — + emit (~7 dispatches, 4 barriers) + the
+    // frame lifecycle barrier (1). So dispatches = B(2R+2) + 5R + 12, barriers = B(2R+4) + 5R + 16.
+    // The ~94%-of-work repair term B(2R+2) is why an early-out on convergence is the target.
+    // Returns {0,0} for a zero-split front. KEEP IN SYNC with recordFrame's recorders if they
+    // change.
+    struct ComputeCost
+    {
+        std::uint32_t dispatches{0};
+        std::uint32_t barriers{0};
+    };
+    [[nodiscard]] static constexpr ComputeCost
+    analyticComputeCost(std::uint32_t rankCount, std::uint32_t roundBudget) noexcept
+    {
+        if (rankCount == 0)
+        {
+            return {};
+        }
+        const std::uint32_t r = rankCount;
+        const std::uint32_t b = roundBudget;
+        return {.dispatches = b * (2 * r + 2) + 5 * r + 12,
+                .barriers = b * (2 * r + 4) + 5 * r + 16};
     }
 
 private:
@@ -624,6 +671,11 @@ private:
     std::uint64_t repairClassificationAddress_{0};
     std::span<std::byte> repairParamsMapped_{};
     std::uint64_t repairParamsAddress_{0};
+    // Per-round convergence history (perf instrumentation, runtime front only).
+    // kVdpmGpuRepairRounds slots; NullBuffer/0 on isolated fronts, which fall back to writing
+    // anyMarked into repairControl (no per-round capture).
+    BufferHandle roundHistory_{NullBuffer};
+    std::uint64_t roundHistoryAddress_{0};
 
     // The shared close+refine recorder (Stage B3), reused by B4's repair round. Owns its boundary
     // barriers: a leading seed-write→closure-read barrier, barriers between close ranks and before
