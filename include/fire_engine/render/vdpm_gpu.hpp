@@ -508,6 +508,17 @@ public:
     {
         return repairControl_;
     }
+    // Per-round convergence history (perf instrumentation): one uint per bounded repair round, each
+    // atomic-OR'd with that round's detect `anyMarked` (via address redirection — the SAME atomic
+    // the round already recorded, just aimed at its own slot; the accumulated bounded value in
+    // repairControl[0] was unused, only the final detect drives the fallback). Cleared once per
+    // recordFrame. Reads as a marked-then-clean prefix; a marked round after a clean one (view
+    // fixed) would flag a repair/sync bug. Empty on isolated (non-runtime) fronts. eTransferSrc for
+    // the delayed readback.
+    [[nodiscard]] BufferHandle roundHistoryBuffer() const noexcept
+    {
+        return roundHistory_;
+    }
     // Per-face packed classification from recordDetectClassify (test only); one uint per finest
     // face.
     [[nodiscard]] BufferHandle repairClassificationBuffer() const noexcept
@@ -660,6 +671,11 @@ private:
     std::uint64_t repairClassificationAddress_{0};
     std::span<std::byte> repairParamsMapped_{};
     std::uint64_t repairParamsAddress_{0};
+    // Per-round convergence history (perf instrumentation, runtime front only).
+    // kVdpmGpuRepairRounds slots; NullBuffer/0 on isolated fronts, which fall back to writing
+    // anyMarked into repairControl (no per-round capture).
+    BufferHandle roundHistory_{NullBuffer};
+    std::uint64_t roundHistoryAddress_{0};
 
     // The shared close+refine recorder (Stage B3), reused by B4's repair round. Owns its boundary
     // barriers: a leading seed-write→closure-read barrier, barriers between close ranks and before

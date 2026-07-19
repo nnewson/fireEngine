@@ -186,6 +186,16 @@ void DebugOverlay::buildUi(const FrameStats& stats, RenderTunables& tunables)
                     "VDPM GPU: record %.3f ms CPU | ~%d dispatches, ~%d barriers (analytic)",
                     static_cast<double>(stats.vdpmRecordCpuMs), stats.vdpmAnalyticDispatches,
                     stats.vdpmAnalyticBarriers);
+                // Delayed convergence readback (a representative front, a few frames late): how
+                // many of the budgeted repair rounds actually found work. A small number vs the
+                // budget is the wasted-round evidence.
+                if (stats.vdpmRepairMarkedRounds >= 0)
+                {
+                    ImGui::Text("VDPM GPU repair: %d/%d rounds did work%s | emitted %d idx",
+                                stats.vdpmRepairMarkedRounds, stats.vdpmRepairRoundBudget,
+                                stats.vdpmRepairFallbackFired ? " (fallback FIRED)" : "",
+                                stats.vdpmEmittedIndexCount);
+                }
             }
         }
         ImGui::TextDisabled("View > 'LOD tint' colours by level (green/yellow/red)");

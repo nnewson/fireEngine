@@ -1018,6 +1018,9 @@ void Renderer::drawFrame(Window& display, RenderableScene& scene, float dt)
     stats_.vdpmRepairRoundBudget = 0;
     stats_.vdpmAnalyticDispatches = 0;
     stats_.vdpmAnalyticBarriers = 0;
+    stats_.vdpmRepairMarkedRounds = -1;
+    stats_.vdpmRepairFallbackFired = false;
+    stats_.vdpmEmittedIndexCount = 0;
     if (vdpmManager_ != nullptr && !vdpmRecordScratch_.empty())
     {
         const VdpmFrameGlobals globals{.viewProj = currentViewProj_,
@@ -1036,6 +1039,9 @@ void Renderer::drawFrame(Window& display, RenderableScene& scene, float dt)
         vdpmManager_->recordRequests(cmd, vdpmRecordScratch_, globals);
         const auto vdpmRecordEnd = std::chrono::steady_clock::now();
         profiler_.end(cmd, currentFrame_, ProfilePass::VdpmCompute);
+        // Delayed convergence readback recorded AFTER the timestamp closes, so its tiny copies
+        // don't inflate the VdpmCompute GPU time.
+        vdpmManager_->recordDiagnosticReadback(cmd, currentFrame_);
 
         stats_.vdpmRecordCpuMs =
             std::chrono::duration<float, std::milli>(vdpmRecordEnd - vdpmRecordStart).count();
@@ -1045,6 +1051,10 @@ void Renderer::drawFrame(Window& display, RenderableScene& scene, float dt)
         stats_.vdpmRepairRoundBudget = static_cast<int>(cs.roundBudget);
         stats_.vdpmAnalyticDispatches = static_cast<int>(cs.analyticDispatches);
         stats_.vdpmAnalyticBarriers = static_cast<int>(cs.analyticBarriers);
+        const VdpmGpuManager::Diagnostics& diag = vdpmManager_->lastDiagnostics();
+        stats_.vdpmRepairMarkedRounds = diag.valid ? static_cast<int>(diag.markedRounds) : -1;
+        stats_.vdpmRepairFallbackFired = diag.fallbackFired != 0;
+        stats_.vdpmEmittedIndexCount = static_cast<int>(diag.emittedIndexCount);
     }
 
     // Particles render un-jittered (after TAA); feed them the plain proj. The

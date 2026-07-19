@@ -1,6 +1,8 @@
 #include <fire_engine/render/vdpm_gpu_manager.hpp>
 
 #include <algorithm>
+#include <array>
+#include <cstring>
 #include <optional>
 #include <stdexcept>
 #include <utility>
@@ -14,6 +16,16 @@
 namespace fire_engine
 {
 
+namespace
+{
+// Diagnostic readback layout (uint32 words): roundHistory[0..B) | repairControl[0..4) |
+// counters[0..3).
+constexpr std::uint32_t kVdpmDiagRoundBase = 0;
+constexpr std::uint32_t kVdpmDiagControlBase = kVdpmGpuRepairRoundBudget;
+constexpr std::uint32_t kVdpmDiagCountersBase = kVdpmGpuRepairRoundBudget + 4;
+constexpr std::uint32_t kVdpmDiagWordCount = kVdpmGpuRepairRoundBudget + 7;
+} // namespace
+
 VdpmGpuManager::VdpmGpuManager(const Device& device, Resources& resources)
     : resources_(resources),
       scorePipeline_(device, vdpmScorePipelineConfig()),
@@ -21,6 +33,10 @@ VdpmGpuManager::VdpmGpuManager(const Device& device, Resources& resources)
       repairPipelines_(device),
       emitPipelines_(device)
 {
+    // Delayed diagnostics readback ring (perf arc, item 4): [roundHistory[0..B),
+    // repairControl[0..4), counters[0..3)] per frame slot.
+    diagReadback_ =
+        resources_.createMappedReadbackBuffers(kVdpmDiagWordCount * sizeof(std::uint32_t));
 }
 
 VdpmMeshHandle VdpmGpuManager::registerMesh(std::span<const Vertex> vertices,
@@ -133,6 +149,7 @@ void VdpmGpuManager::recordRequests(vk::CommandBuffer cmd,
     // Perf instrumentation (no behaviour change): tally the analytic compute-command cost as we
     // record. Reset here; accumulated per resolved front below.
     lastComputeStats_ = ComputeStats{.roundBudget = kVdpmGpuRepairRoundBudget};
+    diagFront_ = nullptr; // set to the first resolved front for the delayed convergence readback
 
     for (const VdpmWorkRequest& req : requests)
     {
@@ -140,6 +157,10 @@ void VdpmGpuManager::recordRequests(vk::CommandBuffer cmd,
         if (front == nullptr)
         {
             continue; // stale/invalid handle — skip
+        }
+        if (diagFront_ == nullptr)
+        {
+            diagFront_ = front; // representative front for the delayed convergence readback
         }
 
         // Score view (cone predicate + screen-space error scale). makeVdpmViewParams is the SAME
@@ -188,6 +209,85 @@ void VdpmGpuManager::recordRequests(vk::CommandBuffer cmd,
                    lastComputeStats_.analyticBarriers);
         lastLoggedRequestCount_ = requests.size();
     }
+}
+
+void VdpmGpuManager::recordDiagnosticReadback(vk::CommandBuffer cmd, std::uint32_t frameIndex)
+{
+    // Parse the slot written a FULL frames-in-flight cycle ago (this frame's fence guarantees it is
+    // complete — no stall). Only once it has real data.
+    const std::span<std::byte> slot = diagReadback_.mapped[frameIndex];
+    if (diagSlotWritten_[frameIndex] && slot.size() >= kVdpmDiagWordCount * sizeof(std::uint32_t))
+    {
+        std::array<std::uint32_t, kVdpmDiagWordCount> w{};
+        std::memcpy(w.data(), slot.data(), sizeof(w));
+
+        std::uint32_t marked = 0;
+        bool seenZero = false;
+        bool cleanPrefix = true;
+        for (std::uint32_t r = 0; r < kVdpmGpuRepairRoundBudget; ++r)
+        {
+            if (w[kVdpmDiagRoundBase + r] != 0)
+            {
+                ++marked;
+                if (seenZero)
+                {
+                    cleanPrefix = false; // a marked round after a clean one — repair/sync anomaly
+                }
+            }
+            else
+            {
+                seenZero = true;
+            }
+        }
+        lastDiagnostics_ = Diagnostics{.valid = true,
+                                       .roundBudget = kVdpmGpuRepairRoundBudget,
+                                       .markedRounds = marked,
+                                       .cleanPrefix = cleanPrefix,
+                                       .finalAnyMarked = w[kVdpmDiagControlBase + 0],
+                                       .fallbackFired = w[kVdpmDiagControlBase + 2],
+                                       .emittedIndexCount = w[kVdpmDiagCountersBase + 2]};
+
+        if (marked != lastLoggedMarkedRounds_)
+        {
+            log::debug(log::category::render,
+                       "VDPM GPU repair: converged after {}/{} rounds (cleanPrefix {}, "
+                       "finalAnyMarked {}, fallbackFired {}, emitted {})",
+                       marked, kVdpmGpuRepairRoundBudget, cleanPrefix,
+                       lastDiagnostics_.finalAnyMarked, lastDiagnostics_.fallbackFired,
+                       lastDiagnostics_.emittedIndexCount);
+            lastLoggedMarkedRounds_ = marked;
+        }
+    }
+
+    // Record this frame's copy into the same slot (for a later frame to read). No-op if no front
+    // recorded or the representative front has no repair buffers.
+    if (diagFront_ == nullptr || diagFront_->roundHistoryBuffer() == NullBuffer)
+    {
+        return;
+    }
+    const vk::Buffer dst = resources_.vulkanBuffer(diagReadback_.buffers[frameIndex]);
+    // Order the compute writes (roundHistory / repairControl / counters) before the transfer reads.
+    const vk::MemoryBarrier2 computeToCopy{
+        .srcStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+        .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
+        .dstStageMask = vk::PipelineStageFlagBits2::eCopy,
+        .dstAccessMask = vk::AccessFlagBits2::eTransferRead,
+    };
+    cmd.pipelineBarrier2(
+        vk::DependencyInfo{.memoryBarrierCount = 1, .pMemoryBarriers = &computeToCopy});
+    cmd.copyBuffer(resources_.vulkanBuffer(diagFront_->roundHistoryBuffer()), dst,
+                   vk::BufferCopy{.srcOffset = 0,
+                                  .dstOffset = kVdpmDiagRoundBase * sizeof(std::uint32_t),
+                                  .size = kVdpmGpuRepairRoundBudget * sizeof(std::uint32_t)});
+    cmd.copyBuffer(resources_.vulkanBuffer(diagFront_->repairControlBuffer()), dst,
+                   vk::BufferCopy{.srcOffset = 0,
+                                  .dstOffset = kVdpmDiagControlBase * sizeof(std::uint32_t),
+                                  .size = 4 * sizeof(std::uint32_t)});
+    cmd.copyBuffer(resources_.vulkanBuffer(diagFront_->countersBuffer(frameIndex)), dst,
+                   vk::BufferCopy{.srcOffset = 0,
+                                  .dstOffset = kVdpmDiagCountersBase * sizeof(std::uint32_t),
+                                  .size = 3 * sizeof(std::uint32_t)});
+    diagSlotWritten_[frameIndex] = true;
 }
 
 VdpmGpuManager::DrawBuffers VdpmGpuManager::resolveDrawBuffers(VdpmFrontHandle front,

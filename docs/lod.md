@@ -695,7 +695,13 @@ at a fraction of the triangles. The remaining residuals and follow-ons, in rough
   Measured: the 15k-tri helmet is **~1014 dispatches + ~1066 barriers/frame** (1 front, 18 ranks);
   TransmissionTest **~19,700 dispatches + ~20,400 barriers/frame** (13 fronts). MoltenVK's per-command
   Metal translation makes CPU recording rival shader time; vsync turns the 16.7ms crossing into an abrupt
-  60→30. **Next: the repair-scheduling arc** — early-out on GPU-resident convergence (detection produces
+  60→30. **The per-round convergence evidence is decisive** (captured GPU-resident via address
+  redirection — each bounded detect atomic-ORs its `anyMarked` into a per-round history slot, no shader
+  change, delayed readback): the helmet repair **converges in 2 of the 24 rounds** (marked-then-clean
+  prefix, fallback never fires) — so ~22 rounds (~87% of the dispatches) do nothing. A repair-budget sweep
+  confirms it: budget **2 emits the IDENTICAL front** (38970 indices, no fallback) at **~178 dispatches vs
+  ~1014 — 5.7×** fewer; budget 1 is insufficient (a violation remains → fallback fires → over-refines to
+  full detail 46356). **Next: the repair-scheduling arc** — early-out on GPU-resident convergence (detection produces
   work; no work ⇒ no closure/refine sequence runs) + a work-queue/wave scheduler consuming a compact queue
   in few dispatches (not 2R/round), then batch same-mesh instances by rank; hoist the per-rank pipeline
   binds as a quick win. THEN resume B5c — delayed triangle/repair diagnostics + the deferred helmet

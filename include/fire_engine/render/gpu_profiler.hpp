@@ -86,6 +86,13 @@ struct FrameStats
     int vdpmRepairRoundBudget{0};  // the repair round budget B those dispatches assumed
     int vdpmAnalyticDispatches{0}; // Σ over fronts of the analytic compute-dispatch count
     int vdpmAnalyticBarriers{0};   // Σ over fronts of the analytic pipeline-barrier count
+    // Delayed per-round repair-convergence diagnostics for a representative front (read back
+    // ~kMaxFramesInFlight frames late). markedRounds = leading rounds whose detect found a
+    // violation = the convergence point (of a 24-round budget); -1 until the first slot completes.
+    // The gap to the budget is the wasted-round evidence this arc targets.
+    int vdpmRepairMarkedRounds{-1};
+    bool vdpmRepairFallbackFired{false};
+    int vdpmEmittedIndexCount{0};
 };
 
 class GpuProfiler
