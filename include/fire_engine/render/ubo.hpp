@@ -697,6 +697,23 @@ static_assert(alignof(VdpmFrontSplitGpu) == 4);
 static_assert(std::is_standard_layout_v<VdpmFrontSplitGpu>);
 static_assert(std::is_trivially_copyable_v<VdpmFrontSplitGpu>);
 
+// One rank's contiguous range in `splitsByRank` (Stage B3 / repair-scheduler ABI). Uploaded
+// device-local (VdpmGpuMeshBinding::rankRangesAddress) so the persistent repair kernel walks ranks
+// in-workgroup; the CPU recorder issues one dispatch per rank over `[offset, offset + count)`.
+// `render/vdpm_gpu.hpp` aliases RankRange to this — one authority for the CPU dispatch loop and the
+// GPU buffer.
+struct alignas(4) VdpmRankRangeGpu
+{
+    std::uint32_t offset{0};
+    std::uint32_t count{0};
+};
+static_assert(offsetof(VdpmRankRangeGpu, offset) == 0);
+static_assert(offsetof(VdpmRankRangeGpu, count) == 4);
+static_assert(sizeof(VdpmRankRangeGpu) == 8, "VdpmRankRangeGpu std430 size/stride");
+static_assert(alignof(VdpmRankRangeGpu) == 4);
+static_assert(std::is_standard_layout_v<VdpmRankRangeGpu>);
+static_assert(std::is_trivially_copyable_v<VdpmRankRangeGpu>);
+
 // Push for vdpm_mark.comp: over ALL splits, full-overwrite `required[s] = (backface == 0 && s >
 // pixelBudget)` where `s = max(geometry, uv, normal, tangent)` (straddle excluded, matching
 // VdpmSplitScore::score). No separate clear — this writes every entry.

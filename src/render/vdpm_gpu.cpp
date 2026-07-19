@@ -255,6 +255,28 @@ VdpmGpuMesh VdpmGpuMesh::build(Resources& resources, std::span<const Vertex> ver
     return mesh;
 }
 
+void validateVdpmRankRanges(std::span<const RankRange> ranges, std::uint32_t splitCount)
+{
+    // A contiguous partition of [0, splitCount): rank 0 at offset 0, each rank starting where the
+    // previous ended, the last ending exactly at splitCount. The running offset accumulates in
+    // 64-bit so a wild `count` can't wrap around into a spuriously valid total.
+    std::uint64_t expected = 0;
+    for (const RankRange& rr : ranges)
+    {
+        if (rr.offset != expected)
+        {
+            throw std::runtime_error(
+                "validateVdpmRankRanges: rank ranges are not a contiguous partition (gap/overlap)");
+        }
+        expected += rr.count;
+    }
+    if (expected != splitCount)
+    {
+        throw std::runtime_error(
+            "validateVdpmRankRanges: rank ranges do not cover exactly splitCount splits");
+    }
+}
+
 bool VdpmGpuMesh::fitsComputeDispatchLimits(const Resources& resources, const VertexForest& forest,
                                             std::size_t indexCount) noexcept
 {
@@ -273,6 +295,21 @@ void VdpmGpuMesh::uploadScoreData(VdpmGpuMesh& mesh, Resources& resources,
                                   const DependencyDag& dag)
 {
     mesh.splitCount_ = static_cast<std::uint32_t>(forest.splits.size());
+
+    // Per-rank dispatch ranges from the CSR rank offsets. DERIVED + VALIDATED up front — BEFORE any
+    // GPU upload below — so a malformed partition throws without orphaning resource-table entries
+    // (the "all throwing derivation before the first upload" contract). A zero-split forest has NO
+    // ranks (not one zero-count range) — the documented empty representation.
+    if (mesh.splitCount_ > 0)
+    {
+        mesh.rankRanges_.reserve(dag.maxRank + 1);
+        for (std::uint32_t r = 0; r <= dag.maxRank; ++r)
+        {
+            mesh.rankRanges_.push_back(
+                {dag.rankOffsets[r], dag.rankOffsets[r + 1] - dag.rankOffsets[r]});
+        }
+        validateVdpmRankRanges(mesh.rankRanges_, mesh.splitCount_);
+    }
 
     // Per-split metric records (static, device-local, uploaded once).
     std::vector<VdpmSplitGpu> splits;
@@ -339,19 +376,6 @@ void VdpmGpuMesh::uploadScoreData(VdpmGpuMesh& mesh, Resources& resources,
         frontSplits[s] = {sp.parent, sp.child, sp.vl, sp.vr, d.parent, d.vl, d.vr, 0};
     }
 
-    // Per-rank dispatch ranges from the CSR rank offsets (CPU-side; copied into a front at build).
-    // A zero-split forest has NO ranks (not one zero-count range) — the documented empty
-    // representation.
-    if (mesh.splitCount_ > 0)
-    {
-        mesh.rankRanges_.reserve(dag.maxRank + 1);
-        for (std::uint32_t r = 0; r <= dag.maxRank; ++r)
-        {
-            mesh.rankRanges_.push_back(
-                {dag.rankOffsets[r], dag.rankOffsets[r + 1] - dag.rankOffsets[r]});
-        }
-    }
-
     if (!frontSplits.empty())
     {
         mesh.frontSplits_ = resources.createDeviceLocalStorageBuffer(
@@ -365,6 +389,17 @@ void VdpmGpuMesh::uploadScoreData(VdpmGpuMesh& mesh, Resources& resources,
             dag.splitsByRank.size() * sizeof(std::uint32_t), dag.splitsByRank.data());
         mesh.binding_.splitsByRankAddress = resources.bufferAddress(mesh.splitsByRank_);
         requireAligned(mesh.binding_.splitsByRankAddress, 4, "splitsByRank");
+    }
+
+    // Upload the per-rank ranges device-local (the persistent repair kernel walks them
+    // in-workgroup; the CPU recorder keeps using rankRanges_ as push constants). Already derived +
+    // VALIDATED at the top of this function, before any upload.
+    if (!mesh.rankRanges_.empty())
+    {
+        mesh.rankRangesBuffer_ = resources.createDeviceLocalStorageBuffer(
+            mesh.rankRanges_.size() * sizeof(RankRange), mesh.rankRanges_.data());
+        mesh.binding_.rankRangesAddress = resources.bufferAddress(mesh.rankRangesBuffer_);
+        requireAligned(mesh.binding_.rankRangesAddress, 4, "rankRanges");
     }
 }
 

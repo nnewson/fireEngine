@@ -232,14 +232,21 @@ if(NOT GLSLC_EXECUTABLE)
   message(FATAL_ERROR "glslc not found in the vcpkg tools dir — is 'shaderc' in vcpkg.json and installed?")
 endif()
 
+# Shared GLSL includes (#include-d by shaders via the shaders/ dir on the include path). A change to
+# any of them rebuilds every shader — includes are rare + shared, so this over-approximation is cheap
+# and keeps the SPV outputs correct.
+set(SHADER_INCLUDES
+    ${PROJECT_SOURCE_DIR}/shaders/vdpm_repair_classify.glsl
+)
+
 foreach(shader IN LISTS SHADER_SOURCES)
   get_filename_component(SHADER_NAME ${shader} NAME)
   set(SHADER_SPV ${CMAKE_CURRENT_BINARY_DIR}/${SHADER_NAME}.spv)
 
   add_custom_command(
     OUTPUT ${SHADER_SPV}
-    COMMAND ${GLSLC_EXECUTABLE} ${PROJECT_SOURCE_DIR}/${shader} -o ${SHADER_SPV}
-    DEPENDS ${PROJECT_SOURCE_DIR}/${shader}
+    COMMAND ${GLSLC_EXECUTABLE} -I ${PROJECT_SOURCE_DIR}/shaders ${PROJECT_SOURCE_DIR}/${shader} -o ${SHADER_SPV}
+    DEPENDS ${PROJECT_SOURCE_DIR}/${shader} ${SHADER_INCLUDES}
     COMMENT "Compiling ${SHADER_NAME} -> ${SHADER_NAME}.spv"
     VERBATIM
   )

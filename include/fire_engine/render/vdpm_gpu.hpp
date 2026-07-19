@@ -69,12 +69,17 @@ struct DependencyDag; // graphics/vdpm_parallel.hpp — the forest's refine-depe
 [[nodiscard]] ComputePipelineConfig vdpmRepairFallbackPipelineConfig();
 
 // A rank's contiguous range in `splitsByRank` — the CPU recorder issues one dispatch per rank over
-// `[offset, offset + count)`. Copied into the front at build (never a pointer into a movable mesh).
-struct RankRange
-{
-    std::uint32_t offset{0};
-    std::uint32_t count{0};
-};
+// `[offset, offset + count)`, and an array of these is uploaded device-local for the persistent
+// repair kernel (binding.rankRangesAddress). The shared GPU ABI struct lives in ubo.hpp (the
+// project invariant for every host↔shader struct); RankRange is the one authority used both places.
+using RankRange = VdpmRankRangeGpu;
+
+// Validate a rank-range list as a contiguous partition of `[0, splitCount)`: rank 0 at offset 0,
+// each rank starting where the previous ended, the last ending exactly at splitCount. Throws
+// std::runtime_error on a gap, overlap, wrong terminal count, or a count that overflows (the
+// running offset accumulates in 64-bit). Pure + Vulkan-free — run at the mesh-build boundary BEFORE
+// any GPU upload, and unit-tested directly.
+void validateVdpmRankRanges(std::span<const RankRange> ranges, std::uint32_t splitCount);
 
 // The IMMUTABLE GPU binding of a VdpmGpuMesh — device addresses + counts, copied into a front so
 // the front never holds a pointer into a (movable) mesh object. The emit block (indices, weld,
@@ -110,6 +115,7 @@ struct VdpmGpuMeshBinding
     std::uint64_t frontSplitsAddress{
         0}; // VdpmFrontSplitGpu per split (vertices + dependency splits)
     std::uint64_t splitsByRankAddress{0}; // uint32 per split, packed by ascending rank
+    std::uint64_t rankRangesAddress{0};   // RankRange[maxRank+1] {offset,count} into splitsByRank
     std::uint32_t maxRank{0};             // rank passes = maxRank + 1
 };
 
@@ -208,6 +214,7 @@ private:
     // build).
     BufferHandle frontSplits_{NullBuffer};
     BufferHandle splitsByRank_{NullBuffer};
+    BufferHandle rankRangesBuffer_{NullBuffer}; // device-local RankRange[] (persistent kernel ABI)
     std::vector<RankRange> rankRanges_;
     std::vector<std::uint32_t> initialActive_;
 
