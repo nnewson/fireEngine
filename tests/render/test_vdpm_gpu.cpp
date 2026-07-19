@@ -149,6 +149,52 @@ TEST_CASE("packVdpmScoreParams images VdpmViewParams column-major with flags + a
     CHECK(p.outputsAddress == 0x3333u);
 }
 
+TEST_CASE("validateVdpmRankRanges accepts a contiguous partition, rejects malformed ones", "[vdpm]")
+{
+    using R = RankRange;
+
+    SECTION("valid contiguous partition of splitCount")
+    {
+        const std::array<R, 3> ok{R{0, 4}, R{4, 3}, R{7, 5}}; // covers [0,12)
+        REQUIRE_NOTHROW(validateVdpmRankRanges(ok, 12));
+    }
+    SECTION("empty ranges cover exactly a zero-split mesh")
+    {
+        REQUIRE_NOTHROW(validateVdpmRankRanges(std::span<const R>{}, 0));
+    }
+    SECTION("gap between ranks throws")
+    {
+        const std::array<R, 2> gap{R{0, 4}, R{5, 3}}; // 4 != 5
+        REQUIRE_THROWS_AS(validateVdpmRankRanges(gap, 8), std::runtime_error);
+    }
+    SECTION("overlap between ranks throws")
+    {
+        const std::array<R, 2> overlap{R{0, 4}, R{3, 3}}; // 4 != 3
+        REQUIRE_THROWS_AS(validateVdpmRankRanges(overlap, 7), std::runtime_error);
+    }
+    SECTION("wrong terminal count throws")
+    {
+        const std::array<R, 2> partition{R{0, 4}, R{4, 3}}; // covers 7, not 8
+        REQUIRE_THROWS_AS(validateVdpmRankRanges(partition, 8), std::runtime_error);
+    }
+    SECTION("first rank not at offset 0 throws")
+    {
+        const std::array<R, 1> shifted{R{1, 4}};
+        REQUIRE_THROWS_AS(validateVdpmRankRanges(shifted, 4), std::runtime_error);
+    }
+    SECTION("counts that would wrap under 32-bit arithmetic are still rejected")
+    {
+        // Rank 0 covers [0, UINT32_MAX); rank 1 starts at UINT32_MAX (offset check passes) and adds
+        // 5. A 32-bit accumulator wraps UINT32_MAX + 5 to 4 and would WRONGLY accept splitCount 4;
+        // the 64-bit accumulator reaches UINT32_MAX + 5 and rejects. This pins the 64-bit choice.
+        const std::array<R, 2> wrapping{
+            R{0, std::numeric_limits<std::uint32_t>::max()},
+            R{std::numeric_limits<std::uint32_t>::max(), 5},
+        };
+        REQUIRE_THROWS_AS(validateVdpmRankRanges(wrapping, 4), std::runtime_error);
+    }
+}
+
 // ============================================================================================
 // GPU score harness ([.][gpu], local-only — needs a real Vulkan device). Cross-checks
 // shaders/vdpm_score.comp against the CPU scoring authority (scoreVdpmSplit) on a headless device.

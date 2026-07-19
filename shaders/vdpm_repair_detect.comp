@@ -4,15 +4,16 @@
 // VDPM GPU repair pass (Stage B4): one invocation per CANONICAL finest face. Classifies foldover ∪
 // coverage against the SETTLED front (the shared ancestor pass supplied `ancestorId` per canonical
 // vertex) and atomic-ORs each violation's inactive-corner removing split into `required`, plus
-// `repairControl[0]` (anyMarked). A faithful port of the CPU `detail::isFoldover` +
-// `detail::classifyCoverageRepair` (graphics/vdpm.cpp) — the SAME screen-space policy, so the GPU
-// and CPU fixed points differ only where a floating-point comparison lands on a threshold. All
-// positions are WORLD space; `viewProj` is jitter-free. Marking (not applying) is what lets the
-// whole pass run in parallel — the caller closes + refines the marked set, then re-detects the new
-// settled front.
+// `repairControl[0]` (anyMarked). The screen-space policy is the PURE shared classifier in
+// vdpm_repair_classify.glsl (also used by the persistent repair kernel) — a faithful port of CPU
+// detail::isFoldover + detail::classifyCoverageRepair (graphics/vdpm.cpp). This shader keeps the
+// buffer access, the atomics, and the required-marking; the include is math-only. All positions are
+// WORLD space; `viewProj` is jitter-free. Marking (not applying) is what lets the whole pass run in
+// parallel — the caller closes + refines the marked set, then re-detects the new settled front.
+
+#include "vdpm_repair_classify.glsl"
 
 const uint kInvalid = 0xFFFFFFFFu; // ancestor sentinel / no-split
-const float kMinCoverageScreenAreaPx = 2.0f;
 
 layout(buffer_reference, std430, buffer_reference_align = 4) buffer UintBuf
 {
@@ -53,31 +54,6 @@ vec3 worldPos(uint canonical)
     return (pc.params.world * vec4(pc.positions.v[canonical].xyz, 1.0)).xyz;
 }
 
-// NDC xy of a world point; returns false (behind the camera, w <= eps) leaving `out` untouched.
-bool toNdc(vec3 wp, out vec2 ndc)
-{
-    const vec4 c = pc.params.viewProj * vec4(wp, 1.0);
-    if (c.w <= 1e-6)
-    {
-        return false;
-    }
-    ndc = c.xy / c.w;
-    return true;
-}
-
-float edge(vec2 a, vec2 b, vec2 p)
-{
-    return ((p.x - a.x) * (b.y - a.y)) - ((p.y - a.y) * (b.x - a.x));
-}
-
-bool insideTri(vec2 p, vec2 a, vec2 b, vec2 c)
-{
-    const float d0 = edge(a, b, p);
-    const float d1 = edge(b, c, p);
-    const float d2 = edge(c, a, p);
-    return !((d0 < 0.0 || d1 < 0.0 || d2 < 0.0) && (d0 > 0.0 || d1 > 0.0 || d2 > 0.0));
-}
-
 void markInactiveCorner(uint corner)
 {
     if (pc.activeFlags.v[corner] != 0u)
@@ -106,144 +82,33 @@ void main()
         return; // a corrupt ancestor walk (ancestorFailure already recorded it) — skip this face
     }
 
-    const vec3 o0 = worldPos(c0);
-    const vec3 o1 = worldPos(c1);
-    const vec3 o2 = worldPos(c2);
-    const vec3 r0 = worldPos(a0);
-    const vec3 r1 = worldPos(a1);
-    const vec3 r2 = worldPos(a2);
     const bool degenerate = (a0 == a1 || a1 == a2 || a0 == a2);
-    bool foldover = false;
-
-    // --- isFoldover: WORLD-space winding of replacement vs original (degenerate ⇒ not a foldover)
-    // ---
-    if (!degenerate)
-    {
-        const vec3 origN = cross(o1 - o0, o2 - o0);
-        const vec3 replN = cross(r1 - r0, r2 - r0);
-        if (dot(origN, replN) < 0.0)
-        {
-            foldover = true;
-            markInactiveCorner(c0);
-            markInactiveCorner(c1);
-            markInactiveCorner(c2);
-        }
-    }
-
-    // --- classifyCoverageRepair ---
-    const bool anyInactive =
-        pc.activeFlags.v[c0] == 0u || pc.activeFlags.v[c1] == 0u || pc.activeFlags.v[c2] == 0u;
-
-    // "AllInactiveCorners" outcome: refine every inactive corner (collapses to a no-op when none).
-    // Applied via a shared helper so the early returns below can invoke it.
-    // (GLSL has no closures, so we set a flag + fall to a single apply site.)
-    bool doAllInactive = false;
-    bool doWorst = false;
-    uint worstCorner = kInvalid;
-    uint worstLocal = 0u; // 0..2, valid only when doWorst — the packed classification's corner
-
-    const vec3 faceCentroid = (o0 + o1 + o2) * (1.0 / 3.0);
-    const vec3 gn = cross(o1 - o0, o2 - o0);
     const bool cull = pc.params.viewport.z != 0.0;
-    bool coverageResolved = false;
-    if (cull && dot(gn, pc.params.cameraPos.xyz - faceCentroid) <= 0.0)
-    {
-        coverageResolved = true; // back-facing + culled ⇒ never shown, can't leak
-    }
+    const RepairClassification rc = classifyRepairFace(
+        worldPos(c0), worldPos(c1), worldPos(c2), worldPos(a0), worldPos(a1), worldPos(a2),
+        pc.activeFlags.v[c0] != 0u, pc.activeFlags.v[c1] != 0u, pc.activeFlags.v[c2] != 0u,
+        degenerate, pc.params.viewProj, pc.params.cameraPos.xyz, pc.params.viewport.xy, cull);
 
-    vec2 s0;
-    vec2 s1;
-    vec2 s2;
-    int inFront = 0;
-    if (!coverageResolved)
-    {
-        inFront = int(toNdc(o0, s0)) + int(toNdc(o1, s1)) + int(toNdc(o2, s2));
-        if (inFront == 0)
-        {
-            coverageResolved = true; // fully behind the camera — not visible
-        }
-        else if (inFront < 3)
-        {
-            doAllInactive = anyInactive; // straddles the near plane — refine conservatively
-            coverageResolved = true;
-        }
-    }
-    if (!coverageResolved)
-    {
-        const float minNdcArea =
-            kMinCoverageScreenAreaPx / max(1.0, 0.25 * pc.params.viewport.x * pc.params.viewport.y);
-        if (abs(edge(s0, s1, s2)) * 0.5 < minNdcArea)
-        {
-            coverageResolved = true; // sub-pixel: not a visible hole
-        }
-    }
-    if (!coverageResolved && degenerate)
-    {
-        doAllInactive = anyInactive; // degenerate replacement over a visible area ⇒ a real hole
-        coverageResolved = true;
-    }
-    vec2 sc;
-    vec2 sa0;
-    vec2 sa1;
-    vec2 sa2;
-    if (!coverageResolved)
-    {
-        if (!toNdc(faceCentroid, sc) || !toNdc(r0, sa0) || !toNdc(r1, sa1) || !toNdc(r2, sa2))
-        {
-            doAllInactive = anyInactive; // replacement/faceCentroid straddles near plane — refine
-            coverageResolved = true;
-        }
-        else if (insideTri(sc, sa0, sa1, sa2))
-        {
-            coverageResolved = true; // the replacement still covers this face's faceCentroid
-        }
-    }
-    if (!coverageResolved)
-    {
-        // Coverage hole: the inactive corner whose ancestor is displaced furthest on screen.
-        float worstDisp = -1.0;
-        for (uint k = 0u; k < 3u; ++k)
-        {
-            const uint ck = (k == 0u) ? c0 : (k == 1u ? c1 : c2);
-            const uint ak = (k == 0u) ? a0 : (k == 1u ? a1 : a2);
-            if (pc.activeFlags.v[ck] != 0u)
-            {
-                continue; // already at finest — cannot displace
-            }
-            vec2 sFine;
-            vec2 sAnc;
-            if (!toNdc(worldPos(ck), sFine) || !toNdc(worldPos(ak), sAnc))
-            {
-                continue;
-            }
-            const vec2 d = sFine - sAnc;
-            const float disp = dot(d, d);
-            if (disp > worstDisp)
-            {
-                worstDisp = disp;
-                worstCorner = ck;
-                worstLocal = k;
-            }
-        }
-        doWorst = (worstCorner != kInvalid);
-    }
-
-    // Test-only per-face classification (bit0 foldover, bits1-2 coverage kind, bits4-5 worst
-    // local).
     if (pc.writeClassification != 0u)
     {
-        const uint coverageKind = doAllInactive ? 1u : (doWorst ? 2u : 0u);
-        pc.classification.v[f] = (foldover ? 1u : 0u) | (coverageKind << 1u) | (worstLocal << 4u);
+        pc.classification.v[f] =
+            (rc.foldover ? 1u : 0u) | (rc.coverageKind << 1u) | (rc.worstLocal << 4u);
     }
 
-    if (doAllInactive)
+    if (rc.foldover)
     {
         markInactiveCorner(c0);
         markInactiveCorner(c1);
         markInactiveCorner(c2);
     }
-    else if (doWorst)
+    if (rc.coverageKind == kRepairCoverageAllInactive)
     {
-        markInactiveCorner(worstCorner);
+        markInactiveCorner(c0);
+        markInactiveCorner(c1);
+        markInactiveCorner(c2);
+    }
+    else if (rc.coverageKind == kRepairCoverageWorst)
+    {
+        markInactiveCorner((rc.worstLocal == 0u) ? c0 : (rc.worstLocal == 1u ? c1 : c2));
     }
 }

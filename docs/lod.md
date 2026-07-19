@@ -715,7 +715,14 @@ at a fraction of the triangles. The remaining residuals and follow-ons, in rough
   is too serial for large meshes. Implications: upload the rank offsets (currently CPU-side), share the
   GLSL coverage/foldover classifier between the existing detector and the new kernel, keep the current
   recorder as the tested reference/fallback until invariants + output match. Hoisting the per-rank
-  pipeline binds is now only a small cleanup to that retained reference path, not a priority. THEN resume
+  pipeline binds is now only a small cleanup to that retained reference path, not a priority. **Stage 1
+  (groundwork) has landed:** the foldover/coverage screen-space policy is the PURE shared include
+  `shaders/vdpm_repair_classify.glsl` (`classifyRepairFace → {foldover, coverageKind, worstLocal}`, no
+  buffer access / atomics / marking — the detect shader + the coming kernel share one classifier;
+  byte-identical, the classification `[.][gpu]` test unchanged), and the per-rank `RankRange{offset,count}`
+  list is uploaded device-local (`binding.rankRangesAddress`, the `VdpmRankRangeGpu` ABI in ubo.hpp,
+  derived + validated as a contiguous partition of `splitsByRank` at the build boundary BEFORE any upload;
+  a `[vdpm]` CI test pins the reject branches). THEN resume
   B5c — delayed triangle/repair diagnostics + the deferred helmet wedge/rank-count evidence (Vulkan glTF
   path) + a possible default flip to GPU after parity sign-off.
 - **7 forest skips.** `buildVertexForest` skips collapses whose edge diverged from its adjacency
