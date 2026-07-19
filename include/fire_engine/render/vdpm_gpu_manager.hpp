@@ -166,11 +166,17 @@ private:
 
     Resources& resources_;
 
-    // The reusable pipeline bundles, built once. Non-movable, so the manager is too.
+    // The reusable pipeline bundles, built once. Non-movable, so the manager is too. The
+    // multi-dispatch repair recorder (repairPipelines_) stays built even when the kernel is present
+    // — it is the intentional reference/fallback for a device that fails VdpmRepairKernel support.
     ComputePipeline scorePipeline_;
     VdpmRefinePipelines refinePipelines_;
     VdpmRepairPipelines repairPipelines_;
     VdpmEmitPipelines emitPipelines_;
+    // The single-dispatch persistent repair kernel (Stage 3) — emplaced ONLY when the device meets
+    // VdpmRepairKernel::deviceSupported (independent of the VdpmScan gate). recordFrame is handed
+    // `repairKernel_ ? &*repairKernel_ : nullptr`, so an unsupported device keeps the recorder.
+    std::optional<VdpmRepairKernel> repairKernel_;
 
     // Per-mesh forests (shared by every instance of a geometry) and per-instance fronts, each keyed
     // by a generational handle. The optional lets a recycled slot be re-emplaced.

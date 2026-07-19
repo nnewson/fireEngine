@@ -591,3 +591,339 @@ TEST_CASE("VDPM repair kernel: a short budget clears the full history tail on re
     }
     checkHoleFree(forest, st, m.verts, m.indices, world, viewProj, cam, kVw, kVh, cull);
 }
+
+// ============================================================================================
+// Stage-3 CROSS-CHECK: the persistent kernel vs the multi-dispatch recorder, driven from IDENTICAL
+// pre-repair states (two fronts from one mesh — the real production init path, no reset). Proves
+// the flip is a faithful port: exact front state + emit + diagnostics, AND (the CPU-oracle gate)
+// that each resulting front is genuinely valid + hole-free (both GPU paths could share a defect).
+// ============================================================================================
+
+namespace
+{
+
+struct FullState
+{
+    std::vector<std::uint32_t> active;
+    std::vector<std::uint32_t> refined;
+    std::vector<std::uint32_t> dependents;
+    std::vector<std::uint32_t> required;
+    std::array<std::uint32_t, 2> failFlags{};
+    std::array<std::uint32_t, 4> control{};
+    std::vector<std::uint32_t> roundHistory;
+    std::vector<std::uint32_t> emitted; // valid length = emittedCount (post-repair only)
+    std::uint32_t emittedCount{0};
+};
+
+class CrossCheckRunner
+{
+public:
+    CrossCheckRunner(std::span<const Vertex> verts, std::span<const std::uint32_t> indices,
+                     const VertexForest& forest)
+        : device_(Device::headlessCompute()),
+          resources_(device_),
+          scorePipeline_(device_, vdpmScorePipelineConfig()),
+          refinePipelines_(device_),
+          repairPipelines_(device_),
+          emitPipelines_(device_),
+          kernel_(device_),
+          pool_(
+              device_.device(),
+              vk::CommandPoolCreateInfo{.flags = vk::CommandPoolCreateFlagBits::eResetCommandBuffer,
+                                        .queueFamilyIndex = device_.graphicsFamily()}),
+          mesh_(VdpmGpuMesh::build(resources_, verts, indices, forest)),
+          frontK_(VdpmGpuFront::buildRuntime(resources_, mesh_)),
+          frontR_(VdpmGpuFront::buildRuntime(resources_, mesh_)),
+          vertexCount_(forest.vertexCount),
+          splitCount_(static_cast<std::uint32_t>(forest.splits.size())),
+          faceCount_(mesh_.binding().faceCount)
+    {
+    }
+    CrossCheckRunner(const CrossCheckRunner&) = delete;
+    CrossCheckRunner& operator=(const CrossCheckRunner&) = delete;
+    CrossCheckRunner(CrossCheckRunner&&) = delete;
+    CrossCheckRunner& operator=(CrossCheckRunner&&) = delete;
+    ~CrossCheckRunner() = default;
+
+    [[nodiscard]] static bool supported()
+    {
+        return VdpmRepairKernel::deviceSupported(Device::headlessCompute());
+    }
+
+    // Submit 1: settle BOTH fronts identically (recordScore + recordApplyScoredView), read back the
+    // pre-repair state of each.
+    struct Pair
+    {
+        FullState k;
+        FullState r;
+    };
+    [[nodiscard]] Pair settleBoth(const VdpmViewParams& scoreView, float budget)
+    {
+        return runPair(
+            [&](vk::CommandBuffer cmd)
+            {
+                frontK_.recordScore(cmd, scorePipeline_, 0, scoreView);
+                frontK_.recordApplyScoredView(cmd, refinePipelines_, resources_, budget,
+                                              kVdpmCoarsenRatio * budget);
+                frontR_.recordScore(cmd, scorePipeline_, 0, scoreView);
+                frontR_.recordApplyScoredView(cmd, refinePipelines_, resources_, budget,
+                                              kVdpmCoarsenRatio * budget);
+            },
+            /*wantEmit=*/false);
+    }
+
+    // Submit 2: repair frontK with the KERNEL (+ kernel→emit barrier), frontR with the RECORDER,
+    // emit both, read back the post-repair state + emitted indices of each.
+    [[nodiscard]] Pair repairBoth(const VdpmRepairParams& params, std::uint32_t roundBudget)
+    {
+        return runPair(
+            [&](vk::CommandBuffer cmd)
+            {
+                frontK_.recordRepairKernel(cmd, kernel_, 0, params, roundBudget);
+                const vk::MemoryBarrier2 kernelToEmit{
+                    .srcStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+                    .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
+                    .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+                    .dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead |
+                                     vk::AccessFlagBits2::eShaderStorageWrite,
+                };
+                cmd.pipelineBarrier2(
+                    vk::DependencyInfo{.memoryBarrierCount = 1, .pMemoryBarriers = &kernelToEmit});
+                frontK_.recordEmitFromFront(cmd, emitPipelines_, resources_, 0);
+
+                frontR_.recordRepairRuntime(cmd, refinePipelines_, repairPipelines_, resources_, 0,
+                                            params, roundBudget);
+                frontR_.recordEmitFromFront(cmd, emitPipelines_, resources_, 0);
+            },
+            /*wantEmit=*/true);
+    }
+
+private:
+    template <class RecordFn>
+    [[nodiscard]] Pair runPair(RecordFn&& record, bool wantEmit)
+    {
+        const vk::CommandBufferAllocateInfo ai{.commandPool = *pool_,
+                                               .level = vk::CommandBufferLevel::ePrimary,
+                                               .commandBufferCount = 1};
+        auto cmds = device_.device().allocateCommandBuffers(ai);
+        vk::raii::CommandBuffer& cmd = cmds[0];
+        cmd.begin(
+            vk::CommandBufferBeginInfo{.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
+        record(*cmd);
+
+        const vk::MemoryBarrier2 toTransfer{
+            .srcStageMask =
+                vk::PipelineStageFlagBits2::eComputeShader | vk::PipelineStageFlagBits2::eClear,
+            .srcAccessMask =
+                vk::AccessFlagBits2::eShaderStorageWrite | vk::AccessFlagBits2::eTransferWrite,
+            .dstStageMask = vk::PipelineStageFlagBits2::eCopy,
+            .dstAccessMask = vk::AccessFlagBits2::eTransferRead,
+        };
+        cmd.pipelineBarrier2(
+            vk::DependencyInfo{.memoryBarrierCount = 1, .pMemoryBarriers = &toTransfer});
+
+        auto copyBack = [&](BufferHandle src, std::uint32_t count)
+        {
+            const vk::DeviceSize size = static_cast<vk::DeviceSize>(count) * sizeof(std::uint32_t);
+            Resources::MappedBufferSet host = resources_.createMappedReadbackBuffers(size);
+            cmd.copyBuffer(resources_.vulkanBuffer(src), resources_.vulkanBuffer(host.buffers[0]),
+                           vk::BufferCopy{.size = size});
+            return host;
+        };
+        struct Handles
+        {
+            Resources::MappedBufferSet active, refined, dependents, required, failFlags, control,
+                history, emitted, counters;
+        };
+        auto queue = [&](VdpmGpuFront& f)
+        {
+            Handles h;
+            h.active = copyBack(f.activeStateBuffer(), vertexCount_);
+            h.refined = copyBack(f.refinedStateBuffer(), splitCount_);
+            h.dependents = copyBack(f.dependentsStateBuffer(), vertexCount_);
+            h.required = copyBack(f.requiredStateBuffer(), splitCount_);
+            h.failFlags = copyBack(f.failFlagsBuffer(), 2);
+            h.control = copyBack(f.repairControlBuffer(), 4);
+            h.history = copyBack(f.roundHistoryBuffer(), kVdpmGpuRepairRoundBudget);
+            if (wantEmit)
+            {
+                h.emitted = copyBack(f.emittedIndicesBuffer(0), faceCount_ * 3);
+                h.counters = copyBack(f.countersBuffer(0), 3);
+            }
+            return h;
+        };
+        const Handles hk = queue(frontK_);
+        const Handles hr = queue(frontR_);
+
+        const vk::MemoryBarrier2 toHost{
+            .srcStageMask = vk::PipelineStageFlagBits2::eCopy,
+            .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
+            .dstStageMask = vk::PipelineStageFlagBits2::eHost,
+            .dstAccessMask = vk::AccessFlagBits2::eHostRead,
+        };
+        cmd.pipelineBarrier2(
+            vk::DependencyInfo{.memoryBarrierCount = 1, .pMemoryBarriers = &toHost});
+        cmd.end();
+
+        const vk::CommandBufferSubmitInfo cmdInfo{.commandBuffer = *cmd};
+        const vk::SubmitInfo2 submit{.commandBufferInfoCount = 1, .pCommandBufferInfos = &cmdInfo};
+        const vk::raii::Fence fence(device_.device(), vk::FenceCreateInfo{});
+        device_.graphicsQueue().submit2(submit, *fence);
+        (void)device_.device().waitForFences(*fence, vk::True,
+                                             std::numeric_limits<std::uint64_t>::max());
+
+        auto read = [](const Resources::MappedBufferSet& set, std::uint32_t count)
+        {
+            std::vector<std::uint32_t> out(count);
+            std::memcpy(out.data(), set.mapped[0].data(), count * sizeof(std::uint32_t));
+            return out;
+        };
+        auto parse = [&](const Handles& h)
+        {
+            FullState st;
+            st.active = read(h.active, vertexCount_);
+            st.refined = read(h.refined, splitCount_);
+            st.dependents = read(h.dependents, vertexCount_);
+            st.required = read(h.required, splitCount_);
+            std::ranges::copy(read(h.failFlags, 2), st.failFlags.begin());
+            std::ranges::copy(read(h.control, 4), st.control.begin());
+            st.roundHistory = read(h.history, kVdpmGpuRepairRoundBudget);
+            if (wantEmit)
+            {
+                st.emittedCount = read(h.counters, 3)[2];
+                // Validate the GPU-provided count BEFORE using it in iterator arithmetic — a broken
+                // shader must fail the assertion, not drive the TEST itself into undefined
+                // behaviour (out-of-range `all.begin() + count`). Emit writes 3 indices per
+                // surviving face.
+                REQUIRE(st.emittedCount % 3u == 0u);
+                REQUIRE(st.emittedCount <= faceCount_ * 3u);
+                const std::vector<std::uint32_t> all = read(h.emitted, faceCount_ * 3);
+                st.emitted.assign(all.begin(), all.begin() + st.emittedCount);
+            }
+            return st;
+        };
+        return Pair{.k = parse(hk), .r = parse(hr)};
+    }
+
+    Device device_;
+    Resources resources_;
+    ComputePipeline scorePipeline_;
+    VdpmRefinePipelines refinePipelines_;
+    VdpmRepairPipelines repairPipelines_;
+    VdpmEmitPipelines emitPipelines_;
+    VdpmRepairKernel kernel_;
+    vk::raii::CommandPool pool_;
+    VdpmGpuMesh mesh_;
+    VdpmGpuFront frontK_;
+    VdpmGpuFront frontR_;
+    std::uint32_t vertexCount_;
+    std::uint32_t splitCount_;
+    std::uint32_t faceCount_;
+};
+
+// One cross-check config: settle + repair, assert identical pre-state, identical post-state + emit,
+// then the CPU-oracle invariant gate on the kernel front.
+void crossCheck(const Mesh& m, const VertexForest& forest, const Mat4& world, const Vec3& cam,
+                float budget, std::uint32_t roundBudget, bool cull)
+{
+    const Mat4 viewProj = lookAtProj(cam);
+    CrossCheckRunner runner(m.verts, m.indices, forest);
+
+    // Pre-repair: the two fronts settle to a BIT-IDENTICAL state (proven, not assumed). REQUIRE,
+    // not CHECK — if the starting states differ, the whole kernel-vs-recorder comparison below is
+    // meaningless (it would compare repairs of DIFFERENT inputs), so stop here rather than
+    // continue.
+    const CrossCheckRunner::Pair pre =
+        runner.settleBoth(scoreViewOf(world, cam, kVh, cull), budget);
+    REQUIRE(pre.k.active == pre.r.active);
+    REQUIRE(pre.k.refined == pre.r.refined);
+    REQUIRE(pre.k.dependents == pre.r.dependents);
+    REQUIRE(pre.k.required == pre.r.required);
+    REQUIRE(pre.k.failFlags == pre.r.failFlags);
+
+    // Post-repair: the kernel and recorder reach the EXACT same front + emit + diagnostics.
+    const CrossCheckRunner::Pair post =
+        runner.repairBoth(repairParamsOf(world, viewProj, cam, kVw, kVh, cull), roundBudget);
+    CHECK(post.k.active == post.r.active);
+    CHECK(post.k.refined == post.r.refined);
+    CHECK(post.k.dependents == post.r.dependents);
+    CHECK(post.k.required == post.r.required);
+    CHECK(post.k.failFlags == post.r.failFlags);
+    CHECK(post.k.control == post.r.control);
+    CHECK(post.k.roundHistory == post.r.roundHistory);
+    CHECK(post.k.emittedCount == post.r.emittedCount);
+    CHECK(post.k.emitted == post.r.emitted);
+
+    // CPU-oracle gate: the kernel front is genuinely valid + hole-free (both GPU paths could share
+    // a bug the mutual comparison can't see). Zero failure flags too.
+    CHECK(post.k.failFlags[0] == 0u);
+    CHECK(post.k.failFlags[1] == 0u);
+    CHECK(post.k.control[1] == 0u); // no ancestor failures
+    CHECK_NOTHROW(
+        validateFrontInvariants(forest, post.k.active, post.k.refined, post.k.dependents));
+    const GpuFrontView view{forest, post.k.active};
+    CHECK(test::foldoverCount(view, m.verts, m.indices, world) == 0);
+    CHECK(test::coverageFailures(view, m.verts, m.indices, viewProj, cam, world, kVw, kVh, cull) ==
+          0);
+    // Emitted count bounded by finest detail (welded finest ≤ raw index count).
+    CHECK(post.k.emittedCount <= static_cast<std::uint32_t>(m.indices.size()));
+}
+
+} // namespace
+
+TEST_CASE("VDPM repair kernel == recorder: normal convergence (identity, cull)", "[.][gpu]")
+{
+    if (!CrossCheckRunner::supported())
+    {
+        return;
+    }
+    const QuadricSimplifier simp;
+    const Mesh m = uvSphere(18, 24);
+    const auto collapses = simp.collapseSequence(m.verts, m.indices);
+    const VertexForest forest = buildVertexForest(m.verts, collapses);
+    crossCheck(m, forest, Mat4::identity(), Vec3{0.0f, 0.0f, 2.5f}, 4.0f, 24, /*cull=*/true);
+}
+
+TEST_CASE("VDPM repair kernel == recorder: forced fallback (budget 0)", "[.][gpu]")
+{
+    if (!CrossCheckRunner::supported())
+    {
+        return;
+    }
+    const QuadricSimplifier simp;
+    const Mesh m = uvSphere(16, 20);
+    const auto collapses = simp.collapseSequence(m.verts, m.indices);
+    const VertexForest forest = buildVertexForest(m.verts, collapses);
+    crossCheck(m, forest, Mat4::identity(), Vec3{0.0f, 0.0f, 2.5f}, 4.0f, 0, /*cull=*/true);
+}
+
+TEST_CASE("VDPM repair kernel == recorder: reflected world + cull", "[.][gpu]")
+{
+    if (!CrossCheckRunner::supported())
+    {
+        return;
+    }
+    const QuadricSimplifier simp;
+    const Mesh m = uvSphere(16, 20);
+    const auto collapses = simp.collapseSequence(m.verts, m.indices);
+    const VertexForest forest = buildVertexForest(m.verts, collapses);
+    Mat4 reflected = Mat4::identity();
+    reflected[0, 0] = -1.0f; // mirror X (flips winding — foldover/facing must stay correct)
+    crossCheck(m, forest, reflected, Vec3{0.0f, 0.0f, 2.5f}, 4.0f, 24, /*cull=*/true);
+}
+
+TEST_CASE("VDPM repair kernel == recorder: non-uniform scale, no cull", "[.][gpu]")
+{
+    if (!CrossCheckRunner::supported())
+    {
+        return;
+    }
+    const QuadricSimplifier simp;
+    const Mesh m = uvSphere(18, 24);
+    const auto collapses = simp.collapseSequence(m.verts, m.indices);
+    const VertexForest forest = buildVertexForest(m.verts, collapses);
+    Mat4 nonUniform = Mat4::identity();
+    nonUniform[0, 0] = 1.7f;
+    nonUniform[1, 1] = 0.6f;
+    crossCheck(m, forest, nonUniform, Vec3{0.0f, 0.0f, 2.5f}, 4.0f, 24, /*cull=*/false);
+}

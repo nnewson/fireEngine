@@ -195,6 +195,69 @@ TEST_CASE("validateVdpmRankRanges accepts a contiguous partition, rejects malfor
     }
 }
 
+TEST_CASE("VdpmGpuFront::analyticComputeCost pins the recorder + persistent formulas", "[vdpm]")
+{
+    using Cost = VdpmGpuFront::ComputeCost;
+
+    // Representative face counts for each scan hierarchy tier (block = kScanElementsPerBlock):
+    // K internal levels ⇒ scan {2K+1, 2K} for K≥1, {1,0} for K==0, {0,0} for 0 faces.
+    constexpr std::uint32_t kBlock = kScanElementsPerBlock;
+    constexpr std::uint32_t fcSingle = kBlock;      // K=0 → scan {1,0} → emit {5,4}
+    constexpr std::uint32_t fcTwo = kBlock * 100;   // K=1 → scan {3,2} → emit {7,6}
+    constexpr std::uint32_t fcThree = kBlock * 300; // K=2 → scan {5,4} → emit {9,8}
+
+    SECTION("emit cost tracks the scan hierarchy, not a fixed constant (R=0 → emit+lifecycle only)")
+    {
+        // Zero ranks: score/apply/repair early-out, so BOTH paths cost exactly lifecycle(1) + emit.
+        // Emit = {4 + scanD, 4 + scanB}; the lifecycle barrier adds 1 to barriers.
+        // faceCount == 0 → scan {0,0} → {4, 1+4}.
+        CHECK(VdpmGpuFront::analyticComputeCost(0, 0, 24, false).dispatches == 4u);
+        CHECK(VdpmGpuFront::analyticComputeCost(0, 0, 24, false).barriers == 5u);
+        // Single block (K=0) → scan {1,0} → {5, 5}.
+        CHECK(VdpmGpuFront::analyticComputeCost(0, fcSingle, 24, false).dispatches == 5u);
+        CHECK(VdpmGpuFront::analyticComputeCost(0, fcSingle, 24, false).barriers == 5u);
+        // Two-level (K=1) → scan {3,2} → {7, 7}.
+        CHECK(VdpmGpuFront::analyticComputeCost(0, fcTwo, 24, false).dispatches == 7u);
+        CHECK(VdpmGpuFront::analyticComputeCost(0, fcTwo, 24, false).barriers == 7u);
+        // Three-level (K=2) → scan {5,4} → {9, 9}.
+        CHECK(VdpmGpuFront::analyticComputeCost(0, fcThree, 24, false).dispatches == 9u);
+        CHECK(VdpmGpuFront::analyticComputeCost(0, fcThree, 24, false).barriers == 9u);
+        // A zero-rank front is NOT free, and both repair paths agree when there's no repair to do.
+        CHECK(VdpmGpuFront::analyticComputeCost(0, fcTwo, 24, true).dispatches == 7u);
+        CHECK(VdpmGpuFront::analyticComputeCost(0, fcTwo, 24, true).barriers == 7u);
+    }
+    SECTION("recorder: B(2R+2)+2R+3 repair + score/apply/emit/lifecycle")
+    {
+        // Helmet (two-level scan): R=18, B=24. base emit+lifecycle {7,7} + score/apply {56,56} +
+        // recorder {24*38+39, 24*40+43} = {951, 1003} → {1014, 1066}.
+        const Cost c = VdpmGpuFront::analyticComputeCost(18, fcTwo, 24, false);
+        CHECK(c.dispatches == 1014u);
+        CHECK(c.barriers == 1066u);
+        // A larger mesh (three-level scan) shifts by the emit delta (+2 dispatch / +2 barrier).
+        const Cost cBig = VdpmGpuFront::analyticComputeCost(18, fcThree, 24, false);
+        CHECK(cBig.dispatches == 1016u);
+        CHECK(cBig.barriers == 1068u);
+        // A second point (R=5, B=2, two-level): {7,7} + score/apply {17,17} + recorder
+        // {2*12+13, 2*14+17} = +{37,45} → {61, 69}.
+        const Cost c2 = VdpmGpuFront::analyticComputeCost(5, fcTwo, 2, false);
+        CHECK(c2.dispatches == 61u);
+        CHECK(c2.barriers == 69u);
+    }
+    SECTION("persistent kernel: one dispatch + two barriers, independent of budget")
+    {
+        // Helmet R=18 (two-level): {7,7} + {56,56} + {1,2} = {64, 65}.
+        const Cost c = VdpmGpuFront::analyticComputeCost(18, fcTwo, 24, true);
+        CHECK(c.dispatches == 64u);
+        CHECK(c.barriers == 65u);
+        // The persistent repair is one dispatch regardless of the round budget.
+        CHECK(VdpmGpuFront::analyticComputeCost(18, fcTwo, 1, true).dispatches == 64u);
+        CHECK(VdpmGpuFront::analyticComputeCost(18, fcTwo, 1, true).barriers == 65u);
+        // R=5 two-level: {7,7} + score/apply {17,17} + repair {1,2} = {25, 26}.
+        CHECK(VdpmGpuFront::analyticComputeCost(5, fcTwo, 24, true).dispatches == 25u);
+        CHECK(VdpmGpuFront::analyticComputeCost(5, fcTwo, 24, true).barriers == 26u);
+    }
+}
+
 // ============================================================================================
 // GPU score harness ([.][gpu], local-only — needs a real Vulkan device). Cross-checks
 // shaders/vdpm_score.comp against the CPU scoring authority (scoreVdpmSplit) on a headless device.
