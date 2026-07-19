@@ -685,8 +685,21 @@ at a fraction of the triangles. The remaining residuals and follow-ons, in rough
   the compute). Per-mesh fallback instances (ineligible mesh → NullVdpmFront) keep the CPU path; stale CPU
   repair/channel stats for GPU instances are suppressed via a per-binding `vdpmCpuRanThisFrame` flag until
   B5c. Verified 0-VUID drawing GPU output on the helmet (opaque + prepass) and TransmissionTest (13 fronts,
-  transmission path). Next: B5c — delayed triangle/repair diagnostics + the deferred helmet wedge/rank-count
-  evidence (Vulkan glTF path) + a possible default flip to GPU after parity sign-off.
+  transmission path). **Perf arc opened (B5c/default-flip paused):** the GPU backend is **dispatch-bound,
+  not triangle-bound** — the front lifecycle records ≈ `B·(2R+2) + 5R + 12` compute dispatches + a matching
+  barrier count per instance per frame (R = rank count, B = repair round budget = 24), ~94% of it the
+  fixed-round repair that records ALL 24 rounds even after round-1 convergence (plus a full close/refine
+  after the fallback). Instrumented (no behaviour change): `ProfilePass::VdpmCompute` GPU timestamp, CPU
+  wall time around `recordRequests`, and the analytic dispatch/barrier tally per front
+  (`VdpmGpuFront::analyticComputeCost`, `VdpmGpuManager::ComputeStats`, overlay + `FE_LOG=render:debug`).
+  Measured: the 15k-tri helmet is **~1014 dispatches + ~1066 barriers/frame** (1 front, 18 ranks);
+  TransmissionTest **~19,700 dispatches + ~20,400 barriers/frame** (13 fronts). MoltenVK's per-command
+  Metal translation makes CPU recording rival shader time; vsync turns the 16.7ms crossing into an abrupt
+  60→30. **Next: the repair-scheduling arc** — early-out on GPU-resident convergence (detection produces
+  work; no work ⇒ no closure/refine sequence runs) + a work-queue/wave scheduler consuming a compact queue
+  in few dispatches (not 2R/round), then batch same-mesh instances by rank; hoist the per-rank pipeline
+  binds as a quick win. THEN resume B5c — delayed triangle/repair diagnostics + the deferred helmet
+  wedge/rank-count evidence (Vulkan glTF path) + a possible default flip to GPU after parity sign-off.
 - **7 forest skips.** `buildVertexForest` skips collapses whose edge diverged from its adjacency
   replay (7 of ~6800 on the helmet); past the first skip the forest is slightly unfaithful. The repairs
   cover the visible symptoms; truncating the stream at the first skip would be the clean structural fix.

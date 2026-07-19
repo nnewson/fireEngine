@@ -80,6 +80,23 @@ public:
     void recordRequests(vk::CommandBuffer cmd, std::span<const VdpmWorkRequest> requests,
                         const VdpmFrameGlobals& globals);
 
+    // Per-frame compute-command instrumentation from the most recent recordRequests (perf arc, no
+    // behaviour change): how many fronts recorded, the largest rank count among them, the repair
+    // round budget those dispatches assumed, and the ANALYTIC dispatch/barrier totals (Σ over
+    // fronts of VdpmGpuFront::analyticComputeCost). Zeroed at the top of each recordRequests.
+    struct ComputeStats
+    {
+        std::uint32_t frontsRecorded{0};
+        std::uint32_t maxRankCount{0};
+        std::uint32_t roundBudget{0};
+        std::uint32_t analyticDispatches{0};
+        std::uint32_t analyticBarriers{0};
+    };
+    [[nodiscard]] const ComputeStats& lastComputeStats() const noexcept
+    {
+        return lastComputeStats_;
+    }
+
     // A GPU-driven front's draw-consumed buffers for one frame slot: the GPU-emitted index stream
     // (always uint32) + the GPU-written indirect command. The count lives in the indirect command.
     struct DrawBuffers
@@ -130,6 +147,8 @@ private:
     std::vector<std::optional<VdpmGpuMesh>> meshes_;
     GenerationalSlotPool frontPool_;
     std::vector<FrontSlot> fronts_;
+
+    ComputeStats lastComputeStats_{};
 
     // Log a dispatch-limit ineligibility fallback only once (else one line per ineligible mesh).
     bool loggedDispatchFallback_{false};

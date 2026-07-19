@@ -20,6 +20,7 @@ class Device;
 // configurations) — callers fall back to CPU frame timing.
 enum class ProfilePass : uint32_t
 {
+    VdpmCompute, // GPU-driven VDPM front lifecycle (recorded before the shadow pass)
     Shadow,
     DepthPrepass,
     Ssao,
@@ -72,6 +73,19 @@ struct FrameStats
     float vdpmMaxUvRatio{0.0f};
     float vdpmMaxNormalRatio{0.0f};
     float vdpmMaxTangentRatio{0.0f};
+
+    // GPU-driven-front (B5b) performance instrumentation — populated only when the GPU VDPM backend
+    // recorded compute this frame (else all 0). CPU wall time is measured around the manager's
+    // recordRequests; the GPU compute time is the ProfilePass::VdpmCompute timestamp above
+    // (passMs). The dispatch/barrier totals are ANALYTIC (computed from each front's rank count +
+    // the repair round budget, per the recorder structure) — they quantify the command-count cost
+    // this arc targets, independent of the shader time.
+    float vdpmRecordCpuMs{0.0f};   // CPU cost of recording all fronts' compute
+    int vdpmFrontsRecorded{0};     // fronts whose lifecycle was recorded this frame
+    int vdpmMaxRankCount{0};       // largest per-front rank count R across those fronts
+    int vdpmRepairRoundBudget{0};  // the repair round budget B those dispatches assumed
+    int vdpmAnalyticDispatches{0}; // Σ over fronts of the analytic compute-dispatch count
+    int vdpmAnalyticBarriers{0};   // Σ over fronts of the analytic pipeline-barrier count
 };
 
 class GpuProfiler

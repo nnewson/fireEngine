@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <span>
@@ -1010,6 +1011,13 @@ void Renderer::drawFrame(Window& display, RenderableScene& scene, float dt)
     // barrier — the collectDrawCommands walk pointed each tagged draw at this front's GPU output
     // (resolveDrawBuffers), and the compute→(index + indirect read) barrier is recorded separately
     // just before the depth prepass (after the shadow pass, so shadow work overlaps the compute).
+    // Perf instrumentation defaults to 0 for a frame that records no GPU VDPM compute.
+    stats_.vdpmRecordCpuMs = 0.0f;
+    stats_.vdpmFrontsRecorded = 0;
+    stats_.vdpmMaxRankCount = 0;
+    stats_.vdpmRepairRoundBudget = 0;
+    stats_.vdpmAnalyticDispatches = 0;
+    stats_.vdpmAnalyticBarriers = 0;
     if (vdpmManager_ != nullptr && !vdpmRecordScratch_.empty())
     {
         const VdpmFrameGlobals globals{.viewProj = currentViewProj_,
@@ -1019,7 +1027,24 @@ void Renderer::drawFrame(Window& display, RenderableScene& scene, float dt)
                                        .viewportHeight = static_cast<float>(extent.height),
                                        .pixelBudget = tunables_.lodPixelErrorBudget,
                                        .frameIndex = currentFrame_};
+        // Perf instrumentation (no behaviour change): GPU timestamps around the compute
+        // (ProfilePass::VdpmCompute) + CPU wall time of the recording itself (the MoltenVK
+        // command-translation cost this arc suspects rivals shader time) + the analytic command
+        // counts the manager tallied.
+        profiler_.begin(cmd, currentFrame_, ProfilePass::VdpmCompute);
+        const auto vdpmRecordStart = std::chrono::steady_clock::now();
         vdpmManager_->recordRequests(cmd, vdpmRecordScratch_, globals);
+        const auto vdpmRecordEnd = std::chrono::steady_clock::now();
+        profiler_.end(cmd, currentFrame_, ProfilePass::VdpmCompute);
+
+        stats_.vdpmRecordCpuMs =
+            std::chrono::duration<float, std::milli>(vdpmRecordEnd - vdpmRecordStart).count();
+        const VdpmGpuManager::ComputeStats& cs = vdpmManager_->lastComputeStats();
+        stats_.vdpmFrontsRecorded = static_cast<int>(cs.frontsRecorded);
+        stats_.vdpmMaxRankCount = static_cast<int>(cs.maxRankCount);
+        stats_.vdpmRepairRoundBudget = static_cast<int>(cs.roundBudget);
+        stats_.vdpmAnalyticDispatches = static_cast<int>(cs.analyticDispatches);
+        stats_.vdpmAnalyticBarriers = static_cast<int>(cs.analyticBarriers);
     }
 
     // Particles render un-jittered (after TAA); feed them the plain proj. The

@@ -1,5 +1,6 @@
 #include <fire_engine/render/vdpm_gpu_manager.hpp>
 
+#include <algorithm>
 #include <optional>
 #include <stdexcept>
 #include <utility>
@@ -129,14 +130,9 @@ void VdpmGpuManager::recordRequests(vk::CommandBuffer cmd,
     // same relationship the CPU refineForView uses internally.
     const float coarsenBudget = kVdpmCoarsenRatio * globals.pixelBudget;
 
-    // Debug trace only when the front count changes (an activation / count-change proof, not a
-    // per-frame flood). Placeholder until B5c's real diagnostics land.
-    if (requests.size() != lastLoggedRequestCount_)
-    {
-        log::debug(log::category::render, "VDPM GPU: now recording {} front(s) per frame",
-                   requests.size());
-        lastLoggedRequestCount_ = requests.size();
-    }
+    // Perf instrumentation (no behaviour change): tally the analytic compute-command cost as we
+    // record. Reset here; accumulated per resolved front below.
+    lastComputeStats_ = ComputeStats{.roundBudget = kVdpmGpuRepairRoundBudget};
 
     for (const VdpmWorkRequest& req : requests)
     {
@@ -169,6 +165,28 @@ void VdpmGpuManager::recordRequests(vk::CommandBuffer cmd,
         front->recordFrame(cmd, scorePipeline_, refinePipelines_, repairPipelines_, emitPipelines_,
                            resources_, globals.frameIndex, view, repair, globals.pixelBudget,
                            coarsenBudget, kVdpmGpuRepairRoundBudget);
+
+        const std::uint32_t rank = front->rankCount();
+        const VdpmGpuFront::ComputeCost cost =
+            VdpmGpuFront::analyticComputeCost(rank, kVdpmGpuRepairRoundBudget);
+        ++lastComputeStats_.frontsRecorded;
+        lastComputeStats_.maxRankCount = std::max(lastComputeStats_.maxRankCount, rank);
+        lastComputeStats_.analyticDispatches += cost.dispatches;
+        lastComputeStats_.analyticBarriers += cost.barriers;
+    }
+
+    // Debug trace only when the front count changes (an activation / count-change proof, not a
+    // per-frame flood). Reports the analytic command cost so the dispatch-bound diagnosis is
+    // visible headless (perf arc); real per-round GPU diagnostics land later.
+    if (requests.size() != lastLoggedRequestCount_)
+    {
+        log::debug(log::category::render,
+                   "VDPM GPU: {} front(s), {} ranks, repairBudget {} → ~{} dispatches + ~{} "
+                   "barriers/frame (analytic)",
+                   lastComputeStats_.frontsRecorded, lastComputeStats_.maxRankCount,
+                   lastComputeStats_.roundBudget, lastComputeStats_.analyticDispatches,
+                   lastComputeStats_.analyticBarriers);
+        lastLoggedRequestCount_ = requests.size();
     }
 }
 
