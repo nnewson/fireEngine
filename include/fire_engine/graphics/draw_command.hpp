@@ -102,6 +102,12 @@ struct DrawCommand
     // in this layer).
     BufferHandle indirectBuffer{NullBuffer};
     uint64_t indirectOffset{0};
+    // GPU-driven VDPM front for this instance (rendering-spine #3, Stage B5b). Non-null only on a
+    // forward VDPM draw whose front runs on the GPU backend. B5b-1 records the compute for it but
+    // still draws the CPU-emitted `indirectBuffer` above; B5b-2 resolves this handle to the GPU
+    // emitted index/indirect buffers and points the draw at them. The renderer harvests it from the
+    // camera-visible forward buckets to decide which fronts' compute to record.
+    VdpmFrontHandle vdpmGpuFront{NullVdpmFront};
 };
 
 } // namespace fire_engine

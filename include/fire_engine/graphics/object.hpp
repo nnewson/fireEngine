@@ -21,6 +21,7 @@ class Geometry;
 class Material;
 class Resources;
 class Skin;
+class VdpmGpuRegistry;
 
 class Object
 {
@@ -37,7 +38,11 @@ public:
     void shadowGeometry(std::size_t geometryIndex, const Geometry* geometry) noexcept;
     void addVariantMaterial(std::size_t geometryIndex, std::size_t variantIndex,
                             const Material* material);
-    void load(Resources& resources);
+    // `registry`, when non-null, creates a per-instance GPU-driven VDPM front over each geometry's
+    // registered mesh (Stage B5b). Null (CPU backend / unsupported device) or a geometry with no
+    // GPU mesh handle leaves the binding's vdpmGpuFront == NullVdpmFront and the instance CPU-only.
+    // No default — every caller states its registration choice (pass Renderer::vdpmRegistry()).
+    void load(Resources& resources, VdpmGpuRegistry* registry);
     void activeVariant(std::optional<std::size_t> variantIndex);
     [[nodiscard]] bool hasVariant(std::size_t variantIndex) const noexcept;
     [[nodiscard]] bool wouldChangeVariant(std::optional<std::size_t> variantIndex) const noexcept;
@@ -110,6 +115,11 @@ private:
         // absent for non-VDPM meshes (small/deformable/no collapse stream). vdpmIndexCount is the
         // current frame's emitted index count.
         std::optional<ActiveFront> vdpmFront;
+        // GPU-driven VDPM front handle for this instance (Stage B5b), created at load when a
+        // registry is supplied and the geometry has a GPU mesh. In B5b-1 it runs alongside the CPU
+        // vdpmFront (the compute is a shadow run; the CPU output above is still drawn).
+        // NullVdpmFront ⇒ CPU only.
+        VdpmFrontHandle vdpmGpuFront{NullVdpmFront};
         std::array<BufferHandle, kMaxFramesInFlight> vdpmIndexBufs{NullBuffer, NullBuffer};
         std::array<std::span<std::byte>, kMaxFramesInFlight> vdpmIndexMapped{};
         uint32_t vdpmIndexCount{0};
@@ -133,7 +143,7 @@ private:
     // buffers; createShadowBindings allocates the per-object ShadowUBO buffers.
     // Both forward and shadow set 0 are pushed inline per draw (no descriptor
     // sets); the shadow draw reuses the forward skin/morph/morphSsbo buffers.
-    void createForwardBindings(Resources& resources);
+    void createForwardBindings(Resources& resources, VdpmGpuRegistry* registry);
     void createShadowBindings(Resources& resources);
 
     // render() phases: write the per-frame UBOs (shared/skin/material/morph),

@@ -64,6 +64,7 @@ add_library(fireengine SHARED
     src/graphics/vdpm.cpp
     src/graphics/vdpm_material.cpp
     src/graphics/vdpm_parallel.cpp
+    src/graphics/vdpm_gpu_registry.cpp
     src/graphics/vdpm_wedge_choices.cpp
     src/graphics/image.cpp
     src/graphics/ktx_image.cpp
@@ -111,6 +112,7 @@ add_library(fireengine SHARED
     src/render/taa.cpp
     src/render/transmission.cpp
     src/render/vdpm_gpu.cpp
+    src/render/vdpm_gpu_manager.cpp
     src/render/vdpm_scan.cpp
     src/scene/animator.cpp
     src/scene/controllable.cpp
@@ -328,6 +330,7 @@ add_executable(test_fire_engine
     tests/graphics/test_mesh_simplifier.cpp
     tests/graphics/test_vipm.cpp
     tests/graphics/test_vdpm.cpp
+    tests/graphics/test_vdpm_gpu_registry.cpp
     tests/graphics/test_vdpm_parallel.cpp
     tests/graphics/test_mesh_topology.cpp
     tests/graphics/test_vdpm_wedge_choices.cpp
@@ -341,6 +344,7 @@ add_executable(test_fire_engine
     tests/render/test_vdpm_gpu.cpp
     tests/render/test_vdpm_gpu_front.cpp
     tests/render/test_vdpm_gpu_repair.cpp
+    tests/render/test_vdpm_gpu_manager.cpp
     tests/render/test_vdpm_gpu_runtime.cpp
     tests/render/test_vdpm_scan.cpp
     tests/graphics/test_generational_slot_pool.cpp

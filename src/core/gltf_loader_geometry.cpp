@@ -393,7 +393,7 @@ GltfLoader::GltfSceneBuilder::loadGeometry(const fastgltf::Primitive& primitive,
     geometry.indices(std::move(data.indices));
     loadMorphTargets(context_.asset, primitive, data.positions.size(), geometry);
 
-    geometry.load(context_.resources);
+    geometry.load(context_.resources, context_.vdpmRegistry);
     return tangentResult;
 }
 

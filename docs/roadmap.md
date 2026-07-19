@@ -385,11 +385,26 @@ Candidates" section folds in here:
   harness: OFF-THRESHOLD (cull-off, tiny budget) exact front + emit vs the CPU lifecycle; GENERAL valid
   hole-free front + emitted ≤ finest + clean diagnostics + the 5 indirect words + `indexCount ==
   counters[2]`; and two frames back-to-back (no CPU wait) proving the ring keeps distinct slot outputs.
-  **Stage B5a complete.** Still ahead: **B5b** — renderer integration (opaque mesh/front handles, the
-  work-request seam recording after collectDrawCommands, `drawIndexedIndirect` from the GPU buffers,
-  the compute→(index-read + indirect-read) barrier, CPU-fallback selection **default CPU**); **B5c** —
-  completed-frame delayed diagnostics, the deferred helmet wedge/rank-count evidence (Vulkan glTF path),
-  and a possible default flip to GPU after parity + zero-VUID + no unexpected fallbacks.
+  **Stage B5a complete.** **B5b-1 — registration + live compute, CPU output still drawn**
+  *(branch `cr-vdpm-gpu-render-1`)*: a Vulkan-free registration seam (`graphics/vdpm_gpu_registry.hpp`
+  — the `VdpmGpuRegistry` interface, the generational `VdpmMeshHandle`/`VdpmFrontHandle` in
+  `gpu_handle.hpp`, the semantic `VdpmWorkRequest`) implemented by `render::VdpmGpuManager`, which owns
+  the reusable pipeline bundles + `GenerationalSlotPool`-keyed per-geometry mesh / per-instance front
+  tables and is built by the Renderer **only** past the `VdpmScan::deviceSupported` check (unsupported →
+  null, CPU front stays usable, construction never fails; per-mesh dispatch-limit ineligibility falls
+  back, logged once). The load path threads the registry (`GltfLoader::loadScene` → `Geometry::load`
+  registers the shared forest once → `Object::load` creates the per-instance front). Each frame the
+  Renderer sets the sink + selector on `FrameInfo`; `Object` tags each camera-visible forward
+  `DrawCommand` with its front handle and appends a `VdpmWorkRequest`; the Renderer filters the sink to
+  fronts whose forward draw survived the camera cull (shadow-only instances never run compute), dedups
+  by handle, and records `recordRequests` after `collectDrawCommands`. The compute is a **shadow run** —
+  the CPU front still emits the drawn buffers, no consumer barrier yet — verified 0-VUID on the helmet
+  (`--lod-mode view-dependent --vdpm-gpu`), with a `[.][gpu]` manager test + a CI `sameParams`/handle
+  test. Still ahead: **B5b-2** — resolve the front handle to the GPU emitted index/indirect buffers, add
+  the compute→(index-read + indirect-read) barrier before the depth prepass, flip the draw off the CPU
+  output (**default CPU** selector retained); **B5c** — completed-frame delayed diagnostics, the deferred
+  helmet wedge/rank-count evidence (Vulkan glTF path), and a possible default flip to GPU after parity +
+  zero-VUID + no unexpected fallbacks.
 - ✅ **Static GPU residency** — device-local static asset upload split from dynamic mapped buffers.
   Landed in block B (`createDeviceLocalBuffer` for static vertices/indices/LODs/VIPM), and the batching
   follow-up is now done too *(branch `cr-static-residency-batch`)*: when a load-time `uploadBatch_` is

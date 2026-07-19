@@ -41,6 +41,7 @@ class Object;
 class Resources;
 class SceneGraph;
 class Skin;
+class VdpmGpuRegistry;
 class Texture;
 enum class TextureEncoding : std::uint8_t;
 class Mesh;
@@ -68,10 +69,13 @@ public:
     // the caller to register with the soft-body solver. When `ragdolls` is non-null,
     // any `extras.Ragdoll` node auto-builds a Ragdoll from its skin's joints (bodies
     // + joints created in `physics`, activated), appended for the caller to retain.
+    // `vdpmRegistry`, when non-null, registers every loaded geometry's forest + instance front with
+    // the GPU-driven VDPM backend (Stage B5b); null loads the scene CPU-only.
     static Node* loadScene(const std::string& path, SceneGraph& scene, Resources& resources,
                            Assets& assets, PhysicsWorld& physics,
                            std::vector<ClothRegistration>* clothRegistrations = nullptr,
-                           std::vector<Ragdoll>* ragdolls = nullptr);
+                           std::vector<Ragdoll>* ragdolls = nullptr,
+                           VdpmGpuRegistry* vdpmRegistry = nullptr);
 
     // Synthesises per-vertex normals from a triangle mesh when the source
     // glTF lacks the NORMAL attribute. Smooth (area-weighted accumulate-and-
@@ -177,6 +181,10 @@ private:
         MeshMap meshMap;
         std::size_t nextAnimSlot{0};
         Node* activeCamera{nullptr};
+        // GPU-driven VDPM registration seam (Stage B5b), threaded from loadScene. Non-null enrolls
+        // each loaded geometry's forest + each instance's front with the GPU backend; null keeps
+        // the scene on the CPU front. Set after construction (not a ctor arg), default null.
+        VdpmGpuRegistry* vdpmRegistry{nullptr};
 
         // Constructor to centralize initialization and avoid missing-field-initializers warnings.
         GltfLoadContext(const fastgltf::Asset& assetRef, std::string baseDir_,

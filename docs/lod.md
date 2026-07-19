@@ -652,9 +652,27 @@ at a fraction of the triangles. The remaining residuals and follow-ons, in rough
   chains the lot GPU-only. The `[.][gpu]` harness splits the contract: off-threshold (cull-off, tiny
   budget) exact front + emit vs the CPU lifecycle; general fixtures need only a valid hole-free front +
   emitted ≤ finest + clean diagnostics + a correct 5-word indirect (`indexCount == counters[2]`); a
-  two-frame back-to-back test proves the ring. Next: B5b — renderer integration (opaque handles, the
-  work-request seam, `drawIndexedIndirect` from the GPU buffers, CPU fallback default) → B5c — delayed
-  diagnostics + the deferred helmet wedge/rank-count evidence (Vulkan glTF path) + a possible GPU flip.
+  two-frame back-to-back test proves the ring. **B5b-1 — renderer integration (registration + compute,
+  CPU output still drawn)** then wired the manager into the live pipeline. A Vulkan-free registration
+  seam `graphics/vdpm_gpu_registry.hpp` (`VdpmGpuRegistry` interface + the generational identity
+  handles `VdpmMeshHandle`/`VdpmFrontHandle` in `gpu_handle.hpp` + the semantic `VdpmWorkRequest`)
+  is implemented by `render::VdpmGpuManager` (`render/vdpm_gpu_manager.{hpp,cpp}`): it owns the reusable
+  score/refine/repair/emit pipeline bundles + a per-geometry mesh table and per-instance front table
+  (both `GenerationalSlotPool`-keyed), and is built by the Renderer **only** after the
+  `VdpmScan::deviceSupported` capability check (an unsupported device leaves it null — construction
+  never fails, the CPU front stays usable; a per-mesh dispatch-limit ineligibility falls back, logged
+  once). The load path threads the registry (`GltfLoader::loadScene` → `Geometry::load` registers the
+  shared forest once → `Object::load` creates a per-instance front). Each frame, when the backend is
+  selected (`RenderTunables::vdpmGpuBackend`, CLI `--vdpm-gpu`) and the device is capable, `Object`
+  tags each camera-visible forward `DrawCommand` with its `VdpmFrontHandle` and appends a
+  `VdpmWorkRequest` to the renderer-owned sink; the Renderer distils the sink to the fronts whose
+  FORWARD draw survived the camera cull (a shadow-only instance never runs compute), dedups by handle,
+  and records `VdpmGpuManager::recordRequests` after `collectDrawCommands`. In B5b-1 the compute is a
+  **shadow run** — the CPU front still emits the drawn index/indirect buffers; the compute integrates
+  0-VUID (verified on the helmet) with no consumer barrier yet. Next: B5b-2 — resolve the front handle
+  to the GPU emitted index/indirect buffers, add the compute→(index + indirect read) barrier before the
+  depth prepass, and flip the draw off the CPU output → B5c — delayed diagnostics + the deferred helmet
+  wedge/rank-count evidence (Vulkan glTF path) + a possible GPU flip.
 - **7 forest skips.** `buildVertexForest` skips collapses whose edge diverged from its adjacency
   replay (7 of ~6800 on the helmet); past the first skip the forest is slightly unfaithful. The repairs
   cover the visible symptoms; truncating the stream at the first skip would be the clean structural fix.
