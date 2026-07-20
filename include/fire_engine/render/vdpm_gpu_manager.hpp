@@ -186,6 +186,10 @@ private:
     // VdpmRepairKernel::deviceSupported (independent of the VdpmScan gate). recordFrame is handed
     // `repairKernel_ ? &*repairKernel_ : nullptr`, so an unsupported device keeps the recorder.
     std::optional<VdpmRepairKernel> repairKernel_;
+    // The single-dispatch persistent APPLY kernel (apply-kernel arc) — same pattern: emplaced iff
+    // VdpmApplyKernel::deviceSupported, else recordFrame gets nullptr and keeps the recorder
+    // (recordApplyScoredView). The recorder pipelines (refinePipelines_) stay built regardless.
+    std::optional<VdpmApplyKernel> applyKernel_;
 
     // Per-mesh forests (shared by every instance of a geometry) and per-instance fronts, each keyed
     // by a generational handle. The optional lets a recycled slot be re-emplaced.

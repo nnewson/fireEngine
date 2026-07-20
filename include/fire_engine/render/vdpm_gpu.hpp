@@ -76,8 +76,9 @@ struct DependencyDag; // graphics/vdpm_parallel.hpp — the forest's refine-depe
 
 // The persistent apply kernel config (apply-kernel arc): `shaders/vdpm_apply_kernel.comp` runs the
 // whole refine/coarsen apply (mark → close → refine → coarsen) for one front in ONE workgroup.
-// Descriptor-free; push = VdpmApplyKernelPush (job-array address + count).
-[[nodiscard]] ComputePipelineConfig vdpmApplyKernelPipelineConfig();
+// Descriptor-free; push = VdpmApplyKernelPush (job-array address + count). `workgroupSize` is set
+// as specialization constant id 0 (local_size_x).
+[[nodiscard]] ComputePipelineConfig vdpmApplyKernelPipelineConfig(std::uint32_t workgroupSize);
 
 // A rank's contiguous range in `splitsByRank` — the CPU recorder issues one dispatch per rank over
 // `[offset, offset + count)`, and an array of these is uploaded device-local for the persistent
@@ -411,13 +412,16 @@ private:
 class VdpmApplyKernel
 {
 public:
-    // The kernel's fixed workgroup size (local_size_x in vdpm_apply_kernel.comp).
+    // The default workgroup size, baked from the size sweep (test_vdpm_apply_kernel.cpp
+    // `[.][gpu][ApplySizeSweep]`). local_size_x is a spec constant, so any supported size can be
+    // built; this is the production default.
     static constexpr std::uint32_t kLocalSize = 256;
 
-    // Throws std::runtime_error if !deviceSupported. The check runs BEFORE the pipeline is
-    // constructed (the public ctor delegates through requireSupported), so a caller that forgot
-    // deviceSupported() fails loudly here — not at pipeline creation.
-    explicit VdpmApplyKernel(const Device& device);
+    // Build at `workgroupSize` (spec constant id 0; default kLocalSize). Throws std::runtime_error
+    // if !deviceSupported(device, workgroupSize) — the check runs BEFORE the pipeline is
+    // constructed (the public ctor delegates through requireSupported), so a caller that forgot the
+    // check fails loudly here, not at pipeline creation.
+    explicit VdpmApplyKernel(const Device& device, std::uint32_t workgroupSize = kLocalSize);
 
     VdpmApplyKernel(const VdpmApplyKernel&) = delete;
     VdpmApplyKernel& operator=(const VdpmApplyKernel&) = delete;
@@ -425,10 +429,13 @@ public:
     VdpmApplyKernel& operator=(VdpmApplyKernel&&) = delete;
     ~VdpmApplyKernel() = default;
 
-    // True when the device can run the kernel: a workgroup of kLocalSize invocations (size[0] +
-    // invocations). Apply has NO shared memory (unlike repair). The 1-D workgroup COUNT cap
-    // (relevant once a later stage dispatches N fronts) is checked per-dispatch.
-    [[nodiscard]] static bool deviceSupported(const Device& device);
+    // True when the device can run a workgroup of `workgroupSize` invocations (both size[0] AND
+    // invocations limits). Apply has NO shared memory (unlike repair). Validates the ACTUAL
+    // selected specialization — the production default and every sweep candidate go through this.
+    // The 1-D workgroup COUNT cap (relevant once a later stage dispatches N fronts) is checked
+    // per-dispatch.
+    [[nodiscard]] static bool deviceSupported(const Device& device,
+                                              std::uint32_t workgroupSize = kLocalSize);
 
     [[nodiscard]] const ComputePipeline& pipeline() const noexcept
     {
@@ -439,8 +446,9 @@ private:
     struct Checked
     {
     };
-    [[nodiscard]] static Checked requireSupported(const Device& device);
-    VdpmApplyKernel(const Device& device, Checked);
+    [[nodiscard]] static Checked requireSupported(const Device& device,
+                                                  std::uint32_t workgroupSize);
+    VdpmApplyKernel(const Device& device, std::uint32_t workgroupSize, Checked);
 
     ComputePipeline pipeline_;
 };
@@ -502,13 +510,14 @@ public:
     // NO consumer barrier after emit — the caller (renderer) adds the compute→(index-read +
     // indirect-read) barrier before the draw. Throws std::logic_error on a non-runtime front.
     //
-    // `repairKernel` (Stage 3): when non-null the single-dispatch persistent kernel does the
-    // repair, followed by an explicit kernel→emit compute barrier; when null the multi-dispatch
-    // recorder (recordRepairRuntime) does it. The manager passes its kernel when the device
-    // supports it, else nullptr — so an unsupported device transparently keeps the recorder. NO
-    // default: the repair path is an explicit choice at every call site (a forgotten argument must
-    // not silently select the ~1000-command fallback). Tests pass nullptr explicitly to exercise
-    // it.
+    // `applyKernel` (apply-kernel arc) + `repairKernel` (Stage 3): when non-null, the
+    // single-dispatch persistent kernel does that stage (apply's own leading score→kernel barrier;
+    // repair's leading apply→repair barrier + a kernel→emit barrier); when null the multi-dispatch
+    // recorder does it (recordApplyScoredView / recordRepairRuntime). The manager passes each
+    // kernel when the device supports it, else nullptr — an unsupported device transparently keeps
+    // the recorder. NEITHER has a default: each stage's path is an explicit choice at every call
+    // site (a forgotten argument must not silently select a ~thousand-command fallback). Tests pass
+    // nullptr explicitly to exercise the recorders.
     //
     // `stageProfile` (nullptr in production): optional per-stage CPU/GPU timing — see
     // VdpmStageProfile. A pure observer; a null value records identically with zero overhead.
@@ -518,8 +527,8 @@ public:
                      const VdpmEmitPipelines& emitPipelines, Resources& resources,
                      std::uint32_t frameIndex, const VdpmViewParams& scoreView,
                      const VdpmRepairParams& repairParams, float pixelBudget, float coarsenBudget,
-                     std::uint32_t repairRoundBudget, const VdpmRepairKernel* repairKernel,
-                     const VdpmStageProfile* stageProfile);
+                     std::uint32_t repairRoundBudget, const VdpmApplyKernel* applyKernel,
+                     const VdpmRepairKernel* repairKernel, const VdpmStageProfile* stageProfile);
 
     // Record ONLY the score dispatch for frame `frameIndex` (writes that slot's mapped params from
     // `view`, pushes its address, dispatches ceil(splitCount / 64)). NO barriers — the consumer
@@ -749,6 +758,12 @@ public:
     {
         return binding_.faceCount;
     }
+    // Post-weld canonical face count (degenerates dropped, so <= faceCount) — the repair passes'
+    // input. Repair EARLY-OUTS when this is 0, so it drives the analytic accounting's repair term.
+    [[nodiscard]] std::uint32_t finestFaceCount() const noexcept
+    {
+        return binding_.finestFaceCount;
+    }
 
     // Rank count R = maxRank + 1 = the number of per-rank dispatch waves the refine/coarsen/repair
     // passes fan into (0 for a zero-split front, which records nothing). The dominant driver of the
@@ -759,8 +774,10 @@ public:
     }
 
     // EXACT (not estimated) per-frame compute-dispatch + pipeline-barrier count recordFrame emits
-    // for a front with `rankCount` ranks and `faceCount` finest faces under repair round budget
-    // `roundBudget` (perf instrumentation). Every term below matches a specific recorder:
+    // for a front with `rankCount` ranks, `faceCount` RAW indexed faces (= indices/3, emit's scan
+    // extent), and `finestFaceCount` POST-WELD canonical faces (repair's gate; ≤ faceCount) under
+    // repair round budget `roundBudget` (perf instrumentation). Every term below matches a
+    // recorder:
     //  - LIFECYCLE barrier (1): always — recordFrame's leading boundary barrier (also the sole sync
     //    on a zero-split front).
     //  - EMIT ({4 + scanD, 4 + scanB}): ALWAYS recorded — recordEmitImpl dispatches over FACES, not
@@ -773,27 +790,32 @@ public:
     //    scan hierarchy.
     //  - When rankCount == 0 the score/apply/repair recorders ALL early-out (splitCount == 0), so
     //    the cost is exactly lifecycle + emit — NOT {0,0}.
-    //  - When rankCount == R > 0: + score (1 dispatch) + apply mark/close/refine/coarsen (3R+1
-    //    dispatches, 3R+2 barriers) + the repair term:
-    //     · PERSISTENT KERNEL: ONE dispatch + TWO barriers (leading apply→kernel + kernel→emit).
-    //     · RECORDER: B rounds of reset→ancestor→detect→close→refine ((2R+2) dispatches, (2R+4)
-    //       barriers each) + a final detect + fallback + full close/refine ((2R+3) dispatches,
-    //       (2R+7) barriers) = B(2R+2)+2R+3 dispatches, B(2R+4)+2R+7 barriers. The ~94% B(2R+2)
-    //       dispatch term is what the kernel retires.
-    // For the two-level-scan helmet (R=18, faceCount in (256, 65536]): persistent {64, 65} vs the
-    // recorder's {1014, 1066}. KEEP IN SYNC with recordFrame + recordEmitImpl +
-    // VdpmScan::recordScan (pinned by test_vdpm_gpu.cpp `[vdpm]`).
+    //  - When rankCount == R > 0: + score (1 dispatch) + the APPLY term + the REPAIR term.
+    //     · APPLY — `persistentApply` kernel: ONE dispatch + ONE barrier (leading score→kernel).
+    //       Recorder: mark/close/refine/coarsen = 3R+1 dispatches, 3R+2 barriers.
+    //     · REPAIR — gated on `finestFaceCount` (repair EARLY-OUTS at finestFaceCount == 0, which
+    //     can
+    //       differ from the emit `faceCount`: post-weld drops degenerates). With repair faces:
+    //       `persistentRepair` kernel = ONE dispatch + TWO barriers (leading apply→repair +
+    //       repair→emit); recorder = B(2R+2)+2R+3 dispatches, B(2R+4)+2R+7 barriers (its trailing
+    //       barrier orders repair→emit). With NO repair faces (but splits present): repair records
+    //       nothing, and recordFrame adds exactly ONE apply→emit barrier on BOTH paths → {0, 1}.
+    // For the two-level-scan helmet (R=18, faceCount/finestFaceCount in (256, 65536]): both kernels
+    // {10, 10}; recorder-apply + kernel-repair {64, 65}; both recorders {1014, 1066}. KEEP IN SYNC
+    // with recordFrame + recordEmitImpl + VdpmScan::recordScan (pinned by test_vdpm_gpu.cpp
+    // `[vdpm]`).
     struct ComputeCost
     {
         std::uint32_t dispatches{0};
         std::uint32_t barriers{0};
     };
-    [[nodiscard]] static constexpr ComputeCost analyticComputeCost(std::uint32_t rankCount,
-                                                                   std::uint32_t faceCount,
-                                                                   std::uint32_t roundBudget,
-                                                                   bool persistentRepair) noexcept
+    [[nodiscard]] static constexpr ComputeCost
+    analyticComputeCost(std::uint32_t rankCount, std::uint32_t faceCount,
+                        std::uint32_t finestFaceCount, std::uint32_t roundBudget,
+                        bool persistentApply, bool persistentRepair) noexcept
     {
-        // Scan command count for `faceCount` elements (K = internal-level count).
+        // Emit scans the raw `faceCount` (K = internal-level count). Repair, however, gates on the
+        // POST-WELD `finestFaceCount` (degenerates dropped) — it can be 0 while `faceCount` is not.
         std::uint32_t scanDispatches = 0;
         std::uint32_t scanBarriers = 0;
         if (faceCount != 0)
@@ -812,15 +834,36 @@ public:
         ComputeCost cost{.dispatches = 4 + scanDispatches, .barriers = 1 + 4 + scanBarriers};
         if (rankCount == 0)
         {
-            return cost; // score/apply/repair all early-out at splitCount == 0
+            // score/apply/repair ALL early-out at splitCount == 0 (their recordFrame calls return
+            // before any dispatch), so a selected persistent kernel adds NOTHING — the cost is
+            // exactly lifecycle + emit regardless of persistentApply/persistentRepair.
+            return cost;
         }
         const std::uint32_t r = rankCount;
-        cost.dispatches += 1 + (3 * r + 1); // score + apply
-        cost.barriers += 3 * r + 2;         // apply
-        if (persistentRepair)
+        cost.dispatches += 1; // score (1 dispatch, no barrier)
+        if (persistentApply)
+        {
+            cost.dispatches += 1; // apply kernel: one dispatch
+            cost.barriers += 1;   // its leading score→kernel barrier
+        }
+        else
+        {
+            cost.dispatches += 3 * r + 1; // mark + close/refine + coarsen
+            cost.barriers += 3 * r + 2;
+        }
+        // Repair EARLY-OUTS when finestFaceCount == 0 (no canonical repair faces).
+        const bool hasRepairWork = finestFaceCount != 0;
+        if (!hasRepairWork)
+        {
+            // No repair work, but the apply DID write `active` (rankCount > 0). recordFrame records
+            // exactly ONE apply→emit barrier here — the SAME on the kernel and recorder paths — so
+            // both repair selections contribute {0 dispatch, 1 barrier}.
+            cost.barriers += 1;
+        }
+        else if (persistentRepair)
         {
             cost.dispatches += 1; // one kernel dispatch
-            cost.barriers += 2;   // leading apply→kernel + kernel→emit
+            cost.barriers += 2;   // leading apply→repair + repair→emit
         }
         else
         {

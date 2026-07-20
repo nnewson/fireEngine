@@ -232,9 +232,11 @@ ComputePipelineConfig vdpmRepairKernelPipelineConfig()
     return emitConfig<VdpmRepairKernelPush>("vdpm_repair_kernel.comp.spv");
 }
 
-ComputePipelineConfig vdpmApplyKernelPipelineConfig()
+ComputePipelineConfig vdpmApplyKernelPipelineConfig(std::uint32_t workgroupSize)
 {
-    return emitConfig<VdpmApplyKernelPush>("vdpm_apply_kernel.comp.spv");
+    ComputePipelineConfig config = emitConfig<VdpmApplyKernelPush>("vdpm_apply_kernel.comp.spv");
+    config.specConstants = {{.id = 0, .value = workgroupSize}}; // local_size_x
+    return config;
 }
 
 bool VdpmRepairKernel::deviceSupported(const Device& device)
@@ -265,31 +267,38 @@ VdpmRepairKernel::VdpmRepairKernel(const Device& device, Checked)
 {
 }
 
-bool VdpmApplyKernel::deviceSupported(const Device& device)
+bool VdpmApplyKernel::deviceSupported(const Device& device, std::uint32_t workgroupSize)
 {
+    if (workgroupSize == 0)
+    {
+        return false; // a zero local_size_x is an invalid pipeline, never "supported"
+    }
     const vk::PhysicalDeviceLimits& limits = device.physicalDevice().getProperties().limits;
-    // Apply uses NO shared memory (unlike repair's s_anyMarked) — just a full workgroup.
-    return limits.maxComputeWorkGroupInvocations >= kLocalSize &&
-           limits.maxComputeWorkGroupSize[0] >= kLocalSize;
+    // Apply uses NO shared memory (unlike repair's s_anyMarked) — just a full workgroup of the
+    // SELECTED size (spec constant), validated against both the per-dimension and total-invocation
+    // caps.
+    return limits.maxComputeWorkGroupInvocations >= workgroupSize &&
+           limits.maxComputeWorkGroupSize[0] >= workgroupSize;
 }
 
-VdpmApplyKernel::Checked VdpmApplyKernel::requireSupported(const Device& device)
+VdpmApplyKernel::Checked VdpmApplyKernel::requireSupported(const Device& device,
+                                                           std::uint32_t workgroupSize)
 {
-    if (!deviceSupported(device))
+    if (!deviceSupported(device, workgroupSize))
     {
-        throw std::runtime_error(
-            "VDPM apply kernel: device does not meet the workgroup limits (256)");
+        throw std::runtime_error("VDPM apply kernel: device does not meet the workgroup limits for "
+                                 "the selected size");
     }
     return {};
 }
 
-VdpmApplyKernel::VdpmApplyKernel(const Device& device)
-    : VdpmApplyKernel(device, requireSupported(device))
+VdpmApplyKernel::VdpmApplyKernel(const Device& device, std::uint32_t workgroupSize)
+    : VdpmApplyKernel(device, workgroupSize, requireSupported(device, workgroupSize))
 {
 }
 
-VdpmApplyKernel::VdpmApplyKernel(const Device& device, Checked)
-    : pipeline_(device, vdpmApplyKernelPipelineConfig())
+VdpmApplyKernel::VdpmApplyKernel(const Device& device, std::uint32_t workgroupSize, Checked)
+    : pipeline_(device, vdpmApplyKernelPipelineConfig(workgroupSize))
 {
 }
 
@@ -892,10 +901,17 @@ VdpmGpuFront VdpmGpuFront::buildWithFront(Resources& resources, const VdpmGpuMes
 VdpmGpuFront VdpmGpuFront::buildRuntime(Resources& resources, const VdpmGpuMesh& mesh)
 {
     const VdpmGpuMeshBinding& b = mesh.binding();
-    if (!b.hasEmitData || b.finestFacesAddress == 0 || b.vertexCount == 0)
+    // Requires a FULL mesh (emit data) with vertices. Does NOT require a non-null
+    // finestFacesAddress: `finestFaceCount == 0` is a VALID runtime state — an empty canonical
+    // repair-face array (all raw faces welded to degenerates). Repair recorders early-out at
+    // finestFaceCount == 0; raw-face emission still runs (over `faceCount`), producing a canonical
+    // zero-index indirect command; and recordFrame's conditional apply→emit barrier supplies the
+    // sync. hasEmitData already means "full mesh", so gating on the empty repair-face array here
+    // would be an accidental invariant.
+    if (!b.hasEmitData || b.vertexCount == 0)
     {
-        throw std::logic_error(
-            "VdpmGpuFront::buildRuntime: requires a full mesh (emit + repair data)");
+        throw std::logic_error("VdpmGpuFront::buildRuntime: requires a full mesh (emit data) with "
+                               "a non-empty vertex set");
     }
 
     VdpmGpuFront front = build(resources, mesh); // score output + params ring + binding + limit
@@ -1173,15 +1189,13 @@ void VdpmGpuFront::recordRepairRuntime(vk::CommandBuffer cmd,
                      repairParamsRingAddress_[frameIndex], roundBudget);
 }
 
-void VdpmGpuFront::recordFrame(vk::CommandBuffer cmd, const ComputePipeline& scorePipeline,
-                               const VdpmRefinePipelines& refinePipelines,
-                               const VdpmRepairPipelines& repairPipelines,
-                               const VdpmEmitPipelines& emitPipelines, Resources& resources,
-                               std::uint32_t frameIndex, const VdpmViewParams& scoreView,
-                               const VdpmRepairParams& repairParams, float pixelBudget,
-                               float coarsenBudget, std::uint32_t repairRoundBudget,
-                               const VdpmRepairKernel* repairKernel,
-                               const VdpmStageProfile* stageProfile)
+void VdpmGpuFront::recordFrame(
+    vk::CommandBuffer cmd, const ComputePipeline& scorePipeline,
+    const VdpmRefinePipelines& refinePipelines, const VdpmRepairPipelines& repairPipelines,
+    const VdpmEmitPipelines& emitPipelines, Resources& resources, std::uint32_t frameIndex,
+    const VdpmViewParams& scoreView, const VdpmRepairParams& repairParams, float pixelBudget,
+    float coarsenBudget, std::uint32_t repairRoundBudget, const VdpmApplyKernel* applyKernel,
+    const VdpmRepairKernel* repairKernel, const VdpmStageProfile* stageProfile)
 {
     if (!hasRuntime_)
     {
@@ -1242,10 +1256,21 @@ void VdpmGpuFront::recordFrame(vk::CommandBuffer cmd, const ComputePipeline& sco
     // Boundary b1 (after score): VdpmScore's end AND VdpmApply's begin.
     gpuBoundary(ProfilePass::VdpmScore, /*end=*/true);
     gpuBoundary(ProfilePass::VdpmApply, /*end=*/false);
-    // (2) Refine/coarsen reading that GPU score output (no host round-trip).
+    // (2) Refine/coarsen reading that GPU score output (no host round-trip). The single-dispatch
+    // persistent kernel (when the device supports it) or the multi-dispatch recorder. The kernel's
+    // own leading score→kernel barrier orders the score write → its mark read; the recorder's
+    // leading barrier does the same. Either way it writes active/refined/dependents, which repair's
+    // leading barrier orders → repair's reads.
     {
         const auto t = std::chrono::steady_clock::now();
-        recordApplyScoredView(cmd, refinePipelines, resources, pixelBudget, coarsenBudget);
+        if (applyKernel != nullptr)
+        {
+            recordApplyKernel(cmd, *applyKernel, frameIndex, pixelBudget, coarsenBudget);
+        }
+        else
+        {
+            recordApplyScoredView(cmd, refinePipelines, resources, pixelBudget, coarsenBudget);
+        }
         cpuAccumulate(1, t);
     }
     // Boundary b2 (after apply): VdpmApply's end AND VdpmRepair's begin.
@@ -1258,11 +1283,30 @@ void VdpmGpuFront::recordFrame(vk::CommandBuffer cmd, const ComputePipeline& sco
         if (repairKernel != nullptr)
         {
             recordRepairKernel(cmd, *repairKernel, frameIndex, repairParams, repairRoundBudget);
-            // The kernel records no consumer barrier, and recordEmitFromFront's leading fillBuffer
-            // + clearToCompute orders only the counter CLEAR — not the kernel's active-front
-            // writes. So order the kernel's compute writes (active/refined/dependents) before
-            // emit's ancestor read.
-            const vk::MemoryBarrier2 kernelToEmit{
+        }
+        else
+        {
+            recordRepairRuntime(cmd, refinePipelines, repairPipelines, resources, frameIndex,
+                                repairParams, repairRoundBudget);
+        }
+        // Order the front-state writes (`active`/`refined`/`dependents`) → emit's ancestor read of
+        // `active` (recordEmitFromFront's leading fillBuffer + clearToCompute orders only the
+        // counter CLEAR, not these). Exactly ONE barrier is needed, and only sometimes:
+        //  - splitCount == 0: score/apply/repair ALL early-out — nothing wrote the state, so the
+        //    frame lifecycle barrier suffices; record none. (Reachable — a zero-split-but-faced
+        //    mesh.)
+        //  - kernel repair (splitCount > 0): the kernel records no trailing barrier, so add it here
+        //  —
+        //    as repair→emit when repair ran (finestFaceCount > 0), else as apply→emit (repair
+        //    skipped but the apply DID write `active`).
+        //  - recorder repair: recordRepairImpl's trailing close/refine barrier already orders
+        //    repair→emit WHEN it ran; only when it early-outs (finestFaceCount == 0) — apply still
+        //    having written — do we add the apply→emit barrier here.
+        // All four cases are REACHABLE for a runtime front — finestFaceCount == 0 is a valid empty
+        // repair-face array (a degenerate but raw-faced mesh; pinned by a `[.][gpu]` test).
+        if (binding_.splitCount > 0 && (repairKernel != nullptr || binding_.finestFaceCount == 0))
+        {
+            const vk::MemoryBarrier2 toEmit{
                 .srcStageMask = vk::PipelineStageFlagBits2::eComputeShader,
                 .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
                 .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
@@ -1270,14 +1314,7 @@ void VdpmGpuFront::recordFrame(vk::CommandBuffer cmd, const ComputePipeline& sco
                                  vk::AccessFlagBits2::eShaderStorageWrite,
             };
             cmd.pipelineBarrier2(
-                vk::DependencyInfo{.memoryBarrierCount = 1, .pMemoryBarriers = &kernelToEmit});
-        }
-        else
-        {
-            // The recorder's trailing close/refine barrier already orders repair→emit, no extra
-            // one.
-            recordRepairRuntime(cmd, refinePipelines, repairPipelines, resources, frameIndex,
-                                repairParams, repairRoundBudget);
+                vk::DependencyInfo{.memoryBarrierCount = 1, .pMemoryBarriers = &toEmit});
         }
         cpuAccumulate(2, t);
     }

@@ -1,6 +1,8 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <stdexcept>
+#include <vector>
 
 #include <fire_engine/core/shader_loader.hpp>
 #include <fire_engine/render/compute_pipeline.hpp>
@@ -38,6 +40,41 @@ ComputePipeline::ComputePipeline(const Device& device, const ComputePipelineConf
         .module = *module,
         .pName = "main",
     };
+
+    // Specialization constants (explicit IDs → contiguous uint32 data + one map entry each). Built
+    // here so it outlives cpci; stays null when there are none, so unspecialized pipelines are
+    // unchanged. Duplicate IDs are a programming error (undefined which value wins) → reject.
+    std::vector<vk::SpecializationMapEntry> specEntries;
+    std::vector<std::uint32_t> specData;
+    vk::SpecializationInfo specInfo{};
+    if (!config.specConstants.empty())
+    {
+        specEntries.reserve(config.specConstants.size());
+        specData.reserve(config.specConstants.size());
+        for (const ComputeSpecializationConstant& sc : config.specConstants)
+        {
+            for (const vk::SpecializationMapEntry& e : specEntries)
+            {
+                if (e.constantID == sc.id)
+                {
+                    throw std::runtime_error(
+                        "ComputePipeline: duplicate specialization constant ID");
+                }
+            }
+            specEntries.push_back(vk::SpecializationMapEntry{
+                .constantID = sc.id,
+                .offset = static_cast<std::uint32_t>(specData.size() * sizeof(std::uint32_t)),
+                .size = sizeof(std::uint32_t)});
+            specData.push_back(sc.value);
+        }
+        specInfo =
+            vk::SpecializationInfo{.mapEntryCount = static_cast<std::uint32_t>(specEntries.size()),
+                                   .pMapEntries = specEntries.data(),
+                                   .dataSize = specData.size() * sizeof(std::uint32_t),
+                                   .pData = specData.data()};
+        stage.pSpecializationInfo = &specInfo;
+    }
+
     vk::ComputePipelineCreateInfo cpci{
         .stage = stage,
         .layout = *pipelineLayout_,

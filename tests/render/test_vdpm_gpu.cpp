@@ -197,8 +197,6 @@ TEST_CASE("validateVdpmRankRanges accepts a contiguous partition, rejects malfor
 
 TEST_CASE("VdpmGpuFront::analyticComputeCost pins the recorder + persistent formulas", "[vdpm]")
 {
-    using Cost = VdpmGpuFront::ComputeCost;
-
     // Representative face counts for each scan hierarchy tier (block = kScanElementsPerBlock):
     // K internal levels ⇒ scan {2K+1, 2K} for K≥1, {1,0} for K==0, {0,0} for 0 faces.
     constexpr std::uint32_t kBlock = kScanElementsPerBlock;
@@ -206,55 +204,99 @@ TEST_CASE("VdpmGpuFront::analyticComputeCost pins the recorder + persistent form
     constexpr std::uint32_t fcTwo = kBlock * 100;   // K=1 → scan {3,2} → emit {7,6}
     constexpr std::uint32_t fcThree = kBlock * 300; // K=2 → scan {5,4} → emit {9,8}
 
-    SECTION("emit cost tracks the scan hierarchy, not a fixed constant (R=0 → emit+lifecycle only)")
+    // args: analyticComputeCost(rankCount, faceCount, finestFaceCount, roundBudget,
+    // persistentApply, persistentRepair). Emit scans `faceCount`; repair gates on `finestFaceCount`
+    // (post-weld — can be 0 while faceCount is not). Real meshes: finestFaceCount is the same tier
+    // as faceCount.
+    SECTION("empty boundaries: a selected-but-early-out kernel is NOT counted (adj 5)")
     {
-        // Zero ranks: score/apply/repair early-out, so BOTH paths cost exactly lifecycle(1) + emit.
-        // Emit = {4 + scanD, 4 + scanB}; the lifecycle barrier adds 1 to barriers.
-        // faceCount == 0 → scan {0,0} → {4, 1+4}.
-        CHECK(VdpmGpuFront::analyticComputeCost(0, 0, 24, false).dispatches == 4u);
-        CHECK(VdpmGpuFront::analyticComputeCost(0, 0, 24, false).barriers == 5u);
-        // Single block (K=0) → scan {1,0} → {5, 5}.
-        CHECK(VdpmGpuFront::analyticComputeCost(0, fcSingle, 24, false).dispatches == 5u);
-        CHECK(VdpmGpuFront::analyticComputeCost(0, fcSingle, 24, false).barriers == 5u);
-        // Two-level (K=1) → scan {3,2} → {7, 7}.
-        CHECK(VdpmGpuFront::analyticComputeCost(0, fcTwo, 24, false).dispatches == 7u);
-        CHECK(VdpmGpuFront::analyticComputeCost(0, fcTwo, 24, false).barriers == 7u);
-        // Three-level (K=2) → scan {5,4} → {9, 9}.
-        CHECK(VdpmGpuFront::analyticComputeCost(0, fcThree, 24, false).dispatches == 9u);
-        CHECK(VdpmGpuFront::analyticComputeCost(0, fcThree, 24, false).barriers == 9u);
-        // A zero-rank front is NOT free, and both repair paths agree when there's no repair to do.
-        CHECK(VdpmGpuFront::analyticComputeCost(0, fcTwo, 24, true).dispatches == 7u);
-        CHECK(VdpmGpuFront::analyticComputeCost(0, fcTwo, 24, true).barriers == 7u);
+        // R==0 ⇒ score/apply/repair all early-out (splitCount == 0), so the cost is EXACTLY
+        // lifecycle + emit whatever the persistent flags — a selected-but-no-op kernel adds
+        // nothing.
+        for (const bool pa : {false, true})
+        {
+            for (const bool pr : {false, true})
+            {
+                // faceCount 0 → emit {4,4} + lifecycle → {4,5}.
+                CHECK(VdpmGpuFront::analyticComputeCost(0, 0, 0, 24, pa, pr).dispatches == 4u);
+                CHECK(VdpmGpuFront::analyticComputeCost(0, 0, 0, 24, pa, pr).barriers == 5u);
+                // Two-level emit → {7,7} — persistent flags must NOT add +1 for a no-op kernel.
+                CHECK(VdpmGpuFront::analyticComputeCost(0, fcTwo, fcTwo, 24, pa, pr).dispatches ==
+                      7u);
+                CHECK(VdpmGpuFront::analyticComputeCost(0, fcTwo, fcTwo, 24, pa, pr).barriers ==
+                      7u);
+            }
+        }
+        CHECK(VdpmGpuFront::analyticComputeCost(0, fcSingle, fcSingle, 24, true, true).dispatches ==
+              5u);
+        CHECK(VdpmGpuFront::analyticComputeCost(0, fcThree, fcThree, 24, true, true).dispatches ==
+              9u);
     }
-    SECTION("recorder: B(2R+2)+2R+3 repair + score/apply/emit/lifecycle")
+    SECTION("ranks present but NO repair faces: repair early-outs (finding 1)")
     {
-        // Helmet (two-level scan): R=18, B=24. base emit+lifecycle {7,7} + score/apply {56,56} +
-        // recorder {24*38+39, 24*40+43} = {951, 1003} → {1014, 1066}.
-        const Cost c = VdpmGpuFront::analyticComputeCost(18, fcTwo, 24, false);
-        CHECK(c.dispatches == 1014u);
-        CHECK(c.barriers == 1066u);
-        // A larger mesh (three-level scan) shifts by the emit delta (+2 dispatch / +2 barrier).
-        const Cost cBig = VdpmGpuFront::analyticComputeCost(18, fcThree, 24, false);
-        CHECK(cBig.dispatches == 1016u);
-        CHECK(cBig.barriers == 1068u);
-        // A second point (R=5, B=2, two-level): {7,7} + score/apply {17,17} + recorder
-        // {2*12+13, 2*14+17} = +{37,45} → {61, 69}.
-        const Cost c2 = VdpmGpuFront::analyticComputeCost(5, fcTwo, 2, false);
-        CHECK(c2.dispatches == 61u);
-        CHECK(c2.barriers == 69u);
+        // finestFaceCount == 0 ⇒ repair records no dispatch on either path, but the apply DID write
+        // `active` (ranks present), so recordFrame records ONE apply→emit barrier on BOTH the
+        // kernel and recorder paths — repair = {0 dispatch, 1 barrier}, NOT {1, 2}. faceCount 0 (⇒
+        // finestFaceCount 0), both kernels: emit {4,4}+lifecycle {4,5} + score {1,0}
+        // + apply-kernel {1,1} + repair {0,1} = {6, 7}.
+        CHECK(VdpmGpuFront::analyticComputeCost(5, 0, 0, 24, true, true).dispatches == 6u);
+        CHECK(VdpmGpuFront::analyticComputeCost(5, 0, 0, 24, true, true).barriers == 7u);
+        // faceCount>0 but finestFaceCount 0 (welding dropped all degenerates): emit over fcTwo
+        // {7,7}
+        // + score {1,0} + apply-kernel {1,1} + repair {0,1} = {9, 9}.
+        CHECK(VdpmGpuFront::analyticComputeCost(5, fcTwo, 0, 24, true, true).dispatches == 9u);
+        CHECK(VdpmGpuFront::analyticComputeCost(5, fcTwo, 0, 24, true, true).barriers == 9u);
+        // Recorder repair with no faces: the apply→emit barrier is STILL recorded (same as the
+        // kernel path — the recorder's trailing barrier didn't fire):
+        // {7,7}+{1,0}+apply-kernel{1,1}+ repair{0,1} = {9, 9}.
+        CHECK(VdpmGpuFront::analyticComputeCost(5, fcTwo, 0, 24, true, false).dispatches == 9u);
+        CHECK(VdpmGpuFront::analyticComputeCost(5, fcTwo, 0, 24, true, false).barriers == 9u);
+        // RECORDER apply + no repair faces (both persistentRepair values): apply
+        // {3R+1,3R+2}={16,17}
+        // + repair {0,1} → {7,7}+{1,0}+{16,17}+{0,1} = {24, 25}.
+        CHECK(VdpmGpuFront::analyticComputeCost(5, fcTwo, 0, 24, false, true).dispatches == 24u);
+        CHECK(VdpmGpuFront::analyticComputeCost(5, fcTwo, 0, 24, false, true).barriers == 25u);
+        CHECK(VdpmGpuFront::analyticComputeCost(5, fcTwo, 0, 24, false, false).dispatches == 24u);
+        CHECK(VdpmGpuFront::analyticComputeCost(5, fcTwo, 0, 24, false, false).barriers == 25u);
     }
-    SECTION("persistent kernel: one dispatch + two barriers, independent of budget")
+    SECTION("R=18 helmet (two-level) — four persistentApply × persistentRepair combinations")
     {
-        // Helmet R=18 (two-level): {7,7} + {56,56} + {1,2} = {64, 65}.
-        const Cost c = VdpmGpuFront::analyticComputeCost(18, fcTwo, 24, true);
-        CHECK(c.dispatches == 64u);
-        CHECK(c.barriers == 65u);
-        // The persistent repair is one dispatch regardless of the round budget.
-        CHECK(VdpmGpuFront::analyticComputeCost(18, fcTwo, 1, true).dispatches == 64u);
-        CHECK(VdpmGpuFront::analyticComputeCost(18, fcTwo, 1, true).barriers == 65u);
-        // R=5 two-level: {7,7} + score/apply {17,17} + repair {1,2} = {25, 26}.
-        CHECK(VdpmGpuFront::analyticComputeCost(5, fcTwo, 24, true).dispatches == 25u);
-        CHECK(VdpmGpuFront::analyticComputeCost(5, fcTwo, 24, true).barriers == 26u);
+        // base emit+lifecycle {7,7} + score {1,0}; apply recorder {55,56} / kernel {1,1}; repair
+        // recorder {24*38+39, 24*40+43}={951,1003} / kernel {1,2}.
+        CHECK(VdpmGpuFront::analyticComputeCost(18, fcTwo, fcTwo, 24, false, false).dispatches ==
+              1014u);
+        CHECK(VdpmGpuFront::analyticComputeCost(18, fcTwo, fcTwo, 24, false, false).barriers ==
+              1066u);
+        // Recorder apply + kernel repair (production BEFORE this flip): {64, 65}.
+        CHECK(VdpmGpuFront::analyticComputeCost(18, fcTwo, fcTwo, 24, false, true).dispatches ==
+              64u);
+        CHECK(VdpmGpuFront::analyticComputeCost(18, fcTwo, fcTwo, 24, false, true).barriers == 65u);
+        // Kernel apply + recorder repair: {7+1+1+951, 7+1+1003} = {960, 1011}.
+        CHECK(VdpmGpuFront::analyticComputeCost(18, fcTwo, fcTwo, 24, true, false).dispatches ==
+              960u);
+        CHECK(VdpmGpuFront::analyticComputeCost(18, fcTwo, fcTwo, 24, true, false).barriers ==
+              1011u);
+        // BOTH kernels (production AFTER this flip): {7+1+1+1, 7+1+2} = {10, 10}.
+        CHECK(VdpmGpuFront::analyticComputeCost(18, fcTwo, fcTwo, 24, true, true).dispatches ==
+              10u);
+        CHECK(VdpmGpuFront::analyticComputeCost(18, fcTwo, fcTwo, 24, true, true).barriers == 10u);
+    }
+    SECTION("scan tiers + rank-independence of the persistent path")
+    {
+        // three-level scan shifts recorder+recorder by the emit delta (+2/+2).
+        CHECK(
+            VdpmGpuFront::analyticComputeCost(18, fcThree, fcThree, 24, false, false).dispatches ==
+            1016u);
+        CHECK(VdpmGpuFront::analyticComputeCost(18, fcThree, fcThree, 24, false, false).barriers ==
+              1068u);
+        // Both kernels are O(1) dispatches (rank loops are IN the workgroup), so R=5 both-kernels
+        // == R=18 both-kernels = {10,10} (two-level) — the whole point of the flip.
+        CHECK(VdpmGpuFront::analyticComputeCost(5, fcTwo, fcTwo, 24, true, true).dispatches == 10u);
+        CHECK(VdpmGpuFront::analyticComputeCost(5, fcTwo, fcTwo, 24, true, true).barriers == 10u);
+        // R=5 recorder+recorder, B=2: {7,7}+{1,0}+{16,17}+{2*12+13,2*14+17} = {61, 69}.
+        CHECK(VdpmGpuFront::analyticComputeCost(5, fcTwo, fcTwo, 2, false, false).dispatches ==
+              61u);
+        CHECK(VdpmGpuFront::analyticComputeCost(5, fcTwo, fcTwo, 2, false, false).barriers == 69u);
     }
 }
 

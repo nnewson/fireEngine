@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -10,14 +11,26 @@
 namespace fire_engine
 {
 
+// A uint32 specialization constant: an EXPLICIT constant_id + its value. Explicit IDs (not vector
+// position) keep the ABI documented, allow sparse IDs, and prevent accidental reordering. Used e.g.
+// to specialize a compute shader's local_size_x (`layout(local_size_x_id = N) in;`).
+struct ComputeSpecializationConstant
+{
+    std::uint32_t id;
+    std::uint32_t value;
+};
+
 // Describes a compute pipeline: a single compute shader, its descriptor-set
-// bindings (one set), and push-constant ranges. The graphics counterpart is
-// PipelineConfig in pipeline.hpp.
+// bindings (one set), push-constant ranges, and any specialization constants.
+// The graphics counterpart is PipelineConfig in pipeline.hpp.
 struct ComputePipelineConfig
 {
     std::string compShaderPath;
     std::vector<vk::DescriptorSetLayoutBinding> bindings;
     std::vector<vk::PushConstantRange> pushConstantRanges;
+    // Specialized into the compute stage when non-empty; duplicate IDs are rejected. Empty ⇒ the
+    // stage's pSpecializationInfo stays null (every pipeline that doesn't specialize is unchanged).
+    std::vector<ComputeSpecializationConstant> specConstants;
 };
 
 // Owns a compute VkPipeline plus its single descriptor-set layout and pipeline
