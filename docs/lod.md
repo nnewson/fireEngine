@@ -763,7 +763,19 @@ at a fraction of the triangles. The remaining residuals and follow-ons, in rough
   occupancy-bound. So the apply kernel (also one workgroup) will land near a repair-like floor, not
   free; expect a solid but not proportional GPU drop, and the emerging frontier past the apply kernel is
   single-workgroup occupancy / **front-batching** (N fronts = N workgroups fill the GPU — which is why
-  the job ABI is kept batch-ready). NEXT: build the apply kernel; THEN reconsider whole-lifecycle
+  the job ABI is kept batch-ready). **The kernel now exists BESIDE the recorder but is NOT yet selected
+  by `recordFrame`** (the recorder, `recordApplyScoredView`, still drives every production apply): the
+  mark/coarsen policy + `ScoreOut` struct/reduction are the shared `shaders/vdpm_apply_classify.glsl`
+  (one authority with `vdpm_score/mark/coarsen`, no behaviour change), and `shaders/vdpm_apply_kernel.comp`
+  + `VdpmApplyKernel` run the whole apply (reset failFlags → mark → close → refine → coarsen) for one
+  front in ONE dispatch — close/refine reuse the repair kernel's loops, coarsen ports `vdpm_coarsen.comp`.
+  Batch-ready `VdpmApplyJobGpu` ABI (budgets in the job); `makeApplyJob` + `recordApplyKernel`.
+  `test_vdpm_apply_kernel.cpp` (`[.][gpu]`) cross-checks it BIT-EXACT against the recorder from
+  proven-identical scores (all of active/refined/dependents/required/failFlags) across refine→coarsen,
+  alternating budgets, diamond deps, back-facing coarsen, plus gates for the in-kernel failFlags reset,
+  the coarsen dependents-underflow flag, a zero-split no-dispatch no-op, and a deep rank chain. NEXT: flip
+  `recordFrame` to select it (nullable `VdpmApplyKernel*` + `std::optional` in the manager, `persistentApply`
+  accounting), after a 64/128/256 workgroup-size sweep + remeasure; THEN reconsider whole-lifecycle
   batching; THEN resume B5c — delayed triangle/repair diagnostics + the deferred helmet wedge/rank-count
   evidence (Vulkan glTF path) + a possible default flip to GPU after parity sign-off.
 - **7 forest skips.** `buildVertexForest` skips collapses whose edge diverged from its adjacency
