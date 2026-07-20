@@ -7,7 +7,10 @@
 // screen-space channels. Typed buffer_reference only (no Int64 arithmetic). The ABI mirror + offsets
 // are pinned in render/ubo.hpp; the pack helpers fill them from the same authority. `sin()` in the
 // angular chord is the one op that isn't bit-portable — the harness compares scores CLOSE and
-// decisions EXACT away from thresholds.
+// decisions EXACT away from thresholds. The ScoreOut it writes is the shared apply ABI (struct +
+// reduction + predicates) so scoring and the mark/coarsen consumers stay one authority.
+
+#include "vdpm_apply_classify.glsl"
 
 struct Split
 {
@@ -20,16 +23,6 @@ struct Split
     uint parentId;
     uint childId;
     uint pad;
-};
-
-struct ScoreOut
-{
-    float geometry;
-    float uv;
-    float normal;
-    float tangent;
-    float straddle;
-    uint backface;
 };
 
 layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer Splits

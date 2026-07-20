@@ -1,0 +1,273 @@
+#version 450
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_buffer_reference_uvec2 : require
+
+// VDPM persistent-workgroup APPLY kernel (apply-kernel arc). ONE workgroup per front runs the whole
+// refine/coarsen apply — the exact sequence recordApplyViewImpl records (mark → close → refine →
+// coarsen) but with in-workgroup barriers instead of 3R+1 global dispatches/barriers. Mirrors the
+// repair kernel: reads jobs[gl_WorkGroupID.x] (one VdpmApplyJobGpu, see ubo.hpp) and touches only
+// that front's disjoint state, so separate workgroups need no cross-workgroup sync. Stage-one build
+// dispatches 1 workgroup (1 job); a later batch stage dispatches N — unchanged shader. The
+// mark/coarsen policy + the ScoreOut layout are the shared vdpm_apply_classify.glsl (one authority
+// with vdpm_score/mark/coarsen); the close + refine loops are the ones the repair kernel runs. BDA
+// addresses ride as uvec2 (no shader int64). Result is INTEGER-EXACT to the recorder for the same
+// scores (no FP fixpoint — a single deterministic pass).
+
+#include "vdpm_apply_classify.glsl"
+
+const uint kNoSplit = 0xFFFFFFFFu;       // dependency-split sentinel (root/boundary)
+const uint kInvalidVertex = 0xFFFFFFFFu; // vr sentinel (no vr)
+
+layout(buffer_reference, std430, buffer_reference_align = 4) buffer UintBuf
+{
+    uint v[];
+};
+layout(buffer_reference, std430, buffer_reference_align = 4) buffer ScoreBuf
+{
+    ScoreOut v[];
+};
+struct FrontSplit
+{
+    uint parent;
+    uint child;
+    uint vl;
+    uint vr;
+    uint parentDep;
+    uint vlDep;
+    uint vrDep;
+    uint pad;
+};
+layout(buffer_reference, std430, buffer_reference_align = 4) buffer FrontSplitBuf
+{
+    FrontSplit v[];
+};
+struct RankRange
+{
+    uint offset;
+    uint count;
+};
+layout(buffer_reference, std430, buffer_reference_align = 4) buffer RankRangeBuf
+{
+    RankRange v[]; // base align 4 (VdpmRankRangeGpu is alignas(4)); array stride is 8
+};
+
+// One front's job — layout mirrors VdpmApplyJobGpu (9 addresses as uvec2 + counts + budgets). Field
+// names carry an `Address` suffix (GLSL reserves `active` etc.); only the LAYOUT must match the C++.
+struct ApplyJob
+{
+    uvec2 scoresAddress;
+    uvec2 activeAddress;
+    uvec2 refinedAddress;
+    uvec2 requiredAddress;
+    uvec2 dependentsAddress;
+    uvec2 failFlagsAddress;
+    uvec2 frontSplitsAddress;
+    uvec2 splitsByRankAddress;
+    uvec2 rankRangesAddress;
+    uint vertexCount;
+    uint splitCount;
+    uint rankCount;
+    uint pad;
+    float pixelBudget;
+    float coarsenBudget;
+};
+layout(buffer_reference, std430, buffer_reference_align = 8) buffer JobBuf
+{
+    ApplyJob v[];
+};
+
+layout(push_constant) uniform Push
+{
+    JobBuf jobs;
+    uint jobCount;
+    uint pad;
+}
+pc;
+
+layout(local_size_x = 256) in;
+
+// ---- The job's buffer references + counts, resolved once in main() and shared with the helpers via
+// file-scope globals (GLSL has no closures). ----
+ScoreBuf g_scores;
+UintBuf g_active;
+UintBuf g_refined;
+UintBuf g_required;
+UintBuf g_dependents;
+UintBuf g_failFlags;
+FrontSplitBuf g_frontSplits;
+UintBuf g_splitsByRank;
+RankRangeBuf g_rankRanges;
+uint g_tid;
+uint g_stride;
+uint g_splitCount;
+uint g_rankCount;
+float g_pixelBudget;
+float g_coarsenBudget;
+
+// The single synchronisation helper: publish the SSBO front-state writes + the workgroup execution
+// barrier, between every phase and every rank. Apply has no shared convergence word (unlike repair),
+// so buffer + execution is the whole fence.
+void wgsync()
+{
+    memoryBarrierBuffer();
+    barrier();
+}
+
+// atomic subtract-1 with underflow detection (matches vdpm_coarsen.comp subOne): old value 0 means a
+// dependent decrement below zero — corruption → the underflow flag.
+void subOne(uint index)
+{
+    if (atomicAdd(g_dependents.v[index], 0xFFFFFFFFu) == 0u)
+    {
+        atomicOr(g_failFlags.v[1], 1u);
+    }
+}
+
+// Close (DESCENDING rank) then refine (ASCENDING rank) — the marked `required` set drives the front
+// to its settled state. IDENTICAL to the repair kernel's closeAndRefine (recordCloseAndRefineRequired
+// on the recorder side). wgsync between every rank.
+void closeAndRefine()
+{
+    for (uint rank = g_rankCount; rank-- > 0u;)
+    {
+        const RankRange rr = g_rankRanges.v[rank];
+        for (uint i = g_tid; i < rr.count; i += g_stride)
+        {
+            const uint s = g_splitsByRank.v[rr.offset + i];
+            if (g_required.v[s] == 0u)
+            {
+                continue;
+            }
+            const FrontSplit fs = g_frontSplits.v[s];
+            if (fs.parentDep != kNoSplit)
+            {
+                atomicOr(g_required.v[fs.parentDep], 1u);
+            }
+            if (fs.vlDep != kNoSplit)
+            {
+                atomicOr(g_required.v[fs.vlDep], 1u);
+            }
+            if (fs.vrDep != kNoSplit)
+            {
+                atomicOr(g_required.v[fs.vrDep], 1u);
+            }
+        }
+        wgsync();
+    }
+    for (uint rank = 0u; rank < g_rankCount; ++rank)
+    {
+        const RankRange rr = g_rankRanges.v[rank];
+        for (uint i = g_tid; i < rr.count; i += g_stride)
+        {
+            const uint s = g_splitsByRank.v[rr.offset + i];
+            if (g_required.v[s] == 0u || g_refined.v[s] != 0u)
+            {
+                continue;
+            }
+            const FrontSplit fs = g_frontSplits.v[s];
+            const bool depsActive = g_active.v[fs.parent] != 0u && g_active.v[fs.vl] != 0u &&
+                                    (fs.vr == kInvalidVertex || g_active.v[fs.vr] != 0u);
+            if (!depsActive)
+            {
+                atomicOr(g_failFlags.v[0], 1u);
+                continue;
+            }
+            g_refined.v[s] = 1u;
+            g_active.v[fs.child] = 1u;
+            atomicAdd(g_dependents.v[fs.parent], 1u);
+            atomicAdd(g_dependents.v[fs.vl], 1u);
+            if (fs.vr != kInvalidVertex)
+            {
+                atomicAdd(g_dependents.v[fs.vr], 1u);
+            }
+        }
+        wgsync();
+    }
+}
+
+// Coarsen (DESCENDING rank) — port of vdpm_coarsen.comp's body into the in-workgroup rank loop. A
+// refined split that is over-coarse (applyCoarsenEligible) AND whose child is a leaf collapses:
+// clear refined, deactivate child, atomic-sub dependents at each vertex slot. High→low with a
+// barrier between ranks frees the child before this rank reads its dependents (dependents have
+// strictly higher rank).
+void coarsen()
+{
+    for (uint rank = g_rankCount; rank-- > 0u;)
+    {
+        const RankRange rr = g_rankRanges.v[rank];
+        for (uint i = g_tid; i < rr.count; i += g_stride)
+        {
+            const uint s = g_splitsByRank.v[rr.offset + i];
+            if (g_refined.v[s] == 0u)
+            {
+                continue;
+            }
+            const ScoreOut o = g_scores.v[s];
+            if (!applyCoarsenEligible(o, g_coarsenBudget))
+            {
+                continue; // still fine enough and front-facing — keep it
+            }
+            const FrontSplit fs = g_frontSplits.v[s];
+            if (g_dependents.v[fs.child] != 0u)
+            {
+                continue; // the child props up a refined split — not a leaf
+            }
+            g_refined.v[s] = 0u;
+            g_active.v[fs.child] = 0u;
+            subOne(fs.parent);
+            subOne(fs.vl);
+            if (fs.vr != kInvalidVertex)
+            {
+                subOne(fs.vr);
+            }
+        }
+        wgsync();
+    }
+}
+
+void main()
+{
+    // Uniform-return guard BEFORE any barrier (a per-workgroup early-out must precede all barriers so
+    // no invocation waits on a barrier its peers skip).
+    if (gl_WorkGroupID.x >= pc.jobCount)
+    {
+        return;
+    }
+
+    const ApplyJob job = pc.jobs.v[gl_WorkGroupID.x];
+    g_tid = gl_LocalInvocationID.x;
+    g_stride = gl_WorkGroupSize.x;
+    g_scores = ScoreBuf(job.scoresAddress);
+    g_active = UintBuf(job.activeAddress);
+    g_refined = UintBuf(job.refinedAddress);
+    g_required = UintBuf(job.requiredAddress);
+    g_dependents = UintBuf(job.dependentsAddress);
+    g_failFlags = UintBuf(job.failFlagsAddress);
+    g_frontSplits = FrontSplitBuf(job.frontSplitsAddress);
+    g_splitsByRank = UintBuf(job.splitsByRankAddress);
+    g_rankRanges = RankRangeBuf(job.rankRangesAddress);
+    g_splitCount = job.splitCount;
+    g_rankCount = job.rankCount;
+    g_pixelBudget = job.pixelBudget;
+    g_coarsenBudget = job.coarsenBudget;
+
+    // Clear BOTH failFlags cooperatively INSIDE the kernel (the recorder clears them every apply
+    // cycle; an in-kernel reset keeps the whole apply one dispatch — no external fillBuffer/barrier).
+    if (g_tid < 2u)
+    {
+        g_failFlags.v[g_tid] = 0u;
+    }
+
+    // MARK: FULL-OVERWRITE the required seed from the scores (front-facing over-budget splits). Full
+    // overwrite means no separate clear before the closure.
+    for (uint s = g_tid; s < g_splitCount; s += g_stride)
+    {
+        g_required.v[s] = applyMarkRequired(g_scores.v[s], g_pixelBudget) ? 1u : 0u;
+    }
+    wgsync(); // publish the failFlags reset + the required seed before closure/refine read them
+
+    closeAndRefine();
+    // closeAndRefine's trailing wgsync (last refine rank) published refined/active/dependents, which
+    // coarsen reads — no extra barrier needed here.
+    coarsen();
+}

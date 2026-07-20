@@ -74,6 +74,11 @@ struct DependencyDag; // graphics/vdpm_parallel.hpp — the forest's refine-depe
 // VdpmRepairKernelPush (job-array address + count).
 [[nodiscard]] ComputePipelineConfig vdpmRepairKernelPipelineConfig();
 
+// The persistent apply kernel config (apply-kernel arc): `shaders/vdpm_apply_kernel.comp` runs the
+// whole refine/coarsen apply (mark → close → refine → coarsen) for one front in ONE workgroup.
+// Descriptor-free; push = VdpmApplyKernelPush (job-array address + count).
+[[nodiscard]] ComputePipelineConfig vdpmApplyKernelPipelineConfig();
+
 // A rank's contiguous range in `splitsByRank` — the CPU recorder issues one dispatch per rank over
 // `[offset, offset + count)`, and an array of these is uploaded device-local for the persistent
 // repair kernel (binding.rankRangesAddress). The shared GPU ABI struct lives in ubo.hpp (the
@@ -399,6 +404,47 @@ private:
     ComputePipeline pipeline_;
 };
 
+// The persistent-workgroup APPLY kernel (apply-kernel arc) — mirrors VdpmRepairKernel: one
+// workgroup per front runs the whole refine/coarsen apply in ONE dispatch. Capability-gated
+// independently (checked before the pipeline is built, via the delegating ctor). The recorder
+// (recordApplyScoredView) stays built as the reference/fallback for unsupported devices.
+class VdpmApplyKernel
+{
+public:
+    // The kernel's fixed workgroup size (local_size_x in vdpm_apply_kernel.comp).
+    static constexpr std::uint32_t kLocalSize = 256;
+
+    // Throws std::runtime_error if !deviceSupported. The check runs BEFORE the pipeline is
+    // constructed (the public ctor delegates through requireSupported), so a caller that forgot
+    // deviceSupported() fails loudly here — not at pipeline creation.
+    explicit VdpmApplyKernel(const Device& device);
+
+    VdpmApplyKernel(const VdpmApplyKernel&) = delete;
+    VdpmApplyKernel& operator=(const VdpmApplyKernel&) = delete;
+    VdpmApplyKernel(VdpmApplyKernel&&) = delete;
+    VdpmApplyKernel& operator=(VdpmApplyKernel&&) = delete;
+    ~VdpmApplyKernel() = default;
+
+    // True when the device can run the kernel: a workgroup of kLocalSize invocations (size[0] +
+    // invocations). Apply has NO shared memory (unlike repair). The 1-D workgroup COUNT cap
+    // (relevant once a later stage dispatches N fronts) is checked per-dispatch.
+    [[nodiscard]] static bool deviceSupported(const Device& device);
+
+    [[nodiscard]] const ComputePipeline& pipeline() const noexcept
+    {
+        return pipeline_;
+    }
+
+private:
+    struct Checked
+    {
+    };
+    [[nodiscard]] static Checked requireSupported(const Device& device);
+    VdpmApplyKernel(const Device& device, Checked);
+
+    ComputePipeline pipeline_;
+};
+
 // Optional per-stage instrumentation for recordFrame (apply-kernel arc checkpoint). Passed
 // non-null, recordFrame times each of its four stages (score / apply / repair / emit):
 //  - `cpuMs` (if set) accumulates the CPU record cost per stage; valid for ANY front count (the
@@ -559,6 +605,22 @@ public:
     // std::logic_error otherwise. `roundBudget` must be <= the allocated roundHistory capacity.
     [[nodiscard]] VdpmRepairJobGpu makeRepairJob(std::uint32_t frameIndex,
                                                  std::uint32_t roundBudget) const;
+
+    // Pack this front's complete APPLY job (apply-kernel arc) — the single assembly authority a
+    // later batch stage reuses to fill its N-job array. Budgets live IN the job (no separate params
+    // block); `scoresAddress` points at the front's own GPU score output (recordScore wrote it).
+    // Requires a runtime front with refine/coarsen state; throws std::logic_error otherwise.
+    [[nodiscard]] VdpmApplyJobGpu makeApplyJob(std::uint32_t frameIndex, float pixelBudget,
+                                               float coarsenBudget) const;
+
+    // Record the persistent-kernel APPLY for frame slot `frameIndex`: pack + upload the 1-element
+    // job (only the job — budgets are in it), a leading score→kernel compute barrier (recordFrame /
+    // recordScore ordered the score write; this orders it → the kernel's mark read), then ONE
+    // dispatch of ONE workgroup. Records NO consumer barrier — the caller (recordFrame's repair
+    // stage, or a test) synchronises. Throws std::logic_error without a runtime refine/coarsen
+    // front.
+    void recordApplyKernel(vk::CommandBuffer cmd, const VdpmApplyKernel& kernel,
+                           std::uint32_t frameIndex, float pixelBudget, float coarsenBudget);
 
     // Record the persistent-kernel repair for frame slot `frameIndex`: upload `params`, pack +
     // upload the 1-element job, a leading apply/coarsen→repair compute barrier (recordFrame owns
@@ -887,6 +949,11 @@ private:
     // slot, packed + uploaded per repair and read by the kernel via its device address.
     std::array<std::span<std::byte>, kMaxFramesInFlight> jobRing_{};
     std::array<std::uint64_t, kMaxFramesInFlight> jobRingAddress_{};
+    // Persistent apply-kernel job ring (apply-kernel arc): one host-visible VdpmApplyJobGpu per
+    // frame slot. Budgets live in the job, so — unlike repair — there is no separate apply-params
+    // ring.
+    std::array<std::span<std::byte>, kMaxFramesInFlight> applyJobRing_{};
+    std::array<std::uint64_t, kMaxFramesInFlight> applyJobRingAddress_{};
 };
 
 } // namespace fire_engine

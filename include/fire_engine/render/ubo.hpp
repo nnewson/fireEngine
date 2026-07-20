@@ -964,4 +964,53 @@ static_assert(alignof(VdpmRepairKernelPush) == 8);
 static_assert(std::is_standard_layout_v<VdpmRepairKernelPush>);
 static_assert(std::is_trivially_copyable_v<VdpmRepairKernelPush>);
 
+// One front's complete APPLY job (apply-kernel arc, persistent-kernel ABI). Same batch vehicle as
+// VdpmRepairJobGpu: the apply kernel reads `jobs[gl_WorkGroupID.x]` and runs the whole
+// refine/coarsen apply (mark → close → refine → coarsen) for that front in ONE workgroup. A strict
+// SUBSET of the repair job's addresses — apply reads the front's own SCORES (repair doesn't) and
+// needs no ancestor/positions/params/history state. Budgets live IN the job (no separate params
+// block). All *Address fields are BDA device addresses.
+struct alignas(8) VdpmApplyJobGpu
+{
+    std::uint64_t scoresAddress{0};       // VdpmScoreOut per split (the front's own score output)
+    std::uint64_t activeAddress{0};       // per canonical: 0/1
+    std::uint64_t refinedAddress{0};      // per split
+    std::uint64_t requiredAddress{0};     // per split (mark seed → closure)
+    std::uint64_t dependentsAddress{0};   // per canonical
+    std::uint64_t failFlagsAddress{0};    // 2 uint [0]=refine failure, [1]=dependents underflow
+    std::uint64_t frontSplitsAddress{0};  // VdpmFrontSplitGpu per split
+    std::uint64_t splitsByRankAddress{0}; // uint per split, packed by ascending rank
+    std::uint64_t rankRangesAddress{0};   // VdpmRankRangeGpu[rankCount]
+    std::uint32_t vertexCount{0};
+    std::uint32_t splitCount{0};
+    std::uint32_t rankCount{0}; // = maxRank + 1 (0 for a zero-split front)
+    std::uint32_t pad{0};
+    float pixelBudget{0.0f};
+    float coarsenBudget{0.0f};
+};
+static_assert(offsetof(VdpmApplyJobGpu, scoresAddress) == 0);
+static_assert(offsetof(VdpmApplyJobGpu, rankRangesAddress) == 64); // 9th uint64 (index 8)
+static_assert(offsetof(VdpmApplyJobGpu, vertexCount) == 72);
+static_assert(offsetof(VdpmApplyJobGpu, pixelBudget) == 88);
+static_assert(offsetof(VdpmApplyJobGpu, coarsenBudget) == 92);
+static_assert(sizeof(VdpmApplyJobGpu) == 96, "VdpmApplyJobGpu std430 size/stride");
+static_assert(alignof(VdpmApplyJobGpu) == 8);
+static_assert(std::is_standard_layout_v<VdpmApplyJobGpu>);
+static_assert(std::is_trivially_copyable_v<VdpmApplyJobGpu>);
+
+// Push constant for the persistent apply kernel: only the job-array address + count (never push the
+// per-front addresses). The kernel dispatches `jobCount` workgroups, one per front.
+struct alignas(8) VdpmApplyKernelPush
+{
+    std::uint64_t jobsAddress{0};
+    std::uint32_t jobCount{0};
+    std::uint32_t pad{0};
+};
+static_assert(offsetof(VdpmApplyKernelPush, jobsAddress) == 0);
+static_assert(offsetof(VdpmApplyKernelPush, jobCount) == 8);
+static_assert(sizeof(VdpmApplyKernelPush) == 16);
+static_assert(alignof(VdpmApplyKernelPush) == 8);
+static_assert(std::is_standard_layout_v<VdpmApplyKernelPush>);
+static_assert(std::is_trivially_copyable_v<VdpmApplyKernelPush>);
+
 } // namespace fire_engine

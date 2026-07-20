@@ -216,6 +216,7 @@ set(SHADER_SOURCES
     shaders/vdpm_repair_detect.comp
     shaders/vdpm_repair_fallback.comp
     shaders/vdpm_repair_kernel.comp
+    shaders/vdpm_apply_kernel.comp
 )
 
 # glslc from the vcpkg `shaderc` port (installed under <vcpkg-installed>/<triplet>/tools/shaderc via
@@ -238,6 +239,7 @@ endif()
 # and keeps the SPV outputs correct.
 set(SHADER_INCLUDES
     ${PROJECT_SOURCE_DIR}/shaders/vdpm_repair_classify.glsl
+    ${PROJECT_SOURCE_DIR}/shaders/vdpm_apply_classify.glsl
 )
 
 foreach(shader IN LISTS SHADER_SOURCES)
@@ -355,6 +357,7 @@ add_executable(test_fire_engine
     tests/render/test_vdpm_gpu_manager.cpp
     tests/render/test_vdpm_gpu_runtime.cpp
     tests/render/test_vdpm_repair_kernel.cpp
+    tests/render/test_vdpm_apply_kernel.cpp
     tests/render/test_vdpm_scan.cpp
     tests/graphics/test_generational_slot_pool.cpp
     tests/scene/test_particle_emitter.cpp

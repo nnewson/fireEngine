@@ -2,21 +2,11 @@
 #extension GL_EXT_buffer_reference : require
 
 // VDPM GPU refine/coarsen pass 1 (Stage B3): over ALL splits, FULL-OVERWRITE the per-split
-// `required` seed = the refine predicate `backface == 0 && s > pixelBudget`, where the decision
-// score `s = max(geometry, uv, normal, tangent)` (straddle excluded, matching
-// VdpmSplitScore::score). Full overwrite means no separate clear is needed before the closure. A
-// back-facing split scores 0 on the CPU side too, so the explicit backface gate and the raw max
-// agree.
+// `required` seed = the refine predicate applyMarkRequired (ScoreOut struct + reduction + predicate
+// live in the shared vdpm_apply_classify.glsl — one authority with score/coarsen/kernel). Full
+// overwrite means no separate clear is needed before the closure.
 
-struct ScoreOut
-{
-    float geometry;
-    float uv;
-    float normal;
-    float tangent;
-    float straddle;
-    uint backface;
-};
+#include "vdpm_apply_classify.glsl"
 
 layout(buffer_reference, std430, buffer_reference_align = 4) buffer ScoreBuf
 {
@@ -46,6 +36,5 @@ void main()
         return;
     }
     const ScoreOut o = pc.scores.v[s];
-    const float score = max(max(o.geometry, o.uv), max(o.normal, o.tangent));
-    pc.required.v[s] = (o.backface == 0u && score > pc.pixelBudget) ? 1u : 0u;
+    pc.required.v[s] = applyMarkRequired(o, pc.pixelBudget) ? 1u : 0u;
 }

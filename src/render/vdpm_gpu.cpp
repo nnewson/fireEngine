@@ -232,6 +232,11 @@ ComputePipelineConfig vdpmRepairKernelPipelineConfig()
     return emitConfig<VdpmRepairKernelPush>("vdpm_repair_kernel.comp.spv");
 }
 
+ComputePipelineConfig vdpmApplyKernelPipelineConfig()
+{
+    return emitConfig<VdpmApplyKernelPush>("vdpm_apply_kernel.comp.spv");
+}
+
 bool VdpmRepairKernel::deviceSupported(const Device& device)
 {
     const vk::PhysicalDeviceLimits& limits = device.physicalDevice().getProperties().limits;
@@ -257,6 +262,34 @@ VdpmRepairKernel::VdpmRepairKernel(const Device& device)
 
 VdpmRepairKernel::VdpmRepairKernel(const Device& device, Checked)
     : pipeline_(device, vdpmRepairKernelPipelineConfig())
+{
+}
+
+bool VdpmApplyKernel::deviceSupported(const Device& device)
+{
+    const vk::PhysicalDeviceLimits& limits = device.physicalDevice().getProperties().limits;
+    // Apply uses NO shared memory (unlike repair's s_anyMarked) — just a full workgroup.
+    return limits.maxComputeWorkGroupInvocations >= kLocalSize &&
+           limits.maxComputeWorkGroupSize[0] >= kLocalSize;
+}
+
+VdpmApplyKernel::Checked VdpmApplyKernel::requireSupported(const Device& device)
+{
+    if (!deviceSupported(device))
+    {
+        throw std::runtime_error(
+            "VDPM apply kernel: device does not meet the workgroup limits (256)");
+    }
+    return {};
+}
+
+VdpmApplyKernel::VdpmApplyKernel(const Device& device)
+    : VdpmApplyKernel(device, requireSupported(device))
+{
+}
+
+VdpmApplyKernel::VdpmApplyKernel(const Device& device, Checked)
+    : pipeline_(device, vdpmApplyKernelPipelineConfig())
 {
 }
 
@@ -969,6 +1002,16 @@ VdpmGpuFront VdpmGpuFront::buildRuntime(Resources& resources, const VdpmGpuMesh&
         front.jobRingAddress_[i] = resources.bufferAddress(jobs.buffers[i]);
         requireAligned(front.jobRingAddress_[i], 8, "repairJob");
     }
+    // Persistent apply-kernel job ring (apply-kernel arc): one host-visible VdpmApplyJobGpu per
+    // slot.
+    const MappedBufferSet applyJobs =
+        resources.createMappedDeviceAddressBuffers(sizeof(VdpmApplyJobGpu));
+    for (int i = 0; i < kMaxFramesInFlight; ++i)
+    {
+        front.applyJobRing_[i] = applyJobs.mapped[i];
+        front.applyJobRingAddress_[i] = resources.bufferAddress(applyJobs.buffers[i]);
+        requireAligned(front.applyJobRingAddress_[i], 8, "applyJob");
+    }
     return front;
 }
 
@@ -1011,6 +1054,31 @@ VdpmRepairJobGpu VdpmGpuFront::makeRepairJob(std::uint32_t frameIndex,
                             .pad = 0};
 }
 
+VdpmApplyJobGpu VdpmGpuFront::makeApplyJob(std::uint32_t /*frameIndex*/, float pixelBudget,
+                                           float coarsenBudget) const
+{
+    if (!hasRuntime_ || !hasFront_)
+    {
+        throw std::logic_error("VdpmGpuFront::makeApplyJob: not a runtime refine/coarsen front");
+    }
+    const std::uint32_t rankCount = static_cast<std::uint32_t>(rankRanges_.size());
+    return VdpmApplyJobGpu{.scoresAddress = outputAddress_, // the front's own GPU score output
+                           .activeAddress = activeStateAddress_,
+                           .refinedAddress = refinedStateAddress_,
+                           .requiredAddress = requiredStateAddress_,
+                           .dependentsAddress = dependentsStateAddress_,
+                           .failFlagsAddress = failFlagsAddress_,
+                           .frontSplitsAddress = binding_.frontSplitsAddress,
+                           .splitsByRankAddress = binding_.splitsByRankAddress,
+                           .rankRangesAddress = binding_.rankRangesAddress,
+                           .vertexCount = binding_.vertexCount,
+                           .splitCount = binding_.splitCount,
+                           .rankCount = rankCount,
+                           .pad = 0,
+                           .pixelBudget = pixelBudget,
+                           .coarsenBudget = coarsenBudget};
+}
+
 void VdpmGpuFront::recordRepairKernel(vk::CommandBuffer cmd, const VdpmRepairKernel& kernel,
                                       std::uint32_t frameIndex, const VdpmRepairParams& params,
                                       std::uint32_t roundBudget)
@@ -1048,6 +1116,45 @@ void VdpmGpuFront::recordRepairKernel(vk::CommandBuffer cmd, const VdpmRepairKer
     cmd.pushConstants<VdpmRepairKernelPush>(kernel.pipeline().pipelineLayout(),
                                             vk::ShaderStageFlagBits::eCompute, 0, push);
     cmd.dispatch(1, 1, 1); // ONE workgroup — the whole repair fixpoint
+    // No consumer barrier — the caller synchronises the state read-back.
+}
+
+void VdpmGpuFront::recordApplyKernel(vk::CommandBuffer cmd, const VdpmApplyKernel& kernel,
+                                     std::uint32_t frameIndex, float pixelBudget,
+                                     float coarsenBudget)
+{
+    if (!hasRuntime_ || !hasFront_)
+    {
+        throw std::logic_error(
+            "VdpmGpuFront::recordApplyKernel: not a runtime refine/coarsen front");
+    }
+    if (binding_.splitCount == 0)
+    {
+        return; // nothing to apply (no splits) — matches recordApplyScoredView's early-out
+    }
+
+    // Pack + host-upload the job (budgets are in it — no separate params block). The submit makes
+    // the write available to the dispatch, like the CPU indirect write.
+    const VdpmApplyJobGpu job = makeApplyJob(frameIndex, pixelBudget, coarsenBudget);
+    writeMapped(applyJobRing_[frameIndex], job);
+
+    // Leading barrier: the score dispatch (compute, no trailing barrier) → the kernel's mark read
+    // of the score output. recordFrame owns the cross-frame lifecycle barrier.
+    const vk::MemoryBarrier2 lead{
+        .srcStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+        .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
+        .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+        .dstAccessMask =
+            vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite,
+    };
+    cmd.pipelineBarrier2(vk::DependencyInfo{.memoryBarrierCount = 1, .pMemoryBarriers = &lead});
+
+    const VdpmApplyKernelPush push{
+        .jobsAddress = applyJobRingAddress_[frameIndex], .jobCount = 1, .pad = 0};
+    cmd.bindPipeline(vk::PipelineBindPoint::eCompute, kernel.pipeline().pipeline());
+    cmd.pushConstants<VdpmApplyKernelPush>(kernel.pipeline().pipelineLayout(),
+                                           vk::ShaderStageFlagBits::eCompute, 0, push);
+    cmd.dispatch(1, 1, 1); // ONE workgroup — the whole refine/coarsen apply
     // No consumer barrier — the caller synchronises the state read-back.
 }
 
