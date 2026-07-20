@@ -84,7 +84,10 @@ layout(push_constant) uniform Push
 }
 pc;
 
-layout(local_size_x = 256) in;
+// Workgroup size is a specialization constant (id 0) so the host can sweep 64/128/256 and bake the
+// best; the literal 256 is the unspecialized default. The shader reads gl_WorkGroupSize.x for the
+// stride, so every phase is size-agnostic.
+layout(local_size_x_id = 0, local_size_x = 256) in;
 
 // ---- The job's buffer references + counts, resolved once in main() and shared with the helpers via
 // file-scope globals (GLSL has no closures). ----

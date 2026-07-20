@@ -6,7 +6,9 @@
 #include <cstdint>
 #include <cstring>
 #include <limits>
+#include <optional>
 #include <span>
+#include <stdexcept>
 #include <vector>
 
 #include <fire_engine/graphics/lod.hpp>
@@ -387,6 +389,114 @@ VertexForest qemForest(const Mesh& m)
     return buildVertexForest(m.verts, simp.collapseSequence(m.verts, m.indices));
 }
 
+double medianMs(std::vector<double> v)
+{
+    if (v.empty())
+    {
+        return 0.0;
+    }
+    std::ranges::sort(v);
+    const std::size_t n = v.size();
+    return (n % 2 == 1) ? v[n / 2] : 0.5 * (v[(n / 2) - 1] + v[n / 2]);
+}
+
+// Workgroup-size sweep (apply-kernel arc, adj 3) on one mesh — GPU-timestamp the apply dispatch at
+// 64/128/256 and WARN the median. Statistically meaningful, NOT one-shot: three independent,
+// identically-initialised persistent fronts (one per size, so mutation doesn't bias later samples);
+// pipelines + warm-up OUTSIDE timing; alternating refine/coarsen so every size sees equivalent
+// work; median over repeats with the per-cycle size order ROTATED to blunt thermal/DVFS bias. Read
+// the numbers and bake the winner into VdpmApplyKernel::kLocalSize — or keep 256 on a material tie.
+void applySizeSweep(const Mesh& m, const char* label)
+{
+    Device device = Device::headlessCompute();
+    const vk::PhysicalDeviceLimits& limits = device.physicalDevice().getProperties().limits;
+    const auto qfp = device.physicalDevice().getQueueFamilyProperties();
+    if (limits.timestampPeriod == 0.0f || qfp[device.graphicsFamily()].timestampValidBits == 0)
+    {
+        WARN(label << ": device has no compute-queue timestamp support — sweep skipped");
+        return;
+    }
+    Resources resources(device);
+    ComputePipeline scorePipeline(device, vdpmScorePipelineConfig());
+    const VertexForest forest = qemForest(m);
+    const VdpmGpuMesh mesh = VdpmGpuMesh::build(resources, m.verts, m.indices, forest);
+
+    constexpr std::array<std::uint32_t, 3> sizes{64u, 128u, 256u};
+    std::array<std::optional<VdpmApplyKernel>, 3> kernels; // non-movable → optional + emplace
+    std::vector<VdpmGpuFront> fronts;
+    for (std::size_t i = 0; i < sizes.size(); ++i)
+    {
+        kernels[i].emplace(device, sizes[i]);
+        fronts.push_back(VdpmGpuFront::buildRuntime(resources, mesh));
+    }
+
+    const vk::raii::CommandPool pool(
+        device.device(),
+        vk::CommandPoolCreateInfo{.flags = vk::CommandPoolCreateFlagBits::eResetCommandBuffer,
+                                  .queueFamilyIndex = device.graphicsFamily()});
+    const vk::raii::QueryPool queryPool(
+        device.device(),
+        vk::QueryPoolCreateInfo{.queryType = vk::QueryType::eTimestamp, .queryCount = 2});
+    const VdpmViewParams view = scoreViewOf(Mat4::identity(), Vec3{0.0f, 0.0f, 2.5f}, kVh, true);
+
+    // Score + GPU-timestamped apply on front i (persistent), returning the apply's GPU ms.
+    auto timedApply = [&](std::size_t i, float budget) -> double
+    {
+        auto cmds = device.device().allocateCommandBuffers(
+            vk::CommandBufferAllocateInfo{.commandPool = *pool,
+                                          .level = vk::CommandBufferLevel::ePrimary,
+                                          .commandBufferCount = 1});
+        vk::raii::CommandBuffer& cmd = cmds[0];
+        cmd.begin(
+            vk::CommandBufferBeginInfo{.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
+        cmd.resetQueryPool(*queryPool, 0, 2);
+        fronts[i].recordScore(*cmd, scorePipeline, 0, view);
+        cmd.writeTimestamp2(vk::PipelineStageFlagBits2::eBottomOfPipe, *queryPool, 0);
+        fronts[i].recordApplyKernel(*cmd, *kernels[i], 0, budget, kVdpmCoarsenRatio * budget);
+        cmd.writeTimestamp2(vk::PipelineStageFlagBits2::eBottomOfPipe, *queryPool, 1);
+        cmd.end();
+        const vk::CommandBufferSubmitInfo cmdInfo{.commandBuffer = *cmd};
+        const vk::SubmitInfo2 submit{.commandBufferInfoCount = 1, .pCommandBufferInfos = &cmdInfo};
+        const vk::raii::Fence fence(device.device(), vk::FenceCreateInfo{});
+        device.graphicsQueue().submit2(submit, *fence);
+        (void)device.device().waitForFences(*fence, vk::True,
+                                            std::numeric_limits<std::uint64_t>::max());
+        const auto [res, data] = queryPool.getResults<std::uint64_t>(
+            0, 2, 2 * sizeof(std::uint64_t), sizeof(std::uint64_t),
+            vk::QueryResultFlagBits::e64 | vk::QueryResultFlagBits::eWait);
+        return static_cast<double>(data[1] - data[0]) *
+               static_cast<double>(limits.timestampPeriod) / 1.0e6;
+    };
+
+    // Warm-up OUTSIDE timing: one refine + one coarsen per front (pipeline/first-submit costs
+    // paid).
+    for (std::size_t i = 0; i < sizes.size(); ++i)
+    {
+        (void)timedApply(i, 0.4f);
+        (void)timedApply(i, 1.0e9f);
+    }
+    // Timed cycles: alternating refine/coarsen budgets (equivalent work per size), size order
+    // rotated per cycle.
+    constexpr int kCycles = 24;
+    std::array<std::vector<double>, 3> samples;
+    for (int c = 0; c < kCycles; ++c)
+    {
+        const float budget = (c % 2 == 0) ? 0.4f : 1.0e9f;
+        for (std::size_t k = 0; k < sizes.size(); ++k)
+        {
+            const std::size_t i = (k + static_cast<std::size_t>(c)) % sizes.size();
+            samples[i].push_back(timedApply(i, budget));
+        }
+    }
+    for (std::size_t i = 0; i < sizes.size(); ++i)
+    {
+        WARN(label << " local_size_x=" << sizes[i] << ": median apply " << medianMs(samples[i])
+                   << " ms GPU (" << samples[i].size() << " samples)");
+    }
+    SUCCEED("sweep reported medians for "
+            << label); // evidence test — the WARN'd medians are the output
+}
+
 } // namespace
 
 TEST_CASE("VDPM apply kernel == recorder: full refine then full coarsen", "[.][gpu]")
@@ -532,4 +642,144 @@ TEST_CASE("VDPM apply kernel == recorder: deep rank chain (descending-loop bound
         scoreViewOf(Mat4::identity(), Vec3{16.0f, 16.0f, 30.0f}, kVh, false);
     checkApply(runner.applyOnce(view, 0.3f, kVdpmCoarsenRatio * 0.3f), forest);     // deep refine
     checkApply(runner.applyOnce(view, 1.0e9f, kVdpmCoarsenRatio * 1.0e9f), forest); // full coarsen
+}
+
+TEST_CASE("VDPM apply kernel: workgroup size 0 is rejected", "[.][gpu]")
+{
+    const Device device = Device::headlessCompute();
+    // A zero local_size_x is an invalid pipeline — deviceSupported must say no, and the ctor must
+    // reject it (via requireSupported) rather than build a broken pipeline.
+    CHECK_FALSE(VdpmApplyKernel::deviceSupported(device, 0u));
+    // Sanity: a valid size passes. Use 1 (any compute device runs 1-wide groups) — a
+    // recorder-fallback device that can't run 256-wide would otherwise fail this positive check.
+    CHECK(VdpmApplyKernel::deviceSupported(device, 1u));
+    CHECK_THROWS_AS(VdpmApplyKernel(device, 0u), std::runtime_error);
+}
+
+TEST_CASE("VDPM apply kernel: split-bearing front with ZERO repair faces (recordFrame, both paths)",
+          "[.][gpu]")
+{
+    // A REACHABLE runtime state: a split-bearing forest but an ALL-DEGENERATE index stream (every
+    // face's three corners are vertex 0 → all weld together → 0 canonical repair faces, but raw
+    // faceCount > 0). Repair early-outs (finestFaceCount == 0), so recordFrame's conditional
+    // apply→emit barrier is the ONLY thing ordering the apply's `active` writes before emit's
+    // ancestor read — exercise BOTH the persistent-kernel and recorder selections. Emission is
+    // empty (every face degenerate) with a canonical zero-index indirect command; failFlags stay
+    // clean.
+    if (!VdpmApplyKernel::deviceSupported(Device::headlessCompute()) ||
+        !VdpmRepairKernel::deviceSupported(Device::headlessCompute()))
+    {
+        return;
+    }
+    Device device = Device::headlessCompute();
+    Resources resources(device);
+    ComputePipeline scorePipeline(device, vdpmScorePipelineConfig());
+    VdpmRefinePipelines refinePipelines(device);
+    VdpmRepairPipelines repairPipelines(device);
+    VdpmEmitPipelines emitPipelines(device);
+    VdpmApplyKernel applyKernel(device);
+    VdpmRepairKernel repairKernel(device);
+    const vk::raii::CommandPool pool(
+        device.device(),
+        vk::CommandPoolCreateInfo{.flags = vk::CommandPoolCreateFlagBits::eResetCommandBuffer,
+                                  .queueFamilyIndex = device.graphicsFamily()});
+
+    const Mesh m = uvSphere(14, 18);
+    const VertexForest forest = qemForest(m);
+    const std::vector<std::uint32_t> degenerate(m.indices.size(), 0u);
+    const VdpmGpuMesh mesh = VdpmGpuMesh::build(resources, m.verts, degenerate, forest);
+    REQUIRE(mesh.binding().splitCount > 0u);
+    REQUIRE(mesh.binding().finestFaceCount == 0u);
+    REQUIRE(mesh.binding().faceCount > 0u); // raw faces DO exist — emit runs over them
+    VdpmGpuFront front = VdpmGpuFront::buildRuntime(resources, mesh);
+    const std::uint32_t vertexCount = forest.vertexCount;
+    const std::uint32_t splitCount = static_cast<std::uint32_t>(forest.splits.size());
+
+    const VdpmViewParams view = scoreViewOf(Mat4::identity(), Vec3{0.0f, 0.0f, 1.7f}, kVh, true);
+    const VdpmRepairParams repairParams{}; // unused — repair early-outs at finestFaceCount == 0
+
+    auto runFrame = [&](const VdpmApplyKernel* ak, const VdpmRepairKernel* rk)
+    {
+        auto cmds = device.device().allocateCommandBuffers(
+            vk::CommandBufferAllocateInfo{.commandPool = *pool,
+                                          .level = vk::CommandBufferLevel::ePrimary,
+                                          .commandBufferCount = 1});
+        vk::raii::CommandBuffer& cmd = cmds[0];
+        cmd.begin(
+            vk::CommandBufferBeginInfo{.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
+        front.recordFrame(*cmd, scorePipeline, refinePipelines, repairPipelines, emitPipelines,
+                          resources, 0, view, repairParams, 1.0f, kVdpmCoarsenRatio * 1.0f,
+                          kVdpmGpuRepairRoundBudget, ak, rk, nullptr);
+
+        const vk::MemoryBarrier2 toTransfer{
+            .srcStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+            .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
+            .dstStageMask = vk::PipelineStageFlagBits2::eCopy,
+            .dstAccessMask = vk::AccessFlagBits2::eTransferRead,
+        };
+        cmd.pipelineBarrier2(
+            vk::DependencyInfo{.memoryBarrierCount = 1, .pMemoryBarriers = &toTransfer});
+        auto copyBack = [&](BufferHandle src, std::uint32_t words)
+        {
+            Resources::MappedBufferSet host =
+                resources.createMappedReadbackBuffers(words * sizeof(std::uint32_t));
+            cmd.copyBuffer(resources.vulkanBuffer(src), resources.vulkanBuffer(host.buffers[0]),
+                           vk::BufferCopy{.size = words * sizeof(std::uint32_t)});
+            return host;
+        };
+        const Resources::MappedBufferSet counters = copyBack(front.countersBuffer(0), 3);
+        const Resources::MappedBufferSet indirect = copyBack(front.emittedIndirectBuffer(0), 5);
+        const Resources::MappedBufferSet failFlags = copyBack(front.failFlagsBuffer(), 2);
+        const Resources::MappedBufferSet active = copyBack(front.activeStateBuffer(), vertexCount);
+        const Resources::MappedBufferSet refined = copyBack(front.refinedStateBuffer(), splitCount);
+        const Resources::MappedBufferSet deps =
+            copyBack(front.dependentsStateBuffer(), vertexCount);
+        const vk::MemoryBarrier2 toHost{
+            .srcStageMask = vk::PipelineStageFlagBits2::eCopy,
+            .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
+            .dstStageMask = vk::PipelineStageFlagBits2::eHost,
+            .dstAccessMask = vk::AccessFlagBits2::eHostRead,
+        };
+        cmd.pipelineBarrier2(
+            vk::DependencyInfo{.memoryBarrierCount = 1, .pMemoryBarriers = &toHost});
+        cmd.end();
+        const vk::CommandBufferSubmitInfo cmdInfo{.commandBuffer = *cmd};
+        const vk::SubmitInfo2 submit{.commandBufferInfoCount = 1, .pCommandBufferInfos = &cmdInfo};
+        const vk::raii::Fence fence(device.device(), vk::FenceCreateInfo{});
+        device.graphicsQueue().submit2(submit, *fence);
+        (void)device.device().waitForFences(*fence, vk::True,
+                                            std::numeric_limits<std::uint64_t>::max());
+        auto read = [](const Resources::MappedBufferSet& set, std::uint32_t count)
+        {
+            std::vector<std::uint32_t> out(count);
+            std::memcpy(out.data(), set.mapped[0].data(), count * sizeof(std::uint32_t));
+            return out;
+        };
+        CHECK(read(counters, 3)[2] == 0u); // emission empty — every face is degenerate
+        const std::vector<std::uint32_t> ind = read(indirect, 5);
+        CHECK(ind[0] == 0u); // indexCount == 0 (canonical zero-index draw)
+        CHECK(ind[1] == 1u); // instanceCount == 1 (still a valid indirect command)
+        const std::vector<std::uint32_t> ff = read(failFlags, 2);
+        CHECK(ff[0] == 0u); // no refine failure
+        CHECK(ff[1] == 0u); // no dependents underflow
+        CHECK_NOTHROW(validateFrontInvariants(forest, read(active, vertexCount),
+                                              read(refined, splitCount), read(deps, vertexCount)));
+    };
+
+    runFrame(&applyKernel, &repairKernel); // both kernels
+    runFrame(nullptr, nullptr);            // both recorders — the apply→emit barrier path
+}
+
+// Evidence sweep (not a pass/fail gate): pick the kernel's production workgroup size. Run with
+// `./test_fire_engine "[ApplySizeSweep]"` from the build dir and read the WARN'd medians.
+TEST_CASE("VDPM apply kernel workgroup-size sweep (64/128/256)", "[.][gpu][ApplySizeSweep]")
+{
+    // All three candidates are constructed, so gate on the LARGEST (256) — 64-only hardware would
+    // otherwise throw when building the 128/256 kernels.
+    if (!VdpmApplyKernel::deviceSupported(Device::headlessCompute(), 256u))
+    {
+        return;
+    }
+    applySizeSweep(uvSphere(30, 40), "sphere(30,40)"); // curved / helmet-like ranks
+    applySizeSweep(grid(49), "grid(49)");              // deeper rank chain
 }

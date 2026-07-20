@@ -733,12 +733,12 @@ at a fraction of the triangles. The remaining residuals and follow-ons, in rough
   recorder — now `recordRepairRuntime` — when null), with an explicit kernel→emit compute barrier
   (the emit counter clear only orders the counter, not the kernel's active-front writes). It has no
   default, so the repair path is chosen explicitly at every call site (a forgotten argument can't
-  silently pick the ~1000-command recorder). `analyticComputeCost(rank, faceCount, roundBudget,
-  persistentRepair)` is now EXACT: the always-present lifecycle barrier + emit are counted (emit runs
-  over FACES, so a zero-rank front is not free), and the emit's scan cost is derived from `faceCount`
+  silently pick the ~1000-command recorder). `analyticComputeCost` (signature detailed in the apply
+  bullet below) is now EXACT: the always-present lifecycle barrier + emit are counted (emit runs over
+  FACES, so a zero-rank front is not free), and the emit's scan cost is derived from `faceCount`
   (K internal levels → `{2K+1, 2K}`) instead of assuming one hierarchy — the two-level helmet (R=18)
-  still gives persistent **64/65** vs recorder ~1014/1066; a `[vdpm]` CI test pins BOTH paths across
-  scan tiers + the zero-rank case so a recorder change can't silently stale the overlay. **Cross-check gate (`[.][gpu]`):** two `buildRuntime` fronts settle from
+  gives recorder-apply+kernel-repair **64/65** vs both-recorders ~1014/1066; a `[vdpm]` CI test pins
+  the paths across scan tiers + the zero-rank case so a recorder change can't silently stale the overlay. **Cross-check gate (`[.][gpu]`):** two `buildRuntime` fronts settle from
   one mesh to a bit-identical pre-repair state (proven by reading back active/refined/dependents/required/
   failFlags), then one is repaired by the kernel and one by the recorder; post-repair front + emitted
   indices + control/history diagnostics + zero failure flags match **exactly** across normal-convergence,
@@ -763,21 +763,36 @@ at a fraction of the triangles. The remaining residuals and follow-ons, in rough
   occupancy-bound. So the apply kernel (also one workgroup) will land near a repair-like floor, not
   free; expect a solid but not proportional GPU drop, and the emerging frontier past the apply kernel is
   single-workgroup occupancy / **front-batching** (N fronts = N workgroups fill the GPU — which is why
-  the job ABI is kept batch-ready). **The kernel now exists BESIDE the recorder but is NOT yet selected
-  by `recordFrame`** (the recorder, `recordApplyScoredView`, still drives every production apply): the
-  mark/coarsen policy + `ScoreOut` struct/reduction are the shared `shaders/vdpm_apply_classify.glsl`
-  (one authority with `vdpm_score/mark/coarsen`, no behaviour change), and `shaders/vdpm_apply_kernel.comp`
-  + `VdpmApplyKernel` run the whole apply (reset failFlags → mark → close → refine → coarsen) for one
-  front in ONE dispatch — close/refine reuse the repair kernel's loops, coarsen ports `vdpm_coarsen.comp`.
-  Batch-ready `VdpmApplyJobGpu` ABI (budgets in the job); `makeApplyJob` + `recordApplyKernel`.
-  `test_vdpm_apply_kernel.cpp` (`[.][gpu]`) cross-checks it BIT-EXACT against the recorder from
-  proven-identical scores (all of active/refined/dependents/required/failFlags) across refine→coarsen,
-  alternating budgets, diamond deps, back-facing coarsen, plus gates for the in-kernel failFlags reset,
-  the coarsen dependents-underflow flag, a zero-split no-dispatch no-op, and a deep rank chain. NEXT: flip
-  `recordFrame` to select it (nullable `VdpmApplyKernel*` + `std::optional` in the manager, `persistentApply`
-  accounting), after a 64/128/256 workgroup-size sweep + remeasure; THEN reconsider whole-lifecycle
-  batching; THEN resume B5c — delayed triangle/repair diagnostics + the deferred helmet wedge/rank-count
-  evidence (Vulkan glTF path) + a possible default flip to GPU after parity sign-off.
+  the job ABI is kept batch-ready). **The apply kernel is now SELECTED by `recordFrame` in production**
+  (the recorder, `recordApplyScoredView`, is retained as the reference/fallback for unsupported
+  devices): the mark/coarsen policy + `ScoreOut` struct/reduction are the shared
+  `shaders/vdpm_apply_classify.glsl` (one authority with `vdpm_score/mark/coarsen`, no behaviour
+  change), and `shaders/vdpm_apply_kernel.comp` + `VdpmApplyKernel` run the whole apply (reset failFlags
+  → mark → close → refine → coarsen) for one front in ONE dispatch — close/refine reuse the repair
+  kernel's loops, coarsen ports `vdpm_coarsen.comp`. `recordFrame` takes a nullable
+  `const VdpmApplyKernel*` (no default — every stage's path is explicit) and the manager holds a
+  `std::optional<VdpmApplyKernel>` emplaced iff `deviceSupported`; `VdpmGpuFront::makeApplyJob` +
+  `recordApplyKernel`; batch-ready `VdpmApplyJobGpu` ABI (budgets in the job). The workgroup size is a
+  spec constant (`ComputeSpecializationConstant`, `layout(local_size_x_id = 0)`); the
+  `[.][gpu][ApplySizeSweep]` benchmark (3 independent fronts, GPU-timestamped, warm-up excluded, median
+  over rotated alternating cycles) picked **256** — fastest on the curved sphere, a tie on a deep grid.
+  `analyticComputeCost(rank, faceCount, finestFaceCount, roundBudget, persistentApply, persistentRepair)`
+  gained `persistentApply` ({1 dispatch, 1 barrier}) and the `finestFaceCount` repair gate (repair
+  early-outs at 0 canonical faces, distinct from the emit `faceCount`); a `[vdpm]` test pins all four
+  combinations + the empty-boundary cases (a selected-but-early-out kernel counts as zero, not one
+  dispatch — including ranks-present-but-no-repair-faces).
+  `test_vdpm_apply_kernel.cpp` (`[.][gpu]`) cross-checks BIT-EXACT vs the recorder from proven-identical
+  scores across refine→coarsen / alternating budgets / diamond deps / back-facing coarsen, plus gates
+  for the in-kernel failFlags reset, the coarsen dependents-underflow flag, a zero-split no-dispatch
+  no-op, and a deep rank chain. **Measured (helmet, both kernels now on): 64 → ~10 dispatches; apply GPU
+  ~1.2 → ~0.4 ms, apply CPU-record ~0.17 → ~0.005 ms; total VdpmCompute ~2.0 → ~1.2–1.5 ms GPU, total
+  CPU-record ~0.26 → ~0.06 ms; 0-VUID on helmet + TransmissionTest + DamagedHelmetBlend.** Apply landed
+  BELOW repair's floor (~0.4 vs ~0.75 ms — apply is less work), so REPAIR is now the dominant GPU stage;
+  both are occupancy-bound single workgroups. NEXT: reconsider whole-lifecycle / apply+repair **fusion**
+  (drop the apply→repair barrier + a dispatch) and/or **front-batching** (N fronts = N workgroups — the
+  occupancy lever for multi-front scenes); THEN resume B5c — delayed triangle/repair diagnostics + the
+  deferred helmet wedge/rank-count evidence (Vulkan glTF path) + a possible default flip to GPU after
+  parity sign-off.
 - **7 forest skips.** `buildVertexForest` skips collapses whose edge diverged from its adjacency
   replay (7 of ~6800 on the helmet); past the first skip the forest is slightly unfaithful. The repairs
   cover the visible symptoms; truncating the stream at the first skip would be the clean structural fix.

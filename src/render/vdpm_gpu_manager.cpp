@@ -46,6 +46,12 @@ VdpmGpuManager::VdpmGpuManager(const Device& device, Resources& resources)
     {
         repairKernel_.emplace(device);
     }
+    // The persistent apply kernel (apply-kernel arc) — same independent capability gate. Built at
+    // the default workgroup size (VdpmApplyKernel::kLocalSize, baked from the size sweep).
+    if (VdpmApplyKernel::deviceSupported(device))
+    {
+        applyKernel_.emplace(device);
+    }
 }
 
 VdpmMeshHandle VdpmGpuManager::registerMesh(std::span<const Vertex> vertices,
@@ -214,15 +220,17 @@ void VdpmGpuManager::recordRequests(vk::CommandBuffer cmd,
         repair.viewport[1] = globals.viewportHeight;
         repair.viewport[2] = req.rasterBackfaceCulling ? 1.0f : 0.0f;
 
+        const VdpmApplyKernel* const applyKernel = applyKernel_ ? &*applyKernel_ : nullptr;
         const VdpmRepairKernel* const kernel = repairKernel_ ? &*repairKernel_ : nullptr;
         front->recordFrame(cmd, scorePipeline_, refinePipelines_, repairPipelines_, emitPipelines_,
                            resources_, globals.frameIndex, view, repair, globals.pixelBudget,
-                           coarsenBudget, kVdpmGpuRepairRoundBudget, kernel, stageProfilePtr);
+                           coarsenBudget, kVdpmGpuRepairRoundBudget, applyKernel, kernel,
+                           stageProfilePtr);
 
         const std::uint32_t rank = front->rankCount();
-        const VdpmGpuFront::ComputeCost cost =
-            VdpmGpuFront::analyticComputeCost(rank, front->faceCount(), kVdpmGpuRepairRoundBudget,
-                                              /*persistentRepair=*/kernel != nullptr);
+        const VdpmGpuFront::ComputeCost cost = VdpmGpuFront::analyticComputeCost(
+            rank, front->faceCount(), front->finestFaceCount(), kVdpmGpuRepairRoundBudget,
+            /*persistentApply=*/applyKernel != nullptr, /*persistentRepair=*/kernel != nullptr);
         ++lastComputeStats_.frontsRecorded;
         lastComputeStats_.maxRankCount = std::max(lastComputeStats_.maxRankCount, rank);
         lastComputeStats_.analyticDispatches += cost.dispatches;
