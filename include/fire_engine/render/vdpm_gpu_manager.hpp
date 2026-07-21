@@ -90,8 +90,10 @@ public:
 
     // Per-frame compute-command instrumentation from the most recent recordRequests (perf arc, no
     // behaviour change): how many fronts recorded, the largest rank count among them, the repair
-    // round budget those dispatches assumed, and the ANALYTIC dispatch/barrier totals (Σ over
-    // fronts of VdpmGpuFront::analyticComputeCost). Zeroed at the top of each recordRequests.
+    // round budget those dispatches assumed, and the ANALYTIC dispatch/barrier totals — the
+    // STAGE-MAJOR aggregate (VdpmGpuFront::analyticBatchedCost) on the batched path, or the Σ of
+    // per-front VdpmGpuFront::analyticComputeCost on the per-front path. Zeroed at the top of each
+    // recordRequests.
     struct ComputeStats
     {
         std::uint32_t frontsRecorded{0};
@@ -99,6 +101,12 @@ public:
         std::uint32_t roundBudget{0};
         std::uint32_t analyticDispatches{0};
         std::uint32_t analyticBarriers{0};
+        // Compacted batched job counts (front-batching arc): Na apply jobs (split-bearing fronts),
+        // Nr repair jobs (additionally finestFaceCount>0). Set on the batched path; 0 on the
+        // per-front path. Make the analytic dispatch composition observable (score+emit are still
+        // per-front, so e.g. 13 fronts → 13 score + Σemit + Na-chunks + Nr-chunks).
+        std::uint32_t applyJobs{0};
+        std::uint32_t repairJobs{0};
         // Per-stage CPU record ms summed across the fronts recorded this frame ([score, apply,
         // repair, emit]) — the apply-kernel checkpoint's CPU evidence; populated when
         // VdpmFrameGlobals::stageProfiler is set. GPU per-stage ms come from the profiler passes.
@@ -163,6 +171,23 @@ public:
     [[nodiscard]] BufferHandle frontIndirectBuffer(VdpmFrontHandle front,
                                                    std::uint32_t frameIndex) const;
 
+    // TEST-ONLY read-only introspection: the live front behind a handle, so the
+    // batched-vs-per-front cross-check ([.][gpu]) can read its already-public state buffers
+    // (active/refined/dependents/ required/failFlags) after a batched recordRequests. nullptr on a
+    // stale/invalid handle. Not for production use — the draw path goes through resolveDrawBuffers.
+    [[nodiscard]] const VdpmGpuFront* frontForTest(VdpmFrontHandle front) const noexcept
+    {
+        return resolveFront(front);
+    }
+
+    // TEST-ONLY: force the batched-dispatch 1-D group cap so the chunked advanced-BDA dispatch path
+    // (⌈N/cap⌉ chunks advancing the job BDA by firstJob*stride) is actually exercised — the real
+    // device cap is enormous, so N never chunks in practice. 0 ⇒ use the device cap (production).
+    void setTestGroupCapOverride(std::uint32_t cap) noexcept
+    {
+        testGroupCapOverride_ = cap;
+    }
+
 private:
     struct FrontSlot
     {
@@ -170,8 +195,41 @@ private:
         std::uint32_t meshIndex{0}; // the mesh this front was built over
     };
 
+    // One resolved work request (front-batching arc): the live front + its derived per-frame params
+    // + the stage work flags, resolved ONCE per recordRequests into the reused `resolveScratch_` so
+    // no stage re-resolves handles or allocates. `hasApply` (splitCount>0 ⇒ score + an apply job);
+    // `hasRepair` (splitCount>0 && finestFaceCount>0 ⇒ a repair job) — the compaction predicates.
+    struct ResolvedRequest
+    {
+        VdpmGpuFront* front{nullptr};
+        VdpmViewParams view{};
+        VdpmRepairParams repair{};
+        bool hasApply{false};
+        bool hasRepair{false};
+    };
+
     [[nodiscard]] VdpmGpuFront* resolveFront(VdpmFrontHandle front) noexcept;
     [[nodiscard]] const VdpmGpuFront* resolveFront(VdpmFrontHandle front) const noexcept;
+
+    // Grow the batched job arrays to hold >= `frontCount` compacted jobs (geometric). A replaced
+    // array's buffer is not freed (Resources is session-lifetime), so an in-flight frame's dispatch
+    // referencing the old BDA stays valid. Called from recordBatched before any dispatch references
+    // an array. No-op once capacity suffices.
+    void ensureJobCapacity(std::uint32_t frontCount);
+
+    // The STAGE-MAJOR batched record path (front-batching arc), driven from `resolveScratch_`: one
+    // lifecycle barrier → score every front → one dispatch(Na) apply → one dispatch(Nr) repair
+    // (both over compacted, chunked job arrays) → one final front-state→emit barrier → emit every
+    // front. Taken when BOTH kernels are available and the frame is not a profiled single front
+    // (see recordRequests). Fills lastComputeStats_ from the BATCHED aggregate
+    // (analyticBatchedCost).
+    void recordBatched(vk::CommandBuffer cmd, const VdpmFrameGlobals& globals, float coarsenBudget);
+
+    // The per-front reference path (recordFrame per resolved request) — the original behaviour,
+    // used when a kernel is missing or the frame is a single profiled front (preserves per-stage
+    // GPU timestamps). Fills lastComputeStats_ from the per-front analyticComputeCost sum.
+    void recordPerFront(vk::CommandBuffer cmd, const VdpmFrameGlobals& globals, float coarsenBudget,
+                        const VdpmStageProfile* stageProfilePtr);
 
     Resources& resources_;
 
@@ -197,6 +255,26 @@ private:
     std::vector<std::optional<VdpmGpuMesh>> meshes_;
     GenerationalSlotPool frontPool_;
     std::vector<FrontSlot> fronts_;
+
+    // Reused per-frame scratch (front-batching arc) — resolved once per recordRequests, never
+    // per-stage, so no stage re-resolves handles or allocates. `dimsScratch_` feeds the batched
+    // aggregate accounting (analyticBatchedCost).
+    std::vector<ResolvedRequest> resolveScratch_;
+    std::vector<VdpmGpuFront::FrontDims> dimsScratch_;
+
+    // Stage-major batched job arrays (front-batching arc): one host-visible device-address buffer
+    // PER frame slot (a MappedBufferSet each), holding up to `jobCapacity_` COMPACTED jobs.
+    // recordBatched fills slot [frameIndex] and issues one dispatch(N) per stage. Grown
+    // geometrically by ensureJobCapacity when the live front count exceeds capacity. LIFETIME:
+    // `Resources` never frees a buffer within a session (there is no releaseBuffer — buffers live
+    // until Resources is destroyed), so a grown-over array's underlying buffer stays valid for any
+    // in-flight frame whose dispatch still references its BDA; reassigning applyJobArray_ drops
+    // only the handle copy, not the resource. Growth is load-time-rare (fronts register at load).
+    MappedBufferSet applyJobArray_{};
+    MappedBufferSet repairJobArray_{};
+    std::uint32_t jobCapacity_{0};
+    // TEST-ONLY chunk-cap override (0 ⇒ device cap); see setTestGroupCapOverride.
+    std::uint32_t testGroupCapOverride_{0};
 
     ComputeStats lastComputeStats_{};
 

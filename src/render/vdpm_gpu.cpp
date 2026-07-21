@@ -267,6 +267,16 @@ VdpmRepairKernel::VdpmRepairKernel(const Device& device, Checked)
 {
 }
 
+void VdpmRepairKernel::recordDispatch(vk::CommandBuffer cmd, std::uint64_t jobsAddress,
+                                      std::uint32_t jobCount) const
+{
+    const VdpmRepairKernelPush push{.jobsAddress = jobsAddress, .jobCount = jobCount, .pad = 0};
+    cmd.bindPipeline(vk::PipelineBindPoint::eCompute, pipeline_.pipeline());
+    cmd.pushConstants<VdpmRepairKernelPush>(pipeline_.pipelineLayout(),
+                                            vk::ShaderStageFlagBits::eCompute, 0, push);
+    cmd.dispatch(jobCount, 1, 1); // one workgroup per job — each runs its front's whole fixpoint
+}
+
 bool VdpmApplyKernel::deviceSupported(const Device& device, std::uint32_t workgroupSize)
 {
     if (workgroupSize == 0)
@@ -300,6 +310,16 @@ VdpmApplyKernel::VdpmApplyKernel(const Device& device, std::uint32_t workgroupSi
 VdpmApplyKernel::VdpmApplyKernel(const Device& device, std::uint32_t workgroupSize, Checked)
     : pipeline_(device, vdpmApplyKernelPipelineConfig(workgroupSize))
 {
+}
+
+void VdpmApplyKernel::recordDispatch(vk::CommandBuffer cmd, std::uint64_t jobsAddress,
+                                     std::uint32_t jobCount) const
+{
+    const VdpmApplyKernelPush push{.jobsAddress = jobsAddress, .jobCount = jobCount, .pad = 0};
+    cmd.bindPipeline(vk::PipelineBindPoint::eCompute, pipeline_.pipeline());
+    cmd.pushConstants<VdpmApplyKernelPush>(pipeline_.pipelineLayout(),
+                                           vk::ShaderStageFlagBits::eCompute, 0, push);
+    cmd.dispatch(jobCount, 1, 1); // one workgroup per job — each runs its front's whole apply
 }
 
 VdpmGpuMesh VdpmGpuMesh::build(Resources& resources, std::span<const Vertex> vertices,
@@ -1070,12 +1090,12 @@ VdpmRepairJobGpu VdpmGpuFront::makeRepairJob(std::uint32_t frameIndex,
                             .pad = 0};
 }
 
-VdpmApplyJobGpu VdpmGpuFront::makeApplyJob(std::uint32_t /*frameIndex*/, float pixelBudget,
-                                           float coarsenBudget) const
+VdpmApplyJobGpu VdpmGpuFront::prepareApplyJob(std::uint32_t /*frameIndex*/, float pixelBudget,
+                                              float coarsenBudget) const
 {
     if (!hasRuntime_ || !hasFront_)
     {
-        throw std::logic_error("VdpmGpuFront::makeApplyJob: not a runtime refine/coarsen front");
+        throw std::logic_error("VdpmGpuFront::prepareApplyJob: not a runtime refine/coarsen front");
     }
     const std::uint32_t rankCount = static_cast<std::uint32_t>(rankRanges_.size());
     return VdpmApplyJobGpu{.scoresAddress = outputAddress_, // the front's own GPU score output
@@ -1095,6 +1115,21 @@ VdpmApplyJobGpu VdpmGpuFront::makeApplyJob(std::uint32_t /*frameIndex*/, float p
                            .coarsenBudget = coarsenBudget};
 }
 
+VdpmRepairJobGpu VdpmGpuFront::prepareRepairJob(std::uint32_t frameIndex,
+                                                const VdpmRepairParams& params,
+                                                std::uint32_t roundBudget)
+{
+    if (!hasRuntime_ || !hasRepair_)
+    {
+        throw std::logic_error("VdpmGpuFront::prepareRepairJob: not a runtime repair front");
+    }
+    // Pack (and validate the budget) BEFORE mutating the params ring, so an oversized budget throws
+    // without leaving a half-written ring slot.
+    const VdpmRepairJobGpu job = makeRepairJob(frameIndex, roundBudget);
+    writeMapped(repairParamsRing_[frameIndex], params);
+    return job;
+}
+
 void VdpmGpuFront::recordRepairKernel(vk::CommandBuffer cmd, const VdpmRepairKernel& kernel,
                                       std::uint32_t frameIndex, const VdpmRepairParams& params,
                                       std::uint32_t roundBudget)
@@ -1111,27 +1146,13 @@ void VdpmGpuFront::recordRepairKernel(vk::CommandBuffer cmd, const VdpmRepairKer
     // Host-upload the params + the packed job (persistent mapping; the submit makes the writes
     // available to the dispatch, exactly like the CPU indirect write). The kernel reaches every
     // buffer via BDA, so no Resources needed here.
-    writeMapped(repairParamsRing_[frameIndex], params);
-    const VdpmRepairJobGpu job = makeRepairJob(frameIndex, roundBudget);
+    const VdpmRepairJobGpu job = prepareRepairJob(frameIndex, params, roundBudget);
     writeMapped(jobRing_[frameIndex], job);
 
     // Leading barrier: applyView's coarsen (compute, no trailing barrier) → the kernel's reads of
     // the settled front state. recordFrame owns the cross-frame lifecycle barrier.
-    const vk::MemoryBarrier2 lead{
-        .srcStageMask = vk::PipelineStageFlagBits2::eComputeShader,
-        .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
-        .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
-        .dstAccessMask =
-            vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite,
-    };
-    cmd.pipelineBarrier2(vk::DependencyInfo{.memoryBarrierCount = 1, .pMemoryBarriers = &lead});
-
-    const VdpmRepairKernelPush push{
-        .jobsAddress = jobRingAddress_[frameIndex], .jobCount = 1, .pad = 0};
-    cmd.bindPipeline(vk::PipelineBindPoint::eCompute, kernel.pipeline().pipeline());
-    cmd.pushConstants<VdpmRepairKernelPush>(kernel.pipeline().pipelineLayout(),
-                                            vk::ShaderStageFlagBits::eCompute, 0, push);
-    cmd.dispatch(1, 1, 1); // ONE workgroup — the whole repair fixpoint
+    recordComputeStageBoundary(cmd);
+    kernel.recordDispatch(cmd, jobRingAddress_[frameIndex], 1); // ONE workgroup — whole fixpoint
     // No consumer barrier — the caller synchronises the state read-back.
 }
 
@@ -1151,26 +1172,13 @@ void VdpmGpuFront::recordApplyKernel(vk::CommandBuffer cmd, const VdpmApplyKerne
 
     // Pack + host-upload the job (budgets are in it — no separate params block). The submit makes
     // the write available to the dispatch, like the CPU indirect write.
-    const VdpmApplyJobGpu job = makeApplyJob(frameIndex, pixelBudget, coarsenBudget);
+    const VdpmApplyJobGpu job = prepareApplyJob(frameIndex, pixelBudget, coarsenBudget);
     writeMapped(applyJobRing_[frameIndex], job);
 
     // Leading barrier: the score dispatch (compute, no trailing barrier) → the kernel's mark read
     // of the score output. recordFrame owns the cross-frame lifecycle barrier.
-    const vk::MemoryBarrier2 lead{
-        .srcStageMask = vk::PipelineStageFlagBits2::eComputeShader,
-        .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
-        .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
-        .dstAccessMask =
-            vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite,
-    };
-    cmd.pipelineBarrier2(vk::DependencyInfo{.memoryBarrierCount = 1, .pMemoryBarriers = &lead});
-
-    const VdpmApplyKernelPush push{
-        .jobsAddress = applyJobRingAddress_[frameIndex], .jobCount = 1, .pad = 0};
-    cmd.bindPipeline(vk::PipelineBindPoint::eCompute, kernel.pipeline().pipeline());
-    cmd.pushConstants<VdpmApplyKernelPush>(kernel.pipeline().pipelineLayout(),
-                                           vk::ShaderStageFlagBits::eCompute, 0, push);
-    cmd.dispatch(1, 1, 1); // ONE workgroup — the whole refine/coarsen apply
+    recordComputeStageBoundary(cmd);
+    kernel.recordDispatch(cmd, applyJobRingAddress_[frameIndex], 1); // ONE workgroup — whole apply
     // No consumer barrier — the caller synchronises the state read-back.
 }
 
@@ -1187,6 +1195,31 @@ void VdpmGpuFront::recordRepairRuntime(vk::CommandBuffer cmd,
     writeMapped(repairParamsRing_[frameIndex], params);
     recordRepairImpl(cmd, refinePipelines, repairPipelines, resources,
                      repairParamsRingAddress_[frameIndex], roundBudget);
+}
+
+void VdpmGpuFront::recordLifecycleBoundary(vk::CommandBuffer cmd)
+{
+    const vk::MemoryBarrier2 mb{
+        .srcStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+        .srcAccessMask =
+            vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite,
+        .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+        .dstAccessMask =
+            vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite,
+    };
+    cmd.pipelineBarrier2(vk::DependencyInfo{.memoryBarrierCount = 1, .pMemoryBarriers = &mb});
+}
+
+void VdpmGpuFront::recordComputeStageBoundary(vk::CommandBuffer cmd)
+{
+    const vk::MemoryBarrier2 mb{
+        .srcStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+        .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
+        .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+        .dstAccessMask =
+            vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite,
+    };
+    cmd.pipelineBarrier2(vk::DependencyInfo{.memoryBarrierCount = 1, .pMemoryBarriers = &mb});
 }
 
 void VdpmGpuFront::recordFrame(
@@ -1232,16 +1265,7 @@ void VdpmGpuFront::recordFrame(
     // score dispatch) can't cover. src names READS + WRITES; a no-op for the first frame on a fresh
     // front. (Also the only synchronisation on a zero-split mesh, where score/apply/repair all
     // early-out and two back-to-back emits would otherwise race the shared scratch.)
-    const vk::MemoryBarrier2 lifecycleBoundary{
-        .srcStageMask = vk::PipelineStageFlagBits2::eComputeShader,
-        .srcAccessMask =
-            vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite,
-        .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
-        .dstAccessMask =
-            vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite,
-    };
-    cmd.pipelineBarrier2(
-        vk::DependencyInfo{.memoryBarrierCount = 1, .pMemoryBarriers = &lifecycleBoundary});
+    recordLifecycleBoundary(cmd);
 
     // Boundary b0: bottom-of-pipe before the score dispatch (VdpmScore's begin).
     gpuBoundary(ProfilePass::VdpmScore, /*end=*/false);
@@ -1306,15 +1330,7 @@ void VdpmGpuFront::recordFrame(
         // repair-face array (a degenerate but raw-faced mesh; pinned by a `[.][gpu]` test).
         if (binding_.splitCount > 0 && (repairKernel != nullptr || binding_.finestFaceCount == 0))
         {
-            const vk::MemoryBarrier2 toEmit{
-                .srcStageMask = vk::PipelineStageFlagBits2::eComputeShader,
-                .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
-                .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
-                .dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead |
-                                 vk::AccessFlagBits2::eShaderStorageWrite,
-            };
-            cmd.pipelineBarrier2(
-                vk::DependencyInfo{.memoryBarrierCount = 1, .pMemoryBarriers = &toEmit});
+            recordComputeStageBoundary(cmd); // front-state (apply/repair) writes → emit's reads
         }
         cpuAccumulate(2, t);
     }

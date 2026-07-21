@@ -519,9 +519,11 @@ TEST_CASE("VDPM repair kernel: an oversized round budget is rejected before reco
     const VertexForest forest = buildVertexForest(m.verts, collapses);
 
     KernelRunner runner(m.verts, m.indices, forest);
-    // makeRepairJob / recordRepairKernel must reject a budget past the allocated history capacity.
-    REQUIRE_THROWS_AS(runner.front().makeRepairJob(0, kVdpmGpuRepairRoundBudget + 1),
-                      std::logic_error);
+    // prepareRepairJob / recordRepairKernel must reject a budget past the allocated history
+    // capacity (prepareRepairJob is the public authority; the raw packer is private).
+    REQUIRE_THROWS_AS(
+        runner.front().prepareRepairJob(0, VdpmRepairParams{}, kVdpmGpuRepairRoundBudget + 1),
+        std::logic_error);
 }
 
 TEST_CASE("VDPM repair kernel: two back-to-back frame slots do not clobber each other's rings",

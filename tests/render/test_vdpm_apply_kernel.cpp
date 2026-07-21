@@ -109,6 +109,33 @@ VdpmViewParams scoreViewOf(const Mat4& world, const Vec3& cam, float vh, bool cu
     return makeVdpmViewParams(world, cam, 1.0f, vh, 2.0f, cull, 1.0f, 1.0f, 1.0f);
 }
 
+Mat4 lookAtProj(const Vec3& cam)
+{
+    Mat4 view = Mat4::identity();
+    view[0, 3] = -cam.x();
+    view[1, 3] = -cam.y();
+    view[2, 3] = -cam.z();
+    Mat4 proj = Mat4::identity();
+    proj[2, 2] = -1.0f;
+    proj[3, 2] = -1.0f;
+    proj[3, 3] = 0.0f;
+    return proj * view;
+}
+
+VdpmRepairParams repairParamsOf(const Mat4& world, const Vec3& cam, float vw, float vh, bool cull)
+{
+    VdpmRepairParams p{};
+    p.world = world;
+    p.viewProj = lookAtProj(cam);
+    p.cameraPos[0] = cam.x();
+    p.cameraPos[1] = cam.y();
+    p.cameraPos[2] = cam.z();
+    p.viewport[0] = vw;
+    p.viewport[1] = vh;
+    p.viewport[2] = cull ? 1.0f : 0.0f;
+    return p;
+}
+
 constexpr float kVh = 768.0f;
 
 struct ApplyState
@@ -768,6 +795,258 @@ TEST_CASE("VDPM apply kernel: split-bearing front with ZERO repair faces (record
 
     runFrame(&applyKernel, &repairKernel); // both kernels
     runFrame(nullptr, nullptr);            // both recorders — the apply→emit barrier path
+}
+
+// Front-batching go/no-go benchmark (front-batching arc, Stage A). N fronts, each a
+// single-workgroup apply/repair. SERIAL = N back-to-back per-front dispatches (each
+// recordApplyKernel/recordRepairKernel carries its own leading barrier, so the N dispatches
+// serialise — the current production shape). BATCHED = fill an N-job array + ONE dispatch(N), so
+// the N fronts' workgroups run concurrently and fill the GPU. GPU-timestamped, median over repeats.
+// If BATCHED is materially faster than SERIAL, front-batching is justified (adj 1 — a real
+// GPU-concurrency measurement, not an estimate). Run with
+// `./test_fire_engine "[BatchBench]"` and read the WARN'd medians.
+TEST_CASE("VDPM front-batch benchmark: serial vs dispatch(N) apply + repair",
+          "[.][gpu][BatchBench]")
+{
+    Device device = Device::headlessCompute(); // ONE device for both capability queries (adj 2)
+    if (!VdpmApplyKernel::deviceSupported(device) || !VdpmRepairKernel::deviceSupported(device))
+    {
+        return;
+    }
+    const vk::PhysicalDeviceLimits& limits = device.physicalDevice().getProperties().limits;
+    const auto qfp = device.physicalDevice().getQueueFamilyProperties();
+    if (limits.timestampPeriod == 0.0f || qfp[device.graphicsFamily()].timestampValidBits == 0)
+    {
+        WARN("device has no compute-queue timestamp support — batch benchmark skipped");
+        return;
+    }
+    Resources resources(device);
+    ComputePipeline scorePipeline(device, vdpmScorePipelineConfig());
+    VdpmApplyKernel applyKernel(device);
+    VdpmRepairKernel repairKernel(device);
+    const vk::raii::CommandPool pool(
+        device.device(),
+        vk::CommandPoolCreateInfo{.flags = vk::CommandPoolCreateFlagBits::eResetCommandBuffer,
+                                  .queueFamilyIndex = device.graphicsFamily()});
+    const vk::raii::QueryPool queryPool(
+        device.device(),
+        vk::QueryPoolCreateInfo{.queryType = vk::QueryType::eTimestamp, .queryCount = 2});
+
+    constexpr std::uint32_t kN = 13; // ~TransmissionTest front count
+    const Mesh m = uvSphere(24, 32); // helmet-ish scale
+    const VertexForest forest = qemForest(m);
+    const VdpmGpuMesh mesh = VdpmGpuMesh::build(resources, m.verts, m.indices, forest);
+    // TWO identical front sets: A driven SERIALLY, B BATCHED. State-fair (adj 1): serial and
+    // batched never see each other's mutated output — each rep resets BOTH to identical roots, then
+    // times serial(A) vs batched(B) on that SAME pre-state, asserting the sets stay identical
+    // throughout.
+    std::vector<VdpmGpuFront> setA, setB;
+    setA.reserve(kN);
+    setB.reserve(kN);
+    for (std::uint32_t i = 0; i < kN; ++i)
+    {
+        setA.push_back(VdpmGpuFront::buildRuntime(resources, mesh));
+        setB.push_back(VdpmGpuFront::buildRuntime(resources, mesh));
+    }
+    const Resources::MappedBufferSet applyJobs =
+        resources.createMappedDeviceAddressBuffers(kN * sizeof(VdpmApplyJobGpu));
+    const Resources::MappedBufferSet repairJobs =
+        resources.createMappedDeviceAddressBuffers(kN * sizeof(VdpmRepairJobGpu));
+    const std::uint32_t vertexCount = forest.vertexCount;
+
+    const VdpmViewParams view = scoreViewOf(Mat4::identity(), Vec3{0.0f, 0.0f, 1.7f}, kVh, true);
+    const VdpmRepairParams params =
+        repairParamsOf(Mat4::identity(), Vec3{0.0f, 0.0f, 1.7f}, 1024.0f, kVh, true);
+    constexpr float kBudget = 0.5f;
+    constexpr float kCoarsen = kVdpmCoarsenRatio * kBudget;
+
+    auto computeBarrier = [](vk::CommandBuffer cmd)
+    {
+        const vk::MemoryBarrier2 mb{
+            .srcStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+            .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
+            .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+            .dstAccessMask =
+                vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite,
+        };
+        cmd.pipelineBarrier2(vk::DependencyInfo{.memoryBarrierCount = 1, .pMemoryBarriers = &mb});
+    };
+    auto oneShot = [&]() -> vk::raii::CommandBuffer
+    {
+        auto cmds = device.device().allocateCommandBuffers(
+            vk::CommandBufferAllocateInfo{.commandPool = *pool,
+                                          .level = vk::CommandBufferLevel::ePrimary,
+                                          .commandBufferCount = 1});
+        cmds[0].begin(
+            vk::CommandBufferBeginInfo{.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
+        return std::move(cmds[0]);
+    };
+    auto submitWait = [&](vk::raii::CommandBuffer& cmd)
+    {
+        cmd.end();
+        const vk::CommandBufferSubmitInfo ci{.commandBuffer = *cmd};
+        const vk::SubmitInfo2 sub{.commandBufferInfoCount = 1, .pCommandBufferInfos = &ci};
+        const vk::raii::Fence fence(device.device(), vk::FenceCreateInfo{});
+        device.graphicsQueue().submit2(sub, *fence);
+        (void)device.device().waitForFences(*fence, vk::True,
+                                            std::numeric_limits<std::uint64_t>::max());
+    };
+    auto submitTimed = [&](auto&& record) -> double
+    {
+        vk::raii::CommandBuffer cmd = oneShot();
+        cmd.resetQueryPool(*queryPool, 0, 2);
+        cmd.writeTimestamp2(vk::PipelineStageFlagBits2::eBottomOfPipe, *queryPool, 0);
+        record(*cmd);
+        cmd.writeTimestamp2(vk::PipelineStageFlagBits2::eBottomOfPipe, *queryPool, 1);
+        submitWait(cmd);
+        const auto [res, data] = queryPool.getResults<std::uint64_t>(
+            0, 2, 2 * sizeof(std::uint64_t), sizeof(std::uint64_t),
+            vk::QueryResultFlagBits::e64 | vk::QueryResultFlagBits::eWait);
+        return static_cast<double>(data[1] - data[0]) *
+               static_cast<double>(limits.timestampPeriod) / 1.0e6;
+    };
+
+    // Coarsen a set fully to roots (apply with huge budgets — nothing refines, everything coarsens)
+    // + score for the next real apply. Deterministic, so both sets land on identical roots +
+    // scores.
+    auto resetAndScore = [&](vk::CommandBuffer cmd, std::vector<VdpmGpuFront>& set)
+    {
+        for (VdpmGpuFront& f : set)
+        {
+            f.recordScore(cmd, scorePipeline, 0, view);
+            f.recordApplyKernel(cmd, applyKernel, 0, 1.0e9f, 1.0e9f);
+        }
+    };
+    // Concatenate every front's `active` (proves the two sets stay bit-identical — the fairness +
+    // batched==serial guard).
+    auto readActive = [&](std::vector<VdpmGpuFront>& set)
+    {
+        vk::raii::CommandBuffer cmd = oneShot();
+        std::vector<Resources::MappedBufferSet> hosts;
+        hosts.reserve(set.size());
+        for (VdpmGpuFront& f : set)
+        {
+            Resources::MappedBufferSet h =
+                resources.createMappedReadbackBuffers(vertexCount * sizeof(std::uint32_t));
+            cmd.copyBuffer(resources.vulkanBuffer(f.activeStateBuffer()),
+                           resources.vulkanBuffer(h.buffers[0]),
+                           vk::BufferCopy{.size = vertexCount * sizeof(std::uint32_t)});
+            hosts.push_back(h);
+        }
+        const vk::MemoryBarrier2 toHost{
+            .srcStageMask = vk::PipelineStageFlagBits2::eCopy,
+            .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
+            .dstStageMask = vk::PipelineStageFlagBits2::eHost,
+            .dstAccessMask = vk::AccessFlagBits2::eHostRead,
+        };
+        cmd.pipelineBarrier2(
+            vk::DependencyInfo{.memoryBarrierCount = 1, .pMemoryBarriers = &toHost});
+        submitWait(cmd);
+        std::vector<std::uint32_t> out;
+        out.reserve(set.size() * vertexCount);
+        for (const Resources::MappedBufferSet& h : hosts)
+        {
+            const auto* p = reinterpret_cast<const std::uint32_t*>(h.mapped[0].data());
+            out.insert(out.end(), p, p + vertexCount);
+        }
+        return out;
+    };
+    auto writeJobs = [&](const Resources::MappedBufferSet& dst, auto makeJob)
+    {
+        for (std::uint32_t i = 0; i < kN; ++i)
+        {
+            const auto job = makeJob(i);
+            std::memcpy(dst.mapped[0].data() + i * sizeof(job), &job, sizeof(job));
+        }
+    };
+    auto serialApply = [&](vk::CommandBuffer cmd, std::vector<VdpmGpuFront>& set)
+    {
+        for (VdpmGpuFront& f : set)
+        {
+            f.recordApplyKernel(cmd, applyKernel, 0, kBudget, kCoarsen);
+        }
+    };
+    auto batchedApply = [&](vk::CommandBuffer cmd, std::vector<VdpmGpuFront>& set)
+    {
+        writeJobs(applyJobs,
+                  [&](std::uint32_t i) { return set[i].prepareApplyJob(0, kBudget, kCoarsen); });
+        computeBarrier(cmd);
+        const VdpmApplyKernelPush push{
+            .jobsAddress = resources.bufferAddress(applyJobs.buffers[0]), .jobCount = kN, .pad = 0};
+        cmd.bindPipeline(vk::PipelineBindPoint::eCompute, applyKernel.pipeline().pipeline());
+        cmd.pushConstants<VdpmApplyKernelPush>(applyKernel.pipeline().pipelineLayout(),
+                                               vk::ShaderStageFlagBits::eCompute, 0, push);
+        cmd.dispatch(kN, 1, 1);
+    };
+    auto serialRepair = [&](vk::CommandBuffer cmd, std::vector<VdpmGpuFront>& set)
+    {
+        for (VdpmGpuFront& f : set)
+        {
+            f.recordRepairKernel(cmd, repairKernel, 0, params, kVdpmGpuRepairRoundBudget);
+        }
+    };
+    auto batchedRepair = [&](vk::CommandBuffer cmd, std::vector<VdpmGpuFront>& set)
+    {
+        writeJobs(repairJobs, [&](std::uint32_t i)
+                  { return set[i].prepareRepairJob(0, params, kVdpmGpuRepairRoundBudget); });
+        computeBarrier(cmd);
+        const VdpmRepairKernelPush push{.jobsAddress =
+                                            resources.bufferAddress(repairJobs.buffers[0]),
+                                        .jobCount = kN,
+                                        .pad = 0};
+        cmd.bindPipeline(vk::PipelineBindPoint::eCompute, repairKernel.pipeline().pipeline());
+        cmd.pushConstants<VdpmRepairKernelPush>(repairKernel.pipeline().pipelineLayout(),
+                                                vk::ShaderStageFlagBits::eCompute, 0, push);
+        cmd.dispatch(kN, 1, 1);
+    };
+
+    constexpr int kReps = 16;
+    std::array<std::vector<double>, 4>
+        s; // [serialApply, batchedApply, serialRepair, batchedRepair]
+    for (int r = 0; r < kReps; ++r)
+    {
+        const bool serialFirst = (r % 2 == 0); // rotate order to blunt thermal/warm-up bias
+        // Pre-apply: reset BOTH sets to identical roots (+ score), assert identical.
+        {
+            vk::raii::CommandBuffer cmd = oneShot();
+            resetAndScore(*cmd, setA);
+            resetAndScore(*cmd, setB);
+            submitWait(cmd);
+        }
+        REQUIRE(readActive(setA) == readActive(setB)); // pre-apply state identical (both roots)
+        auto apA = [&] { return submitTimed([&](vk::CommandBuffer c) { serialApply(c, setA); }); };
+        auto apB = [&] { return submitTimed([&](vk::CommandBuffer c) { batchedApply(c, setB); }); };
+        if (serialFirst)
+        {
+            s[0].push_back(apA());
+            s[1].push_back(apB());
+        }
+        else
+        {
+            s[1].push_back(apB());
+            s[0].push_back(apA());
+        }
+        REQUIRE(readActive(setA) ==
+                readActive(setB)); // post-apply identical (fresh holes to repair)
+        auto rpA = [&] { return submitTimed([&](vk::CommandBuffer c) { serialRepair(c, setA); }); };
+        auto rpB = [&]
+        { return submitTimed([&](vk::CommandBuffer c) { batchedRepair(c, setB); }); };
+        if (serialFirst)
+        {
+            s[2].push_back(rpA());
+            s[3].push_back(rpB());
+        }
+        else
+        {
+            s[3].push_back(rpB());
+            s[2].push_back(rpA());
+        }
+    }
+    WARN("apply  N=" << kN << ": serial " << medianMs(s[0]) << " ms vs batched " << medianMs(s[1])
+                     << " ms GPU");
+    WARN("repair N=" << kN << ": serial " << medianMs(s[2]) << " ms vs batched " << medianMs(s[3])
+                     << " ms GPU");
+    SUCCEED("batch benchmark reported serial vs dispatch(N) medians");
 }
 
 // Evidence sweep (not a pass/fail gate): pick the kernel's production workgroup size. Run with
