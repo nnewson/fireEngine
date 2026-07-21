@@ -823,11 +823,30 @@ at a fraction of the triangles. The remaining residuals and follow-ons, in rough
   GPU timestamp reads `gpuValid=false` on heavier multi-front frames.) 0-VUID on TransmissionTest +
   DamagedHelmet + DamagedHelmetBlend (`--vdpm-gpu`; AlphaBlendModeTest sits below the VDPM eligibility
   threshold, so it does not exercise this path).
-- NEXT: apply+repair **FUSION** (conditional — only if the post-batch timestamps show a material
-  inter-kernel gap; one kernel runs apply then repair per front in one workgroup, dropping the
-  apply→repair barrier + a dispatch, but risks lower occupancy from register pressure — the measurement
-  decides); THEN resume B5c — delayed triangle/repair diagnostics + the deferred helmet wedge/rank-count
-  evidence (Vulkan glTF path) + a possible default flip to GPU after parity sign-off.
+- **Apply+repair FUSION — SKIPPED (complexity/value judgment).** A fused kernel (apply then repair per
+  front in one workgroup, `wgsync` between, dropping the apply→repair barrier + a dispatch) can ONLY
+  reclaim the per-workgroup tail across the global apply→repair barrier (early-finishing apply
+  workgroups idling until the slowest clears before any repair starts). The fenced
+  `[.][gpu][FusionCeiling]` benchmark bounds this on a PROCEDURAL PROXY multi-front set (state-fair,
+  medians): the optimistic ceiling `min(Tapply,Trepair)` is ~25% of the full lifecycle, but the TAIL
+  heuristic (separate-stage floor `max(Aᵢ)+max(Rᵢ)` vs fused ideal `max(Aᵢ+Rᵢ)`) is **0 ms
+  reclaimable**, and the argmax evidence shows why: the SAME front (the heaviest) is the critical path
+  in BOTH apply and repair (`argmax(Aᵢ) == argmax(Rᵢ)`) — apply cost (∝ splits/ranks) and repair cost
+  (∝ faces) both grow with mesh complexity, so the heaviest front tends to dominate both stages and
+  there is no cross-front tail to overlap. **CAVEAT — this is a proxy, not a scene-specific
+  measurement.** The proxies match triangle counts only; they do NOT reproduce TransmissionTest's real
+  collapse forests, DAG ranks (its live max rank ~45 vs the proxies'), per-instance transforms, or
+  materials (every job shares one identity world/view/params — but VDPM work is instance- and
+  view-dependent). So a scene-specific NO-GO would require loading the real meshes + transforms +
+  acceptance camera. It is not built because the payoff is small even optimistically and a fused kernel
+  is heavy machinery (fused ABI + shader + bit-exact cross-check) with real MoltenVK/Metal occupancy
+  risk — a poor trade regardless of the exact per-scene tail. The occupancy arc closes here. (Side
+  finding, MEASURED not inferred: emit is a large share of the lifecycle — ~17–56% depending on
+  composition — so if a future dispatch lever is ever wanted, multi-front emit compaction is the
+  candidate, though substantially more invasive.)
+- NEXT: **B5c** — delayed triangle/repair diagnostics + the deferred helmet wedge/rank-count evidence
+  (Vulkan glTF path) + a parity sign-off and a possible default flip to GPU — closing the GPU-front
+  productionization tail while the lifecycle is fresh; THEN the parked code-review backlog.
 - **7 forest skips.** `buildVertexForest` skips collapses whose edge diverged from its adjacency
   replay (7 of ~6800 on the helmet); past the first skip the forest is slightly unfaithful. The repairs
   cover the visible symptoms; truncating the stream at the first skip would be the clean structural fix.

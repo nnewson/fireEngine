@@ -1049,6 +1049,389 @@ TEST_CASE("VDPM front-batch benchmark: serial vs dispatch(N) apply + repair",
     SUCCEED("batch benchmark reported serial vs dispatch(N) medians");
 }
 
+// ============================================================================================
+// FUSION CEILING — is an apply+repair FUSED kernel worth PROTOTYPING? ([.][gpu][FusionCeiling])
+// A hidden fenced measurement (evidence → docs/lod.md), NOT production plumbing. Fusion's only win
+// is reclaiming the PER-WORKGROUP TAIL: across the GLOBAL apply→repair barrier, early-finishing
+// apply workgroups idle until the SLOWEST clears before ANY repair workgroup starts. A
+// command-level "apply-end→repair-start" gap CANNOT see that (a barrier is a dependency, not GPU
+// work), so we bound it analytically instead:
+//   (2) optimistic CEILING: saving ≲ min(Tapply, Trepair) + a small launch/sync allowance (fusion
+//       also drops one dispatch launch + swaps the device-wide barrier for workgroup-local sync).
+//       If that is a tiny fraction of the FULL lifecycle → skip fusion outright (no kernel).
+//   (3) TAIL heuristic (whether a PROTOTYPE is warranted, NOT a runtime prediction — scheduling,
+//   wave
+//       capacity, and fused register pressure move the real number): separate-stage floor
+//       max(Ai)+max(Ri) vs fused ideal max(Ai+Ri), over HETEROGENEOUS fronts (identical fronts have
+//       ZERO tail by construction). A small delta ⇒ the heaviest front dominates both stages.
+//   EMIT's lifecycle share is MEASURED here too (emit is 91/106 dispatches, but the TIME must be
+//   measured — the shaders may be cheap despite the count).
+// State-fair: each timed region runs on a freshly reset+scored pre-state; warm-up excluded;
+// medians.
+// ============================================================================================
+TEST_CASE("VDPM apply+repair fusion ceiling", "[.][gpu][FusionCeiling]")
+{
+    Device device = Device::headlessCompute();
+    if (!VdpmApplyKernel::deviceSupported(device) || !VdpmRepairKernel::deviceSupported(device))
+    {
+        return;
+    }
+    const vk::PhysicalDeviceLimits& limits = device.physicalDevice().getProperties().limits;
+    const auto qfp = device.physicalDevice().getQueueFamilyProperties();
+    if (limits.timestampPeriod == 0.0f || qfp[device.graphicsFamily()].timestampValidBits == 0)
+    {
+        WARN("no compute-queue timestamp support — fusion-ceiling benchmark skipped");
+        return;
+    }
+    Resources resources(device);
+    ComputePipeline scorePipeline(device, vdpmScorePipelineConfig());
+    VdpmEmitPipelines emitPipelines(device);
+    VdpmApplyKernel applyKernel(device);
+    VdpmRepairKernel repairKernel(device);
+    const vk::raii::CommandPool pool(
+        device.device(),
+        vk::CommandPoolCreateInfo{.flags = vk::CommandPoolCreateFlagBits::eResetCommandBuffer,
+                                  .queueFamilyIndex = device.graphicsFamily()});
+    const vk::raii::QueryPool queryPool(
+        device.device(),
+        vk::QueryPoolCreateInfo{.queryType = vk::QueryType::eTimestamp, .queryCount = 2});
+
+    // A PROCEDURAL PROXY multi-front set to exercise the fusion-tail methodology — NOT
+    // TransmissionTest's meshes. It does NOT reproduce the real collapse forests, DAG ranks
+    // (TransmissionTest's live max rank is ~45 — these proxies differ), per-instance transforms, or
+    // materials: every job here shares ONE identity world / view / repair params. So any zero-tail
+    // result below is a property of THESE benchmark jobs, not a guarantee about the renderer's
+    // instances (identical geometry != identical VDPM work — scoring / active state / coverage /
+    // convergence are instance- and view-dependent). The skip-fusion decision is a complexity/value
+    // JUDGMENT, not a scene-specific measurement (a scene-specific verdict would need the real
+    // meshes
+    // + transforms + acceptance camera loaded, per docs/lod.md). Heterogeneous (varied cost)
+    // because an identical set has zero tail trivially. Meshes kept alive: a front holds device
+    // ADDRESSES.
+    const std::array<Mesh, 5> specs{uvSphere(12, 16), uvSphere(22, 30), uvSphere(34, 46), grid(48),
+                                    uvSphere(18, 24)};
+    constexpr std::uint32_t kMax = 13;
+    std::vector<VdpmGpuMesh> meshes;
+    std::vector<VdpmGpuFront> fronts;
+    meshes.reserve(kMax);
+    fronts.reserve(kMax);
+    for (std::uint32_t i = 0; i < kMax; ++i)
+    {
+        const Mesh& mm = specs[i % specs.size()];
+        meshes.push_back(VdpmGpuMesh::build(resources, mm.verts, mm.indices, qemForest(mm)));
+        fronts.push_back(VdpmGpuFront::buildRuntime(resources, meshes.back()));
+    }
+    const Resources::MappedBufferSet applyJobs =
+        resources.createMappedDeviceAddressBuffers(kMax * sizeof(VdpmApplyJobGpu));
+    const Resources::MappedBufferSet repairJobs =
+        resources.createMappedDeviceAddressBuffers(kMax * sizeof(VdpmRepairJobGpu));
+    const VdpmViewParams view = scoreViewOf(Mat4::identity(), Vec3{0.0f, 0.0f, 1.7f}, kVh, true);
+    const VdpmRepairParams params =
+        repairParamsOf(Mat4::identity(), Vec3{0.0f, 0.0f, 1.7f}, 1024.0f, kVh, true);
+    constexpr float kBudget = 0.5f;
+    constexpr float kCoarsen = kVdpmCoarsenRatio * kBudget;
+
+    auto computeBarrier = [](vk::CommandBuffer cmd)
+    {
+        const vk::MemoryBarrier2 mb{
+            .srcStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+            .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
+            .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+            .dstAccessMask =
+                vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite,
+        };
+        cmd.pipelineBarrier2(vk::DependencyInfo{.memoryBarrierCount = 1, .pMemoryBarriers = &mb});
+    };
+    auto oneShot = [&]() -> vk::raii::CommandBuffer
+    {
+        auto cmds = device.device().allocateCommandBuffers(
+            vk::CommandBufferAllocateInfo{.commandPool = *pool,
+                                          .level = vk::CommandBufferLevel::ePrimary,
+                                          .commandBufferCount = 1});
+        cmds[0].begin(
+            vk::CommandBufferBeginInfo{.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
+        return std::move(cmds[0]);
+    };
+    auto submitWait = [&](vk::raii::CommandBuffer& cmd)
+    {
+        cmd.end();
+        const vk::CommandBufferSubmitInfo ci{.commandBuffer = *cmd};
+        const vk::SubmitInfo2 sub{.commandBufferInfoCount = 1, .pCommandBufferInfos = &ci};
+        const vk::raii::Fence fence(device.device(), vk::FenceCreateInfo{});
+        device.graphicsQueue().submit2(sub, *fence);
+        (void)device.device().waitForFences(*fence, vk::True,
+                                            std::numeric_limits<std::uint64_t>::max());
+    };
+    auto submitTimed = [&](auto&& record) -> double
+    {
+        vk::raii::CommandBuffer cmd = oneShot();
+        cmd.resetQueryPool(*queryPool, 0, 2);
+        cmd.writeTimestamp2(vk::PipelineStageFlagBits2::eBottomOfPipe, *queryPool, 0);
+        record(*cmd);
+        cmd.writeTimestamp2(vk::PipelineStageFlagBits2::eBottomOfPipe, *queryPool, 1);
+        submitWait(cmd);
+        const auto [res, data] = queryPool.getResults<std::uint64_t>(
+            0, 2, 2 * sizeof(std::uint64_t), sizeof(std::uint64_t),
+            vk::QueryResultFlagBits::e64 | vk::QueryResultFlagBits::eWait);
+        return static_cast<double>(data[1] - data[0]) *
+               static_cast<double>(limits.timestampPeriod) / 1.0e6;
+    };
+
+    // Reset [0,n) to roots (+ score) so every timed region starts from an identical pre-state.
+    auto resetAndScore = [&](std::uint32_t n)
+    {
+        vk::raii::CommandBuffer cmd = oneShot();
+        for (std::uint32_t i = 0; i < n; ++i)
+        {
+            fronts[i].recordScore(*cmd, scorePipeline, 0, view);
+            fronts[i].recordApplyKernel(*cmd, applyKernel, 0, 1.0e9f, 1.0e9f);
+        }
+        submitWait(cmd);
+    };
+    auto scoreAll = [&](vk::CommandBuffer cmd, std::uint32_t n)
+    {
+        for (std::uint32_t i = 0; i < n; ++i)
+        {
+            fronts[i].recordScore(cmd, scorePipeline, 0, view);
+        }
+    };
+    // dispatch(n) of a batch, with a leading score/apply→kernel barrier (jobs filled from fronts).
+    auto batchedApply = [&](vk::CommandBuffer cmd, std::uint32_t n)
+    {
+        for (std::uint32_t i = 0; i < n; ++i)
+        {
+            const VdpmApplyJobGpu j = fronts[i].prepareApplyJob(0, kBudget, kCoarsen);
+            std::memcpy(applyJobs.mapped[0].data() + i * sizeof(j), &j, sizeof(j));
+        }
+        computeBarrier(cmd);
+        applyKernel.recordDispatch(cmd, resources.bufferAddress(applyJobs.buffers[0]), n);
+    };
+    auto batchedRepair = [&](vk::CommandBuffer cmd, std::uint32_t n)
+    {
+        for (std::uint32_t i = 0; i < n; ++i)
+        {
+            const VdpmRepairJobGpu j =
+                fronts[i].prepareRepairJob(0, params, kVdpmGpuRepairRoundBudget);
+            std::memcpy(repairJobs.mapped[0].data() + i * sizeof(j), &j, sizeof(j));
+        }
+        computeBarrier(cmd);
+        repairKernel.recordDispatch(cmd, resources.bufferAddress(repairJobs.buffers[0]), n);
+    };
+    auto emitAll = [&](vk::CommandBuffer cmd, std::uint32_t n)
+    {
+        for (std::uint32_t i = 0; i < n; ++i)
+        {
+            fronts[i].recordEmitFromFront(cmd, emitPipelines, resources, 0);
+        }
+    };
+
+    constexpr int kWarmup = 2;
+    constexpr int kReps = 7;
+    auto med = [&](auto&& sample) -> double
+    {
+        std::vector<double> v;
+        v.reserve(kReps);
+        for (int r = 0; r < kWarmup + kReps; ++r)
+        {
+            const double t = sample();
+            if (r >= kWarmup)
+            {
+                v.push_back(t);
+            }
+        }
+        return medianMs(v);
+    };
+
+    // Batched stage timings over the first n fronts, each on a fresh reset pre-state.
+    auto tApply = [&](std::uint32_t n)
+    {
+        return med(
+            [&]
+            {
+                resetAndScore(n);
+                return submitTimed([&](vk::CommandBuffer c) { batchedApply(c, n); });
+            });
+    };
+    auto tRepair = [&](std::uint32_t n)
+    {
+        return med(
+            [&]
+            {
+                resetAndScore(n);
+                {
+                    auto c = oneShot();
+                    batchedApply(*c, n);
+                    submitWait(c);
+                } // to the applied state
+                return submitTimed([&](vk::CommandBuffer c) { batchedRepair(c, n); });
+            });
+    };
+    auto tSeq = [&](std::uint32_t n)
+    {
+        return med(
+            [&]
+            {
+                resetAndScore(n);
+                return submitTimed(
+                    [&](vk::CommandBuffer c)
+                    {
+                        batchedApply(c, n);
+                        batchedRepair(c, n);
+                    });
+            });
+    };
+    auto tEmit = [&](std::uint32_t n)
+    {
+        return med(
+            [&]
+            {
+                resetAndScore(n);
+                {
+                    auto c = oneShot();
+                    batchedApply(*c, n);
+                    batchedRepair(*c, n);
+                    submitWait(c);
+                }
+                return submitTimed(
+                    [&](vk::CommandBuffer c)
+                    {
+                        // The repair→emit compute-stage boundary is part of emit's real ENTRY cost
+                        // (production records it before the emit reads the repair-written active
+                        // state) — time it inside the region.
+                        computeBarrier(c);
+                        emitAll(c, n);
+                    });
+            });
+    };
+    auto tFull = [&](std::uint32_t n)
+    {
+        return med(
+            [&]
+            {
+                resetAndScore(n);
+                return submitTimed(
+                    [&](vk::CommandBuffer c)
+                    {
+                        scoreAll(c, n);
+                        batchedApply(c, n);
+                        batchedRepair(c, n);
+                        computeBarrier(c); // repair → emit
+                        emitAll(c, n);
+                    });
+            });
+    };
+    // Per-front A_i / R_i (single-workgroup dispatch(1)) for the tail heuristic. NOTE: scores are
+    // state-INDEPENDENT (view + split geometry only), so the ONE reset score is valid for the timed
+    // stage — no re-score (which, after an apply that read the score buffer, would be a WAR
+    // rewrite), and the applies' own leading barriers order the roots→test-state dependency.
+    auto aOf = [&](std::uint32_t i)
+    {
+        return med(
+            [&]
+            {
+                {
+                    auto c = oneShot();
+                    fronts[i].recordScore(*c, scorePipeline, 0, view);
+                    fronts[i].recordApplyKernel(*c, applyKernel, 0, 1.0e9f, 1.0e9f); // → roots
+                    submitWait(c);
+                }
+                return submitTimed(
+                    [&](vk::CommandBuffer c)
+                    { fronts[i].recordApplyKernel(c, applyKernel, 0, kBudget, kCoarsen); });
+            });
+    };
+    auto rOf = [&](std::uint32_t i)
+    {
+        return med(
+            [&]
+            {
+                {
+                    auto c = oneShot();
+                    fronts[i].recordScore(*c, scorePipeline, 0, view);
+                    fronts[i].recordApplyKernel(*c, applyKernel, 0, 1.0e9f, 1.0e9f);    // → roots
+                    fronts[i].recordApplyKernel(*c, applyKernel, 0, kBudget, kCoarsen); // → test
+                    submitWait(c);
+                }
+                return submitTimed(
+                    [&](vk::CommandBuffer c)
+                    {
+                        fronts[i].recordRepairKernel(c, repairKernel, 0, params,
+                                                     kVdpmGpuRepairRoundBudget);
+                    });
+            });
+    };
+
+    // (4) Scaling sweep.
+    for (const std::uint32_t n : {1u, 2u, 4u, 8u, kMax})
+    {
+        const double full = tFull(n);
+        const double ap = tApply(n);
+        const double rp = tRepair(n);
+        const double sq = tSeq(n);
+        const double em = tEmit(n);
+        WARN("N=" << n << ": full " << full << " | apply " << ap << " | repair " << rp << " | seq "
+                  << sq << " | emit " << em << " ms GPU");
+    }
+
+    // (2) Ceiling + (3) tail + emit share, at the full N=kMax heterogeneous composition.
+    const double full = tFull(kMax);
+    const double ap = tApply(kMax);
+    const double rp = tRepair(kMax);
+    const double em = tEmit(kMax);
+    double maxA = 0.0;
+    double maxR = 0.0;
+    double maxAplusR = 0.0;
+    std::uint32_t argMaxA = 0;
+    std::uint32_t argMaxR = 0;
+    std::uint32_t argMaxAR = 0;
+    for (std::uint32_t i = 0; i < kMax; ++i)
+    {
+        const double a = aOf(i);
+        const double r = rOf(i);
+        if (a > maxA)
+        {
+            maxA = a;
+            argMaxA = i;
+        }
+        if (r > maxR)
+        {
+            maxR = r;
+            argMaxR = i;
+        }
+        if (a + r > maxAplusR)
+        {
+            maxAplusR = a + r;
+            argMaxAR = i;
+        }
+    }
+    const double ceiling = std::min(ap, rp);                  // optimistic overlap recoverable
+    const double separateFloor = maxA + maxR;                 // batched-separate ideal
+    const double fusedIdealFloor = maxAplusR;                 // fused ideal
+    const double tailDelta = separateFloor - fusedIdealFloor; // the reclaimable tail
+    auto dims = [&](std::uint32_t i)
+    {
+        return "front[" + std::to_string(i) + "]{rank=" + std::to_string(fronts[i].rankCount()) +
+               ",face=" + std::to_string(fronts[i].faceCount()) +
+               ",finest=" + std::to_string(fronts[i].finestFaceCount()) + "}";
+    };
+
+    WARN("CEILING: min(Tapply,Trepair)=" << ceiling << " ms is " << (100.0 * ceiling / full)
+                                         << "% of full lifecycle " << full
+                                         << " ms (+ a small launch/sync allowance) — <~10% ⇒ skip");
+    WARN("EMIT share: " << em << " ms = " << (100.0 * em / full) << "% of full lifecycle");
+    WARN("TAIL: separate floor max(Ai)+max(Ri)="
+         << separateFloor << " ms vs fused ideal max(Ai+Ri)=" << fusedIdealFloor
+         << " ms → reclaimable " << tailDelta << " ms (" << (100.0 * tailDelta / full)
+         << "% of full)");
+    // Argmax evidence: a near-zero tail means the SAME front is the critical path in both stages
+    // (argMaxA == argMaxR) — no cross-front tail on THIS proxy. The skip-fusion decision is a
+    // complexity/value judgment (docs/lod.md), not a scene-specific verdict from these proxies.
+    WARN("ARGMAX: maxA " << dims(argMaxA) << "=" << maxA << " ms | maxR " << dims(argMaxR) << "="
+                         << maxR << " ms | max(A+R) " << dims(argMaxAR) << "=" << maxAplusR
+                         << " ms  (same front dominates both ⇔ tail≈0)");
+    SUCCEED("fusion-ceiling benchmark reported the ceiling + tail bounds");
+}
+
 // Evidence sweep (not a pass/fail gate): pick the kernel's production workgroup size. Run with
 // `./test_fire_engine "[ApplySizeSweep]"` from the build dir and read the WARN'd medians.
 TEST_CASE("VDPM apply kernel workgroup-size sweep (64/128/256)", "[.][gpu][ApplySizeSweep]")
