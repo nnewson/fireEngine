@@ -1018,6 +1018,8 @@ void Renderer::drawFrame(Window& display, RenderableScene& scene, float dt)
     stats_.vdpmRepairRoundBudget = 0;
     stats_.vdpmAnalyticDispatches = 0;
     stats_.vdpmAnalyticBarriers = 0;
+    stats_.vdpmApplyJobs = 0;
+    stats_.vdpmRepairJobs = 0;
     stats_.vdpmRepairMarkedRounds = -1;
     stats_.vdpmRepairFallbackFired = false;
     stats_.vdpmEmittedIndexCount = 0;
@@ -1052,6 +1054,8 @@ void Renderer::drawFrame(Window& display, RenderableScene& scene, float dt)
         stats_.vdpmRepairRoundBudget = static_cast<int>(cs.roundBudget);
         stats_.vdpmAnalyticDispatches = static_cast<int>(cs.analyticDispatches);
         stats_.vdpmAnalyticBarriers = static_cast<int>(cs.analyticBarriers);
+        stats_.vdpmApplyJobs = static_cast<int>(cs.applyJobs);
+        stats_.vdpmRepairJobs = static_cast<int>(cs.repairJobs);
         const VdpmGpuManager::Diagnostics& diag = vdpmManager_->lastDiagnostics();
         stats_.vdpmRepairMarkedRounds = diag.valid ? static_cast<int>(diag.markedRounds) : -1;
         stats_.vdpmRepairFallbackFired = diag.fallbackFired != 0;
@@ -1066,10 +1070,11 @@ void Renderer::drawFrame(Window& display, RenderableScene& scene, float dt)
             log::debug(
                 log::category::render,
                 "VDPM GPU perf: record {:.3f} ms CPU | compute {:.3f} ms GPU (valid {}) | {} "
-                "front(s), ~{} dispatches, converged {}/{} rounds",
+                "front(s), ~{} dispatches ({} apply + {} repair batched jobs), converged {}/{} "
+                "rounds",
                 stats_.vdpmRecordCpuMs, gpuMs, stats_.gpuValid, stats_.vdpmFrontsRecorded,
-                stats_.vdpmAnalyticDispatches, stats_.vdpmRepairMarkedRounds,
-                stats_.vdpmRepairRoundBudget);
+                stats_.vdpmAnalyticDispatches, stats_.vdpmApplyJobs, stats_.vdpmRepairJobs,
+                stats_.vdpmRepairMarkedRounds, stats_.vdpmRepairRoundBudget);
             // Per-stage breakdown (apply-kernel checkpoint). CPU ms is summed over the frame's
             // fronts (any count); GPU ms is meaningful only when ONE front recorded (single-shot
             // query slots) — it reads 0 otherwise. Confirms which stage owns the GPU time before

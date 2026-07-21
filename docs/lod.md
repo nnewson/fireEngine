@@ -725,7 +725,8 @@ at a fraction of the triangles. The remaining residuals and follow-ons, in rough
   a `[vdpm]` CI test pins the reject branches). **Stage 2 (the persistent-workgroup kernel) has landed
   too:** `shaders/vdpm_repair_kernel.comp` runs the whole repair fixpoint for one front in ONE workgroup /
   ONE dispatch (the `VdpmRepairJobGpu` batch ABI in ubo.hpp; `s_anyMarked` shared reduction for the
-  uniform convergence exit; `VdpmRepairKernel` capability-gated; `VdpmGpuFront::makeRepairJob` +
+  uniform convergence exit; `VdpmRepairKernel` capability-gated; `VdpmGpuFront::prepareRepairJob` (the
+  public write-params-and-pack authority; the raw `makeRepairJob` packer is private) +
   `recordRepairKernel`), built beside the recorder and exercised by 6 `[.][gpu]` control-flow fixtures.
   **Stage 3 (the flip) has landed too:** `recordFrame` now drives repair through the kernel when the
   device supports it (`VdpmGpuManager` holds a `std::optional<VdpmRepairKernel>`, emplaced iff
@@ -771,8 +772,9 @@ at a fraction of the triangles. The remaining residuals and follow-ons, in rough
   → mark → close → refine → coarsen) for one front in ONE dispatch — close/refine reuse the repair
   kernel's loops, coarsen ports `vdpm_coarsen.comp`. `recordFrame` takes a nullable
   `const VdpmApplyKernel*` (no default — every stage's path is explicit) and the manager holds a
-  `std::optional<VdpmApplyKernel>` emplaced iff `deviceSupported`; `VdpmGpuFront::makeApplyJob` +
-  `recordApplyKernel`; batch-ready `VdpmApplyJobGpu` ABI (budgets in the job). The workgroup size is a
+  `std::optional<VdpmApplyKernel>` emplaced iff `deviceSupported`; `VdpmGpuFront::prepareApplyJob` (the
+  public pack authority) + `recordApplyKernel`; batch-ready `VdpmApplyJobGpu` ABI (budgets in the job).
+  The workgroup size is a
   spec constant (`ComputeSpecializationConstant`, `layout(local_size_x_id = 0)`); the
   `[.][gpu][ApplySizeSweep]` benchmark (3 independent fronts, GPU-timestamped, warm-up excluded, median
   over rotated alternating cycles) picked **256** — fastest on the curved sphere, a tie on a deep grid.
@@ -788,11 +790,44 @@ at a fraction of the triangles. The remaining residuals and follow-ons, in rough
   ~1.2 → ~0.4 ms, apply CPU-record ~0.17 → ~0.005 ms; total VdpmCompute ~2.0 → ~1.2–1.5 ms GPU, total
   CPU-record ~0.26 → ~0.06 ms; 0-VUID on helmet + TransmissionTest + DamagedHelmetBlend.** Apply landed
   BELOW repair's floor (~0.4 vs ~0.75 ms — apply is less work), so REPAIR is now the dominant GPU stage;
-  both are occupancy-bound single workgroups. NEXT: reconsider whole-lifecycle / apply+repair **fusion**
-  (drop the apply→repair barrier + a dispatch) and/or **front-batching** (N fronts = N workgroups — the
-  occupancy lever for multi-front scenes); THEN resume B5c — delayed triangle/repair diagnostics + the
-  deferred helmet wedge/rank-count evidence (Vulkan glTF path) + a possible default flip to GPU after
-  parity sign-off.
+  both are occupancy-bound single workgroups (one workgroup can't fill the GPU — the residual is the
+  occupancy floor, not dispatch/barrier overhead).
+- **Front-batching (landed) — the occupancy lever for MULTI-front scenes.** A single-front scene can't
+  gain (one front = one workgroup); but a multi-front scene (TransmissionTest = 13 fronts) previously ran
+  13 per-front lifecycles back-to-back — 13 under-occupied single-workgroup apply + repair dispatches,
+  serialised by per-front barriers. `VdpmGpuManager::recordBatched` collapses this to **STAGE-MAJOR**:
+  ONE lifecycle barrier → score every front → ONE `dispatch(Na)` apply → ONE `dispatch(Nr)` repair → ONE
+  final front-state→emit barrier → emit every front, so the N fronts' workgroups run concurrently and
+  fill the GPU. Requests are resolved ONCE into a reused scratch (front* + derived params + work flags);
+  the apply/repair job arrays are COMPACTED (apply: `splitCount>0`; repair: additionally
+  `finestFaceCount>0`, so an apply-only front is in the apply batch but out of the repair batch) into two
+  manager-owned host-visible BDA arrays (one per frame-slot, geometric growth, replaced arrays RETAINED
+  until session end so an in-flight frame never reads a freed BDA); a batch exceeding the 1-D group cap
+  CHUNKS by advancing the job BDA `firstJob*stride` (disjoint jobs → no inter-chunk barrier; stride is
+  8-aligned, the shader's `buffer_reference_align`, `static_assert`ed). `VdpmApplyKernel`/
+  `VdpmRepairKernel::recordDispatch(cmd, jobsAddress, jobCount)` is the shared push-ABI authority
+  (per-front recorder = `recordDispatch(…, 1)`); `VdpmGpuFront::{recordLifecycleBoundary,
+  recordComputeStageBoundary}` are the shared barrier authorities recordFrame + the batched path both
+  record, so the two paths can't drift. The manager routes to the batched path when BOTH kernels are
+  available and the frame is not a profiled single front (a profiled single front keeps `recordFrame` for
+  its per-stage GPU timestamps — dispatch(N) can't stamp them); the per-front path is the unchanged
+  fallback. `VdpmGpuFront::analyticBatchedCost(fronts, groupCap)` is the EXACT stage-major aggregate
+  (lifecycle + Σ score + Σ emit + ⌈Na/cap⌉ + ⌈Nr/cap⌉ dispatches; +[Na>0]+[Nr>0]+[Na>0‖Nr>0] barriers),
+  pinned by a `[vdpm]` CI test. `test_vdpm_gpu_manager.cpp` (`[.][gpu]`) drives N fronts BATCHED via the
+  real manager vs per-front `recordFrame`, asserting active/refined/dependents/required/failFlags + the
+  indirect command + emitted indices **BIT-EXACT** across distinct per-request params, compaction
+  (full / apply-only / zero-split), shuffled order, N=1, a job-array growth boundary, and two frame slots.
+  **Measured (state-fair GPU-timestamp benchmark, 13 fronts, `[.][gpu][BatchBench]`): apply serial 3.07 →
+  batched 0.25 ms (~12×), repair serial 4.99 → batched 0.41 ms (~12×)** — the serialised multi-front cost
+  collapses toward the concurrent floor. (The benchmark is authoritative because the in-app `VdpmCompute`
+  GPU timestamp reads `gpuValid=false` on heavier multi-front frames.) 0-VUID on TransmissionTest +
+  DamagedHelmet + DamagedHelmetBlend (`--vdpm-gpu`; AlphaBlendModeTest sits below the VDPM eligibility
+  threshold, so it does not exercise this path).
+- NEXT: apply+repair **FUSION** (conditional — only if the post-batch timestamps show a material
+  inter-kernel gap; one kernel runs apply then repair per front in one workgroup, dropping the
+  apply→repair barrier + a dispatch, but risks lower occupancy from register pressure — the measurement
+  decides); THEN resume B5c — delayed triangle/repair diagnostics + the deferred helmet wedge/rank-count
+  evidence (Vulkan glTF path) + a possible default flip to GPU after parity sign-off.
 - **7 forest skips.** `buildVertexForest` skips collapses whose edge diverged from its adjacency
   replay (7 of ~6800 on the helmet); past the first skip the forest is slightly unfaithful. The repairs
   cover the visible symptoms; truncating the stream at the first skip would be the clean structural fix.

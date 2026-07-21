@@ -300,6 +300,74 @@ TEST_CASE("VdpmGpuFront::analyticComputeCost pins the recorder + persistent form
     }
 }
 
+TEST_CASE("VdpmGpuFront::analyticBatchedCost pins the stage-major batched aggregate", "[vdpm]")
+{
+    // Per-front emit is faceCount-tiered (as above): fcTwo → emitCost {7,6} (no lifecycle). The
+    // batched aggregate: dispatches = Σ score(1/split-bearing) + Σ emit(4+scanD) + ⌈Na/cap⌉ +
+    // ⌈Nr/cap⌉; barriers = 1 lifecycle + Σ emit(4+scanB) + [Na>0] + [Nr>0] + [Na>0 || Nr>0].
+    using FrontDims = VdpmGpuFront::FrontDims;
+    constexpr std::uint32_t kBlock = kScanElementsPerBlock;
+    constexpr std::uint32_t fcTwo = kBlock * 100; // K=1 → emit {7,6}
+    constexpr std::uint32_t kBigCap = 1u << 20;   // no chunking
+
+    SECTION("N full fronts: score+apply+repair all batched")
+    {
+        // 3 × {rank 5, fcTwo, fcTwo}: Na=3, Nr=3. d = 3 score + 3*7 emit + 1 apply + 1 repair = 26;
+        // b = 1 + 3*6 emit + 1 + 1 + 1 = 22.
+        const std::array<FrontDims, 3> fronts{
+            FrontDims{5, fcTwo, fcTwo}, FrontDims{5, fcTwo, fcTwo}, FrontDims{5, fcTwo, fcTwo}};
+        const auto cost = VdpmGpuFront::analyticBatchedCost(fronts, kBigCap);
+        CHECK(cost.dispatches == 26u);
+        CHECK(cost.barriers == 22u);
+    }
+    SECTION("mixed: apply-only + full + zero-split (compaction)")
+    {
+        // apply-only {5, fcTwo, 0}, full {5, fcTwo, fcTwo}, zero-split {0, fcTwo, 0}: Na=2, Nr=1.
+        // All three EMIT (emit is over faces). d = 2 score + 3*7 emit + 1 apply + 1 repair = 25; b
+        // = 1 + 3*6 + 1 + 1 + 1 = 22.
+        const std::array<FrontDims, 3> fronts{FrontDims{5, fcTwo, 0}, FrontDims{5, fcTwo, fcTwo},
+                                              FrontDims{0, fcTwo, 0}};
+        const auto cost = VdpmGpuFront::analyticBatchedCost(fronts, kBigCap);
+        CHECK(cost.dispatches == 25u);
+        CHECK(cost.barriers == 22u);
+    }
+    SECTION("apply-only batch: no repair anywhere ⇒ final barrier is apply→emit")
+    {
+        // 2 × {5, fcTwo, 0}: Na=2, Nr=0. d = 2 score + 2*7 emit + 1 apply + 0 repair = 17;
+        // b = 1 + 2*6 + 1 (score→apply) + 0 (Nr) + 1 (final apply→emit) = 15.
+        const std::array<FrontDims, 2> fronts{FrontDims{5, fcTwo, 0}, FrontDims{5, fcTwo, 0}};
+        const auto cost = VdpmGpuFront::analyticBatchedCost(fronts, kBigCap);
+        CHECK(cost.dispatches == 17u);
+        CHECK(cost.barriers == 15u);
+    }
+    SECTION("all zero-split: only lifecycle + emit, no apply/repair/final barrier")
+    {
+        // 2 × {0, fcTwo, 0}: Na=0, Nr=0. d = 0 score + 2*7 emit = 14; b = 1 + 2*6 = 13.
+        const std::array<FrontDims, 2> fronts{FrontDims{0, fcTwo, 0}, FrontDims{0, fcTwo, 0}};
+        const auto cost = VdpmGpuFront::analyticBatchedCost(fronts, kBigCap);
+        CHECK(cost.dispatches == 14u);
+        CHECK(cost.barriers == 13u);
+    }
+    SECTION("chunking past the group cap adds dispatches, not barriers")
+    {
+        // 3 full fronts, cap 2: apply ⌈3/2⌉=2, repair ⌈3/2⌉=2 dispatches — the ONE score→apply and
+        // ONE apply→repair barrier are unchanged (chunks touch disjoint jobs, no inter-chunk
+        // barrier). d = 3 + 3*7 + 2 + 2 = 28; b = 1 + 3*6 + 1 + 1 + 1 = 22 (same as the big-cap
+        // full-fronts case).
+        const std::array<FrontDims, 3> fronts{
+            FrontDims{5, fcTwo, fcTwo}, FrontDims{5, fcTwo, fcTwo}, FrontDims{5, fcTwo, fcTwo}};
+        const auto cost = VdpmGpuFront::analyticBatchedCost(fronts, /*groupCap=*/2);
+        CHECK(cost.dispatches == 28u);
+        CHECK(cost.barriers == 22u);
+    }
+    SECTION("empty request set records nothing (routed to the per-front path, not recordBatched)")
+    {
+        const auto cost = VdpmGpuFront::analyticBatchedCost({}, kBigCap);
+        CHECK(cost.dispatches == 0u);
+        CHECK(cost.barriers == 0u);
+    }
+}
+
 // ============================================================================================
 // GPU score harness ([.][gpu], local-only — needs a real Vulkan device). Cross-checks
 // shaders/vdpm_score.comp against the CPU scoring authority (scoreVdpmSplit) on a headless device.

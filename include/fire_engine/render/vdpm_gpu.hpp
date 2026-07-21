@@ -393,6 +393,15 @@ public:
         return pipeline_;
     }
 
+    // Record ONE dispatch of the persistent kernel over a compacted N-job array (front-batching
+    // arc): bind + push {jobsAddress, jobCount} + dispatch(jobCount), one workgroup per job. The
+    // caller owns ALL barriers (the leading apply→repair and any trailing) and MUST pass jobCount
+    // in [1, device 1-D group cap] — the manager chunks past the cap by advancing `jobsAddress`
+    // (the BDA of the chunk's first job). Encapsulates the push ABI so no call site re-derives it;
+    // the per-front recorder is `recordDispatch(cmd, ringAddress, 1)`.
+    void recordDispatch(vk::CommandBuffer cmd, std::uint64_t jobsAddress,
+                        std::uint32_t jobCount) const;
+
 private:
     // Token proving deviceSupported ran before the pipeline member is constructed (the delegating
     // ctor evaluates requireSupported first).
@@ -441,6 +450,14 @@ public:
     {
         return pipeline_;
     }
+
+    // Record ONE dispatch over a compacted N-job array (front-batching arc) — the apply parallel of
+    // VdpmRepairKernel::recordDispatch: bind + push {jobsAddress, jobCount} + dispatch(jobCount),
+    // one workgroup per job. The caller owns ALL barriers (leading score→apply, any trailing) and
+    // MUST pass jobCount in [1, device 1-D group cap]. The per-front recorder is
+    // `recordDispatch(cmd, ringAddress, 1)`.
+    void recordDispatch(vk::CommandBuffer cmd, std::uint64_t jobsAddress,
+                        std::uint32_t jobCount) const;
 
 private:
     struct Checked
@@ -607,20 +624,24 @@ public:
                       const VdpmRepairPipelines& repairPipelines, Resources& resources,
                       const VdpmRepairParams& params, std::uint32_t roundBudget);
 
-    // Pack this front's complete repair job (perf arc, Stage 2) for frame slot `frameIndex` under
-    // `roundBudget` — the single assembly authority Stage 4 reuses to fill its N-job manager array.
-    // Points `paramsAddress` at the frame slot's repair-params ring (the caller uploads the params
-    // there first). Requires a runtime front with repair data (buildRuntime full build); throws
-    // std::logic_error otherwise. `roundBudget` must be <= the allocated roundHistory capacity.
-    [[nodiscard]] VdpmRepairJobGpu makeRepairJob(std::uint32_t frameIndex,
-                                                 std::uint32_t roundBudget) const;
+    // Front-owned repair-job preparation (front-batching arc): writes `params` to this front's
+    // frame-slot repair-params ring AND returns the authoritative job POD referencing it — one
+    // call, so a batched job can never point at stale params (adj 4). The caller (the manager's
+    // batched path, or recordRepairKernel) places the returned POD in its job array/ring. Callers
+    // MUST only prepare a front that has repair work (splitCount > 0 && finestFaceCount > 0); the
+    // manager compacts on that before calling.
+    [[nodiscard]] VdpmRepairJobGpu prepareRepairJob(std::uint32_t frameIndex,
+                                                    const VdpmRepairParams& params,
+                                                    std::uint32_t roundBudget);
 
-    // Pack this front's complete APPLY job (apply-kernel arc) — the single assembly authority a
-    // later batch stage reuses to fill its N-job array. Budgets live IN the job (no separate params
-    // block); `scoresAddress` points at the front's own GPU score output (recordScore wrote it).
-    // Requires a runtime front with refine/coarsen state; throws std::logic_error otherwise.
-    [[nodiscard]] VdpmApplyJobGpu makeApplyJob(std::uint32_t frameIndex, float pixelBudget,
-                                               float coarsenBudget) const;
+    // Front-owned APPLY-job preparation (front-batching arc) — the parallel of prepareRepairJob and
+    // the public assembly authority the manager's batched path uses. Apply has NO separate
+    // per-front param upload (budgets live IN the job; `scoresAddress` points at the front's own
+    // GPU score output that recordScore wrote), so this is pure packing — but it keeps the manager
+    // on the same prepare* protocol for both stages. Requires a runtime refine/coarsen front;
+    // throws otherwise.
+    [[nodiscard]] VdpmApplyJobGpu prepareApplyJob(std::uint32_t frameIndex, float pixelBudget,
+                                                  float coarsenBudget) const;
 
     // Record the persistent-kernel APPLY for frame slot `frameIndex`: pack + upload the 1-element
     // job (only the job — budgets are in it), a leading score→kernel compute barrier (recordFrame /
@@ -809,13 +830,15 @@ public:
         std::uint32_t dispatches{0};
         std::uint32_t barriers{0};
     };
-    [[nodiscard]] static constexpr ComputeCost
-    analyticComputeCost(std::uint32_t rankCount, std::uint32_t faceCount,
-                        std::uint32_t finestFaceCount, std::uint32_t roundBudget,
-                        bool persistentApply, bool persistentRepair) noexcept
+
+    // The per-front EMIT cost (recordEmitFromFront / recordEmitImpl): the 4 fixed passes (ancestor
+    // + survival + scatter + finalize) and the 4 fixed barriers around a faceCount-dependent scan
+    // (VdpmScan::recordScan, K internal levels for `faceCount`). ALWAYS recorded — emit dispatches
+    // over FACES, so it runs even for a zero-split (rankCount==0) front. The single authority for
+    // the emit term, shared by analyticComputeCost (per-front) and analyticBatchedCost (stage-major
+    // sum).
+    [[nodiscard]] static constexpr ComputeCost emitCost(std::uint32_t faceCount) noexcept
     {
-        // Emit scans the raw `faceCount` (K = internal-level count). Repair, however, gates on the
-        // POST-WELD `finestFaceCount` (degenerates dropped) — it can be 0 while `faceCount` is not.
         std::uint32_t scanDispatches = 0;
         std::uint32_t scanBarriers = 0;
         if (faceCount != 0)
@@ -830,8 +853,18 @@ public:
             scanDispatches = (k == 0) ? 1 : 2 * k + 1;
             scanBarriers = (k == 0) ? 0 : 2 * k;
         }
-        // Lifecycle barrier (always) + emit (always — over faces).
-        ComputeCost cost{.dispatches = 4 + scanDispatches, .barriers = 1 + 4 + scanBarriers};
+        return {.dispatches = 4 + scanDispatches, .barriers = 4 + scanBarriers};
+    }
+
+    [[nodiscard]] static constexpr ComputeCost
+    analyticComputeCost(std::uint32_t rankCount, std::uint32_t faceCount,
+                        std::uint32_t finestFaceCount, std::uint32_t roundBudget,
+                        bool persistentApply, bool persistentRepair) noexcept
+    {
+        // Lifecycle barrier (always) + emit (always — over faces). Emit scans the raw `faceCount`;
+        // repair below gates on the POST-WELD `finestFaceCount` (can be 0 while faceCount is not).
+        const ComputeCost emit = emitCost(faceCount);
+        ComputeCost cost{.dispatches = emit.dispatches, .barriers = 1 + emit.barriers};
         if (rankCount == 0)
         {
             // score/apply/repair ALL early-out at splitCount == 0 (their recordFrame calls return
@@ -874,7 +907,89 @@ public:
         return cost;
     }
 
+    // Per-front dimensions the batched aggregate reads (front-batching arc).
+    struct FrontDims
+    {
+        std::uint32_t rankCount{0};
+        std::uint32_t faceCount{0};
+        std::uint32_t finestFaceCount{0};
+    };
+
+    // EXACT per-frame compute-dispatch + barrier count for the manager's STAGE-MAJOR BATCHED path
+    // (front-batching arc) — NOT the sum of per-front analyticComputeCost. The batched path always
+    // uses BOTH persistent kernels (its gate), scores + emits EVERY front per-front, and collapses
+    // apply/repair to one dispatch(N) per stage (chunked by `groupCap`, the device 1-D group cap):
+    //   Na = #{rankCount>0} split-bearing fronts (score + one apply job each);
+    //   Nr = #{rankCount>0 && finestFaceCount>0} fronts (one repair job each);
+    //   dispatches = Σ score(1 per split-bearing front) + Σ emit(4+scan) + ⌈Na/cap⌉ + ⌈Nr/cap⌉;
+    //   barriers   = 1 lifecycle + Σ emit(4+scan) + [Na>0] (score→apply) + [Nr>0] (apply→repair)
+    //                + [Na>0 || Nr>0] (one final front-state→emit). KEEP IN SYNC with
+    //   VdpmGpuManager::recordBatched (pinned by test_vdpm_gpu.cpp `[vdpm]`).
+    [[nodiscard]] static constexpr ComputeCost
+    analyticBatchedCost(std::span<const FrontDims> fronts, std::uint32_t groupCap) noexcept
+    {
+        if (fronts.empty())
+        {
+            // The manager routes an empty request set to the per-front path (which records
+            // nothing), never to recordBatched — so the empty batched cost is {0, 0}, not a lone
+            // lifecycle barrier.
+            return {.dispatches = 0, .barriers = 0};
+        }
+        ComputeCost cost{.dispatches = 0, .barriers = 1}; // the lifecycle-boundary barrier
+        std::uint32_t na = 0;
+        std::uint32_t nr = 0;
+        for (const FrontDims& f : fronts)
+        {
+            const ComputeCost emit = emitCost(f.faceCount);
+            cost.dispatches += emit.dispatches;
+            cost.barriers += emit.barriers;
+            if (f.rankCount > 0) // splitCount>0 ⇒ a score dispatch + an apply job
+            {
+                cost.dispatches += 1; // score
+                ++na;
+                if (f.finestFaceCount != 0)
+                {
+                    ++nr;
+                }
+            }
+        }
+        const std::uint32_t cap = groupCap == 0 ? 1 : groupCap;
+        if (na > 0)
+        {
+            cost.dispatches += (na + cap - 1) / cap; // apply chunks
+            cost.barriers += 1;                      // score→apply
+        }
+        if (nr > 0)
+        {
+            cost.dispatches += (nr + cap - 1) / cap; // repair chunks
+            cost.barriers += 1;                      // apply→repair
+        }
+        if (na > 0 || nr > 0)
+        {
+            cost.barriers += 1; // the single final front-state→emit barrier
+        }
+        return cost;
+    }
+
+    // The two VDPM compute-boundary barriers, exposed as the single authority both recordFrame (per
+    // front) and the manager's stage-major batched path record — so the two paths can't drift.
+    //  - LIFECYCLE boundary (read|write → read|write): orders a PRIOR frame's mark/coarsen READS of
+    //    the single-buffered score output + emit scratch before THIS frame's score WRITE + scratch
+    //    reuse (a write-after-read the per-pass barriers, which sit after the score dispatch,
+    //    miss).
+    static void recordLifecycleBoundary(vk::CommandBuffer cmd);
+    //  - STAGE boundary (write → read|write): a prior stage's storage WRITES → the next stage's
+    //    reads (score→apply, apply→repair, and the final front-state→emit).
+    static void recordComputeStageBoundary(vk::CommandBuffer cmd);
+
 private:
+    // RAW repair-job packing (frame slot `frameIndex`, `roundBudget` <= history capacity). PRIVATE:
+    // it does NOT upload params, so calling it without a matching writeMapped would leave the job
+    // pointing at stale params — go through prepareRepairJob (writes params + packs) instead.
+    // Throws on a non-runtime-repair front or an oversized budget.
+    [[nodiscard]] VdpmRepairJobGpu makeRepairJob(std::uint32_t frameIndex,
+                                                 std::uint32_t roundBudget) const;
+
     VdpmGpuMeshBinding binding_{};        // copied at build — no pointer into a movable mesh
     std::uint32_t maxWorkGroupCountX_{0}; // device cap on a 1-D dispatch's group count
     BufferHandle output_{NullBuffer};

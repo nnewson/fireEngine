@@ -88,12 +88,15 @@ struct FrameStats
     // (passMs). The dispatch/barrier totals are ANALYTIC (computed from each front's rank count +
     // the repair round budget, per the recorder structure) — they quantify the command-count cost
     // this arc targets, independent of the shader time.
-    float vdpmRecordCpuMs{0.0f};   // CPU cost of recording all fronts' compute
-    int vdpmFrontsRecorded{0};     // fronts whose lifecycle was recorded this frame
-    int vdpmMaxRankCount{0};       // largest per-front rank count R across those fronts
-    int vdpmRepairRoundBudget{0};  // the repair round budget B those dispatches assumed
-    int vdpmAnalyticDispatches{0}; // Σ over fronts of the analytic compute-dispatch count
-    int vdpmAnalyticBarriers{0};   // Σ over fronts of the analytic pipeline-barrier count
+    float vdpmRecordCpuMs{0.0f};  // CPU cost of recording all fronts' compute
+    int vdpmFrontsRecorded{0};    // fronts whose lifecycle was recorded this frame
+    int vdpmMaxRankCount{0};      // largest per-front rank count R across those fronts
+    int vdpmRepairRoundBudget{0}; // the repair round budget B those dispatches assumed
+    int vdpmAnalyticDispatches{
+        0}; // analytic compute-dispatch count (batched aggregate / per-front Σ)
+    int vdpmAnalyticBarriers{0}; // analytic pipeline-barrier count
+    int vdpmApplyJobs{0};        // batched Na (compacted apply jobs); 0 on the per-front path
+    int vdpmRepairJobs{0};       // batched Nr (compacted repair jobs)
     // Delayed per-round repair-convergence diagnostics for a representative front (read back
     // ~kMaxFramesInFlight frames late). markedRounds = leading rounds whose detect found a
     // violation = the convergence point (of a 24-round budget); -1 until the first slot completes.
