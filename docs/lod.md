@@ -859,9 +859,24 @@ at a fraction of the triangles. The remaining residuals and follow-ons, in rough
   buckets. `test_vdpm_health_reduce.cpp` drives the reducer directly (mixed repair, submitted-draw
   weighting, dirty-history prefix, ancestor/fallback, 64-bit carry); `test_vdpm_gpu_manager.cpp` pins
   the K-frame readback delay + slot isolation. 0-VUID on DamagedHelmet `--vdpm-gpu`.
-- NEXT: **B5c-2** headless helmet wedge/rank cross-check (byte-exact CPU-upload emit vs
-  `emitActiveIndices`; hole-free full-lifecycle) → **B5c-3** parity sign-off → **B5c-4** default flip to
-  GPU; THEN the parked code-review backlog.
+- **B5c-2 (real-asset helmet evidence) — landed.** `test_vdpm_helmet_evidence.cpp` (`[.][gpu]`,
+  local-only) decodes the REAL DamagedHelmet through the production `GltfLoader::loadScene` and uses the
+  collapse stream `Geometry::load` already built (`geometry.collapses()` — no re-simplify), selecting the
+  UNIQUE VDPM-eligible geometry. Two cleanly-separated claims: **(A) byte-identity** — from a CPU-uploaded
+  active set the GPU emit is BYTE-IDENTICAL to `ParallelFront::emitActiveIndices` at roots / mid / full
+  (mid asserted strictly between; the non-full cases asserted to actually reach nonzero ancestor depth +
+  multi-wedge seam buckets **among surviving faces** — resolved-ancestor-distinct — so the match can't be
+  vacuous); **(B) full lifecycle** — the complete GPU `recordFrame` is invariant-valid, hole-free
+  (CPU-classified foldover/coverage == 0), clean-failFlags, and bounded, with the emitted-count guarded
+  (`counters[0]==0`, `[1]≤faces`, `[2]==3·[1]≤3·faces`) before any mapped readback. The exact GPU==CPU
+  lifecycle comparison is GUARDED on the reference first reaching full detail — the real helmet at
+  tiny-budget + cull-off does NOT (8 zero-score splits remain), so the guard correctly skips, proving that
+  "tiny budget" ≠ full refinement (Claim A already supplies the structural byte-identity). Evidence WARNs
+  report maxRank + the uploaded static footprint via `VdpmGpuMesh::staticByteFootprint()` (accumulated at
+  every upload site across all twelve static B2–B4 buffers — uploaded payload bytes, not VMA suballocation
+  padding: helmet ≈ 1.55 MB) and its `wedgeMapByteFootprint()` subset (choices + offsets, ≈ 202 kB).
+- NEXT: **B5c-3** parity sign-off (`docs/acceptance-testing.md`) → **B5c-4** default flip to GPU; THEN the
+  parked code-review backlog.
 - **7 forest skips.** `buildVertexForest` skips collapses whose edge diverged from its adjacency
   replay (7 of ~6800 on the helmet); past the first skip the forest is slightly unfaithful. The repairs
   cover the visible symptoms; truncating the stream at the first skip would be the clean structural fix.
