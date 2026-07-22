@@ -30,10 +30,10 @@ struct FrontInput
 {
     std::uint32_t emitted{0}; // counters[2]
     std::uint32_t drawMultiplier{1};
-    std::uint32_t ancestorFailure{0};   // repairControl[1]
-    std::uint32_t fallbackFired{0};     // repairControl[2]
-    std::uint32_t failFlag0{0};         // failFlags[0]
-    std::uint32_t failFlag1{0};         // failFlags[1]
+    std::uint32_t ancestorFailure{0};     // repairControl[1]
+    std::uint32_t fallbackFired{0};       // repairControl[2]
+    std::uint32_t failFlag0{0};           // failFlags[0]
+    std::uint32_t failFlag1{0};           // failFlags[1]
     std::vector<std::uint32_t> history{}; // roundHistory (length kVdpmGpuRepairRoundBudget)
     bool repairPresent{true};
 };
