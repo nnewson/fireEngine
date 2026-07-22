@@ -605,3 +605,272 @@ TEST_CASE("VdpmGpuManager batched recordRequests == per-front recordFrame (bit-e
         run.runAndCompare(0, std::span<const std::size_t>{all}, 1e-4f, cam);
     }
 }
+
+// Scene-health readback ring (B5c-1): the delayed readback must reflect the frame
+// kMaxFramesInFlight ago and keep the frame slots isolated. Drive frames with a CONSTANT view (⇒
+// constant GPU emitted count) but a DISTINCT cpuTriangleSubtotal each frame; once warm, each read =
+// subtotal(f-K) + a constant emitted-triangle term, so consecutive valid reads step by exactly the
+// per-frame subtotal delta. A wrong delay or cross-slot contamination breaks that constant step.
+TEST_CASE("VdpmGpuManager scene-health readback: K-frame delay + slot isolation", "[.][gpu]")
+{
+    Device device = Device::headlessCompute();
+    Resources resources(device);
+    VdpmGpuManager manager(device, resources);
+    REQUIRE(manager.available());
+
+    const Mesh m = uvSphere(16, 20);
+    const QuadricSimplifier simp;
+    const auto collapses = simp.collapseSequence(m.verts, m.indices);
+    const VdpmMeshHandle mesh = manager.registerMesh(m.verts, m.indices, collapses);
+    REQUIRE(mesh != NullVdpmMesh);
+    const VdpmFrontHandle front = manager.createFront(mesh);
+    REQUIRE(front != NullVdpmFront);
+
+    VdpmWorkRequest req;
+    req.front = front;
+    req.world = Mat4::identity();
+    req.rasterBackfaceCulling = false; // full detail (no back-face zeroing) ⇒ constant emit
+    const std::array<VdpmWorkRequest, 1> requests{req};
+
+    const vk::raii::CommandPool pool(
+        device.device(),
+        vk::CommandPoolCreateInfo{.flags = vk::CommandPoolCreateFlagBits::eResetCommandBuffer,
+                                  .queueFamilyIndex = device.graphicsFamily()});
+
+    constexpr int kFrames = 8;
+    constexpr std::uint64_t kStep = 1000;
+    std::array<std::int64_t, kFrames> reads{};
+    reads.fill(-1);
+    for (int f = 0; f < kFrames; ++f)
+    {
+        const std::uint32_t slot = static_cast<std::uint32_t>(f % kMaxFramesInFlight);
+        const VdpmFrameGlobals globals{.viewProj = lookAtProj(Vec3{0.0f, 0.0f, 3.0f}),
+                                       .cameraPos = Vec3{0.0f, 0.0f, 3.0f},
+                                       .projScaleY = 1.0f,
+                                       .viewportWidth = 1280.0f,
+                                       .viewportHeight = 720.0f,
+                                       .pixelBudget = 1e-6f,
+                                       .frameIndex = slot};
+        auto cmds = device.device().allocateCommandBuffers(
+            vk::CommandBufferAllocateInfo{.commandPool = *pool,
+                                          .level = vk::CommandBufferLevel::ePrimary,
+                                          .commandBufferCount = 1});
+        vk::raii::CommandBuffer& cmd = cmds[0];
+        cmd.begin(
+            vk::CommandBufferBeginInfo{.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
+        manager.recordRequests(*cmd, requests, globals);
+        manager.recordDiagnosticReadback(*cmd, slot, kStep * static_cast<std::uint64_t>(f + 1));
+        cmd.end();
+        const vk::CommandBufferSubmitInfo ci{.commandBuffer = *cmd};
+        const vk::SubmitInfo2 s{.commandBufferInfoCount = 1, .pCommandBufferInfos = &ci};
+        const vk::raii::Fence fence(device.device(), vk::FenceCreateInfo{});
+        device.graphicsQueue().submit2(s, *fence);
+        REQUIRE(device.device().waitForFences(*fence, vk::True, UINT64_MAX) ==
+                vk::Result::eSuccess);
+
+        const VdpmGpuManager::SceneHealth& h = manager.lastSceneHealth();
+        if (h.valid)
+        {
+            reads[static_cast<std::size_t>(f)] = static_cast<std::int64_t>(h.triangleTotal);
+        }
+    }
+
+    // From K+1 on, both the current and previous reads are valid AND from settled frames; their
+    // difference is the per-frame subtotal step (the constant emitted term cancels).
+    int checked = 0;
+    for (int f = kMaxFramesInFlight + 1; f < kFrames; ++f)
+    {
+        REQUIRE(reads[static_cast<std::size_t>(f)] >= 0);
+        REQUIRE(reads[static_cast<std::size_t>(f - 1)] >= 0);
+        CHECK(reads[static_cast<std::size_t>(f)] - reads[static_cast<std::size_t>(f - 1)] ==
+              static_cast<std::int64_t>(kStep));
+        ++checked;
+    }
+    CHECK(checked > 0);
+}
+
+// B5c-1 draw-count validation: a supplied drawCounts mapping must be a complete 1:1 keyed cover of
+// the request set (no zero-count / unknown / duplicate / missing entry) — a silent default-to-1
+// would let a filtering mismatch produce plausible-but-false totals.
+TEST_CASE("VdpmGpuManager recordRequests rejects a malformed draw-count mapping", "[.][gpu]")
+{
+    Device device = Device::headlessCompute();
+    Resources resources(device);
+    VdpmGpuManager manager(device, resources);
+    const Mesh m = uvSphere(12, 16);
+    const QuadricSimplifier simp;
+    const auto collapses = simp.collapseSequence(m.verts, m.indices);
+    const VdpmMeshHandle mesh = manager.registerMesh(m.verts, m.indices, collapses);
+    const VdpmFrontHandle a = manager.createFront(mesh);
+    const VdpmFrontHandle b = manager.createFront(mesh);
+    REQUIRE(a != NullVdpmFront);
+    REQUIRE(b != NullVdpmFront);
+    const VdpmFrontHandle bogus = makeHandle<VdpmFrontHandle>(handleIndex(a), 77);
+
+    auto reqOf = [](VdpmFrontHandle f)
+    {
+        VdpmWorkRequest r;
+        r.front = f;
+        r.world = Mat4::identity();
+        r.rasterBackfaceCulling = false;
+        return r;
+    };
+    const std::array<VdpmWorkRequest, 2> requests{reqOf(a), reqOf(b)};
+    const VdpmFrameGlobals globals{.viewProj = lookAtProj(Vec3{0.0f, 0.0f, 3.0f}),
+                                   .cameraPos = Vec3{0.0f, 0.0f, 3.0f},
+                                   .projScaleY = 1.0f,
+                                   .viewportWidth = 1280.0f,
+                                   .viewportHeight = 720.0f,
+                                   .pixelBudget = 1e-4f,
+                                   .frameIndex = 0};
+
+    const vk::raii::CommandPool pool(
+        device.device(),
+        vk::CommandPoolCreateInfo{.flags = vk::CommandPoolCreateFlagBits::eResetCommandBuffer,
+                                  .queueFamilyIndex = device.graphicsFamily()});
+    auto cmds = device.device().allocateCommandBuffers(vk::CommandBufferAllocateInfo{
+        .commandPool = *pool, .level = vk::CommandBufferLevel::ePrimary, .commandBufferCount = 1});
+    vk::raii::CommandBuffer& cmd = cmds[0];
+    cmd.begin(vk::CommandBufferBeginInfo{.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
+
+    using DC = VdpmFrontDrawCount;
+    // zero count
+    const std::array<DC, 2> zero{DC{a, 0}, DC{b, 1}};
+    REQUIRE_THROWS_AS(manager.recordRequests(*cmd, requests, globals, zero), std::logic_error);
+    // unknown front (not in requests)
+    const std::array<DC, 3> unknown{DC{a, 1}, DC{b, 1}, DC{bogus, 1}};
+    REQUIRE_THROWS_AS(manager.recordRequests(*cmd, requests, globals, unknown), std::logic_error);
+    // duplicate
+    const std::array<DC, 3> dup{DC{a, 1}, DC{a, 1}, DC{b, 1}};
+    REQUIRE_THROWS_AS(manager.recordRequests(*cmd, requests, globals, dup), std::logic_error);
+    // missing (b has no entry)
+    const std::array<DC, 1> missing{DC{a, 1}};
+    REQUIRE_THROWS_AS(manager.recordRequests(*cmd, requests, globals, missing), std::logic_error);
+    // a complete valid mapping is accepted
+    const std::array<DC, 2> ok{DC{a, 1}, DC{b, 2}};
+    REQUIRE_NOTHROW(manager.recordRequests(*cmd, requests, globals, ok));
+}
+
+// B5c-1 stale-diagnostics guard: after an inactive gap (no fronts recorded), the readback must NOT
+// parse an old slot as fresh — it stays invalid until the ring re-warms with live data.
+TEST_CASE("VdpmGpuManager scene-health readback invalidates across an inactive gap", "[.][gpu]")
+{
+    Device device = Device::headlessCompute();
+    Resources resources(device);
+    VdpmGpuManager manager(device, resources);
+    const Mesh m = uvSphere(12, 16);
+    const QuadricSimplifier simp;
+    const auto collapses = simp.collapseSequence(m.verts, m.indices);
+    const VdpmMeshHandle mesh = manager.registerMesh(m.verts, m.indices, collapses);
+    const VdpmFrontHandle front = manager.createFront(mesh);
+    REQUIRE(front != NullVdpmFront);
+    VdpmWorkRequest req;
+    req.front = front;
+    req.world = Mat4::identity();
+    req.rasterBackfaceCulling = false;
+    const std::array<VdpmWorkRequest, 1> requests{req};
+
+    const vk::raii::CommandPool pool(
+        device.device(),
+        vk::CommandPoolCreateInfo{.flags = vk::CommandPoolCreateFlagBits::eResetCommandBuffer,
+                                  .queueFamilyIndex = device.graphicsFamily()});
+    auto activeFrame = [&](int f) -> bool
+    {
+        const std::uint32_t slot = static_cast<std::uint32_t>(f % kMaxFramesInFlight);
+        const VdpmFrameGlobals globals{.viewProj = lookAtProj(Vec3{0.0f, 0.0f, 3.0f}),
+                                       .cameraPos = Vec3{0.0f, 0.0f, 3.0f},
+                                       .projScaleY = 1.0f,
+                                       .viewportWidth = 1280.0f,
+                                       .viewportHeight = 720.0f,
+                                       .pixelBudget = 1e-6f,
+                                       .frameIndex = slot};
+        auto cmds = device.device().allocateCommandBuffers(
+            vk::CommandBufferAllocateInfo{.commandPool = *pool,
+                                          .level = vk::CommandBufferLevel::ePrimary,
+                                          .commandBufferCount = 1});
+        vk::raii::CommandBuffer& cmd = cmds[0];
+        cmd.begin(
+            vk::CommandBufferBeginInfo{.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
+        manager.recordRequests(*cmd, requests, globals);
+        manager.recordDiagnosticReadback(*cmd, slot, 1000);
+        cmd.end();
+        const vk::CommandBufferSubmitInfo ci{.commandBuffer = *cmd};
+        const vk::SubmitInfo2 s{.commandBufferInfoCount = 1, .pCommandBufferInfos = &ci};
+        const vk::raii::Fence fence(device.device(), vk::FenceCreateInfo{});
+        device.graphicsQueue().submit2(s, *fence);
+        REQUIRE(device.device().waitForFences(*fence, vk::True, UINT64_MAX) ==
+                vk::Result::eSuccess);
+        return manager.lastSceneHealth().valid;
+    };
+
+    int f = 0;
+    for (; f < kMaxFramesInFlight + 2; ++f) // warm the ring
+    {
+        activeFrame(f);
+    }
+    REQUIRE(manager.lastSceneHealth().valid);
+
+    // Inactive gap: the Renderer invalidates every slot it doesn't record into.
+    for (std::uint32_t s = 0; s < kMaxFramesInFlight; ++s)
+    {
+        manager.invalidateHealthSlot(s);
+    }
+    // Resume: the first kMaxFramesInFlight active frames read invalidated slots → invalid; then the
+    // slots re-warm and validity returns.
+    for (int i = 0; i < kMaxFramesInFlight; ++i, ++f)
+    {
+        CHECK_FALSE(activeFrame(f)); // reading a slot invalidated during the gap
+    }
+    CHECK(activeFrame(f)); // ring re-warmed
+}
+
+// B5c-1 accounting: the scene-health reduction adds EXACTLY one dispatch + one barrier on top of
+// the front-lifecycle totals — the manager owns this increment, so pin it here.
+TEST_CASE("VdpmGpuManager: the health stage adds exactly {+1 dispatch, +1 barrier}", "[.][gpu]")
+{
+    Device device = Device::headlessCompute();
+    Resources resources(device);
+    VdpmGpuManager manager(device, resources);
+    const Mesh m = uvSphere(12, 16);
+    const QuadricSimplifier simp;
+    const auto collapses = simp.collapseSequence(m.verts, m.indices);
+    const VdpmMeshHandle mesh = manager.registerMesh(m.verts, m.indices, collapses);
+    const VdpmFrontHandle front = manager.createFront(mesh);
+    REQUIRE(front != NullVdpmFront);
+
+    // A single unprofiled front routes to the batched path, so its lifecycle cost is
+    // analyticBatchedCost — the manager's reported total must be exactly that + the health {1,1}.
+    const VdpmGpuFront* f = manager.frontForTest(front);
+    REQUIRE(f != nullptr);
+    const std::array<VdpmGpuFront::FrontDims, 1> dims{
+        {{f->rankCount(), f->faceCount(), f->finestFaceCount()}}};
+    const VdpmGpuFront::ComputeCost lifecycle =
+        VdpmGpuFront::analyticBatchedCost(dims, resources.maxComputeWorkGroupCountX());
+
+    VdpmWorkRequest req;
+    req.front = front;
+    req.world = Mat4::identity();
+    req.rasterBackfaceCulling = false;
+    const std::array<VdpmWorkRequest, 1> requests{req};
+    const VdpmFrameGlobals globals{.viewProj = lookAtProj(Vec3{0.0f, 0.0f, 3.0f}),
+                                   .cameraPos = Vec3{0.0f, 0.0f, 3.0f},
+                                   .projScaleY = 1.0f,
+                                   .viewportWidth = 1280.0f,
+                                   .viewportHeight = 720.0f,
+                                   .pixelBudget = 1e-4f,
+                                   .frameIndex = 0}; // no stageProfiler ⇒ batched path
+
+    const vk::raii::CommandPool pool(
+        device.device(),
+        vk::CommandPoolCreateInfo{.flags = vk::CommandPoolCreateFlagBits::eResetCommandBuffer,
+                                  .queueFamilyIndex = device.graphicsFamily()});
+    auto cmds = device.device().allocateCommandBuffers(vk::CommandBufferAllocateInfo{
+        .commandPool = *pool, .level = vk::CommandBufferLevel::ePrimary, .commandBufferCount = 1});
+    vk::raii::CommandBuffer& cmd = cmds[0];
+    cmd.begin(vk::CommandBufferBeginInfo{.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
+    manager.recordRequests(*cmd, requests, globals); // accounting filled synchronously; no submit
+    cmd.end();
+
+    CHECK(manager.lastComputeStats().analyticDispatches == lifecycle.dispatches + 1);
+    CHECK(manager.lastComputeStats().analyticBarriers == lifecycle.barriers + 1);
+}

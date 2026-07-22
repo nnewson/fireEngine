@@ -1013,4 +1013,88 @@ static_assert(alignof(VdpmApplyKernelPush) == 8);
 static_assert(std::is_standard_layout_v<VdpmApplyKernelPush>);
 static_assert(std::is_trivially_copyable_v<VdpmApplyKernelPush>);
 
+// One front's health SOURCE for the scene-wide diagnostics reduction (B5c-1). The single-invocation
+// reduce shader reads `jobs[i]` for every UNIQUE recorded front and folds it into
+// VdpmSceneHealthGpu. `drawMultiplier` weights the emitted-index contribution by how many forward
+// DRAW commands this front backs this frame (submitted-draw semantics — NOT the deduped
+// work-request count). `repairPresent` == 0 for a front with no repair buffers
+// (roundHistory/repairControl null → skip its repair-health terms). All *Address fields are BDA
+// device addresses (buffers already carry eShaderDeviceAddress).
+struct alignas(8) VdpmHealthJobGpu
+{
+    std::uint64_t countersAddress{0}; // 3 uint [ancestorFailures, survivingFaces, emittedIndex]
+    std::uint64_t repairControlAddress{
+        0};                               // 4 uint [anyMarked, ancestorFailure, fallbackFired, pad]
+    std::uint64_t roundHistoryAddress{0}; // roundBudget uint (per-round detect anyMarked)
+    std::uint64_t failFlagsAddress{0};    // 2 uint [refineFailure, dependentsUnderflow]
+    std::uint32_t roundBudget{0};
+    std::uint32_t drawMultiplier{0};
+    std::uint32_t repairPresent{0};
+    std::uint32_t pad{0};
+};
+static_assert(offsetof(VdpmHealthJobGpu, countersAddress) == 0);
+static_assert(offsetof(VdpmHealthJobGpu, repairControlAddress) == 8);
+static_assert(offsetof(VdpmHealthJobGpu, roundHistoryAddress) == 16);
+static_assert(offsetof(VdpmHealthJobGpu, failFlagsAddress) == 24);
+static_assert(offsetof(VdpmHealthJobGpu, roundBudget) == 32);
+static_assert(offsetof(VdpmHealthJobGpu, drawMultiplier) == 36);
+static_assert(offsetof(VdpmHealthJobGpu, repairPresent) == 40);
+static_assert(offsetof(VdpmHealthJobGpu, pad) == 44);
+static_assert(sizeof(VdpmHealthJobGpu) == 48, "VdpmHealthJobGpu std430 size/stride");
+static_assert(alignof(VdpmHealthJobGpu) == 8);
+static_assert(std::is_standard_layout_v<VdpmHealthJobGpu>);
+static_assert(std::is_trivially_copyable_v<VdpmHealthJobGpu>);
+
+// The scene-wide GPU-front health summary the reduction writes (B5c-1) — replaces the old
+// representative-front diagnostics. Health-oriented, NOT the CPU foldover/coverage vertex counts.
+// The emitted-index total is 64-bit as {lo, hi} (accumulated with a manual carry — no shader
+// int64); `emittedIndexOverflow` is a defensive guard (unreachable for realistic scenes). Reduced
+// on the GPU, copied to the delayed readback ring, parsed on the CPU a frames-in-flight cycle
+// later.
+struct alignas(4) VdpmSceneHealthGpu
+{
+    std::uint32_t emittedIndexTotalLo{0};  // Σ drawMultiplier×emittedIndexCount, low 32 bits
+    std::uint32_t emittedIndexTotalHi{0};  // high 32 bits (manual carry)
+    std::uint32_t emittedIndexOverflow{0}; // set if the 64-bit total itself wrapped (guard)
+    std::uint32_t repairFronts{0};         // # fronts with repair buffers present
+    std::uint32_t maxMarkedRounds{0};      // max over fronts of leading marked-round count
+    std::uint32_t sumMarkedRounds{0};      // Σ leading marked-round counts
+    std::uint32_t fallbackFronts{0};       // # fronts whose full-detail fallback fired
+    std::uint32_t nonCleanPrefixFronts{0}; // # fronts with a marked round after a clean one
+    std::uint32_t ancestorFailureFronts{
+        0};                          // # fronts with repairControl[1] (ancestor resolve failure)
+    std::uint32_t failFlagFronts{0}; // # fronts with any B3 failFlag set
+};
+static_assert(offsetof(VdpmSceneHealthGpu, emittedIndexTotalLo) == 0);
+static_assert(offsetof(VdpmSceneHealthGpu, emittedIndexTotalHi) == 4);
+static_assert(offsetof(VdpmSceneHealthGpu, emittedIndexOverflow) == 8);
+static_assert(offsetof(VdpmSceneHealthGpu, repairFronts) == 12);
+static_assert(offsetof(VdpmSceneHealthGpu, maxMarkedRounds) == 16);
+static_assert(offsetof(VdpmSceneHealthGpu, sumMarkedRounds) == 20);
+static_assert(offsetof(VdpmSceneHealthGpu, fallbackFronts) == 24);
+static_assert(offsetof(VdpmSceneHealthGpu, nonCleanPrefixFronts) == 28);
+static_assert(offsetof(VdpmSceneHealthGpu, ancestorFailureFronts) == 32);
+static_assert(offsetof(VdpmSceneHealthGpu, failFlagFronts) == 36);
+static_assert(sizeof(VdpmSceneHealthGpu) == 40, "VdpmSceneHealthGpu std430 size");
+static_assert(alignof(VdpmSceneHealthGpu) == 4);
+static_assert(std::is_standard_layout_v<VdpmSceneHealthGpu>);
+static_assert(std::is_trivially_copyable_v<VdpmSceneHealthGpu>);
+
+// Push constant for the health reduction: the job-array address + count + the scene-health output
+// address. One workgroup, one invocation, fully overwrites the output.
+struct alignas(8) VdpmHealthReducePush
+{
+    std::uint64_t jobsAddress{0};
+    std::uint64_t sceneHealthAddress{0};
+    std::uint32_t jobCount{0};
+    std::uint32_t pad{0};
+};
+static_assert(offsetof(VdpmHealthReducePush, jobsAddress) == 0);
+static_assert(offsetof(VdpmHealthReducePush, sceneHealthAddress) == 8);
+static_assert(offsetof(VdpmHealthReducePush, jobCount) == 16);
+static_assert(sizeof(VdpmHealthReducePush) == 24);
+static_assert(alignof(VdpmHealthReducePush) == 8);
+static_assert(std::is_standard_layout_v<VdpmHealthReducePush>);
+static_assert(std::is_trivially_copyable_v<VdpmHealthReducePush>);
+
 } // namespace fire_engine

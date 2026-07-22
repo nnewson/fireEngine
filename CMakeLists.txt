@@ -217,6 +217,7 @@ set(SHADER_SOURCES
     shaders/vdpm_repair_fallback.comp
     shaders/vdpm_repair_kernel.comp
     shaders/vdpm_apply_kernel.comp
+    shaders/vdpm_health_reduce.comp
 )
 
 # glslc from the vcpkg `shaderc` port (installed under <vcpkg-installed>/<triplet>/tools/shaderc via
@@ -258,6 +259,12 @@ foreach(shader IN LISTS SHADER_SOURCES)
 endforeach()
 
 add_custom_target(shaders ALL DEPENDS ${SHADER_SPVS} COMMENT "Building shaders")
+
+# `shaders` is an ALL target but the runtime targets load the .spv from the build dir, so make the
+# dependency EXPLICIT — otherwise `cmake --build --target test_fire_engine` (or fireEngineApp) can
+# build against a stale shader (a manual `rm *.spv` must never be needed for correctness). The app
+# target exists above; the test target adds its own dependency after it is defined below.
+add_dependencies(fireEngineApp shaders)
 
 # --- Assets -------------------------------------------------------------
 
@@ -358,6 +365,7 @@ add_executable(test_fire_engine
     tests/render/test_vdpm_gpu_runtime.cpp
     tests/render/test_vdpm_repair_kernel.cpp
     tests/render/test_vdpm_apply_kernel.cpp
+    tests/render/test_vdpm_health_reduce.cpp
     tests/render/test_vdpm_scan.cpp
     tests/graphics/test_generational_slot_pool.cpp
     tests/scene/test_particle_emitter.cpp
@@ -390,6 +398,9 @@ target_compile_options(test_fire_engine PRIVATE -Wall -Wextra -Wpedantic)
 if(FIRE_ENGINE_WARNINGS_AS_ERRORS)
     target_compile_options(test_fire_engine PRIVATE -Werror)
 endif()
+# The [.][gpu] tests load .spv from the build dir at runtime — depend on `shaders` so building the
+# test target alone can never leave a stale shader (tests-full inherits this via test_fire_engine).
+add_dependencies(test_fire_engine shaders)
 
 file(GLOB_RECURSE TEST_ASSETS "${PROJECT_SOURCE_DIR}/tests/assets/*")
 foreach(f IN LISTS TEST_ASSETS)

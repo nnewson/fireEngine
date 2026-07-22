@@ -99,9 +99,10 @@ struct DrawCommand
     // (view-dependent LOD) draws set it; every other path (static / discrete LOD / VIPM / skybox /
     // shadow) leaves it null and draws directly. `indexCount` stays populated for the triangle
     // overlay on the CPU-front indirect path; a GPU-driven-front draw (vdpmGpuFront set)
-    // deliberately leaves it 0 — the real count lives only in the GPU indirect command until B5c
-    // adds delayed triangle diagnostics. `indirectOffset` is a Vulkan-free byte offset (no Vulkan
-    // type here).
+    // deliberately leaves it 0 — the real per-draw count lives only in the GPU indirect command.
+    // The overlay's GPU triangle total instead comes from the B5c-1 delayed scene-health reduction
+    // (the renderer counts these draws per front for the emitted-total weighting). `indirectOffset`
+    // is a Vulkan-free byte offset (no Vulkan type here).
     BufferHandle indirectBuffer{NullBuffer};
     uint64_t indirectOffset{0};
     // GPU-driven VDPM front for this instance (rendering-spine #3, Stage B5b). Non-null only on a

@@ -80,6 +80,11 @@ struct DependencyDag; // graphics/vdpm_parallel.hpp — the forest's refine-depe
 // as specialization constant id 0 (local_size_x).
 [[nodiscard]] ComputePipelineConfig vdpmApplyKernelPipelineConfig(std::uint32_t workgroupSize);
 
+// The scene-wide health reduction config (B5c-1): `shaders/vdpm_health_reduce.comp` folds every
+// recorded front's health into one VdpmSceneHealthGpu in a single-invocation dispatch. Descriptor-
+// free; push = VdpmHealthReducePush (job-array + scene-health address + count).
+[[nodiscard]] ComputePipelineConfig vdpmHealthReducePipelineConfig();
+
 // A rank's contiguous range in `splitsByRank` — the CPU recorder issues one dispatch per rank over
 // `[offset, offset + count)`, and an array of these is uploaded device-local for the persistent
 // repair kernel (binding.rankRangesAddress). The shared GPU ABI struct lives in ubo.hpp (the
@@ -642,6 +647,16 @@ public:
     // throws otherwise.
     [[nodiscard]] VdpmApplyJobGpu prepareApplyJob(std::uint32_t frameIndex, float pixelBudget,
                                                   float coarsenBudget) const;
+
+    // Front-owned HEALTH-job preparation (B5c-1): the per-front source addresses the scene-health
+    // reduction folds — this frame slot's counters (emitted-index count) + the single-buffered
+    // repairControl / roundHistory / failFlags — plus `drawMultiplier` (how many forward draws this
+    // front backs this frame, so the emitted total carries submitted-draw semantics).
+    // `repairPresent` is set only when the front actually runs repair (finestFaceCount > 0); a
+    // repair-less front's roundHistory/repairControl are skipped by the reducer. Requires a runtime
+    // front; throws otherwise.
+    [[nodiscard]] VdpmHealthJobGpu prepareHealthJob(std::uint32_t frameIndex,
+                                                    std::uint32_t drawMultiplier) const;
 
     // Record the persistent-kernel APPLY for frame slot `frameIndex`: pack + upload the 1-element
     // job (only the job — budgets are in it), a leading score→kernel compute barrier (recordFrame /

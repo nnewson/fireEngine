@@ -471,6 +471,8 @@ backend (exact only where off-threshold), and `grep -icE 'VUID|validation error'
 # Transmission path (13 dense transmissive instances)
 ./fireEngineApp TransmissionTest/TransmissionTest.gltf skybox.hdr --lod-mode view-dependent --vdpm-gpu
 ```
-A/B against the same command **without** `--vdpm-gpu` to confirm equivalence. (B5b-2 note: the overlay
-"Triangles drawn" reads 0 for GPU-driven instances — the count is GPU-only until B5c adds delayed
-diagnostics — so judge parity visually, not by the triangle readout.)
+A/B against the same command **without** `--vdpm-gpu` to confirm equivalence. (B5c-1: the overlay
+"Triangles drawn" now includes GPU-driven fronts via the delayed scene-health reduction — a
+frame-consistent CPU+GPU total shown a couple of frames late — so the readout is meaningful for the
+A/B, alongside the separate "VDPM GPU health" repair-convergence lines. Still judge silhouette parity
+visually.)

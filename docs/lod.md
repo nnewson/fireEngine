@@ -844,9 +844,24 @@ at a fraction of the triangles. The remaining residuals and follow-ons, in rough
   finding, MEASURED not inferred: emit is a large share of the lifecycle — ~17–56% depending on
   composition — so if a future dispatch lever is ever wanted, multi-front emit compaction is the
   candidate, though substantially more invasive.)
-- NEXT: **B5c** — delayed triangle/repair diagnostics + the deferred helmet wedge/rank-count evidence
-  (Vulkan glTF path) + a parity sign-off and a possible default flip to GPU — closing the GPU-front
-  productionization tail while the lifecycle is fresh; THEN the parked code-review backlog.
+- **B5c-1 (GPU-sourced overlay diagnostics) — landed.** The overlay's triangle count + repair health
+  for GPU-driven fronts (previously suppressed as stale CPU counters, `vdpmCpuRanThisFrame`) now come
+  from the GPU. A single-invocation `shaders/vdpm_health_reduce.comp` folds every recorded front's
+  health (per-front `VdpmHealthJobGpu` array — counters/repairControl/roundHistory/failFlags by BDA +
+  a submitted-draw multiplier) into ONE scene-wide `VdpmSceneHealthGpu` (64-bit emitted total {lo,hi}
+  with a manual carry; repair-front / max+sum marked-round / fallback / non-clean-prefix / ancestor /
+  B3-fail counts — health-oriented, NOT the CPU foldover/coverage vertex counts). The reduction runs
+  inside the `VdpmCompute` timestamp; a device-local scene-health ring (per frame-slot) is copied to a
+  host readback ring OUTSIDE it, parsed a frames-in-flight cycle later, and COMBINED with that same
+  frame's stored CPU triangle subtotal so the displayed total is frame-consistent. The `vdpmCpuRan-
+  ThisFrame` guard is KEPT (CPU rows labelled "CPU fronts only"); channel attribution shows "n/a" for
+  GPU fronts (no GPU counters built). Draw multipliers are matched BY HANDLE from the real forward
+  buckets. `test_vdpm_health_reduce.cpp` drives the reducer directly (mixed repair, submitted-draw
+  weighting, dirty-history prefix, ancestor/fallback, 64-bit carry); `test_vdpm_gpu_manager.cpp` pins
+  the K-frame readback delay + slot isolation. 0-VUID on DamagedHelmet `--vdpm-gpu`.
+- NEXT: **B5c-2** headless helmet wedge/rank cross-check (byte-exact CPU-upload emit vs
+  `emitActiveIndices`; hole-free full-lifecycle) → **B5c-3** parity sign-off → **B5c-4** default flip to
+  GPU; THEN the parked code-review backlog.
 - **7 forest skips.** `buildVertexForest` skips collapses whose edge diverged from its adjacency
   replay (7 of ~6800 on the helmet); past the first skip the forest is slightly unfaithful. The repairs
   cover the visible symptoms; truncating the stream at the first skip would be the clean structural fix.

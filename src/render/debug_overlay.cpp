@@ -153,19 +153,29 @@ void DebugOverlay::buildUi(const FrameStats& stats, RenderTunables& tunables)
         ImGui::SliderFloat("Pixel error budget", &tunables.lodPixelErrorBudget, 0.25f, 16.0f,
                            "%.2f");
         ImGui::EndDisabled();
-        ImGui::Text("Triangles drawn: %d", stats.trianglesDrawn);
+        if (stats.trianglesGpuPending)
+        {
+            ImGui::Text("Triangles drawn: pending GPU readback");
+        }
+        else
+        {
+            ImGui::Text("Triangles drawn: %llu%s",
+                        static_cast<unsigned long long>(stats.trianglesDrawn),
+                        stats.trianglesOverflow ? " (overflow!)" : "");
+        }
         if (tunables.lodMode == LodMode::ViewDependent)
         {
-            // Per-frame VDPM repair work (vertices each pass pulled back in). A sudden jump signals
-            // a refine/repair regression; steady low numbers are expected.
-            ImGui::Text("VDPM repairs (verts): foldover %d, coverage %d",
+            // Per-frame VDPM repair work (vertices each pass pulled back in). CPU-driven fronts
+            // only — a GPU-backed front's CPU counters are stale (its lifecycle was skipped), so
+            // they are excluded; the GPU-front health summary is separate below.
+            ImGui::Text("VDPM repairs (verts, CPU fronts): foldover %d, coverage %d",
                         stats.vdpmFoldoversRepaired, stats.vdpmCoverageRepaired);
             // Per-channel refine attribution: which metric channel won each over-budget trigger,
             // and the largest score/budget ratio each channel reached this frame. The ratios expose
             // an under-firing channel the counts can't — a smooth interior with normal triggers 0
             // but a normal ratio near 1 is a hair under budget; near 0 means the channel is
             // genuinely blind.
-            ImGui::Text("VDPM triggers: geom %d, uv %d, normal %d, tangent %d",
+            ImGui::Text("VDPM triggers (CPU fronts): geom %d, uv %d, normal %d, tangent %d",
                         stats.vdpmGeometryTriggers, stats.vdpmUvTriggers, stats.vdpmNormalTriggers,
                         stats.vdpmTangentTriggers);
             ImGui::Text("VDPM max score/budget: geom %.2f, uv %.2f, normal %.2f, tangent %.2f",
@@ -186,15 +196,24 @@ void DebugOverlay::buildUi(const FrameStats& stats, RenderTunables& tunables)
                     "VDPM GPU: record %.3f ms CPU | ~%d dispatches, ~%d barriers (analytic)",
                     static_cast<double>(stats.vdpmRecordCpuMs), stats.vdpmAnalyticDispatches,
                     stats.vdpmAnalyticBarriers);
-                // Delayed convergence readback (a representative front, a few frames late): how
-                // many of the budgeted repair rounds actually found work. A small number vs the
-                // budget is the wasted-round evidence.
-                if (stats.vdpmRepairMarkedRounds >= 0)
+                // Channel-trigger attribution is CPU-only (the GPU score picks a channel per split
+                // but doesn't aggregate it back) — shown n/a for GPU fronts.
+                ImGui::TextDisabled("VDPM GPU channel attribution: n/a");
+                // Delayed SCENE-WIDE health readback (a few frames late): repair convergence across
+                // all GPU repair fronts. A low max-marked vs the budget is the
+                // economical-convergence signal; any fallback / non-clean / ancestor / B3-fail
+                // count is a health flag.
+                if (stats.vdpmMaxMarkedRounds >= 0)
                 {
-                    ImGui::Text("VDPM GPU repair: %d/%d rounds did work%s | emitted %d idx",
-                                stats.vdpmRepairMarkedRounds, stats.vdpmRepairRoundBudget,
-                                stats.vdpmRepairFallbackFired ? " (fallback FIRED)" : "",
-                                stats.vdpmEmittedIndexCount);
+                    ImGui::Text(
+                        "VDPM GPU health: %d repair front(s), max %d/%d marked rounds (Σ %d)",
+                        stats.vdpmRepairFronts, stats.vdpmMaxMarkedRounds,
+                        stats.vdpmRepairRoundBudget, stats.vdpmSumMarkedRounds);
+                    ImGui::Text("VDPM GPU flags: fallback %d, non-clean %d, ancestor-fail %d, "
+                                "B3-fail %d%s",
+                                stats.vdpmFallbackFronts, stats.vdpmNonCleanPrefix,
+                                stats.vdpmAncestorFailures, stats.vdpmFailFlagFronts,
+                                stats.vdpmEmittedOverflow ? " | EMITTED OVERFLOW" : "");
                 }
             }
         }
