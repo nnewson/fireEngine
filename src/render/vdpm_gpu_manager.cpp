@@ -20,13 +20,6 @@ namespace fire_engine
 
 namespace
 {
-// Diagnostic readback layout (uint32 words): roundHistory[0..B) | repairControl[0..4) |
-// counters[0..3).
-constexpr std::uint32_t kVdpmDiagRoundBase = 0;
-constexpr std::uint32_t kVdpmDiagControlBase = kVdpmGpuRepairRoundBudget;
-constexpr std::uint32_t kVdpmDiagCountersBase = kVdpmGpuRepairRoundBudget + 4;
-constexpr std::uint32_t kVdpmDiagWordCount = kVdpmGpuRepairRoundBudget + 7;
-
 // Chunked batched dispatch advances a job array's BDA by firstJob * sizeof(Job); the kernels
 // declare the JobBuf buffer reference `buffer_reference_align = 8`, so each job stride must be an
 // 8-multiple for every chunk's base address to keep that promise (front-batching arc).
@@ -41,12 +34,20 @@ VdpmGpuManager::VdpmGpuManager(const Device& device, Resources& resources)
       scorePipeline_(device, vdpmScorePipelineConfig()),
       refinePipelines_(device),
       repairPipelines_(device),
-      emitPipelines_(device)
+      emitPipelines_(device),
+      healthReducePipeline_(device, vdpmHealthReducePipelineConfig())
 {
-    // Delayed diagnostics readback ring (perf arc, item 4): [roundHistory[0..B),
-    // repairControl[0..4), counters[0..3)] per frame slot.
-    diagReadback_ =
-        resources_.createMappedReadbackBuffers(kVdpmDiagWordCount * sizeof(std::uint32_t));
+    // Scene-health readback (B5c-1): the reduction writes one VdpmSceneHealthGpu into a
+    // device-local ring slot (per frame-in-flight, eTransferSrc for the copy);
+    // recordDiagnosticReadback copies it into `diagReadback_` (host-visible) and reads the slot
+    // from a full cycle ago.
+    diagReadback_ = resources_.createMappedReadbackBuffers(sizeof(VdpmSceneHealthGpu));
+    for (std::uint32_t i = 0; i < kMaxFramesInFlight; ++i)
+    {
+        sceneHealthDeviceRing_[i] = resources_.createDeviceLocalStorageBuffer(
+            sizeof(VdpmSceneHealthGpu), nullptr, vk::BufferUsageFlagBits::eTransferSrc);
+        sceneHealthDeviceAddress_[i] = resources_.bufferAddress(sceneHealthDeviceRing_[i]);
+    }
 
     // The single-dispatch persistent repair kernel (Stage 3) — built only when the device supports
     // it (checked independently of the VdpmScan gate that let this manager be constructed).
@@ -184,9 +185,51 @@ void VdpmGpuManager::ensureJobCapacity(std::uint32_t frontCount)
     jobCapacity_ = cap;
 }
 
+void VdpmGpuManager::ensureHealthCapacity(std::uint32_t frontCount)
+{
+    if (frontCount <= healthJobCapacity_)
+    {
+        return;
+    }
+    std::uint32_t cap = healthJobCapacity_ == 0 ? 1 : healthJobCapacity_;
+    while (cap < frontCount)
+    {
+        cap *= 2;
+    }
+    // Same session-lifetime reasoning as ensureJobCapacity: the old array's buffer is never freed,
+    // so an in-flight frame's reduction referencing its BDA stays valid.
+    healthJobArray_ = resources_.createMappedDeviceAddressBuffers(static_cast<std::size_t>(cap) *
+                                                                  sizeof(VdpmHealthJobGpu));
+    healthJobCapacity_ = cap;
+}
+
+void VdpmGpuManager::recordHealthReduction(vk::CommandBuffer cmd, std::uint32_t frameIndex)
+{
+    const std::uint32_t n = static_cast<std::uint32_t>(resolveScratch_.size());
+    for (std::uint32_t i = 0; i < n; ++i)
+    {
+        const ResolvedRequest& r = resolveScratch_[i];
+        const VdpmHealthJobGpu job = r.front->prepareHealthJob(frameIndex, r.drawMultiplier);
+        writeMapped(healthJobArray_.mapped[frameIndex].subspan(i * sizeof(VdpmHealthJobGpu)), job);
+    }
+    // emit → health: the reduction reads each front's counters[2] (emit wrote the emitted-index
+    // count) + its repair buffers.
+    VdpmGpuFront::recordComputeStageBoundary(cmd);
+    const VdpmHealthReducePush push{
+        .jobsAddress = resources_.bufferAddress(healthJobArray_.buffers[frameIndex]),
+        .sceneHealthAddress = sceneHealthDeviceAddress_[frameIndex],
+        .jobCount = n,
+        .pad = 0};
+    cmd.bindPipeline(vk::PipelineBindPoint::eCompute, healthReducePipeline_.pipeline());
+    cmd.pushConstants<VdpmHealthReducePush>(healthReducePipeline_.pipelineLayout(),
+                                            vk::ShaderStageFlagBits::eCompute, 0, push);
+    cmd.dispatch(1, 1, 1); // one workgroup, one invocation — sequential fold over the N jobs
+}
+
 void VdpmGpuManager::recordRequests(vk::CommandBuffer cmd,
                                     std::span<const VdpmWorkRequest> requests,
-                                    const VdpmFrameGlobals& globals)
+                                    const VdpmFrameGlobals& globals,
+                                    std::span<const VdpmFrontDrawCount> drawCounts)
 {
     // The coarsen budget is the refine budget scaled by the persistent-front hysteresis ratio — the
     // same relationship the CPU refineForView uses internally.
@@ -195,7 +238,60 @@ void VdpmGpuManager::recordRequests(vk::CommandBuffer cmd,
     // Perf instrumentation (no behaviour change): tally the analytic compute-command cost as we
     // record. Reset here; the chosen record path fills it.
     lastComputeStats_ = ComputeStats{.roundBudget = kVdpmGpuRepairRoundBudget};
-    diagFront_ = nullptr; // set to the first resolved front for the delayed convergence readback
+
+    // Draw-count validation (B5c-1): when supplied it MUST be a complete 1:1 keyed cover of the
+    // request set — no zero-count, duplicate, unknown (front not in the requests), or missing
+    // entry. A silent default-to-1 would let a future filtering mismatch produce
+    // plausible-but-false totals; this fails loudly instead. Empty is the explicit "all multipliers
+    // 1" convenience (tests).
+    if (!drawCounts.empty())
+    {
+        for (const VdpmFrontDrawCount& dc : drawCounts)
+        {
+            if (dc.drawCount == 0)
+            {
+                throw std::logic_error("VdpmGpuManager::recordRequests: draw-count entry has a "
+                                       "zero count");
+            }
+            std::size_t inRequests = 0;
+            for (const VdpmWorkRequest& req : requests)
+            {
+                inRequests += (req.front == dc.front) ? 1 : 0;
+            }
+            if (inRequests == 0)
+            {
+                throw std::logic_error("VdpmGpuManager::recordRequests: draw-count entry for a "
+                                       "front not in the request set");
+            }
+            std::size_t inCounts = 0;
+            for (const VdpmFrontDrawCount& other : drawCounts)
+            {
+                inCounts += (other.front == dc.front) ? 1 : 0;
+            }
+            if (inCounts != 1)
+            {
+                throw std::logic_error("VdpmGpuManager::recordRequests: duplicate draw-count entry "
+                                       "for a front");
+            }
+        }
+        for (const VdpmWorkRequest& req : requests)
+        {
+            bool matched = false;
+            for (const VdpmFrontDrawCount& dc : drawCounts)
+            {
+                if (dc.front == req.front)
+                {
+                    matched = true;
+                    break;
+                }
+            }
+            if (!matched)
+            {
+                throw std::logic_error("VdpmGpuManager::recordRequests: request front has no "
+                                       "draw-count entry");
+            }
+        }
+    }
 
     // Resolve every request ONCE into the reused scratch: front* + derived per-frame params + stage
     // work flags. No stage below re-resolves a handle or allocates a temporary (front-batching
@@ -230,22 +326,23 @@ void VdpmGpuManager::recordRequests(vk::CommandBuffer cmd,
         // splitCount>0); repair additionally needs post-weld faces (finestFaceCount>0).
         const bool hasApply = front->rankCount() > 0;
         const bool hasRepair = hasApply && front->finestFaceCount() > 0;
+        // Draw multiplier for the emitted-triangle weighting, matched BY HANDLE (validated above as
+        // a complete 1:1 cover when non-empty, so the match is guaranteed). Empty ⇒ 1.
+        std::uint32_t drawMultiplier = 1;
+        for (const VdpmFrontDrawCount& dc : drawCounts)
+        {
+            if (dc.front == req.front)
+            {
+                drawMultiplier = dc.drawCount;
+                break;
+            }
+        }
         resolveScratch_.push_back({.front = front,
                                    .view = view,
                                    .repair = repair,
                                    .hasApply = hasApply,
-                                   .hasRepair = hasRepair});
-        // Representative for the delayed convergence readback: the FIRST repair-bearing front, so
-        // its roundHistory/repairControl are actually WRITTEN this frame. NO fallback to a
-        // non-repair front — repair early-outs there, so its repair ranges are stale and the
-        // readback would copy+parse them verbatim. When no front repairs, diagFront_ stays null:
-        // recordDiagnostic- Readback records no copy this frame (it still parses an older, validly
-        // written slot), and repair diagnostics on an all-apply-only/zero-split frame are moot
-        // anyway.
-        if (diagFront_ == nullptr && hasRepair)
-        {
-            diagFront_ = front;
-        }
+                                   .hasRepair = hasRepair,
+                                   .drawMultiplier = drawMultiplier});
     }
 
     // Per-stage timing (apply-kernel checkpoint), off unless the renderer supplied a profiler. GPU
@@ -272,6 +369,19 @@ void VdpmGpuManager::recordRequests(vk::CommandBuffer cmd,
     else
     {
         recordPerFront(cmd, globals, coarsenBudget, stageProfilePtr);
+    }
+
+    // Scene-wide health reduction (B5c-1) — recorded AFTER all emits but still inside the
+    // VdpmCompute timestamp (the renderer brackets recordRequests). Runs on BOTH record paths
+    // (every recorded front carries the health buffers).
+    if (!resolveScratch_.empty())
+    {
+        ensureHealthCapacity(static_cast<std::uint32_t>(resolveScratch_.size()));
+        recordHealthReduction(cmd, globals.frameIndex);
+        // Keep the analytic totals exact: the reduction adds exactly one emit→health barrier + one
+        // dispatch on top of whichever record path filled the per-lifecycle totals above.
+        lastComputeStats_.analyticDispatches += 1;
+        lastComputeStats_.analyticBarriers += 1;
     }
 
     // Debug trace only when the front count changes (an activation / count-change proof, not a
@@ -464,62 +574,62 @@ void VdpmGpuManager::recordBatched(vk::CommandBuffer cmd, const VdpmFrameGlobals
     lastComputeStats_.repairJobs = nr; // Nr
 }
 
-void VdpmGpuManager::recordDiagnosticReadback(vk::CommandBuffer cmd, std::uint32_t frameIndex)
+void VdpmGpuManager::recordDiagnosticReadback(vk::CommandBuffer cmd, std::uint32_t frameIndex,
+                                              std::uint64_t cpuTriangleSubtotal)
 {
-    // Parse the slot written a FULL frames-in-flight cycle ago (this frame's fence guarantees it is
-    // complete — no stall). Only once it has real data.
+    // (1) Parse the host slot written a FULL frames-in-flight cycle ago (this frame's fence
+    // guarantees it is complete — no stall), combined with THAT frame's stored CPU triangle
+    // subtotal so the total is internally from one frame.
     const std::span<std::byte> slot = diagReadback_.mapped[frameIndex];
-    if (diagSlotWritten_[frameIndex] && slot.size() >= kVdpmDiagWordCount * sizeof(std::uint32_t))
+    // A slot invalidated across an inactive gap (or not yet warm) must not leave lastSceneHealth_
+    // showing the previous, now-stale value — reset it to invalid until the ring re-warms.
+    lastSceneHealth_ = SceneHealth{};
+    if (diagSlotWritten_[frameIndex] && slot.size() >= sizeof(VdpmSceneHealthGpu))
     {
-        std::array<std::uint32_t, kVdpmDiagWordCount> w{};
-        std::memcpy(w.data(), slot.data(), sizeof(w));
-
-        std::uint32_t marked = 0;
-        bool seenZero = false;
-        bool cleanPrefix = true;
-        for (std::uint32_t r = 0; r < kVdpmGpuRepairRoundBudget; ++r)
-        {
-            if (w[kVdpmDiagRoundBase + r] != 0)
-            {
-                ++marked;
-                if (seenZero)
-                {
-                    cleanPrefix = false; // a marked round after a clean one — repair/sync anomaly
-                }
-            }
-            else
-            {
-                seenZero = true;
-            }
-        }
-        lastDiagnostics_ = Diagnostics{.valid = true,
+        VdpmSceneHealthGpu h{};
+        std::memcpy(&h, slot.data(), sizeof(h));
+        const std::uint64_t gpuEmitted =
+            (static_cast<std::uint64_t>(h.emittedIndexTotalHi) << 32) | h.emittedIndexTotalLo;
+        const std::uint64_t cpuSub = cpuTriangleSubtotal_[frameIndex];
+        const std::uint64_t combined = cpuSub + gpuEmitted / 3;
+        // 64-bit wrap guard: the GPU total already overflowed, OR the CPU+GPU sum itself wrapped.
+        const bool overflow = h.emittedIndexOverflow != 0 || combined < cpuSub;
+        lastSceneHealth_ = SceneHealth{.valid = true,
+                                       .triangleTotal = combined,
+                                       .emittedOverflow = overflow,
+                                       .repairFronts = h.repairFronts,
+                                       .maxMarkedRounds = h.maxMarkedRounds,
+                                       .sumMarkedRounds = h.sumMarkedRounds,
                                        .roundBudget = kVdpmGpuRepairRoundBudget,
-                                       .markedRounds = marked,
-                                       .cleanPrefix = cleanPrefix,
-                                       .finalAnyMarked = w[kVdpmDiagControlBase + 0],
-                                       .fallbackFired = w[kVdpmDiagControlBase + 2],
-                                       .emittedIndexCount = w[kVdpmDiagCountersBase + 2]};
+                                       .fallbackFronts = h.fallbackFronts,
+                                       .nonCleanPrefix = h.nonCleanPrefixFronts,
+                                       .ancestorFailures = h.ancestorFailureFronts,
+                                       .failFlagFronts = h.failFlagFronts};
 
-        if (marked != lastLoggedMarkedRounds_)
+        // Log on any HEALTH-STATE transition (not just a front-count change) — a fallback/failure
+        // appearing while repairFronts holds steady must still surface headless.
+        const std::array<std::uint32_t, 5> sig{h.repairFronts, h.fallbackFronts,
+                                               h.nonCleanPrefixFronts, h.ancestorFailureFronts,
+                                               h.failFlagFronts};
+        if (sig != lastLoggedHealth_)
         {
             log::debug(log::category::render,
-                       "VDPM GPU repair: converged after {}/{} rounds (cleanPrefix {}, "
-                       "finalAnyMarked {}, fallbackFired {}, emitted {})",
-                       marked, kVdpmGpuRepairRoundBudget, cleanPrefix,
-                       lastDiagnostics_.finalAnyMarked, lastDiagnostics_.fallbackFired,
-                       lastDiagnostics_.emittedIndexCount);
-            lastLoggedMarkedRounds_ = marked;
+                       "VDPM GPU health: {} repair front(s), max {}/{} marked rounds, {} fallback, "
+                       "{} non-clean, {} ancestor-fail, {} B3-fail",
+                       h.repairFronts, h.maxMarkedRounds, kVdpmGpuRepairRoundBudget,
+                       h.fallbackFronts, h.nonCleanPrefixFronts, h.ancestorFailureFronts,
+                       h.failFlagFronts);
+            lastLoggedHealth_ = sig;
         }
     }
 
-    // Record this frame's copy into the same slot (for a later frame to read). No-op if no front
-    // recorded or the representative front has no repair buffers.
-    if (diagFront_ == nullptr || diagFront_->roundHistoryBuffer() == NullBuffer)
+    // (2) Copy THIS frame's reduced scene-health (written by recordHealthReduction inside the
+    // VdpmCompute timestamp) into the slot just parsed. No-op if no front recorded this frame.
+    if (resolveScratch_.empty())
     {
         return;
     }
     const vk::Buffer dst = resources_.vulkanBuffer(diagReadback_.buffers[frameIndex]);
-    // Order the compute writes (roundHistory / repairControl / counters) before the transfer reads.
     const vk::MemoryBarrier2 computeToCopy{
         .srcStageMask = vk::PipelineStageFlagBits2::eComputeShader,
         .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
@@ -528,18 +638,22 @@ void VdpmGpuManager::recordDiagnosticReadback(vk::CommandBuffer cmd, std::uint32
     };
     cmd.pipelineBarrier2(
         vk::DependencyInfo{.memoryBarrierCount = 1, .pMemoryBarriers = &computeToCopy});
-    cmd.copyBuffer(resources_.vulkanBuffer(diagFront_->roundHistoryBuffer()), dst,
-                   vk::BufferCopy{.srcOffset = 0,
-                                  .dstOffset = kVdpmDiagRoundBase * sizeof(std::uint32_t),
-                                  .size = kVdpmGpuRepairRoundBudget * sizeof(std::uint32_t)});
-    cmd.copyBuffer(resources_.vulkanBuffer(diagFront_->repairControlBuffer()), dst,
-                   vk::BufferCopy{.srcOffset = 0,
-                                  .dstOffset = kVdpmDiagControlBase * sizeof(std::uint32_t),
-                                  .size = 4 * sizeof(std::uint32_t)});
-    cmd.copyBuffer(resources_.vulkanBuffer(diagFront_->countersBuffer(frameIndex)), dst,
-                   vk::BufferCopy{.srcOffset = 0,
-                                  .dstOffset = kVdpmDiagCountersBase * sizeof(std::uint32_t),
-                                  .size = 3 * sizeof(std::uint32_t)});
+    cmd.copyBuffer(resources_.vulkanBuffer(sceneHealthDeviceRing_[frameIndex]), dst,
+                   vk::BufferCopy{.size = sizeof(VdpmSceneHealthGpu)});
+    // Explicit transfer-write → host-read memory dependency: the later fence provides completion,
+    // but recording the dependency is correct + hardens the delayed readback.
+    const vk::MemoryBarrier2 copyToHost{
+        .srcStageMask = vk::PipelineStageFlagBits2::eCopy,
+        .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
+        .dstStageMask = vk::PipelineStageFlagBits2::eHost,
+        .dstAccessMask = vk::AccessFlagBits2::eHostRead,
+    };
+    cmd.pipelineBarrier2(
+        vk::DependencyInfo{.memoryBarrierCount = 1, .pMemoryBarriers = &copyToHost});
+
+    // (3) Store this frame's CPU subtotal for the next ring cycle (parsed a cycle from now
+    // alongside the scene-health just copied).
+    cpuTriangleSubtotal_[frameIndex] = cpuTriangleSubtotal;
     diagSlotWritten_[frameIndex] = true;
 }
 

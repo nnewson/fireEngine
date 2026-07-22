@@ -1,0 +1,163 @@
+#version 450
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_buffer_reference_uvec2 : require
+
+// VDPM scene-wide health REDUCTION (B5c-1). One dispatch, ONE invocation: loop over the UNIQUE
+// recorded fronts' health jobs (jobs[i] = VdpmHealthJobGpu, see ubo.hpp), read each front's
+// counters / repairControl / roundHistory / failFlags by BDA, and fold them into ONE
+// VdpmSceneHealthGpu — fully overwriting it. Deliberately sequential: no atomics, shared memory, or
+// parallel reduction (front counts are tiny, and this runs once per frame for a debug overlay). The
+// emitted-index total is 64-bit as {lo,hi} accumulated with a manual carry (no shader int64). BDA
+// addresses ride as uvec2. This is HEALTH data (converged/fallback/failed), NOT the CPU's
+// foldover/coverage vertex counts.
+
+layout(buffer_reference, std430, buffer_reference_align = 4) buffer UintBuf
+{
+    uint v[];
+};
+
+// Layout mirrors VdpmHealthJobGpu (4 addresses as uvec2 + counts).
+struct HealthJob
+{
+    uvec2 countersAddress;      // 3 uint [ancestorFailures, survivingFaces, emittedIndexCount]
+    uvec2 repairControlAddress; // 4 uint [anyMarked, ancestorFailure, fallbackFired, pad]
+    uvec2 roundHistoryAddress;  // roundBudget uint
+    uvec2 failFlagsAddress;     // 2 uint [refineFailure, dependentsUnderflow]
+    uint roundBudget;
+    uint drawMultiplier;
+    uint repairPresent;
+    uint pad;
+};
+layout(buffer_reference, std430, buffer_reference_align = 8) buffer JobBuf
+{
+    HealthJob v[];
+};
+
+// Layout mirrors VdpmSceneHealthGpu.
+layout(buffer_reference, std430, buffer_reference_align = 4) buffer SceneHealthBuf
+{
+    uint emittedIndexTotalLo;
+    uint emittedIndexTotalHi;
+    uint emittedIndexOverflow;
+    uint repairFronts;
+    uint maxMarkedRounds;
+    uint sumMarkedRounds;
+    uint fallbackFronts;
+    uint nonCleanPrefixFronts;
+    uint ancestorFailureFronts;
+    uint failFlagFronts;
+};
+
+layout(push_constant) uniform Push
+{
+    JobBuf jobs;
+    SceneHealthBuf sceneHealth;
+    uint jobCount;
+    uint pad;
+}
+pc;
+
+layout(local_size_x = 1) in;
+
+void main()
+{
+    uint lo = 0u;
+    uint hi = 0u;
+    uint overflow = 0u;
+    uint repairFronts = 0u;
+    uint maxMarked = 0u;
+    uint sumMarked = 0u;
+    uint fallbackFronts = 0u;
+    uint nonCleanFronts = 0u;
+    uint ancestorFails = 0u;
+    uint failFlagFronts = 0u;
+
+    for (uint i = 0u; i < pc.jobCount; ++i)
+    {
+        HealthJob j = pc.jobs.v[i];
+
+        // Emitted-index total, weighted by the front's submitted-draw multiplier. The PRODUCT is
+        // full 64-bit (umulExtended — a large front × a large multiplier can itself cross 32 bits),
+        // accumulated into (lo:hi) with carry. `overflow` guards the (unreachable) 64-bit wrap.
+        uint prodHi;
+        uint prodLo;
+        umulExtended(UintBuf(j.countersAddress).v[2], j.drawMultiplier, prodHi, prodLo);
+        const uint newLo = lo + prodLo;
+        const uint carry = (newLo < lo) ? 1u : 0u;
+        lo = newLo;
+        const uint sumHi = hi + prodHi;
+        if (sumHi < hi)
+        {
+            overflow = 1u;
+        }
+        const uint sumHi2 = sumHi + carry;
+        if (sumHi2 < sumHi)
+        {
+            overflow = 1u;
+        }
+        hi = sumHi2;
+
+        // B3 refine/coarsen failure flags exist on every runtime front.
+        UintBuf ff = UintBuf(j.failFlagsAddress);
+        if (ff.v[0] != 0u || ff.v[1] != 0u)
+        {
+            failFlagFronts += 1u;
+        }
+
+        // Repair-health terms only for a front that ran repair (has the buffers).
+        if (j.repairPresent != 0u)
+        {
+            repairFronts += 1u;
+            UintBuf control = UintBuf(j.repairControlAddress);
+            UintBuf history = UintBuf(j.roundHistoryAddress);
+
+            uint marked = 0u; // LEADING marked rounds only (the convergence point)
+            bool seenZero = false;
+            bool nonClean = false;
+            for (uint r = 0u; r < j.roundBudget; ++r)
+            {
+                if (history.v[r] != 0u)
+                {
+                    if (seenZero)
+                    {
+                        nonClean = true; // a marked round AFTER a clean one — a repair/sync anomaly
+                    }
+                    else
+                    {
+                        marked += 1u; // still in the leading run before any clean round
+                    }
+                }
+                else
+                {
+                    seenZero = true;
+                }
+            }
+            maxMarked = max(maxMarked, marked);
+            sumMarked += marked;
+            if (nonClean)
+            {
+                nonCleanFronts += 1u;
+            }
+            if (control.v[2] != 0u) // fallbackFired
+            {
+                fallbackFronts += 1u;
+            }
+            if (control.v[1] != 0u) // ancestorFailure
+            {
+                ancestorFails += 1u;
+            }
+        }
+    }
+
+    // Fully overwrite the output (no read-modify-write; this is the sole writer this frame).
+    pc.sceneHealth.emittedIndexTotalLo = lo;
+    pc.sceneHealth.emittedIndexTotalHi = hi;
+    pc.sceneHealth.emittedIndexOverflow = overflow;
+    pc.sceneHealth.repairFronts = repairFronts;
+    pc.sceneHealth.maxMarkedRounds = maxMarked;
+    pc.sceneHealth.sumMarkedRounds = sumMarked;
+    pc.sceneHealth.fallbackFronts = fallbackFronts;
+    pc.sceneHealth.nonCleanPrefixFronts = nonCleanFronts;
+    pc.sceneHealth.ancestorFailureFronts = ancestorFails;
+    pc.sceneHealth.failFlagFronts = failFlagFronts;
+}

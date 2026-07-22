@@ -61,9 +61,17 @@ struct FrameStats
     // culling is disabled.
     int trackedNodes{0};
     int culledNodes{0};
-    // Triangles actually submitted in the forward opaque bucket this frame (post LOD + cull), so
-    // the overlay can show the LOD saving.
-    int trianglesDrawn{0};
+    // Triangles actually submitted this frame (post LOD + cull), so the overlay can show the LOD
+    // saving. 64-bit: a GPU-front scene's combined emitted total (delayed, frame-consistent) can in
+    // principle exceed 32 bits. `trianglesOverflow` flags a (unreachable) 64-bit wrap of the
+    // combine.
+    std::uint64_t trianglesDrawn{0};
+    bool trianglesOverflow{false};
+    // True when the GPU VDPM backend recorded fronts this frame but their emitted total isn't back
+    // yet (ring warming / just after an inactive gap): `trianglesDrawn` then holds only the
+    // CPU-front subtotal, which is INCOMPLETE — the overlay shows "pending" rather than a plausible
+    // partial.
+    bool trianglesGpuPending{false};
     // VDPM per-frame repair work summed over every instance (vertices each pass pulled back in) — a
     // diagnostic so a repair-count regression is visible in the overlay. 0 outside ViewDependent
     // LOD.
@@ -97,13 +105,18 @@ struct FrameStats
     int vdpmAnalyticBarriers{0}; // analytic pipeline-barrier count
     int vdpmApplyJobs{0};        // batched Na (compacted apply jobs); 0 on the per-front path
     int vdpmRepairJobs{0};       // batched Nr (compacted repair jobs)
-    // Delayed per-round repair-convergence diagnostics for a representative front (read back
-    // ~kMaxFramesInFlight frames late). markedRounds = leading rounds whose detect found a
-    // violation = the convergence point (of a 24-round budget); -1 until the first slot completes.
-    // The gap to the budget is the wasted-round evidence this arc targets.
-    int vdpmRepairMarkedRounds{-1};
-    bool vdpmRepairFallbackFired{false};
-    int vdpmEmittedIndexCount{0};
+    // Delayed SCENE-WIDE GPU-front health (B5c-1), read back ~kMaxFramesInFlight frames late from
+    // the health reduction. Health-oriented, NOT the CPU foldover/coverage counts. -1 / 0 until the
+    // first slot completes. `trianglesDrawn` above already carries the frame-consistent combined
+    // total when the GPU backend is active.
+    int vdpmRepairFronts{0};     // fronts that ran repair this frame
+    int vdpmMaxMarkedRounds{-1}; // max leading marked-round count across them (of the round budget)
+    int vdpmSumMarkedRounds{0};  // Σ leading marked-round counts
+    int vdpmFallbackFronts{0};   // fronts whose full-detail fallback fired (a convergence stress)
+    int vdpmNonCleanPrefix{0};   // fronts with a marked round after a clean one (a repair/sync bug)
+    int vdpmAncestorFailures{0}; // fronts with an ancestor-resolve failure
+    int vdpmFailFlagFronts{0};   // fronts with a B3 refine/coarsen failure flag
+    bool vdpmEmittedOverflow{false}; // the 64-bit emitted-index total wrapped (guard)
 };
 
 class GpuProfiler

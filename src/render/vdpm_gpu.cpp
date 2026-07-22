@@ -239,6 +239,11 @@ ComputePipelineConfig vdpmApplyKernelPipelineConfig(std::uint32_t workgroupSize)
     return config;
 }
 
+ComputePipelineConfig vdpmHealthReducePipelineConfig()
+{
+    return emitConfig<VdpmHealthReducePush>("vdpm_health_reduce.comp.spv");
+}
+
 bool VdpmRepairKernel::deviceSupported(const Device& device)
 {
     const vk::PhysicalDeviceLimits& limits = device.physicalDevice().getProperties().limits;
@@ -1113,6 +1118,29 @@ VdpmApplyJobGpu VdpmGpuFront::prepareApplyJob(std::uint32_t /*frameIndex*/, floa
                            .pad = 0,
                            .pixelBudget = pixelBudget,
                            .coarsenBudget = coarsenBudget};
+}
+
+VdpmHealthJobGpu VdpmGpuFront::prepareHealthJob(std::uint32_t frameIndex,
+                                                std::uint32_t drawMultiplier) const
+{
+    if (!hasRuntime_)
+    {
+        throw std::logic_error("VdpmGpuFront::prepareHealthJob: not a runtime front");
+    }
+    // repairPresent iff the front actually RUNS repair — the EXACT manager predicate: splitCount>0
+    // (⇔ rankCount>0) AND finestFaceCount>0, with the buffers present. A zero-split faced front
+    // (splitCount 0, finestFaceCount>0) keeps its cleared repair buffers but never repairs, so it
+    // must NOT be counted as a repair front.
+    const bool repairPresent =
+        hasRepair_ && binding_.splitCount != 0 && binding_.finestFaceCount != 0;
+    return VdpmHealthJobGpu{.countersAddress = frameOutputs_[frameIndex].countersAddress,
+                            .repairControlAddress = repairControlAddress_,
+                            .roundHistoryAddress = roundHistoryAddress_,
+                            .failFlagsAddress = failFlagsAddress_,
+                            .roundBudget = kVdpmGpuRepairRoundBudget,
+                            .drawMultiplier = drawMultiplier,
+                            .repairPresent = repairPresent ? 1u : 0u,
+                            .pad = 0};
 }
 
 VdpmRepairJobGpu VdpmGpuFront::prepareRepairJob(std::uint32_t frameIndex,

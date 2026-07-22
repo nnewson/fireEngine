@@ -426,8 +426,8 @@ void Object::addVdpmRepairCounts(uint32_t& foldovers, uint32_t& coverage) const
     for (const auto& binding : bindings_)
     {
         // Only CPU-driven fronts that actually ran this frame contribute; a GPU-backed instance's
-        // CPU counters are stale (its lifecycle was skipped), so suppress them until B5c's delayed
-        // GPU diagnostics.
+        // CPU counters are stale (its lifecycle was skipped), so they stay suppressed — the GPU
+        // fronts' health is surfaced separately by the B5c-1 scene-health reduction.
         if (binding.vdpmFront && binding.vdpmCpuRanThisFrame)
         {
             foldovers += binding.vdpmFront->foldoversRepaired();
@@ -515,7 +515,8 @@ void Object::writeForwardUniforms(const FrameInfo& frame, const Mat4& world,
         // Reset the CPU-VDPM-ran flag for this binding update; it is set true only immediately
         // before the CPU front lifecycle runs below. When the GPU backend drives this instance (or
         // it isn't a VDPM draw) the CPU front is skipped and the flag stays false, so the overlay
-        // suppresses this binding's now-stale CPU repair/channel stats (real GPU diagnostics: B5c).
+        // suppresses this binding's now-stale CPU repair/channel stats (GPU health comes from the
+        // B5c-1 scene-health reduction instead).
         binding.vdpmCpuRanThisFrame = false;
 
         // Material data is bindless (global set 2 materials[] SSBO); a draw selects
@@ -672,9 +673,9 @@ std::vector<DrawCommand> Object::buildDrawCommands(const FrameInfo& frame, const
                 // requests, and RESOLVES indexBuffer/indirectBuffer to the GPU-emitted ring for
                 // this frame after collection. The GPU-emitted index stream is ALWAYS uint32,
                 // independent of the source geometry's index representation. The CPU vdpm* buffers
-                // are not written (the CPU front was skipped in writeForwardUniforms), so
-                // indexCount is GPU-only — left 0 for the triangle overlay until B5c's delayed
-                // diagnostics.
+                // are not written (the CPU front was skipped in writeForwardUniforms), so the
+                // per-draw indexCount is GPU-only — left 0; the overlay's GPU triangle total comes
+                // from the B5c-1 delayed scene-health reduction instead.
                 cmd.vdpmGpuFront = binding.vdpmGpuFront;
                 cmd.indexType = DrawIndexType::UInt32;
                 cmd.indexCount = 0;

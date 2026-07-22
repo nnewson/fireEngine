@@ -47,6 +47,17 @@ struct VdpmFrameGlobals
     const GpuProfiler* stageProfiler{nullptr};
 };
 
+// One GPU-front's forward-draw count this frame (B5c-1): how many camera-visible forward
+// DrawCommands a given front backs. The health reduction weights each front's emitted-index total
+// by this so the scene triangle total carries submitted-draw semantics (a front backing >1 forward
+// command counts per command). Coupled to the handle — NOT a positional span — so later
+// filtering/reordering can't desync it from the request. Normally the count is 1.
+struct VdpmFrontDrawCount
+{
+    VdpmFrontHandle front{NullVdpmFront};
+    std::uint32_t drawCount{1};
+};
+
 // Owns every Vulkan object the GPU-driven VDPM front needs — the reusable pipeline bundles (score /
 // refine / repair / emit) and the per-mesh + per-instance GPU-front tables — and implements the
 // Vulkan-free VdpmGpuRegistry the load path registers geometry/instances through. Constructed by
@@ -85,8 +96,14 @@ public:
     // NO consumer barrier after the last emit — the caller adds the compute→(index + indirect read)
     // barrier before the draw. A request whose front handle is stale/invalid is skipped.
     // Frame-global camera/budget data comes from `globals`.
+    // `drawCounts` (B5c-1): per-front forward-draw counts for the emitted-triangle weighting, keyed
+    // by handle. When supplied it MUST be a complete 1:1 keyed cover of the request set — a
+    // zero-count, unknown, duplicate, or missing entry throws std::logic_error (a filtering
+    // mismatch must fail loudly, not silently weight 1). Empty ⇒ every front weights 1 (the test
+    // convenience).
     void recordRequests(vk::CommandBuffer cmd, std::span<const VdpmWorkRequest> requests,
-                        const VdpmFrameGlobals& globals);
+                        const VdpmFrameGlobals& globals,
+                        std::span<const VdpmFrontDrawCount> drawCounts = {});
 
     // Per-frame compute-command instrumentation from the most recent recordRequests (perf arc, no
     // behaviour change): how many fronts recorded, the largest rank count among them, the repair
@@ -117,32 +134,52 @@ public:
         return lastComputeStats_;
     }
 
-    // Record the delayed diagnostic readback for a representative front (perf arc, item 4). Called
-    // by the Renderer AFTER the VdpmCompute profiler pass ends (so the tiny copies don't perturb
-    // the compute timestamp): it parses the ring slot written a full frames-in-flight cycle ago
-    // (already complete — no stall) into lastDiagnostics(), then records the copy of this frame's
-    // front convergence buffers into that slot. No-op if no front recorded this frame.
-    void recordDiagnosticReadback(vk::CommandBuffer cmd, std::uint32_t frameIndex);
+    // Record the delayed scene-health readback (B5c-1). Called by the Renderer AFTER the
+    // VdpmCompute profiler pass ends (so the copy doesn't perturb the compute timestamp): it (1)
+    // parses the host ring slot written a full frames-in-flight cycle ago (already complete — no
+    // stall) together with that same frame's stored `cpuTriangleSubtotal` into lastSceneHealth();
+    // (2) records the compute→transfer copy of THIS frame's reduced scene-health buffer into that
+    // slot (+ a transfer-write→host-read barrier); (3) stores this frame's `cpuTriangleSubtotal`
+    // for the next ring cycle. `cpuTriangleSubtotal` is this frame's triangle count from NON-GPU
+    // draws (GPU draws carry indexCount 0), combined with the delayed GPU emitted total so the
+    // displayed total is internally from one frame. No-op if no front recorded this frame.
+    void recordDiagnosticReadback(vk::CommandBuffer cmd, std::uint32_t frameIndex,
+                                  std::uint64_t cpuTriangleSubtotal);
 
-    // The most recently READ-BACK per-round convergence diagnostics (from ~kMaxFramesInFlight
-    // frames ago). `valid` is false until the first slot completes. `markedRounds` is the count of
-    // leading repair rounds whose detect found a violation (the convergence point); `cleanPrefix`
-    // is false if a marked round followed a clean one (a repair/sync bug under a fixed view).
-    // finalAnyMarked = the post-budget detect still found a violation; fallbackFired = the
-    // full-detail seed ran; emittedIndexCount = the drawn index count.
-    struct Diagnostics
+    // Invalidate frame slot `frameIndex`'s readback ring entry (B5c-1). The Renderer calls this on
+    // a frame where the GPU backend records NO fronts (backend toggled off, or nothing visible):
+    // that frame writes no reduction, so its slot must not be parsed a cycle later as if it carried
+    // the normal frames-in-flight delay. A slot is only ever parsed when the frame that wrote it (a
+    // full cycle ago) was ACTIVE — so after any inactive gap the readback stays invalid until the
+    // ring re-warms with live data.
+    void invalidateHealthSlot(std::uint32_t frameIndex) noexcept
+    {
+        diagSlotWritten_[frameIndex] = false;
+    }
+
+    // The most recently READ-BACK scene-wide GPU-front HEALTH (from ~kMaxFramesInFlight frames ago)
+    // — health-oriented, NOT the CPU foldover/coverage vertex counts. `valid` is false until the
+    // first slot completes. `triangleTotal` combines the delayed GPU emitted triangles with the
+    // SAME frame's CPU-front triangle subtotal (frame-consistent). The repair fields summarise
+    // convergence across all repair-bearing fronts; any non-zero
+    // fallback/non-clean/ancestor/fail-flag count is a health signal worth surfacing.
+    struct SceneHealth
     {
         bool valid{false};
-        std::uint32_t roundBudget{0};
-        std::uint32_t markedRounds{0};
-        bool cleanPrefix{true};
-        std::uint32_t finalAnyMarked{0};
-        std::uint32_t fallbackFired{0};
-        std::uint32_t emittedIndexCount{0};
+        std::uint64_t triangleTotal{0};    // GPU emitted (delayed) + CPU-front subtotal, same frame
+        bool emittedOverflow{false};       // the 64-bit GPU emitted-index total wrapped (guard)
+        std::uint32_t repairFronts{0};     // fronts that ran repair this frame
+        std::uint32_t maxMarkedRounds{0};  // max leading marked-round count across them
+        std::uint32_t sumMarkedRounds{0};  // Σ leading marked-round counts
+        std::uint32_t roundBudget{0};      // the per-front repair round budget
+        std::uint32_t fallbackFronts{0};   // fronts whose full-detail fallback fired
+        std::uint32_t nonCleanPrefix{0};   // fronts with a marked round after a clean one
+        std::uint32_t ancestorFailures{0}; // fronts with an ancestor-resolve failure
+        std::uint32_t failFlagFronts{0};   // fronts with a B3 refine/coarsen failure flag
     };
-    [[nodiscard]] const Diagnostics& lastDiagnostics() const noexcept
+    [[nodiscard]] const SceneHealth& lastSceneHealth() const noexcept
     {
-        return lastDiagnostics_;
+        return lastSceneHealth_;
     }
 
     // A GPU-driven front's draw-consumed buffers for one frame slot: the GPU-emitted index stream
@@ -206,6 +243,8 @@ private:
         VdpmRepairParams repair{};
         bool hasApply{false};
         bool hasRepair{false};
+        std::uint32_t drawMultiplier{
+            1}; // forward draws this front backs (health emitted weighting)
     };
 
     [[nodiscard]] VdpmGpuFront* resolveFront(VdpmFrontHandle front) noexcept;
@@ -216,6 +255,18 @@ private:
     // referencing the old BDA stays valid. Called from recordBatched before any dispatch references
     // an array. No-op once capacity suffices.
     void ensureJobCapacity(std::uint32_t frontCount);
+
+    // Grow the health-job array to hold >= `frontCount` jobs (geometric; same session-lifetime
+    // reasoning as ensureJobCapacity). The health reduction runs on BOTH record paths, so this is
+    // called for every recorded frame (not only the batched path).
+    void ensureHealthCapacity(std::uint32_t frontCount);
+
+    // Record the scene-wide health reduction (B5c-1) at the END of recordRequests, inside the
+    // VdpmCompute timestamp: an emit→health compute barrier, fill the health-job array from
+    // `resolveScratch_` (each front's prepareHealthJob with its drawMultiplier), then a
+    // single-invocation dispatch writing this frame's `sceneHealthDeviceRing_` slot. No-op if no
+    // front recorded.
+    void recordHealthReduction(vk::CommandBuffer cmd, std::uint32_t frameIndex);
 
     // The STAGE-MAJOR batched record path (front-batching arc), driven from `resolveScratch_`: one
     // lifecycle barrier → score every front → one dispatch(Na) apply → one dispatch(Nr) repair
@@ -278,16 +329,25 @@ private:
 
     ComputeStats lastComputeStats_{};
 
-    // Delayed per-round convergence diagnostics (perf arc, item 4). `diagReadback_` is a
-    // host-visible ring (one slot per frame-in-flight) each holding [roundHistory[0..B),
-    // repairControl[0..4), counters[0..3)] copied from `diagFront_` — the first front recorded this
-    // frame; reading slot `frameIndex` recovers the copy from a full cycle ago (already complete).
-    // Parsed into lastDiagnostics_.
-    MappedBufferSet diagReadback_{};
-    VdpmGpuFront* diagFront_{nullptr};
-    std::array<bool, kMaxFramesInFlight> diagSlotWritten_{}; // slot has real data to parse
-    Diagnostics lastDiagnostics_{};
-    std::uint32_t lastLoggedMarkedRounds_{static_cast<std::uint32_t>(-1)};
+    // Scene-wide health reduction (B5c-1). The single-invocation `vdpm_health_reduce.comp` folds
+    // every recorded front's health (via a per-front VdpmHealthJobGpu array) into ONE
+    // VdpmSceneHealthGpu in the per-frame `sceneHealthDeviceRing_` slot (device-local, ringed so a
+    // later frame's reduction can't clobber an unread slot). recordDiagnosticReadback copies that
+    // into `diagReadback_` (the host-visible readback ring) and parses the slot from a full cycle
+    // ago, combined with that frame's `cpuTriangleSubtotal_`.
+    ComputePipeline healthReducePipeline_;
+    MappedBufferSet healthJobArray_{}; // per-front VdpmHealthJobGpu, one slot per frame-in-flight
+    std::uint32_t healthJobCapacity_{0};
+    std::array<BufferHandle, kMaxFramesInFlight> sceneHealthDeviceRing_{};
+    std::array<std::uint64_t, kMaxFramesInFlight> sceneHealthDeviceAddress_{};
+    MappedBufferSet diagReadback_{}; // host ring: VdpmSceneHealthGpu per slot
+    std::array<std::uint64_t, kMaxFramesInFlight>
+        cpuTriangleSubtotal_{};                              // same-frame CPU-front tris
+    std::array<bool, kMaxFramesInFlight> diagSlotWritten_{}; // slot's data is from an ACTIVE frame
+    SceneHealth lastSceneHealth_{};
+    // Last-logged discrete health signature {repair, fallback, non-clean, ancestor, B3-fail} — logs
+    // on ANY transition, not just a repair-front count change. Sentinel so the first frame logs.
+    std::array<std::uint32_t, 5> lastLoggedHealth_{static_cast<std::uint32_t>(-1), 0, 0, 0, 0};
 
     // Log a dispatch-limit ineligibility fallback only once (else one line per ineligible mesh).
     bool loggedDispatchFallback_{false};

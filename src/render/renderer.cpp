@@ -896,17 +896,19 @@ const Renderer::DrawBuckets& Renderer::collectDrawCommands(RenderableScene& scen
                                   vdpmSelectScratch_);
     }
 
-    int triangles = 0;
+    std::uint64_t triangles = 0;
     for (const std::vector<DrawCommand>* bucket :
          {&drawBucketsScratch_.opaque, &drawBucketsScratch_.blend,
           &drawBucketsScratch_.transmissive})
     {
         for (const DrawCommand& dc : *bucket)
         {
-            triangles += static_cast<int>(dc.indexCount / 3);
+            triangles += dc.indexCount / 3;
         }
     }
     stats_.trianglesDrawn = triangles;
+    stats_.trianglesOverflow = false;
+    stats_.trianglesGpuPending = false; // set below iff the GPU backend records but isn't warm
     return drawBucketsScratch_;
 }
 
@@ -1020,9 +1022,14 @@ void Renderer::drawFrame(Window& display, RenderableScene& scene, float dt)
     stats_.vdpmAnalyticBarriers = 0;
     stats_.vdpmApplyJobs = 0;
     stats_.vdpmRepairJobs = 0;
-    stats_.vdpmRepairMarkedRounds = -1;
-    stats_.vdpmRepairFallbackFired = false;
-    stats_.vdpmEmittedIndexCount = 0;
+    stats_.vdpmRepairFronts = 0;
+    stats_.vdpmMaxMarkedRounds = -1;
+    stats_.vdpmSumMarkedRounds = 0;
+    stats_.vdpmFallbackFronts = 0;
+    stats_.vdpmNonCleanPrefix = 0;
+    stats_.vdpmAncestorFailures = 0;
+    stats_.vdpmFailFlagFronts = 0;
+    stats_.vdpmEmittedOverflow = false;
     if (vdpmManager_ != nullptr && !vdpmRecordScratch_.empty())
     {
         const VdpmFrameGlobals globals{.viewProj = currentViewProj_,
@@ -1037,14 +1044,49 @@ void Renderer::drawFrame(Window& display, RenderableScene& scene, float dt)
         // (ProfilePass::VdpmCompute) + CPU wall time of the recording itself (the MoltenVK
         // command-translation cost this arc suspects rivals shader time) + the analytic command
         // counts the manager tallied.
+        // Per-front forward-draw counts (submitted-draw weighting for the health emitted total),
+        // keyed BY HANDLE from the actual camera-visible forward buckets (not the deduped
+        // requests).
+        vdpmDrawCounts_.clear();
+        for (const std::vector<DrawCommand>* bucket :
+             {&drawBucketsScratch_.opaque, &drawBucketsScratch_.blend,
+              &drawBucketsScratch_.transmissive})
+        {
+            for (const DrawCommand& dc : *bucket)
+            {
+                if (dc.vdpmGpuFront == NullVdpmFront)
+                {
+                    continue;
+                }
+                bool found = false;
+                for (VdpmFrontDrawCount& c : vdpmDrawCounts_)
+                {
+                    if (c.front == dc.vdpmGpuFront)
+                    {
+                        c.drawCount += 1;
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found)
+                {
+                    vdpmDrawCounts_.push_back({.front = dc.vdpmGpuFront, .drawCount = 1});
+                }
+            }
+        }
+        // This frame's CPU-front (+ non-VDPM) triangle subtotal: GPU draws carry indexCount 0, so
+        // stats_.trianglesDrawn (set in collectDrawCommands) IS exactly that subtotal. The manager
+        // stores it and combines it with the delayed GPU emitted total, one frame at a time.
+        const std::uint64_t cpuTriangleSubtotal = stats_.trianglesDrawn;
+
         profiler_.begin(cmd, currentFrame_, ProfilePass::VdpmCompute);
         const auto vdpmRecordStart = std::chrono::steady_clock::now();
-        vdpmManager_->recordRequests(cmd, vdpmRecordScratch_, globals);
+        vdpmManager_->recordRequests(cmd, vdpmRecordScratch_, globals, vdpmDrawCounts_);
         const auto vdpmRecordEnd = std::chrono::steady_clock::now();
         profiler_.end(cmd, currentFrame_, ProfilePass::VdpmCompute);
-        // Delayed convergence readback recorded AFTER the timestamp closes, so its tiny copies
-        // don't inflate the VdpmCompute GPU time.
-        vdpmManager_->recordDiagnosticReadback(cmd, currentFrame_);
+        // Delayed scene-health readback recorded AFTER the timestamp closes (the copy stays out of
+        // the compute measurement).
+        vdpmManager_->recordDiagnosticReadback(cmd, currentFrame_, cpuTriangleSubtotal);
 
         stats_.vdpmRecordCpuMs =
             std::chrono::duration<float, std::milli>(vdpmRecordEnd - vdpmRecordStart).count();
@@ -1056,10 +1098,29 @@ void Renderer::drawFrame(Window& display, RenderableScene& scene, float dt)
         stats_.vdpmAnalyticBarriers = static_cast<int>(cs.analyticBarriers);
         stats_.vdpmApplyJobs = static_cast<int>(cs.applyJobs);
         stats_.vdpmRepairJobs = static_cast<int>(cs.repairJobs);
-        const VdpmGpuManager::Diagnostics& diag = vdpmManager_->lastDiagnostics();
-        stats_.vdpmRepairMarkedRounds = diag.valid ? static_cast<int>(diag.markedRounds) : -1;
-        stats_.vdpmRepairFallbackFired = diag.fallbackFired != 0;
-        stats_.vdpmEmittedIndexCount = static_cast<int>(diag.emittedIndexCount);
+        const VdpmGpuManager::SceneHealth& health = vdpmManager_->lastSceneHealth();
+        if (health.valid)
+        {
+            // GPU backend active: the overlay triangle count becomes the frame-consistent (delayed)
+            // combined CPU+GPU total. Pure-CPU scenes never reach here, so their count stays
+            // current.
+            stats_.trianglesDrawn = health.triangleTotal;
+            stats_.trianglesOverflow = health.emittedOverflow;
+        }
+        else
+        {
+            // GPU fronts recorded but the emitted total isn't back yet (ring warming / post-gap):
+            // trianglesDrawn is the CPU-only subtotal — INCOMPLETE, so flag it pending.
+            stats_.trianglesGpuPending = true;
+        }
+        stats_.vdpmRepairFronts = static_cast<int>(health.repairFronts);
+        stats_.vdpmMaxMarkedRounds = health.valid ? static_cast<int>(health.maxMarkedRounds) : -1;
+        stats_.vdpmSumMarkedRounds = static_cast<int>(health.sumMarkedRounds);
+        stats_.vdpmFallbackFronts = static_cast<int>(health.fallbackFronts);
+        stats_.vdpmNonCleanPrefix = static_cast<int>(health.nonCleanPrefix);
+        stats_.vdpmAncestorFailures = static_cast<int>(health.ancestorFailures);
+        stats_.vdpmFailFlagFronts = static_cast<int>(health.failFlagFronts);
+        stats_.vdpmEmittedOverflow = health.emittedOverflow;
 
         // Periodic perf sample (headless baseline complement to the overlay). CPU record ms is this
         // frame's; the GPU VdpmCompute ms was resolved from a ring-cycle ago (0 / invalid if the
@@ -1070,11 +1131,11 @@ void Renderer::drawFrame(Window& display, RenderableScene& scene, float dt)
             log::debug(
                 log::category::render,
                 "VDPM GPU perf: record {:.3f} ms CPU | compute {:.3f} ms GPU (valid {}) | {} "
-                "front(s), ~{} dispatches ({} apply + {} repair batched jobs), converged {}/{} "
+                "front(s), ~{} dispatches ({} apply + {} repair batched jobs), max {}/{} marked "
                 "rounds",
                 stats_.vdpmRecordCpuMs, gpuMs, stats_.gpuValid, stats_.vdpmFrontsRecorded,
                 stats_.vdpmAnalyticDispatches, stats_.vdpmApplyJobs, stats_.vdpmRepairJobs,
-                stats_.vdpmRepairMarkedRounds, stats_.vdpmRepairRoundBudget);
+                stats_.vdpmMaxMarkedRounds, stats_.vdpmRepairRoundBudget);
             // Per-stage breakdown (apply-kernel checkpoint). CPU ms is summed over the frame's
             // fronts (any count); GPU ms is meaningful only when ONE front recorded (single-shot
             // query slots) — it reads 0 otherwise. Confirms which stage owns the GPU time before
@@ -1090,6 +1151,12 @@ void Renderer::drawFrame(Window& display, RenderableScene& scene, float dt)
                 stageGpu(ProfilePass::VdpmApply), stageGpu(ProfilePass::VdpmRepair),
                 stageGpu(ProfilePass::VdpmEmit));
         }
+    }
+    else if (vdpmManager_ != nullptr)
+    {
+        // GPU backend present but recording nothing this frame (toggled off, or no visible front):
+        // invalidate this slot so its stale reduction isn't parsed a cycle later as fresh.
+        vdpmManager_->invalidateHealthSlot(currentFrame_);
     }
 
     // Particles render un-jittered (after TAA); feed them the plain proj. The
