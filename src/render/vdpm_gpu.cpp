@@ -436,6 +436,7 @@ void VdpmGpuMesh::uploadScoreData(VdpmGpuMesh& mesh, Resources& resources,
             splits.size() * sizeof(VdpmSplitGpu), splits.data());
         mesh.splitsAddress_ = resources.bufferAddress(mesh.splits_);
         requireAligned(mesh.splitsAddress_, 16, "splits");
+        mesh.staticBytes_ += splits.size() * sizeof(VdpmSplitGpu);
     }
     if (!positions.empty())
     {
@@ -443,6 +444,7 @@ void VdpmGpuMesh::uploadScoreData(VdpmGpuMesh& mesh, Resources& resources,
             positions.size() * sizeof(VdpmPositionGpu), positions.data());
         mesh.positionsAddress_ = resources.bufferAddress(mesh.positions_);
         requireAligned(mesh.positionsAddress_, 16, "positions");
+        mesh.staticBytes_ += positions.size() * sizeof(VdpmPositionGpu);
     }
 
     // Assemble the score portion of the binding (emit portion stays null; hasEmitData false).
@@ -484,6 +486,7 @@ void VdpmGpuMesh::uploadScoreData(VdpmGpuMesh& mesh, Resources& resources,
             frontSplits.size() * sizeof(VdpmFrontSplitGpu), frontSplits.data());
         mesh.binding_.frontSplitsAddress = resources.bufferAddress(mesh.frontSplits_);
         requireAligned(mesh.binding_.frontSplitsAddress, 4, "frontSplits");
+        mesh.staticBytes_ += frontSplits.size() * sizeof(VdpmFrontSplitGpu);
     }
     if (!dag.splitsByRank.empty())
     {
@@ -491,6 +494,7 @@ void VdpmGpuMesh::uploadScoreData(VdpmGpuMesh& mesh, Resources& resources,
             dag.splitsByRank.size() * sizeof(std::uint32_t), dag.splitsByRank.data());
         mesh.binding_.splitsByRankAddress = resources.bufferAddress(mesh.splitsByRank_);
         requireAligned(mesh.binding_.splitsByRankAddress, 4, "splitsByRank");
+        mesh.staticBytes_ += dag.splitsByRank.size() * sizeof(std::uint32_t);
     }
 
     // Upload the per-rank ranges device-local (the persistent repair kernel walks them
@@ -502,6 +506,7 @@ void VdpmGpuMesh::uploadScoreData(VdpmGpuMesh& mesh, Resources& resources,
             mesh.rankRanges_.size() * sizeof(RankRange), mesh.rankRanges_.data());
         mesh.binding_.rankRangesAddress = resources.bufferAddress(mesh.rankRangesBuffer_);
         requireAligned(mesh.binding_.rankRangesAddress, 4, "rankRanges");
+        mesh.staticBytes_ += mesh.rankRanges_.size() * sizeof(RankRange);
     }
 }
 
@@ -578,6 +583,7 @@ VdpmGpuMesh VdpmGpuMesh::build(Resources& resources, std::span<const Vertex> ver
                                                           data.data());
         address = resources.bufferAddress(handle);
         requireAligned(address, 4, what);
+        mesh.staticBytes_ += data.size() * sizeof(std::uint32_t);
     };
 
     std::uint64_t indicesAddress = 0;
@@ -606,6 +612,9 @@ VdpmGpuMesh VdpmGpuMesh::build(Resources& resources, std::span<const Vertex> ver
     mesh.binding_.faceCount = static_cast<std::uint32_t>(indices.size() / 3);
     mesh.binding_.maxDepth = wc.maxDepth;
     mesh.binding_.hasEmitData = true;
+    // The wedge-choice map subset of the static footprint (choices + offsets), reported separately
+    // as emit-restoration evidence.
+    mesh.wedgeMapBytes_ = (wc.choices.size() + wc.offsets.size()) * sizeof(std::uint32_t);
     return mesh;
 }
 

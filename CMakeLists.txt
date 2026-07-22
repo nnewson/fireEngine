@@ -366,6 +366,7 @@ add_executable(test_fire_engine
     tests/render/test_vdpm_repair_kernel.cpp
     tests/render/test_vdpm_apply_kernel.cpp
     tests/render/test_vdpm_health_reduce.cpp
+    tests/render/test_vdpm_helmet_evidence.cpp
     tests/render/test_vdpm_scan.cpp
     tests/graphics/test_generational_slot_pool.cpp
     tests/scene/test_particle_emitter.cpp
@@ -398,6 +399,9 @@ target_compile_options(test_fire_engine PRIVATE -Wall -Wextra -Wpedantic)
 if(FIRE_ENGINE_WARNINGS_AS_ERRORS)
     target_compile_options(test_fire_engine PRIVATE -Werror)
 endif()
+# The B5c-2 helmet-evidence test loads the copied asset by absolute path (CWD-independent).
+target_compile_definitions(test_fire_engine PRIVATE
+    FIRE_ENGINE_BUILD_ASSET_DIR="${CMAKE_CURRENT_BINARY_DIR}")
 # The [.][gpu] tests load .spv from the build dir at runtime — depend on `shaders` so building the
 # test target alone can never leave a stale shader (tests-full inherits this via test_fire_engine).
 add_dependencies(test_fire_engine shaders)

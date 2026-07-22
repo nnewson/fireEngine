@@ -200,6 +200,22 @@ public:
     {
         return initialActive_;
     }
+    // Uploaded payload bytes of the static (per-mesh, frame-invariant) B2–B4 buffers built at
+    // upload time: splits, positions, frontSplits, splitsByRank, rankRanges, indices, weld,
+    // removalParent, wedgeChoices, wedgeOffsets, finestFaces, removingSplit. This is the requested
+    // buffer size sum, NOT the VMA-allocated footprint (excludes suballocation padding); it also
+    // excludes the per-front lifecycle/emit ring buffers, which are frame-slot state, not mesh
+    // data.
+    [[nodiscard]] std::size_t staticByteFootprint() const noexcept
+    {
+        return staticBytes_;
+    }
+    // Of `staticByteFootprint()`, the precomputed wedge-choice map: choices + offsets (the CSR the
+    // emit shader walks to restore seam wedges at nonzero ancestor depths).
+    [[nodiscard]] std::size_t wedgeMapByteFootprint() const noexcept
+    {
+        return wedgeMapBytes_;
+    }
 
 private:
     // Pack + upload the static splits/positions + front topology (from the caller-built `dag`) and
@@ -234,6 +250,10 @@ private:
     BufferHandle rankRangesBuffer_{NullBuffer}; // device-local RankRange[] (persistent kernel ABI)
     std::vector<RankRange> rankRanges_;
     std::vector<std::uint32_t> initialActive_;
+
+    // Accumulated uploaded payload bytes of the static buffers above (see staticByteFootprint()).
+    std::size_t staticBytes_{0};
+    std::size_t wedgeMapBytes_{0};
 
     VdpmGpuMeshBinding binding_{}; // fully assembled at build; the front copies it verbatim
 };
