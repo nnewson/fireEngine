@@ -165,6 +165,24 @@ void DebugOverlay::buildUi(const FrameStats& stats, RenderTunables& tunables)
         }
         if (tunables.lodMode == LodMode::ViewDependent)
         {
+            // GPU-driven front backend toggle (B5c-3). The manager is constructed whenever the
+            // device supports it, independent of this selector, so flipping it takes effect the
+            // next frame with NO reload and an unsupported device falls back to the CPU front. When
+            // the device can't support it, show an explicit "unsupported" label rather than a
+            // silent disabled checkbox.
+            if (stats.vdpmGpuAvailable)
+            {
+                ImGui::Checkbox("GPU-driven front##vdpm", &tunables.vdpmGpuBackend);
+            }
+            else
+            {
+                ImGui::BeginDisabled(true);
+                bool off = false;
+                ImGui::Checkbox("GPU-driven front##vdpm", &off);
+                ImGui::EndDisabled();
+                ImGui::SameLine();
+                ImGui::TextDisabled("(unsupported on this device)");
+            }
             // Per-frame VDPM repair work (vertices each pass pulled back in). CPU-driven fronts
             // only — a GPU-backed front's CPU counters are stale (its lifecycle was skipped), so
             // they are excluded; the GPU-front health summary is separate below.

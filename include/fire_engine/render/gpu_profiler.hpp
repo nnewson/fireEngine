@@ -72,6 +72,10 @@ struct FrameStats
     // CPU-front subtotal, which is INCOMPLETE — the overlay shows "pending" rather than a plausible
     // partial.
     bool trianglesGpuPending{false};
+    // True iff the device supports the GPU-driven VDPM front (the manager was constructed) —
+    // independent of whether the runtime selector currently has it ACTIVE. Drives the overlay's
+    // backend checkbox: enabled when available, an explicit "unsupported" label otherwise.
+    bool vdpmGpuAvailable{false};
     // VDPM per-frame repair work summed over every instance (vertices each pass pulled back in) — a
     // diagnostic so a repair-count regression is visible in the overlay. 0 outside ViewDependent
     // LOD.
