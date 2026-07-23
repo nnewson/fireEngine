@@ -455,24 +455,65 @@ index count the direct path used), and the validation layers must stay **silent*
 exercises the forward + depth-prepass sites; TransmissionTest's dense transmissive meshes exercise the
 transmission site. This is the MoltenVK `drawIndexedIndirect` de-risk.
 
-#### VDPM GPU-driven front (Stage B5b) — CPU↔GPU backend A/B
-Add `--vdpm-gpu` to run the whole per-frame front lifecycle (score → refine/coarsen → repair → emit) on
-the GPU and draw from the GPU-emitted index/indirect buffers; omit it for the CPU front. Both need
-`--lod-mode view-dependent` and a compute/scan-capable device. Confirm the GPU path is live with
-`FE_LOG=render:debug` (prints `VDPM GPU: now recording N front(s) per frame`; the CPU path prints
-nothing). Smoke each **consumer path** — the image must be **equivalent + hole-free** to the CPU
-backend (exact only where off-threshold), and `grep -icE 'VUID|validation error'` must print `0`:
+#### VDPM GPU-driven front (Stage B5b/B5c) — CPU↔GPU backend parity sign-off
+`--vdpm-gpu` runs the whole per-frame front lifecycle (score → refine/coarsen → repair → emit) on the
+GPU and draws from the GPU-emitted index/indirect buffers; omit it for the CPU front. Both need
+`--lod-mode view-dependent` and a compute/scan-capable device. Since **B5c-3 the backend is a runtime
+overlay toggle**, so the A/B is a **same-process, same-camera** flip — not two independent launches
+(which would compare different camera poses and prove nothing about the counts). The manager is built
+whenever the device supports the GPU front, independent of the selector, so the toggle takes effect the
+next frame with **no reload** and an unsupported device shows an explicit "unsupported" label and stays
+on the CPU front.
+
+**The empirical parity gate (same camera, one process).** This is an *empirical* gate: scoring keeps
+running on both backends, so equal counts are **necessary but not sufficient** — pushing the camera
+farther just widens each split's margin from its threshold, it does not *prove* an all-roots front. The
+stronger correctness evidence is the visual checks below + the headless `test_vdpm_helmet_evidence.cpp`
+(B5c-2). Equal triangle counts also do **not** prove identical index buffers — Claim A owns that
+structural identity; here they are a coarse regression tripwire.
+1. Launch with the overlay; in **Mesh LOD**, set **Mode → View-dependent (VDPM)** (CPU front by default).
+2. Back the camera off (or raise the pixel-error budget) until **"Triangles drawn"** is stable **and the
+   "VDPM repairs (CPU fronts)" counters read `foldover 0, coverage 0`.** A stable *non-zero* repair count
+   is NOT a clean plateau — it means the front coarsens and is repaired again every frame (churn), the
+   opposite of what this gate must identify. Keep backing off until both repair counters sit at 0.
+3. Freeze the camera and the budget (don't touch them for the rest of the gate).
+4. Tick **"GPU-driven front"** in the same panel.
+5. Wait for the front to settle **and** the delayed diagnostics to warm up — "Triangles drawn" briefly
+   reads **"pending GPU readback"**; wait until it shows a stable number again.
+6. **Require, at the plateau (exact — no "near"):** the GPU **"Triangles drawn" equals the CPU number
+   exactly**; **"VDPM GPU health" max marked rounds = 0**; **0 fallback, 0 non-clean, 0 ancestor-fail,
+   0 B3-fail**; no `EMITTED OVERFLOW`. (A settled clean front does zero repair, so any marked round here
+   is a churn/health flag, not noise to tolerate.)
+7. Untick the toggle; confirm "Triangles drawn" returns to the same CPU number (reload-free round trip).
+
+**Consumer-path equivalence + 0-VUID smoke.** With the same in-process toggle, exercise each draw-site
+consumer and confirm the image stays **equivalent + hole-free** across the flip (no background leaking
+through, no silhouette holes, no flicker with the camera still, no shimmer under a slow orbit), and that
+`grep -icE 'VUID|validation error'` on a backgrounded run prints `0`:
 ```bash
 # Opaque forward + depth-prepass
-./fireEngineApp DamagedHelmet/DamagedHelmet.gltf skybox.hdr --lod-mode view-dependent --vdpm-gpu
+./fireEngineApp DamagedHelmet/DamagedHelmet.gltf skybox.hdr --lod-mode view-dependent --overlay
 # Blend + double-sided (no depth-prepass consumer, cull none, blend bucket/pipeline) — a dense
 # DamagedHelmet copy re-materialised alphaMode BLEND + doubleSided (reuses the same .bin + textures)
-./fireEngineApp DamagedHelmet/DamagedHelmetBlend.gltf skybox.hdr --lod-mode view-dependent --vdpm-gpu
+./fireEngineApp DamagedHelmet/DamagedHelmetBlend.gltf skybox.hdr --lod-mode view-dependent --overlay
 # Transmission path (13 dense transmissive instances)
-./fireEngineApp TransmissionTest/TransmissionTest.gltf skybox.hdr --lod-mode view-dependent --vdpm-gpu
+./fireEngineApp TransmissionTest/TransmissionTest.gltf skybox.hdr --lod-mode view-dependent --overlay
 ```
-A/B against the same command **without** `--vdpm-gpu` to confirm equivalence. (B5c-1: the overlay
-"Triangles drawn" now includes GPU-driven fronts via the delayed scene-health reduction — a
-frame-consistent CPU+GPU total shown a couple of frames late — so the readout is meaningful for the
-A/B, alongside the separate "VDPM GPU health" repair-convergence lines. Still judge silhouette parity
-visually.)
+Toggle GPU-driven front on/off in each to A/B. (`--vdpm-gpu` still works to *start* on the GPU front; the
+overlay toggle is what makes the same-camera A/B possible.) `FE_LOG=render:debug` prints `VDPM GPU: now
+recording N front(s) per frame` when the GPU path is live. The overlay "Triangles drawn" is the
+frame-consistent CPU+GPU total (B5c-1, a couple of frames late via the scene-health reduction); the
+"VDPM GPU health" lines report repair convergence. **Silhouette parity is judged visually** — the counts
+are necessary, not sufficient.
+
+**Sign-off checklist** (per scene, at the frozen plateau + across a slow orbit):
+- [ ] CPU "VDPM repairs (CPU fronts)": **foldover 0, coverage 0** at the plateau (a clean, non-churning front).
+- [ ] GPU "Triangles drawn" **== CPU** exactly at the frozen plateau.
+- [ ] VDPM GPU health: **max marked rounds 0**; 0 fallback / 0 non-clean / 0 ancestor-fail / 0 B3-fail; no emitted overflow.
+- [ ] No background leak, no silhouette holes on the GPU front (any camera).
+- [ ] No flicker camera-still; no shimmer under a slow orbit.
+- [ ] Reload-free round trip: toggling back to CPU restores the same count.
+- [ ] `grep -icE 'VUID|validation error'` prints `0` for each consumer path.
+
+**Sign-off record** (fill on completion — until then, manual sign-off is PENDING and B5c-4 stays blocked):
+`platform / date / tester · per scene: CPU count = GPU count · repair counters 0 · health flags 0 · visual OK`

@@ -253,6 +253,10 @@ Renderer::Renderer(const Window& window, std::string environmentPath, RendererDe
                   "VDPM GPU backend unavailable: device does not meet the compute/scan limits; the "
                   "view-dependent LOD front will run on the CPU");
     }
+    // Device capability is fixed for the renderer's lifetime, so publish it to the overlay ONCE
+    // here rather than per frame: the first `buildUi` runs before the first `collectDrawCommands`,
+    // so a per-frame assignment would report "unsupported" on frame 0 with `--overlay`.
+    stats_.vdpmGpuAvailable = (vdpmManager_ != nullptr);
 }
 
 GlobalDescriptorRequest Renderer::buildGlobalDescriptorRequest() const
@@ -909,6 +913,8 @@ const Renderer::DrawBuckets& Renderer::collectDrawCommands(RenderableScene& scen
     stats_.trianglesDrawn = triangles;
     stats_.trianglesOverflow = false;
     stats_.trianglesGpuPending = false; // set below iff the GPU backend records but isn't warm
+    // (stats_.vdpmGpuAvailable is published once at construction — device capability is fixed and
+    // the overlay reads it before this runs on frame 0.)
     return drawBucketsScratch_;
 }
 

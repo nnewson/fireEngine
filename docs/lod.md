@@ -875,8 +875,25 @@ at a fraction of the triangles. The remaining residuals and follow-ons, in rough
   report maxRank + the uploaded static footprint via `VdpmGpuMesh::staticByteFootprint()` (accumulated at
   every upload site across all twelve static B2–B4 buffers — uploaded payload bytes, not VMA suballocation
   padding: helmet ≈ 1.55 MB) and its `wedgeMapByteFootprint()` subset (choices + offsets, ≈ 202 kB).
-- NEXT: **B5c-3** parity sign-off (`docs/acceptance-testing.md`) → **B5c-4** default flip to GPU; THEN the
-  parked code-review backlog.
+- **B5c-3 (parity procedure) — landed; manual visual sign-off PENDING.** The *runbook + the runtime
+  control it needs* are in; the actual same-camera count gate, silhouette/motion checks, and the three
+  consumer paths still have to be **run by a human** and recorded (verifying the two startup paths in
+  isolation does NOT substitute for the live toggle transition or the parity gate). **B5c-4 stays blocked
+  until that manual sign-off is recorded** in `docs/acceptance-testing.md`. The
+  `RenderTunables::vdpmGpuBackend` selector is now a runtime
+  **overlay checkbox** ("GPU-driven front", in the Mesh LOD panel's view-dependent block) — the manager
+  is built whenever the device supports the front (independent of the selector), so the flip takes effect
+  the next frame with NO reload and an unsupported device shows an explicit "unsupported" label + stays on
+  the CPU front (`FrameStats::vdpmGpuAvailable`, set from `vdpmManager_ != nullptr`). That makes the
+  CPU↔GPU A/B a **same-process, same-camera** flip. `docs/acceptance-testing.md` gains the **empirical
+  parity gate**: freeze the camera at a stable low-detail plateau, toggle the backend, and require the GPU
+  "Triangles drawn" to equal the CPU number exactly with 0 fallback/non-clean/ancestor/B3-fail health
+  flags — framed HONESTLY as empirical (scoring still runs; equal counts are necessary, not sufficient,
+  and do NOT prove identical indices — Claim A owns structural identity; the visual checks + B5c-2 carry
+  the correctness weight). The overlay backend toggle was pulled forward from B5c-4.
+- NEXT: **record the B5c-3 manual sign-off** (the parity checklist, per scene) → then **B5c-4** default
+  flip to GPU on capable devices (`--no-vdpm-gpu`, last-one-wins CLI, clear the stale B5b-1 "shadow run"
+  comments) → THEN the parked code-review backlog.
 - **7 forest skips.** `buildVertexForest` skips collapses whose edge diverged from its adjacency
   replay (7 of ~6800 on the helmet); past the first skip the forest is slightly unfaithful. The repairs
   cover the visible symptoms; truncating the stream at the first skip would be the clean structural fix.

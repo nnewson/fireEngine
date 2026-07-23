@@ -743,6 +743,20 @@ twice a frame with different inputs, never silently first-wins). **B5b-2 flips t
   view-dependent`); covered by the local `[.][gpu]` `test_vdpm_gpu_manager.cpp` (registration /
   resolve-or-throw / record) and CI `test_vdpm_gpu_registry.cpp` (`[gpu-registry]` — sameParams / handle
   packing / filter+dedup+conflict).
+- **B5c-3 — the backend is a runtime overlay control.** The GPU front is selected by
+  `RenderTunables::vdpmGpuBackend`, exposed as the **"GPU-driven front"** checkbox in the overlay's Mesh
+  LOD panel (view-dependent block). This is safe as a live toggle **because of the construction
+  invariant above**: the manager exists whenever the device supports the front (independent of the
+  selector), and every frame recomputes `vdpmGpuActive = vdpmManager_ != nullptr && tunables_.vdpmGpuBackend`
+  and repopulates the request sink only when active — so flipping the bool switches backends the next
+  frame with **no reload**, and an unsupported device (`vdpmManager_ == nullptr`) simply can't turn it on
+  and stays on the CPU front (**automatic fallback**). The overlay reads capability via
+  `FrameStats::vdpmGpuAvailable` (set from `vdpmManager_ != nullptr`, NOT from whether it's currently
+  active) to enable the checkbox or show an explicit "unsupported" label. **Common task — the CPU↔GPU
+  A/B:** toggle it in one process at a frozen camera so both backends score the SAME view; the acceptance
+  runbook's "empirical parity gate" (`docs/acceptance-testing.md`) uses this — equal triangle counts are
+  a necessary tripwire, not a proof (scoring still runs; structural index identity is owned by
+  `test_vdpm_helmet_evidence.cpp` Claim A, not the counts).
 - **Two dials** live in `mesh_simplifier.cpp`: `kUvWeightFactor` (UV fidelity vs simplification) and
   `kErrorCeilingFactor` (must only refuse *geometrically* un-simplifiable shapes — the cube via its
   boundary weight — not UV-costly seams). `kLodRatios` / `kLodPixelErrorBudget` / the `kVdpm*` dials
