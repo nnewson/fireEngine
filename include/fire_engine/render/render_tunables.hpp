@@ -70,11 +70,12 @@ struct RenderTunables
     // Discrete = hard LOD swaps (Phase 1); Continuous = VIPM geomorph (Phase 2). Coexist —
     // selectable.
     LodMode lodMode{LodMode::Discrete};
-    // Global CPU/GPU selector for the VDPM (ViewDependent) front (rendering-spine #3, Stage B5b).
-    // When true AND the device meets the compute/scan capability, the Renderer builds a
-    // VdpmGpuManager and runs each visible front's lifecycle on the GPU; unsupported hardware or a
-    // per-mesh ineligibility falls back (logged once) to the CPU front. Default false. In B5b-1 the
-    // GPU compute is a shadow run — the CPU front is still what the draw consumes.
+    // Global CPU/GPU selector for the VDPM (ViewDependent) front (rendering-spine #3). When true
+    // AND the device meets the compute/scan capability, the Renderer runs each visible front's
+    // lifecycle on the GPU and draws from the GPU-emitted index/indirect buffers; unsupported
+    // hardware or a per-mesh ineligibility falls back (logged once) to the CPU front. Seeded by the
+    // Renderer from the tri-state CLI request resolved against device capability (B5c-4: defaults
+    // ON where supported); toggled at runtime by the overlay "GPU-driven front" checkbox.
     bool vdpmGpuBackend{false};
 
     // SSAO + contact shadows (screen-space, from the depth prepass). When

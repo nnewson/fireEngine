@@ -179,7 +179,10 @@ Renderer::Renderer(const Window& window, std::string environmentPath, RendererDe
     tunables_.taaEnabled = debug.taa;
     tunables_.debugView = debug.view;
     tunables_.lodMode = debug.lodMode;
-    tunables_.vdpmGpuBackend = debug.vdpmGpuBackend;
+    // B5c-4 default flip: an unset backend request resolves to ON wherever the device supports the
+    // GPU-driven front (VdpmScan::deviceSupported — the same predicate that builds the manager
+    // below), so the GPU path is the default; --vdpm-gpu / --no-vdpm-gpu force it explicitly.
+    tunables_.vdpmGpuBackend = debug.vdpmGpuBackend.value_or(VdpmScan::deviceSupported(device_));
     tunables_.noShadows = debug.noShadows;
     tunables_.debugDrawAabbs = debug.physicsDebug;
     tunables_.debugDrawColliders = debug.physicsDebug;

@@ -148,11 +148,18 @@ struct ApplicationArgs
         }
         if (arg == "--vdpm-gpu")
         {
-            // Enable the GPU-driven VDPM backend (rendering-spine #3 Stage B5b). Effective only
-            // with
-            // `--lod-mode view-dependent` on a compute/scan-capable device; lets the render smoke
-            // test exercise the compute path without the overlay.
+            // Force the GPU-driven VDPM backend ON (rendering-spine #3). Effective only with
+            // `--lod-mode view-dependent` on a compute/scan-capable device. Since B5c-4 the backend
+            // defaults ON where supported, so this is now an explicit override (and lets the render
+            // smoke test pin the compute path); --no-vdpm-gpu forces it OFF. Last flag wins.
             args.debug.vdpmGpuBackend = true;
+            continue;
+        }
+        if (arg == "--no-vdpm-gpu")
+        {
+            // Force the GPU-driven VDPM backend OFF (use the CPU view-dependent front). The A/B and
+            // fallback escape hatch against the B5c-4 default-on. Last flag wins.
+            args.debug.vdpmGpuBackend = false;
             continue;
         }
         if (arg == "--lod-mode")

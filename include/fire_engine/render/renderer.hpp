@@ -64,10 +64,12 @@ struct RendererDebug
     // RenderTunables; the overlay's LOD combo still switches at runtime. `view-dependent` activates
     // VDPM (and its indirect draws) at launch, so that path is exercisable without the overlay.
     LodMode lodMode{LodMode::Discrete};
-    // Start with the GPU-driven VDPM backend on (--vdpm-gpu), rendering-spine #3 Stage B5b. Only
-    // takes effect with lodMode view-dependent and a compute/scan-capable device; B5b-1 records the
-    // GPU front compute as a shadow run while the CPU front still feeds the draw. Off by default.
-    bool vdpmGpuBackend{false};
+    // GPU-driven VDPM backend request (rendering-spine #3). Tri-state: `true` (--vdpm-gpu), `false`
+    // (--no-vdpm-gpu), or unset (nullopt) — resolved in the Renderer against device capability, so
+    // unset defaults the backend ON wherever the device supports it (B5c-4 default flip), explicit
+    // values always win, and repeated flags are last-one-wins. Only takes effect with lodMode
+    // view-dependent; the overlay checkbox toggles it at runtime thereafter.
+    std::optional<bool> vdpmGpuBackend{};
 };
 
 class Renderer
