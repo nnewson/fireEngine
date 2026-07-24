@@ -881,20 +881,21 @@ at a fraction of the triangles. The remaining residuals and follow-ons, in rough
   identical under the in-process toggle + orbit, convergence within budget (max 8/24, no fallback), CPU
   round-trip exact. Non-zero CPU↔GPU count deltas (helmet ≤0.22%; TransmissionTest, 13 fronts, up to 5.8%
   at coarse detail) were assessed as no visible difference — the GPU front is slightly coarser as
-  per-front screen-space FP diverges, silhouette hole-free. DamagedHelmetBlend is deferred as a
-  **validation-layer-only** crash (renders correctly with validation off — `roadmap.md` (C); blend path
-  covered by `AlphaBlendModeTest`). B5c-4 unblocked. The `RenderTunables::vdpmGpuBackend` selector is now
-  a runtime
+  per-front screen-space FP diverges, silhouette hole-free. DamagedHelmetBlend was omitted from that
+  original visual sign-off because of a validation-layer crash; the later forward descriptor-order fix
+  (resolved `roadmap.md` (C)) restores a 0-VUID CPU/GPU validation smoke for the blend consumer, without
+  claiming a retroactive visual/count parity record. B5c-4 unblocked. The
+  `RenderTunables::vdpmGpuBackend` selector is now a runtime
   **overlay checkbox** ("GPU-driven front", in the Mesh LOD panel's view-dependent block) — the manager
   is built whenever the device supports the front (independent of the selector), so the flip takes effect
   the next frame with NO reload and an unsupported device shows an explicit "unsupported" label + stays on
   the CPU front (`FrameStats::vdpmGpuAvailable`, set from `vdpmManager_ != nullptr`). That makes the
   CPU↔GPU A/B a **same-process, same-camera** flip. `docs/acceptance-testing.md` gains the **empirical
-  parity gate**: freeze the camera at a stable low-detail plateau, toggle the backend, and require the GPU
-  "Triangles drawn" to equal the CPU number exactly with 0 fallback/non-clean/ancestor/B3-fail health
-  flags — framed HONESTLY as empirical (scoring still runs; equal counts are necessary, not sufficient,
-  and do NOT prove identical indices — Claim A owns structural identity; the visual checks + B5c-2 carry
-  the correctness weight). The overlay backend toggle was pulled forward from B5c-4.
+  parity gate**: freeze the camera at a stable low-detail plateau, toggle the backend, record and assess
+  any triangle-count delta, and require 0 fallback/non-clean/ancestor/B3-fail health flags. It is framed
+  HONESTLY as empirical: screen-space FP can produce different valid fronts, counts do NOT prove
+  identical indices, and Claim A owns structural identity; the visual checks + B5c-2 carry the
+  correctness weight. The overlay backend toggle was pulled forward from B5c-4.
 - **B5c-4 (default flip) — landed (2026-07-24).** The GPU-driven front is now the **default wherever the
   device supports it**: the CLI backend request is tri-state (`std::optional<bool>` in `DebugOptions`) —
   `--vdpm-gpu` forces on, `--no-vdpm-gpu` forces off, unset resolves in the Renderer to
@@ -903,8 +904,7 @@ at a fraction of the triangles. The remaining residuals and follow-ons, in rough
   render_tunables.hpp / frame_info.hpp / object.cpp) are cleared. Unsupported devices and per-mesh
   ineligibility still fall back to the CPU front; the overlay checkbox toggles at runtime. **This
   completes the GPU-driven-front productionization arc (B5b → B5c).**
-- NEXT: the post-VDPM code-review backlog (`roadmap.md` — including **(C)** the DamagedHelmetBlend
-  validation-layer crash).
+- NEXT: the remaining post-VDPM code-review backlog (`roadmap.md`).
 - **7 forest skips.** `buildVertexForest` skips collapses whose edge diverged from its adjacency
   replay (7 of ~6800 on the helmet); past the first skip the forest is slightly unfaithful. The repairs
   cover the visible symptoms; truncating the stream at the first skip would be the clean structural fix.

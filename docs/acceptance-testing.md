@@ -513,8 +513,6 @@ through, no silhouette holes, no flicker with the camera still, no shimmer under
 ./fireEngineApp DamagedHelmet/DamagedHelmet.gltf skybox.hdr --lod-mode view-dependent --no-vdpm-gpu --overlay
 # Blend + double-sided (no depth-prepass consumer, cull none, blend bucket/pipeline) — a dense
 # DamagedHelmet copy re-materialised alphaMode BLEND + doubleSided (reuses the same .bin + textures)
-# NOTE: DamagedHelmetBlend currently crashes the Dev-build validation layer (rendering is correct) —
-# see roadmap (C); the blend consumer path is covered by AlphaBlendModeTest until that is resolved.
 ./fireEngineApp DamagedHelmet/DamagedHelmetBlend.gltf skybox.hdr --lod-mode view-dependent --no-vdpm-gpu --overlay
 # Transmission path (13 dense transmissive instances)
 ./fireEngineApp TransmissionTest/TransmissionTest.gltf skybox.hdr --lod-mode view-dependent --no-vdpm-gpu --overlay
@@ -541,9 +539,10 @@ the visual + health-flag lines; the counts are recorded and assessed, not a pass
 **Sign-off record** — completed 2026-07-24 (macOS/arm64, MoltenVK). DamagedHelmet and TransmissionTest
 both passed the full same-camera parity gate at two framings each (GPU failure flags all 0, visually
 identical under the in-process toggle + a slow orbit, convergence within budget, CPU round-trip exact);
-DamagedHelmetBlend is deferred as a **validation-layer-only** issue (renders correctly with validation
-off) — tracked in [`roadmap.md`](roadmap.md) **(C)**, with the blend consumer-path smoke carried by
-`AlphaBlendModeTest`. B5c-4 unblocked.
+DamagedHelmetBlend was omitted from that original visual sign-off because of the then-unresolved
+validation-layer crash. That blocker is now fixed (see resolved [`roadmap.md`](roadmap.md) **(C)**), and
+the blend scene passes the Dev-build validation smoke on both CPU and GPU VDPM. A same-camera visual/count
+parity record for that scene has not been added retrospectively.
 
 ```
 Platform: macOS/arm64, MoltenVK   Date: 2026-07-24
@@ -553,7 +552,7 @@ DamagedHelmet @1/3  | 13282  | 13282  | 13282  | yes           | 0 / 0%         
 DamagedHelmet @1/10 | 12722  | 12694  | 12722  | yes           | 28 / 0.22%     | 18 / 679              | 2/24           | 0/0/0/0   | OK*    | 0
 TransmissionTest @1/3  | 109454 | 108990 | —    | —             | 464 / 0.42%    | 71 / 19865            | 2/24           | 0/0/0/0   | OK*    | 0
 TransmissionTest @1/10 | 29881  | 28148  | —    | —             | 1733 / 5.8%    | 103 / 4008            | 8/24           | 0/0/0/0   | OK*    | 0
-DamagedHelmetBlend  | validation-layer crash under Dev-build validation (rendering correct) — see roadmap (C); blend path covered by AlphaBlendModeTest
+DamagedHelmetBlend  | original visual/count record not captured; post-fix CPU + GPU validation smoke: 0 VUID (see roadmap (C))
 ```
 `*` Non-zero CPU↔GPU count deltas were **assessed as no visible difference** under the in-process toggle
 + orbit (the parity gate) — recorded, not silently tolerated. The deltas grow with coarsening and
