@@ -88,6 +88,34 @@ severity tier, so titles are the stable reference, not a global number.)
   host-visible/mapped. The batched-upload optimisation (join the image `uploadBatch_` instead of a
   per-buffer submit) is left as a follow-up under static-residency below.
 
+**(C) `DamagedHelmetBlend` crashes the validation layer on startup** *(newly found during the B5c-3
+parity sign-off; pre-existing since B5b-2, commit `7904bf1`, where the asset was added — it appears to
+have never run cleanly under validation).* **Not a rendering defect: with the validation layer disabled
+the scene renders correctly.** The Vulkan **validation layer** faults (`vvl::DescriptorSet::PerformWrite-
+Update`, wild/near-null addresses, `EXC_BAD_ACCESS`) while processing the blend helmet's **push
+descriptor** — the crash stack is `pushForwardObjectDescriptors` (`descriptors.cpp`,
+`cmd.pushDescriptorSet`) → the layer. Diagnosis captured so it need not be re-derived:
+- **Scope (what's unique to this asset):** it is the only **all-blend** scene (no opaque geometry ⇒ the
+  depth prepass draws nothing) whose *dense* mesh carries a **real VIPM buffer** at forward set-0
+  binding 28, pushed through the **blend** pipeline. Controls: the **opaque** helmet pushes the
+  *identical* 7 writes to a structurally identical set-0 layout **~344×/frame with zero issues**; the
+  **generic blend** scene `AlphaBlendModeTest` runs clean (its meshes hit the *zeros-fallback* VIPM
+  buffer, not a static one). So the blend *pipeline/draw path* is validated — only this
+  dense-VIPM-blend *asset* trips the layer.
+- **Leading hypothesis:** with no opaque geometry there is **no depth-prepass push to "prime" the
+  layer's push-descriptor tracking**, so the first forward push of the frame trips it. Testable fixes:
+  draw the skybox **last** (it currently binds an *allocated* set 0 in the opaque bucket, right before
+  the blend push — see the secondary symptom); force a priming push; or renumber the sparse high set-0
+  bindings (0,3,4,5,28,29,30) dense.
+- **Secondary (separate) symptom:** a validation *false-positive* `vkCmdDrawIndexed … [Set 0, Binding
+  28, variable "vipm"] is invalid` — caused by the **skybox's allocated set-0 bind** immediately
+  preceding the blend push in an all-blend scene (removing the skybox draw removes this error but **not**
+  the crash, so it is a distinct issue).
+- **Likely a MoltenVK validation-layer bug** crashing on a spec-valid push; the "fix" is a workaround to
+  keep the Dev-build validation smoke green, not a correctness fix. If deprioritised, at minimum note
+  `DamagedHelmetBlend` as a known validation-layer issue in `docs/acceptance-testing.md` and rely on
+  `AlphaBlendModeTest` for the blend consumer-path smoke.
+
 ---
 
 ## Could — opportunistic / supporting

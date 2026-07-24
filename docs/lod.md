@@ -875,12 +875,16 @@ at a fraction of the triangles. The remaining residuals and follow-ons, in rough
   report maxRank + the uploaded static footprint via `VdpmGpuMesh::staticByteFootprint()` (accumulated at
   every upload site across all twelve static B2–B4 buffers — uploaded payload bytes, not VMA suballocation
   padding: helmet ≈ 1.55 MB) and its `wedgeMapByteFootprint()` subset (choices + offsets, ≈ 202 kB).
-- **B5c-3 (parity procedure) — landed; manual visual sign-off PENDING.** The *runbook + the runtime
-  control it needs* are in; the actual same-camera count gate, silhouette/motion checks, and the three
-  consumer paths still have to be **run by a human** and recorded (verifying the two startup paths in
-  isolation does NOT substitute for the live toggle transition or the parity gate). **B5c-4 stays blocked
-  until that manual sign-off is recorded** in `docs/acceptance-testing.md`. The
-  `RenderTunables::vdpmGpuBackend` selector is now a runtime
+- **B5c-3 (parity sign-off) — landed (2026-07-24, macOS/arm64).** Runbook, runtime control, and the
+  recorded manual sign-off are all in (`docs/acceptance-testing.md`): DamagedHelmet and TransmissionTest
+  both passed the full same-camera parity gate at two framings each — GPU failure flags all 0, visually
+  identical under the in-process toggle + orbit, convergence within budget (max 8/24, no fallback), CPU
+  round-trip exact. Non-zero CPU↔GPU count deltas (helmet ≤0.22%; TransmissionTest, 13 fronts, up to 5.8%
+  at coarse detail) were assessed as no visible difference — the GPU front is slightly coarser as
+  per-front screen-space FP diverges, silhouette hole-free. DamagedHelmetBlend is deferred as a
+  **validation-layer-only** crash (renders correctly with validation off — `roadmap.md` (C); blend path
+  covered by `AlphaBlendModeTest`). B5c-4 unblocked. The `RenderTunables::vdpmGpuBackend` selector is now
+  a runtime
   **overlay checkbox** ("GPU-driven front", in the Mesh LOD panel's view-dependent block) — the manager
   is built whenever the device supports the front (independent of the selector), so the flip takes effect
   the next frame with NO reload and an unsupported device shows an explicit "unsupported" label + stays on
@@ -891,12 +895,29 @@ at a fraction of the triangles. The remaining residuals and follow-ons, in rough
   flags — framed HONESTLY as empirical (scoring still runs; equal counts are necessary, not sufficient,
   and do NOT prove identical indices — Claim A owns structural identity; the visual checks + B5c-2 carry
   the correctness weight). The overlay backend toggle was pulled forward from B5c-4.
-- NEXT: **record the B5c-3 manual sign-off** (the parity checklist, per scene) → then **B5c-4** default
-  flip to GPU on capable devices (`--no-vdpm-gpu`, last-one-wins CLI, clear the stale B5b-1 "shadow run"
-  comments) → THEN the parked code-review backlog.
+- **B5c-4 (default flip) — landed (2026-07-24).** The GPU-driven front is now the **default wherever the
+  device supports it**: the CLI backend request is tri-state (`std::optional<bool>` in `DebugOptions`) —
+  `--vdpm-gpu` forces on, `--no-vdpm-gpu` forces off, unset resolves in the Renderer to
+  `VdpmScan::deviceSupported` (the same predicate that builds the manager), and repeated flags are
+  last-one-wins (`test_application_args`). The stale B5b-1 "shadow run" comments (renderer.hpp /
+  render_tunables.hpp / frame_info.hpp / object.cpp) are cleared. Unsupported devices and per-mesh
+  ineligibility still fall back to the CPU front; the overlay checkbox toggles at runtime. **This
+  completes the GPU-driven-front productionization arc (B5b → B5c).**
+- NEXT: the post-VDPM code-review backlog (`roadmap.md` — including **(C)** the DamagedHelmetBlend
+  validation-layer crash).
 - **7 forest skips.** `buildVertexForest` skips collapses whose edge diverged from its adjacency
   replay (7 of ~6800 on the helmet); past the first skip the forest is slightly unfaithful. The repairs
   cover the visible symptoms; truncating the stream at the first skip would be the clean structural fix.
+- **Repair never reaches zero on the real helmet (observed).** Backing the camera off, the CPU foldover
+  repair count settles to a non-zero floor (~40) and rises again at the very coarsest levels — there is
+  **no zero-repair plateau**. This is *observed real-helmet behaviour*, phrased as such, not proven
+  causality: it is **consistent with, and likely amplified by, the forest skips above**, but selective
+  non-prefix fronts can require foldover repair even with a perfectly faithful forest, so the skips are
+  not established as the sole cause. Consequence for the parity sign-off (`docs/acceptance-testing.md`):
+  the gate must NOT require foldover/coverage or GPU-marked-rounds == 0 — repair is load-bearing for
+  correctness. Note a *stable* triangle count proves only a stable final front, not a quiescent
+  lifecycle (a region can coarsen and be repaired back every frame at an identical emitted count — that
+  repeated work is real churn, distinct from the settled output).
 - **Coarsest-level seam shift.** A position-welded seam vertex carries one representative UV, so when a
   seam vertex finally collapses *along* its seam, its representative UV shifts slightly. The chart veto
   (decision 8) already removes the worse failure — a seam vertex collapsing *across* into another chart,

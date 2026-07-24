@@ -739,10 +739,13 @@ twice a frame with different inputs, never silently first-wins). **B5b-2 flips t
   the shadow pass and BEFORE the depth prepass — the shadow pass never reads VDPM output (discrete/direct,
   and shadow draw copies clear `vdpmGpuFront`), so it overlaps the compute, and the prepass is the first
   real consumer. Per-mesh fallback (ineligible mesh → NullVdpmFront) keeps the CPU path; the CPU front is
-  still built for every VDPM instance so a fallback is instant. Enable with `--vdpm-gpu` (+ `--lod-mode
-  view-dependent`); covered by the local `[.][gpu]` `test_vdpm_gpu_manager.cpp` (registration /
-  resolve-or-throw / record) and CI `test_vdpm_gpu_registry.cpp` (`[gpu-registry]` — sameParams / handle
-  packing / filter+dedup+conflict).
+  still built for every VDPM instance so a fallback is instant. **Since B5c-4 the backend is ON by
+  default** wherever the device supports it (with `--lod-mode view-dependent`): `DebugOptions::vdpmGpu-
+  Backend` is a tri-state `std::optional<bool>` — `--vdpm-gpu` forces on, `--no-vdpm-gpu` forces off,
+  unset resolves in the Renderer to `VdpmScan::deviceSupported` (last-flag-wins, `test_application_args`).
+  Covered by the local `[.][gpu]` `test_vdpm_gpu_manager.cpp` (registration / resolve-or-throw / record)
+  and CI `test_vdpm_gpu_registry.cpp` (`[gpu-registry]` — sameParams / handle packing / filter+dedup+
+  conflict).
 - **B5c-3 — the backend is a runtime overlay control.** The GPU front is selected by
   `RenderTunables::vdpmGpuBackend`, exposed as the **"GPU-driven front"** checkbox in the overlay's Mesh
   LOD panel (view-dependent block). This is safe as a live toggle **because of the construction

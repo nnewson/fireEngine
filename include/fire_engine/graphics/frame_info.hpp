@@ -58,8 +58,8 @@ struct FrameInfo
     // renderer-owned per-frame work-request sink. When `vdpmGpuBackend` is set and a binding
     // carries a GPU front handle, Object appends its VdpmWorkRequest to `vdpmRequestSink` and tags
     // the forward DrawCommand with the front handle; the renderer harvests the camera-visible
-    // forward draws and records their front compute. B5b-1 still draws the CPU-emitted index buffer
-    // (the GPU compute is a shadow run); B5b-2 flips the draw to the GPU output. Null sink / false
+    // forward draws, records their front compute, and draws directly from the GPU-emitted
+    // index/indirect buffers (the per-instance CPU front work is skipped). Null sink / false
     // selector ⇒ pure CPU front.
     bool vdpmGpuBackend{false};
     std::vector<VdpmWorkRequest>* vdpmRequestSink{nullptr};

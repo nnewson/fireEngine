@@ -62,6 +62,41 @@ TEST_CASE("ApplicationArgs.EmptyArgsUseDefaults", "[ApplicationArgs]")
     CHECK_FALSE(args.addCloth);
     CHECK_FALSE(args.startMaximized);
     CHECK(args.debug.lodMode == LodMode::Discrete); // default matches RenderTunables
+    // The GPU-VDPM backend request is a tri-state; unset by default so the Renderer resolves it
+    // against device capability (B5c-4 default flip).
+    CHECK_FALSE(args.debug.vdpmGpuBackend.has_value());
+}
+
+TEST_CASE("ApplicationArgs.VdpmGpuBackendTriStateFlags", "[ApplicationArgs]")
+{
+    // Unset by default (Renderer resolves to on-if-capable).
+    CHECK_FALSE(parseArgs({"fireEngineApp"}).args.debug.vdpmGpuBackend.has_value());
+
+    // --vdpm-gpu forces on, --no-vdpm-gpu forces off.
+    {
+        const auto b = parseArgs({"fireEngineApp", "--vdpm-gpu"}).args.debug.vdpmGpuBackend;
+        REQUIRE(b.has_value());
+        CHECK(*b == true);
+    }
+    {
+        const auto b = parseArgs({"fireEngineApp", "--no-vdpm-gpu"}).args.debug.vdpmGpuBackend;
+        REQUIRE(b.has_value());
+        CHECK(*b == false);
+    }
+
+    // Repeated / conflicting flags are last-one-wins.
+    {
+        const auto b =
+            parseArgs({"fireEngineApp", "--vdpm-gpu", "--no-vdpm-gpu"}).args.debug.vdpmGpuBackend;
+        REQUIRE(b.has_value());
+        CHECK(*b == false);
+    }
+    {
+        const auto b =
+            parseArgs({"fireEngineApp", "--no-vdpm-gpu", "--vdpm-gpu"}).args.debug.vdpmGpuBackend;
+        REQUIRE(b.has_value());
+        CHECK(*b == true);
+    }
 }
 
 TEST_CASE("ApplicationArgs.LodModeFlagSelectsMode", "[ApplicationArgs]")

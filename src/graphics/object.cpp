@@ -230,10 +230,11 @@ void Object::createForwardBindings(Resources& resources, VdpmGpuRegistry* regist
             }
 
             // GPU-driven VDPM (Stage B5b): create this instance's GPU front over the geometry's
-            // registered mesh. In B5b-1 it runs alongside the CPU front above (the compute is a
-            // shadow run; the CPU output is still drawn). A null registry, an unsupported device,
-            // or a geometry the backend rejected leaves the geometry's mesh handle null, so
-            // createFront returns NullVdpmFront and the instance stays CPU-only.
+            // registered mesh. The CPU front above is retained as the automatic fallback (built for
+            // every instance so a fallback is instant), but when the GPU backend is active the draw
+            // consumes the GPU-emitted buffers. A null registry, an unsupported device, or a
+            // geometry the backend rejected leaves the geometry's mesh handle null, so createFront
+            // returns NullVdpmFront and the instance stays CPU-only.
             if (registry != nullptr)
             {
                 binding.vdpmGpuFront = registry->createFront(binding.geometry->vdpmMeshHandle());
