@@ -557,6 +557,7 @@ void Renderer::clearDrawBuckets(DrawBuckets& buckets) noexcept
     buckets.opaque.clear();
     buckets.blend.clear();
     buckets.transmissive.clear();
+    buckets.anySkinned = false;
 }
 
 void Renderer::buildDrawBuckets(std::span<const DrawCommand> drawCommands,
@@ -577,6 +578,7 @@ void Renderer::buildDrawBuckets(std::span<const DrawCommand> drawCommands,
     const Frustum cameraFrustum = Frustum::fromViewProj(currentViewProj_);
     for (const auto& dc : drawCommands)
     {
+        buckets.anySkinned = buckets.anySkinned || dc.hasSkin;
         if (dc.pipeline == shadows_.pipelineHandle())
         {
             buckets.shadow.push_back(dc);
@@ -924,9 +926,13 @@ void Renderer::recordShadowPass(vk::CommandBuffer cmd, const DrawBuckets& bucket
 {
     std::span<const PointShadowCaster> pointCasterSpan{
         pointCasters_.data(), static_cast<std::size_t>(activePointCasters_)};
+    // Self-shadow slots are assigned densely (assignSelfShadowSlots), so the
+    // scratch map's size is the number of slots the pass must render; the world
+    // CSM is wanted only when a skinned draw exists to sample it.
     shadows_.recordPass(cmd, buckets.shadow, buckets.worldShadow, buckets.selfShadow,
-                        activeSpotCasters_, pointCasterSpan, shadowViewProjs_,
-                        tunables_.cullingEnabled);
+                        static_cast<int>(selfShadowSlotsScratch_.size()), activeSpotCasters_,
+                        pointCasterSpan, shadowViewProjs_, tunables_.cullingEnabled,
+                        buckets.anySkinned);
 }
 
 void Renderer::recordTransmissionPass(vk::CommandBuffer cmd, const DrawBuckets& buckets)

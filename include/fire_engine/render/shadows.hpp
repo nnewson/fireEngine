@@ -42,12 +42,18 @@ public:
 
     // `shadowViewProjs` are the light/cascade matrices indexed by ShadowPushConstants::
     // matrixIndex; when `cullingEnabled` each iteration drops casters outside its
-    // frustum.
+    // frustum. `activeSelfShadowCasters` bounds the self-shadow slot loop (slots are
+    // assigned densely, and an unassigned slot's layers are never sampled — no
+    // fragment carries that slot index — so they need no clear). `renderWorldShadow`
+    // gates the world-only CSM: only skinned fragments sample it (shader.frag gates
+    // on hasSkin), so a frame with no skinned draw skips those iterations, and the
+    // frame that reintroduces one re-renders the map before anything samples it.
     void recordPass(vk::CommandBuffer cmd, std::span<const DrawCommand> shadowDraws,
                     std::span<const DrawCommand> worldOnlyShadowDraws,
-                    std::span<const DrawCommand> selfShadowDraws, int activeSpotCasters,
-                    std::span<const PointShadowCaster> pointCasters,
-                    std::span<const Mat4> shadowViewProjs, bool cullingEnabled) const;
+                    std::span<const DrawCommand> selfShadowDraws, int activeSelfShadowCasters,
+                    int activeSpotCasters, std::span<const PointShadowCaster> pointCasters,
+                    std::span<const Mat4> shadowViewProjs, bool cullingEnabled,
+                    bool renderWorldShadow) const;
 
 private:
     Resources* resources_{nullptr};

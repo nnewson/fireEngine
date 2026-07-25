@@ -83,6 +83,14 @@ void Taa::recordResolve(vk::CommandBuffer cmd, uint32_t currentFrame, float hist
                         float sharpen)
 {
     const auto extent = swapchain_->extent();
+    // The history ping-pong indexes by frame-in-flight slot, and "the other
+    // slot" is only the PREVIOUS FRAME's history under double-buffering. At any
+    // other kMaxFramesInFlight this formula silently samples the wrong (or the
+    // just-written) slot with no validation error — hold the assumption with a
+    // compile-time guard so a frames-in-flight change can't corrupt history.
+    static_assert(kMaxFramesInFlight == 2,
+                  "Taa history indexing assumes double-buffering; rework prev-slot "
+                  "selection before changing kMaxFramesInFlight");
     const uint32_t cur = currentFrame % kMaxFramesInFlight;
     const uint32_t prev = (kMaxFramesInFlight - 1) - cur;
 

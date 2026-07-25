@@ -211,6 +211,12 @@ private:
         // KHR_materials_transmission F3 — draws deferred to the second forward
         // sub-pass so they can sample the captured sceneColor target.
         std::vector<DrawCommand> transmissive;
+        // True when any collected draw this frame carries a skin. Only skinned
+        // fragments sample the world-only CSM (shader.frag gates on hasSkin), so
+        // when this is false the shadow pass skips the world-shadow iterations
+        // entirely — nobody reads the map, and the frame that reintroduces a
+        // skinned mesh re-renders it before any fragment samples it.
+        bool anySkinned{false};
     };
 
     void updateLightData(Vec3 cameraPosition, Vec3 cameraTarget, float aspect,
