@@ -365,9 +365,9 @@ relationship explicit so items don't fork.
 
 | # | Finding | Severity | Effort | Where |
 |---|---------|----------|--------|-------|
-| 1 | Skip redundant world-CSM when no skinned casters | B | S | §2.2 |
-| 2 | Skip empty self-shadow slots (clear-once + dirty bit) | B | S | §2.1 |
-| 3 | `static_assert` / explicit ping-pong for TAA history index | A | XS | §2.4 |
+| 1 | ✅ Skip redundant world-CSM when no skinned casters *(branch `review-shadow-taa-fixes`)* | B | S | §2.2 |
+| 2 | ✅ Skip empty self-shadow slots *(same branch; implementation is simpler than proposed — unassigned slots are provably never sampled, so no clear-once/dirty bit is needed, they are skipped outright)* | B | S | §2.1 |
+| 3 | ✅ `static_assert(kMaxFramesInFlight == 2)` on the TAA history index *(same branch)* | A | XS | §2.4 |
 | 4 | Static-scene CSM caching (light+fit+caster epoch) | B | M | §2.1 |
 | 5 | Compute pre-skinning pass (unify with cloth pattern) | B | L | §1.3 |
 | 6 | Batch image barriers into single `DependencyInfo`s | C | S | §1.2 |

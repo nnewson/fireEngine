@@ -144,9 +144,10 @@ Shadows::Shadows(const Device& device, Resources& resources)
 
 void Shadows::recordPass(vk::CommandBuffer cmd, std::span<const DrawCommand> shadowDraws,
                          std::span<const DrawCommand> worldOnlyShadowDraws,
-                         std::span<const DrawCommand> selfShadowDraws, int activeSpotCasters,
-                         std::span<const PointShadowCaster> pointCasters,
-                         std::span<const Mat4> shadowViewProjs, bool cullingEnabled) const
+                         std::span<const DrawCommand> selfShadowDraws, int activeSelfShadowCasters,
+                         int activeSpotCasters, std::span<const PointShadowCaster> pointCasters,
+                         std::span<const Mat4> shadowViewProjs, bool cullingEnabled,
+                         bool renderWorldShadow) const
 {
     const vk::ClearValue depthClear{.depthStencil =
                                         vk::ClearDepthStencilValue{.depth = 1.0f, .stencil = 0}};
@@ -250,12 +251,25 @@ void Shadows::recordPass(vk::CommandBuffer cmd, std::span<const DrawCommand> sha
         layeredIteration(shadowMapHandle_, cascade, kShadowMapExtent, pc, shadowDraws, filter,
                          shadowPipelineHandle_, kDirectionalShadowRasterBiasConstant,
                          kDirectionalShadowRasterBiasSlope);
-        layeredIteration(worldShadowMapHandle_, cascade, kShadowMapExtent, pc, worldOnlyShadowDraws,
-                         filter, shadowPipelineHandle_, kDirectionalShadowRasterBiasConstant,
-                         kDirectionalShadowRasterBiasSlope);
+        // The world-only CSM exists so skinned receivers can sample a cascade
+        // without their own geometry; with no skinned draw this frame nothing
+        // samples it, so skip the duplicate 4-cascade render entirely (stale
+        // content is unreachable — see the recordPass contract in shadows.hpp).
+        if (renderWorldShadow)
+        {
+            layeredIteration(worldShadowMapHandle_, cascade, kShadowMapExtent, pc,
+                             worldOnlyShadowDraws, filter, shadowPipelineHandle_,
+                             kDirectionalShadowRasterBiasConstant,
+                             kDirectionalShadowRasterBiasSlope);
+        }
     }
 
-    for (int slot = 0; slot < kMaxSkinnedSelfShadowCasters; ++slot)
+    // Only the densely-assigned slots render; an unassigned slot's layers are
+    // never sampled (no fragment carries its index), so they need no clear. An
+    // assigned slot whose caster produced no shadow draw still clears here —
+    // correctly reading "no occluder" (depth 1.0) for its forward fragments.
+    for (int slot = 0; slot < activeSelfShadowCasters && slot < kMaxSkinnedSelfShadowCasters;
+         ++slot)
     {
         ShadowPushConstants pc{};
         pc.matrixIndex = -1;

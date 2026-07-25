@@ -585,6 +585,15 @@ but does not gate per-fragment coverage on closed meshes. Only `kMaxSkinnedSelfS
 objects get these per-object slots each frame; additional skinned objects still cast into the
 full directional CSM for world receivers.
 
+The skinned-only shadow resources render on demand, not unconditionally: only skinned
+fragments sample the world-only CSM (`shader.frag` gates on `hasSkin`) and only assigned
+self-shadow slots are ever addressed (`pc.selfShadowSlot`), so `Shadows::recordPass` skips
+the world-CSM iterations when the frame collected no skinned draw
+(`DrawBuckets::anySkinned`) and only loops the densely-assigned self-shadow slots. A frame
+that reintroduces a skinned mesh re-renders those maps before any fragment samples them, so
+stale content is unreachable — an all-rigid scene pays for one 4-cascade CSM and zero
+self-shadow passes.
+
 Debugging flags are parsed in `ApplicationArgs` into a `RendererDebug { DebugView view;
 bool noShadows; bool taa; }` struct, passed through `FireEngine::run` into the `Renderer` ctor.
 The `DebugView` integer and `noShadows` are packed into `LightUBO::environmentParams` (`.z` / `.w`)
