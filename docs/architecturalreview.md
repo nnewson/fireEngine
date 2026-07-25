@@ -372,14 +372,16 @@ relationship explicit so items don't fork.
 | 5 | Compute pre-skinning pass (unify with cloth pattern) | B | L | §1.3 |
 | 6 | Batch image barriers into single `DependencyInfo`s | C | S | §1.2 |
 | 7 | Physics per-step scratch persistence | B | S | §3.1 |
-| 8 | Named constant for jointed sleep threshold | C | XS | §3.2 |
-| 9 | Single deferred `LightUBO` upload | C | XS | §1.5 |
+| 8 | ✅ Named constant for jointed sleep threshold *(branch `review-xs-cleanups`; `kJointedAngularSleepThreshold`, with the articulation constant now aliasing it as its comment claimed)* | C | XS | §3.2 |
+| 9 | ✅ Single deferred `LightUBO` upload *(same branch; `updateLightData` no longer uploads — `assignSelfShadowSlots` is the sole per-frame write)* | C | XS | §1.5 |
 | 10 | Front-to-back sort of opaque bucket | B | S | §1.1 |
-| 11 | Route main view matrix through `view_basis.hpp` | C | XS | §1.4 |
-| 12 | Skip frustum extraction for inactive shadow slots | C | XS | §5.3 |
-| 13 | Comment: chart-set immutability rationale | C | XS | §4.2 |
-| 14 | Comment: hinge axis rows prepare-frozen by design | C | XS | §3.4 |
+| 11 | ✅ Route main view matrix through `view_basis.hpp` *(same branch; `stableUpForForward`, identical result off the poles)* | C | XS | §1.4 |
+| 12 | ✅ Skip frustum extraction for inactive shadow slots *(same branch; coarse-cull pushes only active cascade/spot/point slots — also tightens the cull)* | C | XS | §5.3 |
+| 13 | ✅ Comment: chart-set immutability rationale *(same branch)* | C | XS | §4.2 |
+| 14 | ✅ Comment: hinge axis rows prepare-frozen by design *(same branch)* | C | XS | §3.4 |
 
-Items 1–3 are the recommended first branch(es): small, high-value, and none moves the
-physics golden or any documented invariant. Item 5 is the one genuinely architectural piece
-of work and should be weighed against the roadmap's existing GPU-driven arc before starting.
+Items 1–3 were the recommended first branch (`review-shadow-taa-fixes`, merged): small,
+high-value, none moves the physics golden or any documented invariant. The six XS items
+(3, 8, 9, 11, 12, 13, 14 — 3 landed with 1–2) followed on `review-xs-cleanups`. Item 5 is the
+one genuinely architectural piece of work and should be weighed against the roadmap's existing
+GPU-driven arc before starting.

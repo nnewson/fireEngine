@@ -1560,7 +1560,8 @@ bool PhysicsWorld::islandShouldSleep(const Island& island) const
         return false;
     }
 
-    const float angularThreshold = island.joints.empty() ? kAngularSleepThreshold : 0.15f;
+    const float angularThreshold =
+        island.joints.empty() ? kAngularSleepThreshold : kJointedAngularSleepThreshold;
     bool anyDynamic = false;
     for (const int bi : island.bodies)
     {
@@ -1713,7 +1714,8 @@ bool PhysicsWorld::solveAndIntegrate(std::span<const SolverContact> contacts, fl
             {
                 continue;
             }
-            const float angularThreshold = island.joints.empty() ? kAngularSleepThreshold : 0.15f;
+            const float angularThreshold =
+                island.joints.empty() ? kAngularSleepThreshold : kJointedAngularSleepThreshold;
             if (belowSleepThreshold(entry.body, angularThreshold))
             {
                 entry.sleepTimer += dt;

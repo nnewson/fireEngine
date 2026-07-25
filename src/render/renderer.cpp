@@ -343,7 +343,10 @@ void Renderer::updateLightData(Vec3 cameraPosition, Vec3 cameraTarget, float asp
 
     writeIblAndDebugParams(lightData);
     lightData_ = lightData;
-    writeMapped(lightUbo_.mapped[currentFrame_], lightData_);
+    // No upload here: assignSelfShadowSlots — which runs later this frame in collectDrawCommands,
+    // before any submit — fills the self-shadow matrices and writes the whole struct once. That is
+    // the single authoritative per-frame LightUBO upload; a write here would be immediately
+    // overwritten (the struct is multi-KB), so don't reinstate one.
 }
 
 void Renderer::computeShadowCascades(LightUBO& out, Vec3 cameraPosition, Vec3 cameraTarget,
@@ -546,6 +549,9 @@ void Renderer::assignSelfShadowSlots(std::span<DrawCommand> drawCommands)
         dc.selfShadowViewProj = lightData_.selfShadowViewProj[it->second];
     }
 
+    // The single authoritative per-frame LightUBO upload (updateLightData deliberately does not
+    // write — see the note there). Runs unconditionally, even with no self-shadow casters, so the
+    // rest of lightData_ (lights, cascades, IBL) still reaches the GPU.
     writeMapped(lightUbo_.mapped[currentFrame_], lightData_);
 }
 
@@ -834,20 +840,32 @@ const Renderer::DrawBuckets& Renderer::collectDrawCommands(RenderableScene& scen
                           .shadowPipeline = shadows_.pipelineHandle(),
                           .shadowViewProjs = shadowViewProjs_};
 
-    // Coarse pre-cull frustums: the camera plus every shadow caster. The union is a superset of
-    // what buildDrawBuckets / shadows_ keep per pass, so a node dropped by all of them is never
-    // wanted downstream. Inactive shadow slots are identity matrices — harmless degenerate
-    // frustums that can only add visibility. When culling is disabled we pass an empty span, and
-    // the scene draws everything.
+    // Coarse pre-cull frustums: the camera plus every ACTIVE shadow caster. The union is a superset
+    // of what buildDrawBuckets / shadows_ keep per pass, so a node dropped by all of them is never
+    // wanted downstream. Only the active slots are pushed — the cascades (always all present) plus
+    // the assigned spot / point-face slots (their counts were fixed in updateLightData, above).
+    // Inactive slots hold identity matrices, whose frustum is a small NDC-cube box near the origin
+    // that no pass renders into; skipping them keeps the union a superset AND tightens the cull
+    // (they only ever spuriously added visibility). When culling is disabled we pass an empty span
+    // and the scene draws everything.
     frustumScratch_.clear();
     if (tunables_.cullingEnabled)
     {
-        frustumScratch_.reserve(1 + shadowViewProjs_.size());
-        frustumScratch_.push_back(Frustum::fromViewProj(currentViewProj_));
-        for (const Mat4& shadowViewProj : shadowViewProjs_)
+        const auto pushRange = [&](int base, int count)
         {
-            frustumScratch_.push_back(Frustum::fromViewProj(shadowViewProj));
-        }
+            for (int i = 0; i < count; ++i)
+            {
+                const auto slot = static_cast<std::size_t>(base) + static_cast<std::size_t>(i);
+                frustumScratch_.push_back(Frustum::fromViewProj(shadowViewProjs_[slot]));
+            }
+        };
+        frustumScratch_.reserve(1 + static_cast<std::size_t>(kShadowCascadeCount) +
+                                static_cast<std::size_t>(activeSpotCasters_) +
+                                6 * static_cast<std::size_t>(activePointCasters_));
+        frustumScratch_.push_back(Frustum::fromViewProj(currentViewProj_));
+        pushRange(kShadowCascadeMatrixBase, static_cast<int>(kShadowCascadeCount));
+        pushRange(kShadowSpotMatrixBase, activeSpotCasters_);
+        pushRange(kShadowPointMatrixBase, 6 * activePointCasters_);
     }
 
     const CullStats cull = scene.buildDrawCommands(frame, frustumScratch_, drawCommandScratch_);
@@ -1004,7 +1022,12 @@ void Renderer::drawFrame(Window& display, RenderableScene& scene, float dt)
     // are independent of the jitter (it cancels in the resolve accumulation).
     const auto extent = swapchain_.extent();
     const float aspect = static_cast<float>(extent.width) / static_cast<float>(extent.height);
-    view_ = Mat4::lookAt(cameraPosition, cameraTarget, {0.0f, 1.0f, 0.0f});
+    // Use the shared stable-up helper rather than a hardcoded world-up so a near-vertical look
+    // direction can't degenerate the view basis (identical to {0,1,0} for every non-vertical view —
+    // stableUpForForward returns it whenever |dot(forward, up)| < 0.99). The skybox/shadow paths
+    // already go through view_basis.hpp; this keeps the main view consistent with them.
+    view_ = Mat4::lookAt(cameraPosition, cameraTarget,
+                         stableUpForForward(cameraTarget - cameraPosition));
     const Mat4 unjitteredProj =
         Mat4::perspective(kCameraFovRadians, aspect, kCameraNearPlane, kCameraFarPlane);
     jitteredProj_ = unjitteredProj;
