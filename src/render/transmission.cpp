@@ -23,19 +23,11 @@ void recordTransmissionDrawBucket(vk::CommandBuffer cmd, std::span<const DrawCom
     auto lastBoundPipeline = PipelineHandle{std::numeric_limits<uint32_t>::max()};
     for (const auto& dc : drawCommands)
     {
-        if (dc.pipeline != lastBoundPipeline)
+        const bool pipelineChanged = dc.pipeline != lastBoundPipeline;
+        if (pipelineChanged)
         {
             cmd.bindPipeline(vk::PipelineBindPoint::eGraphics,
                              resources.vulkanPipeline(dc.pipeline));
-            // Transmission draws use forward pipelines; bind set 1 (globals)
-            // whenever the pipeline changes so it survives any prior pipeline
-            // switch that might have used a set-1-incompatible layout.
-            cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
-                                   resources.vulkanPipelineLayout(dc.pipeline), 1, globalSet, {});
-            // Set 2 — bindless materials (forward shader indexes it for every draw).
-            cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
-                                   resources.vulkanPipelineLayout(dc.pipeline), 2,
-                                   resources.bindlessDescriptorSet(), {});
             lastBoundPipeline = dc.pipeline;
         }
         // Transmissive draws always use the merged opaque/double-sided forward
@@ -55,6 +47,18 @@ void recordTransmissionDrawBucket(vk::CommandBuffer cmd, std::span<const DrawCom
         // are always the merged opaque/double-sided forward pipeline.
         pushForwardObjectDescriptors(cmd, resources, resources.vulkanPipelineLayout(dc.pipeline),
                                      dc);
+        if (pipelineChanged)
+        {
+            // Keep the same set order as the main forward recorder: push set 0
+            // first, then bind allocated sets 1/2 through the same compatible
+            // layout. Besides preserving set 0 by specification, this avoids a
+            // Vulkan Validation Layers 1.4.350 first-use push-state defect.
+            cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
+                                   resources.vulkanPipelineLayout(dc.pipeline), 1, globalSet, {});
+            cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
+                                   resources.vulkanPipelineLayout(dc.pipeline), 2,
+                                   resources.bindlessDescriptorSet(), {});
+        }
         ForwardPushConstants pc{};
         pc.selfShadowSlot = dc.selfShadowSlot;
         pc.materialIndex = dc.materialIndex;

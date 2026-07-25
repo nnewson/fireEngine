@@ -624,29 +624,11 @@ void Renderer::recordDrawBucket(vk::CommandBuffer cmd, std::span<const DrawComma
     {
         const bool isForwardPipeline =
             dc.pipeline == forwardOpaqueHandle_ || dc.pipeline == forwardBlendHandle_;
-        if (dc.pipeline != lastBoundPipeline)
+        const bool pipelineChanged = dc.pipeline != lastBoundPipeline;
+        if (pipelineChanged)
         {
             cmd.bindPipeline(vk::PipelineBindPoint::eGraphics,
                              resources_.vulkanPipeline(dc.pipeline));
-            // Set 1 (forward globals) is bound whenever a forward pipeline
-            // becomes active. Binding it through a forward layout is required
-            // because the skybox pipeline (no globalBindings) shares this
-            // bucket and its layout is set-1-incompatible — binding the
-            // skybox pipeline disturbs set 1 per Vulkan layout-compatibility
-            // rules, so we re-bind on every transition back to a forward
-            // pipeline.
-            if (isForwardPipeline)
-            {
-                vk::DescriptorSet globalSet =
-                    resources_.vulkanDescriptorSet(globalDescSets_[currentFrame_]);
-                cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
-                                       resources_.vulkanPipelineLayout(dc.pipeline), 1, globalSet,
-                                       {});
-                // Set 2 — bindless materials (global texture array + materials SSBO).
-                cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
-                                       resources_.vulkanPipelineLayout(dc.pipeline), 2,
-                                       resources_.bindlessDescriptorSet(), {});
-            }
             lastBoundPipeline = dc.pipeline;
         }
         // The merged opaque/double-sided pipeline declares cull mode dynamic;
@@ -673,6 +655,23 @@ void Renderer::recordDrawBucket(vk::CommandBuffer cmd, std::span<const DrawComma
             // Skybox (also in this bucket) keeps its allocated set 0.
             pushForwardObjectDescriptors(cmd, resources_,
                                          resources_.vulkanPipelineLayout(dc.pipeline), dc);
+            if (pipelineChanged)
+            {
+                // Establish push-descriptor set 0 before installing allocated
+                // higher sets. Vulkan layout compatibility preserves set 0
+                // when sets 1/2 are then bound through this same layout. This
+                // ordering also avoids a Vulkan Validation Layers 1.4.350
+                // first-use state-tracking defect in passes with no preceding
+                // forward push (for example an all-blend scene).
+                vk::DescriptorSet globalSet =
+                    resources_.vulkanDescriptorSet(globalDescSets_[currentFrame_]);
+                cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
+                                       resources_.vulkanPipelineLayout(dc.pipeline), 1, globalSet,
+                                       {});
+                cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
+                                       resources_.vulkanPipelineLayout(dc.pipeline), 2,
+                                       resources_.bindlessDescriptorSet(), {});
+            }
             ForwardPushConstants pc{};
             pc.selfShadowSlot = dc.selfShadowSlot;
             pc.materialIndex = dc.materialIndex;

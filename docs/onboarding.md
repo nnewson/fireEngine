@@ -497,6 +497,9 @@ The render layer is where most difficult bugs live.
   set-1 descriptors with the shared globals (light UBO, shadow maps, IBL textures, scene
   colour). `updateGlobalDescriptors` rewrites those globals after swapchain resize so
   Transmission's recreated sceneColor sampler doesn't leave dangling descriptor references.
+  When a forward pipeline becomes active, both the main and transmission recorders push set 0
+  before binding allocated sets 1/2; those higher sets use the same layout and therefore preserve
+  set 0 by Vulkan layout-compatibility rules.
 - `EnvironmentPrecompute`: startup equirectangular-to-cubemap, irradiance, prefilter, and
   BRDF LUT generation.
 - `Shadows`: cascaded directional shadows, spot shadow layers, point cubemap-array shadows,
@@ -854,6 +857,11 @@ the same change — most have a test or guard that will catch you, but not all.
   shader must match the corresponding `ForwardBinding` / `ForwardGlobalBinding` / `ShadowBinding` /
   `SkyboxBinding` / `PostProcessBinding` enumerator. `tests/render/test_pipeline_config.cpp` checks
   the C++ side; the GLSL side is on you.
+- **Forward push-set command order.** On a transition to a forward pipeline, establish pushed set 0
+  before binding allocated sets 1/2 through that same pipeline layout. Vulkan layout compatibility
+  preserves the lower set when the higher sets are bound. Keep `Renderer::recordDrawBucket` and
+  `recordTransmissionDrawBucket` in lockstep: reversing this order exposes a Vulkan Validation Layers
+  1.4.350 first-use push-state defect in an all-blend pass with no preceding depth-prepass push.
 - **UBO/push-constant structs ↔ GLSL std140 layout.** `render/ubo.hpp` structs are memcpy'd into
   mapped GPU memory, so their field order, `alignas`, and padding must mirror the matching GLSL
   block exactly. `tests/render/test_ubo.cpp` asserts sizes/offsets — extend it when you add a field.
