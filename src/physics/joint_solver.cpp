@@ -120,6 +120,13 @@ void JointSolver::addAxisRows(const SolverBody& a, const SolverBody& b, const Jo
     // Align the two world hinge axes (remove the 2 DOF perpendicular to the axis).
     // For a perpendicular t (fixed to A), C = t·axisB; Ċ = (ωB - ωA)·(axisB×t), so the
     // angular Jacobian is angularA = -(axisB×t), angularB = +(axisB×t), no linear part.
+    //
+    // Deliberately prepare-frozen: unlike the point-anchor rows (row.anchorError == true, whose
+    // error solveVelocity recomputes from the moving pose each substep), the axis-alignment error
+    // and Jacobian are fixed here at step-start orientations and not re-evaluated as the bodies
+    // rotate through the substeps. This is the standard TGS trade-off — it lags the constraint by
+    // at most one step's rotation, acceptable for the angular DOF and cheaper than a per-substep
+    // rebuild.
     const Vec3 axisAWorld = Vec3::normalise(joint.axisA);
     const Vec3 axisBWorld = Vec3::normalise(joint.axisB);
     Vec3 t1;

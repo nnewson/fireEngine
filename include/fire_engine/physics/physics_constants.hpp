@@ -172,9 +172,14 @@ inline constexpr float kJointSlop = 0.0005f;
 // the linear (m/s) and angular (rad/s) speeds.
 inline constexpr float kLinearSleepThreshold = 0.05f;
 inline constexpr float kAngularSleepThreshold = 0.05f;
+// A jointed island rests less crisply than a free body — the constraint chain keeps a small
+// residual spin alive — so its angular sleep threshold is looser than the singleton rigid-body one.
+// Used by both the sleep-eligibility test and the post-solve dwell accumulation for jointed
+// islands.
+inline constexpr float kJointedAngularSleepThreshold = 0.15f;
 // Articulations are jointed chains, so their angular and qDot sleep threshold mirrors the looser
 // jointed-island rigid-body threshold instead of the singleton rigid-body angular threshold.
-inline constexpr float kArticulationAngularSleepThreshold = 0.15f;
+inline constexpr float kArticulationAngularSleepThreshold = kJointedAngularSleepThreshold;
 inline constexpr float kSleepTime = 0.5f;
 
 // Near-rest snap for a reduced-coordinate articulation. A lone straggler DOF (e.g. a shoulder

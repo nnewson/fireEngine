@@ -912,6 +912,12 @@ private:
     // `removed` touches a chart the survivor `kept` does not, so a wedge in that chart would have
     // no same-chart survivor to geomorph toward and the texture would shear/pop. Both sets are tiny
     // (1–3 charts).
+    //
+    // canonicalCharts_ is computed once from the original mesh and never updated on collapse — the
+    // static-set test is correct BECAUSE the sets are immutable: a chart id is attached to a
+    // position's native wedges, and subset placement never moves a wedge, so a canonical position's
+    // chart membership can't change as the mesh coarsens. `kept` therefore need not inherit
+    // `removed`'s charts; the veto rejecting `removed ⊄ kept` is the whole and final invariant.
     [[nodiscard]] bool crossesChart(std::uint32_t removed, std::uint32_t kept) const noexcept
     {
         for (const std::uint32_t chart : canonicalCharts_[removed])
