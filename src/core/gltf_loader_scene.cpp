@@ -38,9 +38,11 @@ Node* GltfLoader::loadScene(const std::string& path, SceneGraph& scene, Resource
     std::unordered_map<std::size_t, PhysicsConfig> physicsNodeConfigs;
     std::unordered_map<std::size_t, ClothMeshParams> clothNodeConfigs;
     std::unordered_map<std::size_t, RagdollParams> ragdollNodeConfigs;
-    auto result = parseAsset(gltfPath, &controllableNodeIndices, &physicsNodeConfigs,
-                             clothRegistrations != nullptr ? &clothNodeConfigs : nullptr,
-                             ragdolls != nullptr ? &ragdollNodeConfigs : nullptr);
+    std::unordered_map<std::size_t, bool> shadowCastsNodes;
+    auto result =
+        parseAsset(gltfPath, &controllableNodeIndices, &physicsNodeConfigs,
+                   clothRegistrations != nullptr ? &clothNodeConfigs : nullptr,
+                   ragdolls != nullptr ? &ragdollNodeConfigs : nullptr, &shadowCastsNodes);
     auto& asset = result.get();
 
     // fastgltf stores extensionsRequired in a pmr-allocated string vector.
@@ -57,7 +59,8 @@ Node* GltfLoader::loadScene(const std::string& path, SceneGraph& scene, Resource
 
     GltfLoadContext context(asset, gltfPath.parent_path().string(), resources, assets, physics,
                             std::move(controllableNodeIndices), std::move(physicsNodeConfigs),
-                            std::move(clothNodeConfigs), std::move(ragdollNodeConfigs));
+                            std::move(clothNodeConfigs), std::move(ragdollNodeConfigs),
+                            std::move(shadowCastsNodes));
     context.vdpmRegistry = vdpmRegistry;
     GltfSceneBuilder builder{std::move(context)};
     return builder.build(scene, clothRegistrations, ragdolls);

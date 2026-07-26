@@ -34,7 +34,14 @@ public:
     Object(Object&&) noexcept = default;
     Object& operator=(Object&&) noexcept = default;
 
-    void addGeometry(const Geometry& geometry);
+    // `castsShadow` is PER INSTANCE, not per geometry: two nodes can draw the same mesh with
+    // opposite shadow eligibility (a glTF scene instancing one mesh as both a caster and a
+    // receive-only surface), and a flag on the shared Geometry could not represent that — the
+    // second load would silently rewrite the first. Authored via `extras.Shadow.Casts`.
+    void addGeometry(const Geometry& geometry, bool castsShadow = true);
+
+    // Whether the instance's `geometryIndex`-th binding contributes to the shadow passes.
+    [[nodiscard]] bool castsShadow(std::size_t geometryIndex) const noexcept;
     void shadowGeometry(std::size_t geometryIndex, const Geometry* geometry) noexcept;
     void addVariantMaterial(std::size_t geometryIndex, std::size_t variantIndex,
                             const Material* material);
@@ -91,6 +98,9 @@ private:
     {
         const Geometry* geometry{nullptr};
         const Geometry* shadowGeometry{nullptr};
+        // Per-INSTANCE shadow eligibility (see Object::addGeometry). A shared Geometry cannot
+        // carry this: two instances of one mesh may legitimately disagree.
+        bool castsShadow{true};
         const Material* defaultMaterial{nullptr};
         const Material* activeMaterial{nullptr};
         std::vector<const Material*> variantMaterials;

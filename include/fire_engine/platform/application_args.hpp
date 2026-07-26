@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <charconv>
 #include <string>
 #include <string_view>
 
@@ -124,6 +125,54 @@ struct ApplicationArgs
         if (arg == "--no-shadows")
         {
             args.debug.noShadows = true;
+            continue;
+        }
+        if (arg == "--no-lod")
+        {
+            // Full detail everywhere — the "before" half of an LOD acceptance A/B. Affects the
+            // shadow selection too, since both read RenderTunables::lodEnabled.
+            args.debug.lod = false;
+            continue;
+        }
+        if (arg == "--capture")
+        {
+            // Write the captured frame to this path and exit. Same value-consuming discipline as
+            // --lod-mode: a trailing `--capture`, or one followed by another flag, must not swallow
+            // that flag or leave the path to be misread as a positional scene argument. With no
+            // usable value the flag is simply inert (capturePath stays empty ⇒ no capture).
+            if (i + 1 < argc)
+            {
+                const std::string_view value = argv[i + 1];
+                if (!value.empty() && value.front() != '-')
+                {
+                    ++i;
+                    args.debug.capturePath = value;
+                }
+            }
+            continue;
+        }
+        if (arg == "--capture-frame")
+        {
+            // Explicit FRAME NUMBER, never a duration: the same frame must be captured on a slow
+            // machine and a fast one, or the reference image isn't reproducible. A missing,
+            // non-numeric, or non-positive value leaves the default rather than capturing frame 0.
+            if (i + 1 < argc)
+            {
+                // Parsed from argv's own null-terminated buffer rather than a string_view's
+                // data(), which clang-tidy flags as a potentially unterminated pointer.
+                const char* raw = argv[i + 1];
+                const std::string_view value = raw;
+                if (!value.empty() && value.front() != '-')
+                {
+                    ++i;
+                    int frame = 0;
+                    const auto result = std::from_chars(raw, raw + value.size(), frame);
+                    if (result.ec == std::errc{} && result.ptr == raw + value.size() && frame > 0)
+                    {
+                        args.debug.captureFrame = frame;
+                    }
+                }
+            }
             continue;
         }
         if (arg == "--no-taa")

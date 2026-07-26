@@ -57,9 +57,11 @@ add_library(fireengine SHARED
     src/core/tangent_generator.cpp
     src/fire_engine.cpp
     src/graphics/cloth.cpp
+    src/graphics/frame_capture.cpp
     src/graphics/geometry.cpp
     src/graphics/mesh_simplifier.cpp
     src/graphics/mesh_topology.cpp
+    src/graphics/shadow_diagnostics.cpp
     src/graphics/vipm.cpp
     src/graphics/vdpm.cpp
     src/graphics/vdpm_material.cpp
@@ -280,8 +282,16 @@ if(PYTHON3_EXECUTABLE)
     COMMENT "Generating physics demo glTF assets"
     VERBATIM
   )
+  # The SH-01 shadow-LOD acceptance scenes (static baseline + motion variant). Its own
+  # target, not a second command on the physics one: the two generators are independent,
+  # and a failure should name the scene set that broke.
+  add_custom_target(shadow_lod_demos ALL
+    COMMAND ${PYTHON3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/assets/shadow_lod/generate.py
+    COMMENT "Generating shadow-LOD acceptance glTF assets"
+    VERBATIM
+  )
 else()
-  message(WARNING "python3 not found — physics demo .gltf will not be regenerated")
+  message(WARNING "python3 not found — generated .gltf will not be regenerated")
 endif()
 
 add_custom_target(assets ALL
@@ -295,7 +305,7 @@ add_custom_target(assets ALL
 
 # Generate before copying so the build dir always has the fresh .gltf.
 if(PYTHON3_EXECUTABLE)
-  add_dependencies(assets physics_demos)
+  add_dependencies(assets physics_demos shadow_lod_demos)
 endif()
 
 # --- Tests --------------------------------------------------------------
@@ -354,10 +364,14 @@ add_executable(test_fire_engine
     tests/graphics/test_vdpm_wedge_choices.cpp
     tests/graphics/test_bounds.cpp
     tests/graphics/test_draw_command.cpp
+    tests/graphics/test_object.cpp
+    tests/graphics/test_frame_capture.cpp
     tests/graphics/test_frame_info.cpp
+    tests/graphics/test_shadow_diagnostics.cpp
     tests/graphics/test_texture.cpp
     tests/graphics/test_sampler_settings.cpp
     tests/render/test_ubo.cpp
+    tests/render/test_descriptors.cpp
     tests/render/test_device_plan.cpp
     tests/render/test_pipeline_config.cpp
     tests/render/test_vdpm_gpu.cpp

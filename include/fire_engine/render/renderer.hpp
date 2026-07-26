@@ -5,10 +5,12 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
 #include <fire_engine/graphics/draw_command.hpp>
+#include <fire_engine/graphics/frame_capture.hpp>
 #include <fire_engine/graphics/frustum.hpp>
 #include <fire_engine/graphics/gpu_handle.hpp>
 #include <fire_engine/graphics/lighting.hpp>
@@ -70,6 +72,21 @@ struct RendererDebug
     // values always win, and repeated flags are last-one-wins. Only takes effect with lodMode
     // view-dependent; the overlay checkbox toggles it at runtime thereafter.
     std::optional<bool> vdpmGpuBackend{};
+    // --no-lod: start with mesh LOD switched off, so every draw is full detail. Seeds
+    // RenderTunables::lodEnabled, which both the forward and the shadow selection read — so this is
+    // the "full detail" half of an acceptance A/B, not a forward-only override.
+    bool lod{true};
+    // --capture <path>: write the frame numbered `captureFrame` to `path` as a PNG and exit
+    // successfully. Empty ⇒ no capture. The image is the final SWAPCHAIN content — post-process and
+    // overlay included, exactly what the user sees — copied out immediately before present.
+    //
+    // Frame-numbered, never time-based: a wall-clock delay captures a different frame on a
+    // different machine, which is the opposite of a reproducible reference image. It points at
+    // argv, which outlives the parse.
+    std::string_view capturePath{};
+    // Which frame to capture (1-based). Enough frames must pass for the swapchain, IBL and any
+    // temporal accumulation to settle; 16 is comfortably past that at any frame rate.
+    int captureFrame{16};
     // --require-validation: refuse to start unless the Vulkan validation layer is actually active.
     // For the render smoke and any automated run where "zero VUIDs" must mean "checked and clean"
     // rather than "nothing was checking". Off by default so a machine without the SDK still runs.
@@ -204,6 +221,14 @@ public:
         return overlay_.wantsKeyboard();
     }
 
+    // True once a requested --capture has been written. The main loop ends on it, so a capture
+    // command returns as soon as the file exists. A FAILED capture never gets here — it throws
+    // out to the top-level handler, which logs and exits non-zero.
+    [[nodiscard]] bool captureComplete() const noexcept
+    {
+        return captureDone_;
+    }
+
 private:
     struct DrawBuckets
     {
@@ -242,7 +267,11 @@ private:
     void writeIblAndDebugParams(LightUBO& out) const;
     void assignSelfShadowSlots(std::span<DrawCommand> drawCommands);
     static void clearDrawBuckets(DrawBuckets& buckets) noexcept;
-    void buildDrawBuckets(std::span<const DrawCommand> drawCommands, DrawBuckets& buckets) const;
+    // `shadowStats` is mutated: the SH-01 LOD-reason tally is accumulated here, once per shadow
+    // command, because this is the only place that sees each command exactly once before the
+    // non-exclusive bucket split duplicates it.
+    void buildDrawBuckets(std::span<const DrawCommand> drawCommands, DrawBuckets& buckets,
+                          ShadowFrameStats& shadowStats) const;
     void recordDrawBucket(vk::CommandBuffer cmd, std::span<const DrawCommand> bucket,
                           PipelineHandle& lastBoundPipeline) const;
 
@@ -279,7 +308,22 @@ private:
     void endForwardRendering(vk::CommandBuffer cmd);
     // Final ColorAttachmentOptimal → PresentSrcKHR transition, recorded after the
     // overlay (post-process leaves the swap image in ColorAttachmentOptimal).
-    void transitionSwapchainToPresent(vk::CommandBuffer cmd, uint32_t imageIndex);
+    // `afterCapture` starts the transition from TransferSrcOptimal, where recordCaptureCopy
+    // left the image, instead of ColorAttachmentOptimal.
+    void transitionSwapchainToPresent(vk::CommandBuffer cmd, uint32_t imageIndex,
+                                      bool afterCapture = false);
+    // Copies the presented swapchain image into the host-visible capture buffer (--capture),
+    // snapshotting the extent + format it was copied with.
+    void recordCaptureCopy(vk::CommandBuffer cmd, uint32_t imageIndex);
+    // Waits for that copy, converts, and writes the PNG. THROWS if the conversion or the write
+    // fails, so a capture command cannot report success without a file.
+    void writeCapture();
+    // Swapchain format → capture channel order, rejecting anything unsupported.
+    [[nodiscard]] static CaptureFormat resolveCaptureFormat(vk::Format format);
+    [[nodiscard]] bool captureWanted() const noexcept
+    {
+        return !capturePath_.empty();
+    }
     void submitAndPresent(Window& display, vk::CommandBuffer cmd, uint32_t imageIndex);
     void recordSkybox(Vec3 cameraPosition, Vec3 cameraTarget,
                       std::vector<DrawCommand>& drawCommands);
@@ -325,6 +369,22 @@ private:
     // Throttle for the periodic VDPM perf sample log (CPU record vs GPU compute ms) — the headless
     // baseline complement to the overlay's live readout.
     std::uint32_t vdpmPerfLogCounter_{0};
+    // Frame capture (--capture). `framesRendered_` counts presented frames, so the capture is keyed
+    // to a RENDER ORDINAL rather than elapsed time — every machine captures the same frame number.
+    // That is not the same as the same picture: the main loop advances animation and physics from
+    // wall-clock dt, so identical content additionally requires a static scene (which the SH-01
+    // baseline is). `captureFormat_` is resolved at startup for an early, clear failure AND again
+    // when the copy is recorded, since a swapchain recreation can change it in between.
+    std::string capturePath_;
+    std::uint64_t captureFrame_{0};
+    std::uint64_t framesRendered_{0};
+    // Extent and format the capture was actually COPIED with. Snapshotted when the copy is
+    // recorded, because the swapchain can be recreated (resize / out-of-date present) between
+    // that submit and the write — decoding against the new extent would garble the old pixels.
+    vk::Extent2D captureExtent_{};
+    CaptureFormat captureFormat_{CaptureFormat::Bgra8};
+    MappedBufferSet captureBuffer_{};
+    bool captureDone_{false};
     GpuProfiler profiler_;
     DebugOverlay overlay_;
     FrameStats stats_{};
@@ -365,6 +425,16 @@ private:
     std::array<uint64_t, kMaxFramesInFlight> frameTimelineValue_{};
     std::vector<uint64_t> imageTimelineValue_{};
     uint32_t currentFrame_{0};
+    // SH-01 shadow diagnostics, FRAME-INDEXED. The overlay is built before this frame records its
+    // shadow pass, while the GPU timings it sits beside come from a completed ring slot — so the
+    // counters are collected into slot `currentFrame_` and published only when that slot's
+    // timestamps resolve. Writing them straight into `stats_` would pair this frame's counts with
+    // an older frame's times, which is most misleading in exactly the moving-light stability case
+    // SH-01 exists to measure.
+    std::array<ShadowFrameStats, kMaxFramesInFlight> shadowStatsRing_{};
+    // Per-slot "collected AND submitted" bit, consumed on publication. Independent of the GPU
+    // timestamp validity: a device without timestamp support still produces valid CPU counters.
+    std::array<bool, kMaxFramesInFlight> shadowStatsSlotUsed_{};
     // Per-frame camera matrices (set at the top of drawFrame). view_ + jitteredProj_
     // drive rasterisation; currentViewProj_/previousViewProj_ are jitter-free for
     // TAA motion vectors. previousViewProj_ persists across frames.

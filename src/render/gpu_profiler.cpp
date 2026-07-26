@@ -108,7 +108,13 @@ void GpuProfiler::resolve(uint32_t frameIndex, FrameStats& out) const
         }
         const float ms = static_cast<float>(endVal - beginVal) * timestampPeriodNs_ / 1.0e6f;
         out.passMs[p] = ms;
-        out.gpuTotalMs += ms;
+        // Only disjoint spans are summed: the VDPM breakdown rows sit INSIDE VdpmCompute, so adding
+        // them too would inflate the reported frame total by the whole VDPM cost whenever the
+        // single-front breakdown is populated.
+        if (profilePassContributesToTotal(static_cast<ProfilePass>(p)))
+        {
+            out.gpuTotalMs += ms;
+        }
         anyValid = true;
     }
     out.gpuValid = anyValid;

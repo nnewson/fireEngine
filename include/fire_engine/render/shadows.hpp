@@ -6,6 +6,7 @@
 #include <fire_engine/graphics/draw_command.hpp>
 #include <fire_engine/math/vec3.hpp>
 #include <fire_engine/render/constants.hpp>
+#include <fire_engine/render/gpu_profiler.hpp>
 #include <fire_engine/render/pipeline.hpp>
 #include <fire_engine/render/resources.hpp>
 
@@ -48,12 +49,16 @@ public:
     // gates the world-only CSM: only skinned fragments sample it (shader.frag gates
     // on hasSkin), so a frame with no skinned draw skips those iterations, and the
     // frame that reintroduces one re-renders the map before anything samples it.
+    // `stats` (SH-01) is MUTATED: every iteration marks its view rasterised and observes every
+    // command it walks, so a view that renders nothing is still reported. Rows are keyed by
+    // PHYSICAL slot, which is stable across frames only while the dense light assignment is.
     void recordPass(vk::CommandBuffer cmd, std::span<const DrawCommand> shadowDraws,
                     std::span<const DrawCommand> worldOnlyShadowDraws,
                     std::span<const DrawCommand> selfShadowDraws, int activeSelfShadowCasters,
                     int activeSpotCasters, std::span<const PointShadowCaster> pointCasters,
                     std::span<const Mat4> shadowViewProjs, bool cullingEnabled,
-                    bool renderWorldShadow) const;
+                    bool renderWorldShadow, ShadowFrameStats& stats, const GpuProfiler& profiler,
+                    uint32_t frameIndex) const;
 
 private:
     Resources* resources_{nullptr};

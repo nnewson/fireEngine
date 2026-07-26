@@ -58,6 +58,7 @@ struct ExtrasParseState
     std::unordered_map<std::size_t, GltfLoader::PhysicsConfig>* physicsNodeConfigs{nullptr};
     std::unordered_map<std::size_t, ClothMeshParams>* clothNodeConfigs{nullptr};
     std::unordered_map<std::size_t, RagdollParams>* ragdollNodeConfigs{nullptr};
+    std::unordered_map<std::size_t, bool>* shadowCastsNodes{nullptr};
 };
 } // namespace
 
@@ -133,6 +134,15 @@ void parseNodeExtras(simdjson::dom::object* extras, std::size_t objectIndex,
             state->ragdollNodeConfigs->insert_or_assign(objectIndex, ragdoll.value());
         }
     }
+
+    if (state->shadowCastsNodes != nullptr)
+    {
+        auto casts = GltfLoader::nodeExtrasShadowCasts(extras);
+        if (casts.has_value())
+        {
+            state->shadowCastsNodes->insert_or_assign(objectIndex, casts.value());
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -144,15 +154,16 @@ GltfLoader::parseAsset(const std::filesystem::path& gltfPath,
                        std::unordered_set<std::size_t>* controllableNodeIndices,
                        std::unordered_map<std::size_t, PhysicsConfig>* physicsNodeConfigs,
                        std::unordered_map<std::size_t, ClothMeshParams>* clothNodeConfigs,
-                       std::unordered_map<std::size_t, RagdollParams>* ragdollNodeConfigs)
+                       std::unordered_map<std::size_t, RagdollParams>* ragdollNodeConfigs,
+                       std::unordered_map<std::size_t, bool>* shadowCastsNodes)
 {
     // fastgltf only parses extension data when the extension is enabled here.
     // Without the opt-in, extension fields silently stay at their defaults.
     fastgltf::Parser parser(supportedExtensionMask());
     ExtrasParseState extrasState{controllableNodeIndices, physicsNodeConfigs, clothNodeConfigs,
-                                 ragdollNodeConfigs};
+                                 ragdollNodeConfigs, shadowCastsNodes};
     if (controllableNodeIndices != nullptr || physicsNodeConfigs != nullptr ||
-        clothNodeConfigs != nullptr || ragdollNodeConfigs != nullptr)
+        clothNodeConfigs != nullptr || ragdollNodeConfigs != nullptr || shadowCastsNodes != nullptr)
     {
         if (controllableNodeIndices != nullptr)
         {
@@ -169,6 +180,10 @@ GltfLoader::parseAsset(const std::filesystem::path& gltfPath,
         if (ragdollNodeConfigs != nullptr)
         {
             ragdollNodeConfigs->clear();
+        }
+        if (shadowCastsNodes != nullptr)
+        {
+            shadowCastsNodes->clear();
         }
         parser.setUserPointer(&extrasState);
         parser.setExtrasParseCallback(&parseNodeExtras);

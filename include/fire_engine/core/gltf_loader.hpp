@@ -148,6 +148,17 @@ public:
     [[nodiscard]]
     static std::optional<ClothMeshParams> nodeExtrasCloth(simdjson::dom::object* extras);
 
+    // `extras.Shadow` authoring on a mesh node. Today the block carries one key,
+    // `Casts` (bool): false makes the node's geometry a shadow RECEIVER only, the
+    // authored equivalent of `Geometry::castsShadow(false)`. A large flat receiver that
+    // casts writes its own depth into every cascade and self-shadows the whole surface,
+    // so a floor authored in glTF needs this the same way the built-in `-f` plane does.
+    // Returns nullopt when the node carries no Shadow extras. `Receives` is deliberately
+    // NOT accepted: nothing implements it, and an authoring key the engine ignores is
+    // worse than no key at all.
+    [[nodiscard]]
+    static std::optional<bool> nodeExtrasShadowCasts(simdjson::dom::object* extras);
+
     // `extras.Ragdoll` authoring parameters on a skinned node. All fields optional
     // (sensible defaults from RagdollParams); presence of the "Ragdoll" object is
     // what flags the node. ConeTwist is a bool; the rest are numbers.
@@ -162,7 +173,8 @@ private:
                std::unordered_set<std::size_t>* controllableNodeIndices = nullptr,
                std::unordered_map<std::size_t, PhysicsConfig>* physicsNodeConfigs = nullptr,
                std::unordered_map<std::size_t, ClothMeshParams>* clothNodeConfigs = nullptr,
-               std::unordered_map<std::size_t, RagdollParams>* ragdollNodeConfigs = nullptr);
+               std::unordered_map<std::size_t, RagdollParams>* ragdollNodeConfigs = nullptr,
+               std::unordered_map<std::size_t, bool>* shadowCastsNodes = nullptr);
 
     static void presizeAssets(const fastgltf::Asset& asset, Assets& assets);
 
@@ -177,6 +189,8 @@ private:
         std::unordered_map<std::size_t, PhysicsConfig> physicsNodeConfigs;
         std::unordered_map<std::size_t, ClothMeshParams> clothNodeConfigs;
         std::unordered_map<std::size_t, RagdollParams> ragdollNodeConfigs;
+        // `extras.Shadow.Casts` per node index; absent means the default (casts).
+        std::unordered_map<std::size_t, bool> shadowCastsNodes;
         NodeMap nodeMap;
         MeshMap meshMap;
         std::size_t nextAnimSlot{0};
@@ -192,7 +206,8 @@ private:
                         std::unordered_set<std::size_t> controllableNodeIndices_ = {},
                         std::unordered_map<std::size_t, PhysicsConfig> physicsNodeConfigs_ = {},
                         std::unordered_map<std::size_t, ClothMeshParams> clothNodeConfigs_ = {},
-                        std::unordered_map<std::size_t, RagdollParams> ragdollNodeConfigs_ = {})
+                        std::unordered_map<std::size_t, RagdollParams> ragdollNodeConfigs_ = {},
+                        std::unordered_map<std::size_t, bool> shadowCastsNodes_ = {})
             : asset(assetRef),
               baseDir(std::move(baseDir_)),
               resources(resourcesRef),
@@ -202,6 +217,7 @@ private:
               physicsNodeConfigs(std::move(physicsNodeConfigs_)),
               clothNodeConfigs(std::move(clothNodeConfigs_)),
               ragdollNodeConfigs(std::move(ragdollNodeConfigs_)),
+              shadowCastsNodes(std::move(shadowCastsNodes_)),
               nodeMap(),
               meshMap(),
               nextAnimSlot(0),
@@ -233,7 +249,10 @@ private:
         void applySkins();
 
         [[nodiscard]]
-        Object loadMesh(const fastgltf::Mesh& mesh, std::size_t meshIndex);
+        // `castsShadow` comes from the attaching node's `extras.Shadow.Casts` (default true)
+        // and is recorded on THIS instance's Object bindings, not on the shared Geometry — so
+        // two nodes instancing one mesh can disagree and both are honoured.
+        Object loadMesh(const fastgltf::Mesh& mesh, std::size_t meshIndex, bool castsShadow);
 
         [[nodiscard]]
         TangentGenerationResult loadGeometry(const fastgltf::Primitive& primitive,

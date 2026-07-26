@@ -144,6 +144,16 @@ Descriptors::buildFrameSets(std::span<const vk::DescriptorPoolSize> poolSizes,
                              writeFrame);
 }
 
+ForwardPushConstants makeForwardPushConstants(const DrawCommand& dc) noexcept
+{
+    ForwardPushConstants pc{};
+    pc.selfShadowSlot = dc.selfShadowSlot;
+    pc.materialIndex = dc.materialIndex;
+    pc.lodLevel = dc.lodLevel;
+    pc.shadowLodLevel = dc.shadowLodLevel;
+    return pc;
+}
+
 void pushForwardObjectDescriptors(vk::CommandBuffer cmd, const Resources& resources,
                                   vk::PipelineLayout layout, const DrawCommand& dc)
 {

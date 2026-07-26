@@ -315,3 +315,73 @@ TEST_CASE("ApplicationArgs.UnknownFlagIsTreatedAsPositional", "[ApplicationArgs]
     CHECK(args.scenePath == "--unknown");
     CHECK(args.skyboxPath == "nightbox.hdr");
 }
+
+// ---------------------------------------------------------------------------
+// --no-lod / --capture / --capture-frame
+//
+// A capture command is meant to be scriptable and reproducible, so its parsing has to be
+// boring in the specific ways that bite: a value-taking flag must never swallow the NEXT
+// flag, a missing value must not turn into a scene path, and a bad frame number must not
+// silently become frame 0 (which would capture before anything has settled).
+// ---------------------------------------------------------------------------
+
+TEST_CASE("ApplicationArgs.NoLodDisablesLodAtStartup", "[ApplicationArgs]")
+{
+    CHECK(parseArgs({"fireEngineApp"}).args.debug.lod);
+    CHECK_FALSE(parseArgs({"fireEngineApp", "--no-lod"}).args.debug.lod);
+}
+
+TEST_CASE("ApplicationArgs.CaptureTakesAPathAndDefaultsTheFrame", "[ApplicationArgs]")
+{
+    const auto parsed =
+        parseArgs({"fireEngineApp", "--capture", "out.png", "DamagedHelmet/DamagedHelmet.gltf"});
+    const auto& args = parsed.args;
+
+    CHECK(args.debug.capturePath == "out.png");
+    CHECK(args.debug.captureFrame == 16);
+    // The path was consumed as the flag's value, NOT left to be read as the scene.
+    CHECK(args.scenePath == "DamagedHelmet/DamagedHelmet.gltf");
+}
+
+TEST_CASE("ApplicationArgs.CaptureWithoutAPathCapturesNothing", "[ApplicationArgs]")
+{
+    // Trailing flag: must not read past argv, and must not leave capture "requested" with an
+    // empty path (which would add swapchain transfer usage for a capture that never happens).
+    CHECK(parseArgs({"fireEngineApp", "--capture"}).args.debug.capturePath.empty());
+
+    // Followed by another flag: that flag must still be processed, not eaten as the path.
+    const auto parsed = parseArgs({"fireEngineApp", "--capture", "--overlay"});
+    CHECK(parsed.args.debug.capturePath.empty());
+    CHECK(parsed.args.debug.overlayVisible);
+}
+
+TEST_CASE("ApplicationArgs.CaptureFrameParsesAndValidates", "[ApplicationArgs]")
+{
+    CHECK(parseArgs({"fireEngineApp", "--capture-frame", "42"}).args.debug.captureFrame == 42);
+
+    // Every rejected form keeps the default rather than capturing frame 0 or a negative frame.
+    for (std::string_view bad : {"0", "-3", "abc", "12x", ""})
+    {
+        CAPTURE(bad);
+        CHECK(parseArgs({"fireEngineApp", "--capture-frame", bad}).args.debug.captureFrame == 16);
+    }
+    CHECK(parseArgs({"fireEngineApp", "--capture-frame"}).args.debug.captureFrame == 16);
+}
+
+TEST_CASE("ApplicationArgs.CaptureFrameDoesNotSwallowAFollowingFlag", "[ApplicationArgs]")
+{
+    const auto parsed = parseArgs({"fireEngineApp", "--capture-frame", "--no-lod"});
+
+    CHECK(parsed.args.debug.captureFrame == 16);
+    CHECK_FALSE(parsed.args.debug.lod);
+}
+
+TEST_CASE("ApplicationArgs.RepeatedCaptureFlagsTakeTheLastValue", "[ApplicationArgs]")
+{
+    const auto parsed = parseArgs({"fireEngineApp", "--capture", "first.png", "--capture-frame",
+                                   "4", "--capture", "second.png", "--capture-frame", "9"});
+    const auto& args = parsed.args;
+
+    CHECK(args.debug.capturePath == "second.png");
+    CHECK(args.debug.captureFrame == 9);
+}

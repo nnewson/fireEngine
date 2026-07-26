@@ -619,7 +619,10 @@ After each physics step, `applyPhysics()` copies dynamic body transforms back on
 
 `assets/physics_demos/` holds one minimal glTF scene per capability — the reference for how
 each feature is authored. They are emitted by `assets/physics_demos/generate.py` (run
-automatically at build) and each is mirrored by a headless behaviour test in
+automatically at build), which owns only the scene content — the geometry primitives,
+quaternion helpers and self-contained-glTF assembler it builds them with are shared in
+`tools/assetgen/`, so a second generator doesn't fork them. Each demo is mirrored by a
+headless behaviour test in
 `tests/physics/test_demos.cpp` (the `[Demos]` tag). Run a demo from `build/`:
 `./fireEngineApp physics_demos/<Name>.gltf skybox.hdr --debug-physics`.
 

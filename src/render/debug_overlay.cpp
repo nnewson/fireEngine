@@ -1,5 +1,9 @@
 #include <fire_engine/render/debug_overlay.hpp>
 
+#include <cstddef>
+#include <cstdio>
+#include <string_view>
+
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_vulkan.h>
@@ -11,6 +15,160 @@
 
 namespace fire_engine
 {
+
+namespace
+{
+
+// One row of the SH-01 shadow table. `timing` is pre-formatted by the caller: milliseconds for a
+// family row, an explicit non-number for rows that have no measurement of their own.
+void shadowStatsRow(const char* label, const ShadowViewStats& stats, const char* timing)
+{
+    ImGui::TableNextRow();
+    ImGui::TableNextColumn();
+    ImGui::TextUnformatted(label);
+    ImGui::TableNextColumn();
+    ImGui::Text("%llu", static_cast<unsigned long long>(stats.rasterPasses));
+    ImGui::TableNextColumn();
+    ImGui::Text("%llu / %llu", static_cast<unsigned long long>(stats.drawnDraws),
+                static_cast<unsigned long long>(stats.candidateDraws));
+    ImGui::TableNextColumn();
+    ImGui::Text("%llu / %llu", static_cast<unsigned long long>(stats.drawnTriangles),
+                static_cast<unsigned long long>(stats.candidateTriangles));
+    for (std::size_t bin = 0; bin < kShadowLodBinCount; ++bin)
+    {
+        ImGui::TableNextColumn();
+        ImGui::Text("%llu", static_cast<unsigned long long>(stats.lodHistogram[bin]));
+    }
+    ImGui::TableNextColumn();
+    ImGui::TextUnformatted(timing);
+}
+
+// Row label for one physical slot of a family. Deliberately says "slot", not "light": slots are
+// assignment order into a fixed array, so the same row can describe a different light next frame —
+// a row is a MAP, not an identity. Point views are stored flat as lightSlot * 6 + face, so they
+// decode back to both numbers here (the same split the renderer used to pick the cube layer).
+void formatShadowSlotLabel(char* out, std::size_t size, ShadowViewGroup group, std::size_t slot)
+{
+    switch (group)
+    {
+    case ShadowViewGroup::Cascade:
+    case ShadowViewGroup::WorldOnly:
+        std::snprintf(out, size, "  cascade %zu", slot);
+        return;
+    case ShadowViewGroup::Point:
+        std::snprintf(out, size, "  slot %zu face %zu", slot / 6, slot % 6);
+        return;
+    case ShadowViewGroup::Self:
+    case ShadowViewGroup::Spot:
+    case ShadowViewGroup::Count:
+        break;
+    }
+    std::snprintf(out, size, "  slot %zu", slot);
+}
+
+// The SH-01 evidence panel: what each shadow view rasterised this frame, and at which levels.
+//
+// Two different quantities share the table, and mixing them is the mistake it is laid out to
+// prevent. "Passes" and the draw/triangle columns are RASTER WORK — the same caster counts once per
+// view it appears in, which is the real GPU cost. The L0..L3+ columns are SELECTION SAMPLES: one
+// per drawn caster per logical view (the self-shadow families rasterise twice but are sampled
+// once), so they describe the level distribution, not the work.
+void drawShadowDiagnostics(const FrameStats& stats)
+{
+    if (!stats.shadowValid)
+    {
+        // The counters are published only when their frame's ring slot completes, so the first
+        // frames after start-up (and after a resize) genuinely have nothing to report. Say so
+        // rather than printing a zeroed table that reads like "no shadows rendered".
+        ImGui::TextDisabled("Shadow diagnostics: pending (ring warm-up)");
+        return;
+    }
+
+    const auto& shadow = stats.shadow;
+    ImGui::Text("Selection: %llu selected, %llu LOD off, %llu single-level",
+                static_cast<unsigned long long>(
+                    shadow.lodReasons[static_cast<std::size_t>(ShadowLodReason::Selected)]),
+                static_cast<unsigned long long>(
+                    shadow.lodReasons[static_cast<std::size_t>(ShadowLodReason::LodDisabled)]),
+                static_cast<unsigned long long>(
+                    shadow.lodReasons[static_cast<std::size_t>(ShadowLodReason::SingleLevel)]));
+
+    constexpr int kColumns = 5 + static_cast<int>(kShadowLodBinCount);
+    if (ImGui::BeginTable("shadowviews", kColumns,
+                          ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_RowBg |
+                              ImGuiTableFlags_BordersInnerV))
+    {
+        ImGui::TableSetupColumn("View");
+        ImGui::TableSetupColumn("Passes");
+        ImGui::TableSetupColumn("Draws d/c");
+        ImGui::TableSetupColumn("Tris d/c");
+        ImGui::TableSetupColumn("L0");
+        ImGui::TableSetupColumn("L1");
+        ImGui::TableSetupColumn("L2");
+        ImGui::TableSetupColumn("L3+");
+        ImGui::TableSetupColumn("GPU ms");
+        ImGui::TableHeadersRow();
+
+        for (std::size_t g = 0; g < kShadowViewGroupCount; ++g)
+        {
+            const auto group = static_cast<ShadowViewGroup>(g);
+            const ShadowViewStats total = shadow.groupTotal(group);
+
+            char timing[32] = "unavailable";
+            if (stats.gpuValid)
+            {
+                // A family that never rasterised has no bracketed span this frame — its resolved
+                // time is 0 because nothing ran, which is a different fact from "not measured".
+                const auto pass = static_cast<std::size_t>(shadowProfilePass(group));
+                std::snprintf(timing, sizeof(timing), "%.3f",
+                              static_cast<double>(stats.passMs[pass]));
+            }
+
+            char groupLabel[48];
+            const std::string_view name = toString(group);
+            std::snprintf(groupLabel, sizeof(groupLabel), "%.*s", static_cast<int>(name.size()),
+                          name.data());
+            shadowStatsRow(groupLabel, total, total.touched() ? timing : "idle");
+
+            for (std::size_t slot = 0; slot < shadowViewSlotCount(group); ++slot)
+            {
+                const ShadowViewStats& view = shadow.view(group, slot);
+                if (!view.touched())
+                {
+                    continue; // a slot nothing rasterised into costs nothing and says nothing
+                }
+                char slotLabel[48];
+                formatShadowSlotLabel(slotLabel, sizeof(slotLabel), group, slot);
+                // Timestamps bracket a whole family, not one map, so a slot row has no time of its
+                // own — an em dash, never a share of the family's number.
+                shadowStatsRow(slotLabel, view, "—");
+            }
+        }
+
+        // The five families are disjoint spans (there is no outer shadow timer), so their sum IS
+        // the frame's shadow time.
+        char totalTiming[32] = "unavailable";
+        if (stats.gpuValid)
+        {
+            float shadowMs = 0.0f;
+            for (std::size_t g = 0; g < kShadowViewGroupCount; ++g)
+            {
+                shadowMs += stats.passMs[static_cast<std::size_t>(
+                    shadowProfilePass(static_cast<ShadowViewGroup>(g)))];
+            }
+            std::snprintf(totalTiming, sizeof(totalTiming), "%.3f", static_cast<double>(shadowMs));
+        }
+        shadowStatsRow("Scene total", shadow.sceneTotal(), totalTiming);
+        ImGui::EndTable();
+    }
+
+    ImGui::TextDisabled("d/c = drawn / candidate (candidate - drawn = per-view cull yield)");
+    ImGui::TextDisabled("L0..L3+ = selection samples per logical view, not raster work");
+    ImGui::TextDisabled(
+        "Levels are CAMERA-derived and replayed into every view (SH-03 fixes this)");
+}
+
+} // namespace
 
 DebugOverlay::DebugOverlay(const Device& device, const Swapchain& swapchain, const Window& window,
                            bool startVisible)
@@ -79,10 +237,6 @@ void DebugOverlay::buildUi(const FrameStats& stats, RenderTunables& tunables)
         return;
     }
 
-    static constexpr std::array<const char*, kProfilePassCount> kPassNames{
-        "VDPM compute", "Shadow",    "Depth", "SSAO",  "Forward", "Transmission",
-        "TAA",          "Particles", "Debug", "Bloom", "Post"};
-
     ImGui::Begin("Fire Engine - Debug");
 
     const float fps = stats.cpuFrameMs > 0.0f ? 1000.0f / stats.cpuFrameMs : 0.0f;
@@ -100,7 +254,7 @@ void DebugOverlay::buildUi(const FrameStats& stats, RenderTunables& tunables)
             {
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
-                ImGui::TextUnformatted(kPassNames[p]);
+                ImGui::TextUnformatted(kProfilePassNames[p]);
                 ImGui::TableNextColumn();
                 ImGui::Text("%.3f", stats.passMs[p]);
             }
@@ -115,6 +269,12 @@ void DebugOverlay::buildUi(const FrameStats& stats, RenderTunables& tunables)
     else
     {
         ImGui::TextDisabled("GPU timestamps unavailable");
+    }
+
+    ImGui::Separator();
+    if (ImGui::CollapsingHeader("Shadows (SH-01)", ImGuiTreeNodeFlags_DefaultOpen))
+    {
+        drawShadowDiagnostics(stats);
     }
 
     ImGui::Separator();
@@ -240,11 +400,9 @@ void DebugOverlay::buildUi(const FrameStats& stats, RenderTunables& tunables)
 
     if (ImGui::CollapsingHeader("Debug view", ImGuiTreeNodeFlags_DefaultOpen))
     {
-        static constexpr const char* kViews[] = {"None",   "Normals",      "N·L",
-                                                 "Shadow", "Shadow depth", "Velocity",
-                                                 "SSAO",   "LOD tint",     "Joints"};
         int view = static_cast<int>(tunables.debugView);
-        if (ImGui::Combo("View", &view, kViews, IM_ARRAYSIZE(kViews)))
+        if (ImGui::Combo("View", &view, kDebugViewNames.data(),
+                         static_cast<int>(kDebugViewNames.size())))
         {
             tunables.debugView = static_cast<DebugView>(view);
         }

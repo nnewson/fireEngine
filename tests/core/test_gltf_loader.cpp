@@ -239,6 +239,16 @@ static std::optional<ClothMeshParams> nodeExtrasClothFromJson(std::string_view j
     return GltfLoader::nodeExtrasCloth(&extras);
 }
 
+static std::optional<bool> nodeExtrasShadowCastsFromJson(std::string_view json)
+{
+    simdjson::dom::parser parser;
+    simdjson::padded_string padded{std::string{json}};
+    auto doc = parser.parse(padded);
+    simdjson::dom::object extras;
+    CHECK(doc.get_object().get(extras) == simdjson::SUCCESS);
+    return GltfLoader::nodeExtrasShadowCasts(&extras);
+}
+
 static std::optional<fire_engine::RagdollParams> nodeExtrasRagdollFromJson(std::string_view json)
 {
     simdjson::dom::parser parser;
@@ -646,6 +656,52 @@ TEST_CASE("GltfNodeExtras.ClothDefaultsWhenFieldsOmitted", "[GltfNodeExtras]")
     CHECK(config->structuralCompliance == Catch::Approx(0.0f).margin(1e-7f));
     // Bend defaults to the soft authored value, not zero.
     CHECK(config->bendCompliance > 0.0f);
+}
+
+// --- extras.Shadow ---------------------------------------------------------
+// `{"Casts": false}` is how an authored scene says what the built-in `-f` floor says in
+// code (`Geometry::castsShadow(false)`). A wide flat surface that casts writes its own
+// depth into every cascade and self-shadows its whole area, so this is a correctness
+// switch, not a cosmetic one.
+
+TEST_CASE("GltfNodeExtras.ShadowCastsFalseIsParsed", "[GltfNodeExtras]")
+{
+    auto casts = nodeExtrasShadowCastsFromJson(R"({"Shadow":{"Casts":false}})");
+
+    REQUIRE(casts.has_value());
+    CHECK_FALSE(casts.value());
+}
+
+TEST_CASE("GltfNodeExtras.ShadowCastsTrueIsParsed", "[GltfNodeExtras]")
+{
+    // Explicit true is legal and means the default — an author restating it should not be
+    // an error, and must not be confused with "absent".
+    auto casts = nodeExtrasShadowCastsFromJson(R"({"Shadow":{"Casts":true}})");
+
+    REQUIRE(casts.has_value());
+    CHECK(casts.value());
+}
+
+TEST_CASE("GltfNodeExtras.ShadowAbsentYieldsNoOpinion", "[GltfNodeExtras]")
+{
+    // No Shadow block at all, and an unrelated block: both leave the engine default (casts)
+    // in place, which the loader represents as nullopt rather than `true`.
+    CHECK_FALSE(nodeExtrasShadowCastsFromJson(R"({})").has_value());
+    CHECK_FALSE(nodeExtrasShadowCastsFromJson(R"({"Physics":{"BodyType":"Static"}})").has_value());
+}
+
+TEST_CASE("GltfNodeExtras.ShadowRejectsMalformedAuthoring", "[GltfNodeExtras]")
+{
+    // A Shadow block the engine can't act on is an authoring error, not a default: staying
+    // silent would leave the author believing a surface stopped casting when it didn't.
+    CHECK_THROWS(nodeExtrasShadowCastsFromJson(R"({"Shadow":true})"));
+    CHECK_THROWS(nodeExtrasShadowCastsFromJson(R"({"Shadow":{}})"));
+    CHECK_THROWS(nodeExtrasShadowCastsFromJson(R"({"Shadow":{"Casts":"false"}})"));
+    // `Receives` is not implemented, so an author writing it gets told — both alone and
+    // alongside a valid Casts, where silently ignoring it would be most misleading (the
+    // block "worked", so the author has no reason to doubt the half that didn't).
+    CHECK_THROWS(nodeExtrasShadowCastsFromJson(R"({"Shadow":{"Receives":false}})"));
+    CHECK_THROWS(nodeExtrasShadowCastsFromJson(R"({"Shadow":{"Casts":false,"Receives":false}})"));
 }
 
 TEST_CASE("GltfNodeExtras.ClothPinValuesParse", "[GltfNodeExtras]")

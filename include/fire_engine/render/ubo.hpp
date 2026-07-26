@@ -6,6 +6,7 @@
 #include <type_traits>
 
 #include <fire_engine/graphics/gpu_limits.hpp>
+#include <fire_engine/graphics/shadow_diagnostics.hpp>
 #include <fire_engine/math/mat4.hpp>
 #include <fire_engine/render/constants.hpp>
 
@@ -193,7 +194,9 @@ struct LightUBO
     alignas(16) float pointSpotShadowParams[4]{};
     // x = kSkyboxIntensity, y = kEnvironmentShadowStrength,
     // z = debug view (0=off, 1=normals, 2=NdotL, 3=shadow visibility,
-    // 4=directional raw depth: red=receiver, green=stored, blue=cascade).
+    // 4=directional raw depth: red=receiver, green=stored, blue=cascade,
+    // 5=velocity, 6=SSAO, 7=LOD tint, 8=shadow-LOD tint). See DebugView, whose
+    // shader-backed values 0..8 are exactly this range.
     // w = disable all shadow-map visibility lookups when > 0.5.
     alignas(16) float environmentParams[4]{};
     // Active light count and the packed light array. Convention: lights[0] is
@@ -260,8 +263,27 @@ struct ForwardPushConstants
     uint32_t materialIndex{0};
     // Selected discrete LOD level (0 = full mesh); read by the shader only for the LOD debug tint.
     uint32_t lodLevel{0};
-    int _pad2{0};
+    // Level this mesh's shadow draw selected, or kNoShadowLod when it casts no shadow — read by the
+    // shader only for the ShadowLod debug tint (SH-01). Occupies what used to be explicit padding,
+    // so the struct's 16-byte size and every preceding offset are unchanged.
+    uint32_t shadowLodLevel{kNoShadowLod};
 };
+
+// Pinned against shader.frag's push_constant block. Push constants are a raw byte range with no
+// driver-side reflection, so a reordered or resized member here silently reinterprets the shader's
+// fields (a mismatched materialIndex indexes the wrong bindless material) — these are the only
+// thing that catches it.
+static_assert(offsetof(ForwardPushConstants, selfShadowSlot) == 0);
+static_assert(offsetof(ForwardPushConstants, materialIndex) == 4);
+static_assert(offsetof(ForwardPushConstants, lodLevel) == 8);
+static_assert(offsetof(ForwardPushConstants, shadowLodLevel) == 12);
+// Also the pipeline layout's declared push-constant range (pipeline.cpp) and the range the two
+// recorders push.
+static_assert(sizeof(ForwardPushConstants) == 16, "ForwardPushConstants std430 layout");
+// offsetof is only defined for standard-layout types, and the whole struct is memcpy'd into the
+// command buffer by pushConstants — both properties are load-bearing, not incidental.
+static_assert(std::is_standard_layout_v<ForwardPushConstants>);
+static_assert(std::is_trivially_copyable_v<ForwardPushConstants>);
 
 struct BloomPushConstants
 {

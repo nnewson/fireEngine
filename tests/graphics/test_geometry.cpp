@@ -89,20 +89,9 @@ TEST_CASE("Geometry.SetAndGetUInt32Indices", "[Geometry]")
     CHECK(geo.indexType() == DrawIndexType::UInt32);
 }
 
-TEST_CASE("Geometry.CastsShadowDefaultsToTrue", "[Geometry]")
-{
-    Geometry geo;
-    CHECK(geo.castsShadow());
-}
-
-TEST_CASE("Geometry.CastsShadowRoundTrip", "[Geometry]")
-{
-    Geometry geo;
-    geo.castsShadow(false);
-    CHECK_FALSE(geo.castsShadow());
-    geo.castsShadow(true);
-    CHECK(geo.castsShadow());
-}
+// Shadow eligibility used to live here and no longer does: a Geometry is shared by every
+// instance that draws it, so the flag could not describe two instances of one mesh that
+// disagree. It moved to the per-instance binding — see tests/graphics/test_object.cpp.
 
 // ---------------------------------------------------------------------------
 // Material pointer

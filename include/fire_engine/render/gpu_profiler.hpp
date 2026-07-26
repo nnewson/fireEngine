@@ -7,6 +7,7 @@
 #include <vulkan/vulkan_raii.hpp>
 
 #include <fire_engine/graphics/gpu_limits.hpp>
+#include <fire_engine/graphics/shadow_diagnostics.hpp>
 
 namespace fire_engine
 {
@@ -29,7 +30,15 @@ enum class ProfilePass : uint32_t
     VdpmApply,
     VdpmRepair,
     VdpmEmit,
-    Shadow,
+    // The five shadow families, timed separately (SH-01): a single Shadow total could not say
+    // whether a change moved cost between cascades, punctual lights, or self-shadowing. They are
+    // disjoint spans — there is no outer Shadow timer to overlap them — so the frame total sums
+    // them like any other pass.
+    ShadowCascades,
+    ShadowWorldOnly,
+    ShadowSelf,
+    ShadowSpot,
+    ShadowPoint,
     DepthPrepass,
     Ssao,
     Forward,
@@ -44,6 +53,60 @@ enum class ProfilePass : uint32_t
 
 inline constexpr uint32_t kProfilePassCount = std::to_underlying(ProfilePass::Count);
 
+// Display names, kept BESIDE the enum so adding a pass without naming it fails to compile. The
+// previous table lived in the overlay with fewer initializers than passes, which silently
+// misaligned every name after the gap and left the tail null.
+inline constexpr std::array kProfilePassNames{
+    "VDPM compute", "VDPM score",   "VDPM apply",  "VDPM repair",  "VDPM emit",
+    "Shadow CSM",   "Shadow world", "Shadow self", "Shadow spot",  "Shadow point",
+    "Depth",        "SSAO",         "Forward",     "Transmission", "TAA",
+    "Particles",    "Debug",        "Bloom",       "Post"};
+static_assert(kProfilePassNames.size() == kProfilePassCount,
+              "every ProfilePass needs a display name, in enum order");
+
+// The timing row that covers a shadow view family's raster work. The single mapping between the
+// two SH-01 halves — the counters keyed by ShadowViewGroup and the timestamps keyed by ProfilePass
+// — so the overlay cannot print one family's triangles beside another's milliseconds. The recorder
+// (`shadows.cpp`) brackets exactly these spans.
+[[nodiscard]] constexpr ProfilePass shadowProfilePass(ShadowViewGroup group) noexcept
+{
+    switch (group)
+    {
+    case ShadowViewGroup::Cascade:
+        return ProfilePass::ShadowCascades;
+    case ShadowViewGroup::WorldOnly:
+        return ProfilePass::ShadowWorldOnly;
+    case ShadowViewGroup::Self:
+        return ProfilePass::ShadowSelf;
+    case ShadowViewGroup::Spot:
+        return ProfilePass::ShadowSpot;
+    case ShadowViewGroup::Point:
+        return ProfilePass::ShadowPoint;
+    case ShadowViewGroup::Count:
+        break;
+    }
+    // `Count` is a bound, not a family. Returning ProfilePass::Count keeps that honest — a caller
+    // that reaches here has no timing row to show, rather than silently borrowing another family's.
+    return ProfilePass::Count;
+}
+
+// Whether a pass's time belongs in the frame total. The four VDPM breakdown rows are SUBRANGES of
+// VdpmCompute, so summing them alongside it double-counts that work; every other pass is a disjoint
+// span and contributes. Pure, so the overlay and any future consumer share one policy.
+[[nodiscard]] constexpr bool profilePassContributesToTotal(ProfilePass pass) noexcept
+{
+    switch (pass)
+    {
+    case ProfilePass::VdpmScore:
+    case ProfilePass::VdpmApply:
+    case ProfilePass::VdpmRepair:
+    case ProfilePass::VdpmEmit:
+        return false;
+    default:
+        return true;
+    }
+}
+
 // Resolved per-frame timings consumed by the overlay.
 struct FrameStats
 {
@@ -55,6 +118,12 @@ struct FrameStats
     std::array<float, kProfilePassCount> passMs{};
     float gpuTotalMs{0.0f};
     bool gpuValid{false};
+    // SH-01 shadow diagnostics from the COMPLETED frame whose ring slot this is (see
+    // Renderer::shadowStatsRing_). `shadowValid` is false during ring warm-up and is entirely
+    // independent of `gpuValid` — the counters are CPU-side and survive a device with no timestamp
+    // support.
+    ShadowFrameStats shadow{};
+    bool shadowValid{false};
     // Scene frustum-cull results from the most recent collectDrawCommands (the overlay
     // shows them a frame later). trackedNodes counts rigid renderables in the cull BVH;
     // culledNodes is how many of those fell outside every frustum this frame. Both 0 when

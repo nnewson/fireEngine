@@ -90,7 +90,19 @@ layout(push_constant) uniform ForwardPushConstants {
     int selfShadowSlot;
     uint materialIndex; // index into the global materials[] SSBO for this draw
     uint lodLevel;      // selected discrete LOD level (read only for the LOD debug tint)
+    // Level this mesh's shadow draw selected, or 0xFFFFFFFF when it casts no shadow (kNoShadowLod
+    // in graphics/shadow_diagnostics.hpp). Read only for the Shadow-LOD debug tint.
+    uint shadowLodLevel;
 } pc;
+
+// Shared palette for the two LOD debug views, so a level always means the same colour in both.
+vec3 lodTint(uint level) {
+    vec3 tints[4] = vec3[4](vec3(0.2, 0.9, 0.2),   // LOD0 green
+                            vec3(0.95, 0.85, 0.1), // LOD1 yellow
+                            vec3(0.9, 0.2, 0.2),   // LOD2 red
+                            vec3(0.9, 0.2, 0.9));  // LOD3+ magenta
+    return tints[min(level, 3u)];
+}
 
 // Global materials SSBO (forward set 2, binding 1), indexed per-draw by the push
 // constant. `material` aliases this draw's entry so the existing material.* reads
@@ -732,11 +744,21 @@ void main() {
     }
     // LOD debug tint: colour each mesh by its selected discrete LOD level.
     if (light.environmentParams.z > 6.5 && light.environmentParams.z < 7.5) {
-        vec3 tints[4] = vec3[4](vec3(0.2, 0.9, 0.2),  // LOD0 green
-                                vec3(0.95, 0.85, 0.1), // LOD1 yellow
-                                vec3(0.9, 0.2, 0.2),   // LOD2 red
-                                vec3(0.9, 0.2, 0.9));  // LOD3+ magenta
-        outColor = vec4(tints[min(pc.lodLevel, 3u)], alpha);
+        outColor = vec4(lodTint(pc.lodLevel), alpha);
+        return;
+    }
+    // Shadow-LOD debug tint (SH-01): colour each mesh by the level its SHADOW draw selected — the
+    // same palette, so this view and the LOD view can be read against each other. Shadow draws are
+    // depth-only, so the forward draw carries the level here.
+    if (light.environmentParams.z > 7.5 && light.environmentParams.z < 8.5) {
+        // No shadow draw this frame: neutral grey rather than the LOD0 green, which would read as
+        // "full detail chosen" in the very view built to find over-detailed shadow casters.
+        // Mirrors kNoShadowLod in graphics/shadow_diagnostics.hpp.
+        if (pc.shadowLodLevel == 0xFFFFFFFFu) {
+            outColor = vec4(vec3(0.35), alpha);
+            return;
+        }
+        outColor = vec4(lodTint(pc.shadowLodLevel), alpha);
         return;
     }
     ao *= ssaoSample.r;

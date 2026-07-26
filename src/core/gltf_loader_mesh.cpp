@@ -406,7 +406,8 @@ bool primitiveNeedsTangents(const fastgltf::Asset& asset, const fastgltf::Primit
 }
 } // namespace
 
-Object GltfLoader::GltfSceneBuilder::loadMesh(const fastgltf::Mesh& mesh, std::size_t meshIndex)
+Object GltfLoader::GltfSceneBuilder::loadMesh(const fastgltf::Mesh& mesh, std::size_t meshIndex,
+                                              bool castsShadow)
 {
     const fastgltf::Asset& asset = context_.asset;
     Assets& assets = context_.assets;
@@ -440,7 +441,10 @@ Object GltfLoader::GltfSceneBuilder::loadMesh(const fastgltf::Mesh& mesh, std::s
         auto materialData = loadMaterialWithTextures(baseMaterialIndex);
         Material* matPtr = &assets.addMaterial(std::move(materialData));
         assets.geometry(geoIdx).material(matPtr);
-        object.addGeometry(assets.geometry(geoIdx));
+        // `extras.Shadow.Casts` from the ATTACHING NODE, recorded on this instance's binding.
+        // The Geometry is shared by every node that instances this mesh, so the flag cannot
+        // live there: two instances may disagree, and whichever loaded last would win.
+        object.addGeometry(assets.geometry(geoIdx), castsShadow);
 
         for (std::size_t variantIndex = 0; variantIndex < primitive.mappings.size(); ++variantIndex)
         {

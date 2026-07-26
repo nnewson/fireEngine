@@ -19,6 +19,7 @@ class Device;
 class Pipeline;
 class Resources;
 struct DrawCommand;
+struct ForwardPushConstants;
 
 struct MappedBufferSet
 {
@@ -172,6 +173,18 @@ private:
     std::vector<vk::raii::DescriptorPool> descriptorPools_{};
     std::vector<vk::DescriptorSet> descriptorSetTable_{};
 };
+
+// Packs a forward draw's fragment push constants from its DrawCommand. The SINGLE construction
+// site, shared by the forward recorder and the transmission recorder — it sits beside
+// pushForwardObjectDescriptors because both are the same DrawCommand→Vulkan binding seam, and a
+// draw's push constants are as much part of that binding as its set 0.
+//
+// It exists because the two recorders each built the struct by hand and drifted: the transmission
+// one never set `lodLevel`, so every transmissive draw reported level 0 to the LOD debug tint no
+// matter which mesh was actually drawn. Add fields here, not at a call site. Returned by value from
+// a forward declaration — every caller already includes `render/ubo.hpp` for the type it pushes, so
+// this header doesn't drag the whole UBO layout in behind it.
+[[nodiscard]] ForwardPushConstants makeForwardPushConstants(const DrawCommand& dc) noexcept;
 
 // Pushes a forward draw's per-object set 0 (frame/skin/morph UBOs + morph SSBO)
 // inline via core 1.4 push descriptors — no allocated descriptor set. Shared by the

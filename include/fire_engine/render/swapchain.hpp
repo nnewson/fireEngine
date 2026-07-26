@@ -13,7 +13,10 @@ namespace fire_engine
 class Swapchain
 {
 public:
-    explicit Swapchain(const Device& device, const Window& window);
+    // `allowCapture` adds TRANSFER_SRC to the swapchain images so a frame can be copied out
+    // (--capture). Requested only when capture is asked for — the usage is not free, and a
+    // surface that doesn't support it must fail loudly rather than silently produce no image.
+    explicit Swapchain(const Device& device, const Window& window, bool allowCapture = false);
     ~Swapchain() = default;
 
     Swapchain(const Swapchain&) = delete;
@@ -65,6 +68,9 @@ private:
                                                       vk::ImageAspectFlags aspect);
 
     const vk::raii::Device* device_{nullptr};
+    // Sticky across recreate(): a resize must not silently drop the capture usage and turn a
+    // later capture into a validation error.
+    bool allowCapture_{false};
     vk::raii::SwapchainKHR swapchain_{nullptr};
     std::vector<vk::Image> images_;
     std::vector<vk::raii::ImageView> views_;
