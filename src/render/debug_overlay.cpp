@@ -79,10 +79,6 @@ void DebugOverlay::buildUi(const FrameStats& stats, RenderTunables& tunables)
         return;
     }
 
-    static constexpr std::array<const char*, kProfilePassCount> kPassNames{
-        "VDPM compute", "Shadow",    "Depth", "SSAO",  "Forward", "Transmission",
-        "TAA",          "Particles", "Debug", "Bloom", "Post"};
-
     ImGui::Begin("Fire Engine - Debug");
 
     const float fps = stats.cpuFrameMs > 0.0f ? 1000.0f / stats.cpuFrameMs : 0.0f;
@@ -100,7 +96,7 @@ void DebugOverlay::buildUi(const FrameStats& stats, RenderTunables& tunables)
             {
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
-                ImGui::TextUnformatted(kPassNames[p]);
+                ImGui::TextUnformatted(kProfilePassNames[p]);
                 ImGui::TableNextColumn();
                 ImGui::Text("%.3f", stats.passMs[p]);
             }

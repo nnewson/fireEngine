@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstring>
 #include <span>
+#include <utility>
 
 #include <fire_engine/core/log.hpp>
 #include <fire_engine/graphics/frame_info.hpp>
@@ -566,8 +567,8 @@ void Renderer::clearDrawBuckets(DrawBuckets& buckets) noexcept
     buckets.anySkinned = false;
 }
 
-void Renderer::buildDrawBuckets(std::span<const DrawCommand> drawCommands,
-                                DrawBuckets& buckets) const
+void Renderer::buildDrawBuckets(std::span<const DrawCommand> drawCommands, DrawBuckets& buckets,
+                                ShadowFrameStats& shadowStats) const
 {
     clearDrawBuckets(buckets);
     buckets.shadow.reserve(drawCommands.size());
@@ -587,6 +588,13 @@ void Renderer::buildDrawBuckets(std::span<const DrawCommand> drawCommands,
         buckets.anySkinned = buckets.anySkinned || dc.hasSkin;
         if (dc.pipeline == shadows_.pipelineHandle())
         {
+            // ONCE per original command, before any bucket insertion: the split below is
+            // deliberately NOT exclusive (every caster enters `shadow`, and additionally either
+            // `worldShadow` or `selfShadow`), and each bucket is then replayed across cascades and
+            // faces. Counting the reason anywhere downstream would multiply one decision by the
+            // number of buckets and views it feeds. The per-view accounting below is the opposite:
+            // it counts every replay, because each replay is real raster work.
+            shadowStats.addLodReason(dc.shadowLodReason);
             buckets.shadow.push_back(dc);
             if (!dc.hasSkin)
             {
@@ -883,7 +891,11 @@ const Renderer::DrawBuckets& Renderer::collectDrawCommands(RenderableScene& scen
     stats_.vdpmMaxTangentRatio = cull.vdpmChannels.maxTangentRatio;
 
     assignSelfShadowSlots(drawCommandScratch_);
-    buildDrawBuckets(drawCommandScratch_, drawBucketsScratch_);
+    // Reset this frame's slot before anything writes into it: the ring slot still holds the
+    // counters from `kMaxFramesInFlight` frames ago, which have already been published.
+    ShadowFrameStats& shadowStats = shadowStatsRing_[currentFrame_];
+    shadowStats.reset();
+    buildDrawBuckets(drawCommandScratch_, drawBucketsScratch_, shadowStats);
 
     // GPU-driven VDPM (Stage B5b): distil the request sink down to the fronts that are actually
     // camera-visible this frame, and (B5b-2) resolve each visible forward draw's buffers to the GPU
@@ -950,7 +962,8 @@ void Renderer::recordShadowPass(vk::CommandBuffer cmd, const DrawBuckets& bucket
     shadows_.recordPass(cmd, buckets.shadow, buckets.worldShadow, buckets.selfShadow,
                         static_cast<int>(selfShadowSlotsScratch_.size()), activeSpotCasters_,
                         pointCasterSpan, shadowViewProjs_, tunables_.cullingEnabled,
-                        buckets.anySkinned);
+                        buckets.anySkinned, shadowStatsRing_[currentFrame_], profiler_,
+                        currentFrame_);
 }
 
 void Renderer::recordTransmissionPass(vk::CommandBuffer cmd, const DrawBuckets& buckets)
@@ -987,6 +1000,23 @@ void Renderer::drawFrame(Window& display, RenderableScene& scene, float dt)
     if (!imageIndex)
     {
         return;
+    }
+
+    // Publish the SHADOW counters this slot collected a ring-cycle ago, BEFORE the timings and the
+    // overlay are built — the acquire timeline-wait is what guarantees that frame completed, so
+    // this is the first moment its counters describe finished work. Consuming the validity bit
+    // means only a later successful submission can re-arm the slot; during ring warm-up (or after a
+    // frame that never reached submit) the flag is false and the panel says so. Deliberately
+    // INDEPENDENT of gpuValid: timestamps may be unsupported on a device while these CPU-side
+    // counters remain perfectly valid.
+    stats_.shadowValid = std::exchange(shadowStatsSlotUsed_[currentFrame_], false);
+    if (stats_.shadowValid)
+    {
+        stats_.shadow = shadowStatsRing_[currentFrame_];
+    }
+    else
+    {
+        stats_.shadow.reset();
     }
 
     // Read back the GPU timings written a ring-cycle ago into this slot (the
@@ -1207,9 +1237,10 @@ void Renderer::drawFrame(Window& display, RenderableScene& scene, float dt)
     }
     particles_.update(emitterScratch_, view_, unjitteredProj, dt, currentFrame_);
 
-    profiler_.begin(cmd, currentFrame_, ProfilePass::Shadow);
+    // No outer Shadow span: the five families are timed individually with bottom-to-bottom
+    // boundaries inside recordPass, and an enclosing top-to-bottom timer would overlap them (and
+    // would then have to be excluded from the frame total to avoid double-counting).
     recordShadowPass(cmd, buckets);
-    profiler_.end(cmd, currentFrame_, ProfilePass::Shadow);
 
     // GPU-driven VDPM (Stage B5b-2): the VDPM compute (recorded above, after collection) wrote each
     // visible front's emitted index stream (scatter) + indirect command (finalize). The depth
@@ -1282,6 +1313,11 @@ void Renderer::drawFrame(Window& display, RenderableScene& scene, float dt)
 
     cmd.end();
     submitAndPresent(display, cmd, *imageIndex);
+
+    // Only now is this slot's collection eligible to become "completed": marking it after
+    // recordShadowPass would mean "recorded", and a frame that threw or bailed before submit would
+    // publish counters for work the GPU never ran.
+    shadowStatsSlotUsed_[currentFrame_] = true;
 
     previousViewProj_ = currentViewProj_;
     currentFrame_ = (currentFrame_ + 1) % kMaxFramesInFlight;

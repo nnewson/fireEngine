@@ -748,6 +748,11 @@ std::vector<DrawCommand> Object::buildDrawCommands(const FrameInfo& frame, const
             binding.shadowBufs[frame.currentFrame] != NullBuffer)
         {
             DrawCommand shadowCmd = cmd;
+            // The copy inherits the FORWARD selection. Reset it here, before any selection branch,
+            // so `lodLevel` can only ever describe the shadow geometry actually bound below: with
+            // discrete LOD it would otherwise report the forward level, and in VDPM mode a
+            // meaningless 0 — either way the SH-01 histogram would be measuring the wrong pass.
+            shadowCmd.lodLevel = 0;
             const Geometry* shadowGeometry =
                 binding.shadowGeometry != nullptr ? binding.shadowGeometry : binding.geometry;
             shadowCmd.vertexBuffer = shadowGeometry->vertexBuffer();
@@ -763,7 +768,32 @@ std::vector<DrawCommand> Object::buildDrawCommands(const FrameInfo& frame, const
             shadowCmd.indirectOffset = 0;
             shadowCmd.vdpmGpuFront = NullVdpmFront;
             // Shadows tolerate a coarser LOD than the main view (silhouette detail matters less).
-            if (frame.lodEnabled && shadowGeometry->lods().size() > 1)
+            //
+            // KNOWN DEFECT, measured by SH-01 and fixed by SH-03: this selects from the CAMERA's
+            // position, projection and viewport, and the one resulting command is then replayed
+            // into every shadow view. A caster's level should come from the shadow view that
+            // rasterises it, in shadow-map texels.
+            //
+            // What the per-view histograms can and cannot show: every surviving command carries the
+            // SAME camera-derived level into every view, but each view accepts a different SUBSET
+            // of commands, so aggregate drawn histograms legitimately differ — normally they
+            // measure a view's surviving composition, not the selection rule. The clean
+            // identical-distribution control is culling disabled with identical candidate spans;
+            // that is where the defect reads directly as "every view rasterises the level the
+            // camera picked".
+            //
+            // Reason precedence is fixed and mutually exclusive: LOD off beats everything, then a
+            // single-level geometry has nothing to select, and only then does the selector run.
+            if (!frame.lodEnabled)
+            {
+                shadowCmd.shadowLodReason = ShadowLodReason::LodDisabled;
+            }
+            else if (shadowGeometry->lods().size() <= 1)
+            {
+                // Includes cloth / storage-vertex geometry, which never builds coarser levels.
+                shadowCmd.shadowLodReason = ShadowLodReason::SingleLevel;
+            }
+            else
             {
                 const float distance = (centroid - frame.cameraPosition).magnitude();
                 const std::size_t level =
@@ -772,6 +802,10 @@ std::vector<DrawCommand> Object::buildDrawCommands(const FrameInfo& frame, const
                               frame.lodPixelErrorBudget * kShadowLodBias);
                 shadowCmd.indexBuffer = shadowGeometry->lods()[level].indexBuffer;
                 shadowCmd.indexCount = shadowGeometry->lods()[level].indexCount;
+                // Assigned with the buffers, so the reported level and the bound geometry cannot
+                // disagree. Level 0 here was CHOSEN within budget — not a fallback.
+                shadowCmd.lodLevel = static_cast<uint32_t>(level);
+                shadowCmd.shadowLodReason = ShadowLodReason::Selected;
             }
             shadowCmd.pipeline = frame.shadowPipeline;
             // Shadow set 0 is pushed inline per draw: the ShadowUBO here plus the

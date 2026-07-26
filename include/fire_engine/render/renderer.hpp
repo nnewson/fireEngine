@@ -242,7 +242,11 @@ private:
     void writeIblAndDebugParams(LightUBO& out) const;
     void assignSelfShadowSlots(std::span<DrawCommand> drawCommands);
     static void clearDrawBuckets(DrawBuckets& buckets) noexcept;
-    void buildDrawBuckets(std::span<const DrawCommand> drawCommands, DrawBuckets& buckets) const;
+    // `shadowStats` is mutated: the SH-01 LOD-reason tally is accumulated here, once per shadow
+    // command, because this is the only place that sees each command exactly once before the
+    // non-exclusive bucket split duplicates it.
+    void buildDrawBuckets(std::span<const DrawCommand> drawCommands, DrawBuckets& buckets,
+                          ShadowFrameStats& shadowStats) const;
     void recordDrawBucket(vk::CommandBuffer cmd, std::span<const DrawCommand> bucket,
                           PipelineHandle& lastBoundPipeline) const;
 
@@ -365,6 +369,16 @@ private:
     std::array<uint64_t, kMaxFramesInFlight> frameTimelineValue_{};
     std::vector<uint64_t> imageTimelineValue_{};
     uint32_t currentFrame_{0};
+    // SH-01 shadow diagnostics, FRAME-INDEXED. The overlay is built before this frame records its
+    // shadow pass, while the GPU timings it sits beside come from a completed ring slot — so the
+    // counters are collected into slot `currentFrame_` and published only when that slot's
+    // timestamps resolve. Writing them straight into `stats_` would pair this frame's counts with
+    // an older frame's times, which is most misleading in exactly the moving-light stability case
+    // SH-01 exists to measure.
+    std::array<ShadowFrameStats, kMaxFramesInFlight> shadowStatsRing_{};
+    // Per-slot "collected AND submitted" bit, consumed on publication. Independent of the GPU
+    // timestamp validity: a device without timestamp support still produces valid CPU counters.
+    std::array<bool, kMaxFramesInFlight> shadowStatsSlotUsed_{};
     // Per-frame camera matrices (set at the top of drawFrame). view_ + jitteredProj_
     // drive rasterisation; currentViewProj_/previousViewProj_ are jitter-free for
     // TAA motion vectors. previousViewProj_ persists across frames.

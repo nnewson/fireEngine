@@ -60,6 +60,7 @@ add_library(fireengine SHARED
     src/graphics/geometry.cpp
     src/graphics/mesh_simplifier.cpp
     src/graphics/mesh_topology.cpp
+    src/graphics/shadow_diagnostics.cpp
     src/graphics/vipm.cpp
     src/graphics/vdpm.cpp
     src/graphics/vdpm_material.cpp
@@ -355,6 +356,7 @@ add_executable(test_fire_engine
     tests/graphics/test_bounds.cpp
     tests/graphics/test_draw_command.cpp
     tests/graphics/test_frame_info.cpp
+    tests/graphics/test_shadow_diagnostics.cpp
     tests/graphics/test_texture.cpp
     tests/graphics/test_sampler_settings.cpp
     tests/render/test_ubo.cpp
