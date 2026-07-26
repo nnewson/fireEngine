@@ -93,6 +93,7 @@ add_library(fireengine SHARED
     src/render/debug_draw.cpp
     src/render/debug_overlay.cpp
     src/render/device.cpp
+    src/render/device_plan.cpp
     src/render/descriptors.cpp
     src/graphics/generational_slot_pool.cpp
     src/render/vma_impl.cpp
@@ -357,6 +358,7 @@ add_executable(test_fire_engine
     tests/graphics/test_texture.cpp
     tests/graphics/test_sampler_settings.cpp
     tests/render/test_ubo.cpp
+    tests/render/test_device_plan.cpp
     tests/render/test_pipeline_config.cpp
     tests/render/test_vdpm_gpu.cpp
     tests/render/test_vdpm_gpu_front.cpp

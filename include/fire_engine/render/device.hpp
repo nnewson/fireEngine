@@ -2,12 +2,14 @@
 
 #include <cstdint>
 #include <optional>
+#include <string>
 #include <utility>
 #include <vector>
 
 #include <vulkan/vulkan_raii.hpp>
 
 #include <fire_engine/platform/window.hpp>
+#include <fire_engine/render/device_plan.hpp>
 #include <fire_engine/render/vma.hpp>
 
 namespace fire_engine
@@ -16,7 +18,9 @@ namespace fire_engine
 class Device
 {
 public:
-    explicit Device(const Window& window);
+    // `requireValidation` (--require-validation) turns a missing validation layer from a warning
+    // into a startup failure — for runs that must not silently degrade to an unvalidated pass.
+    explicit Device(const Window& window, bool requireValidation = false);
     // Surface-free, compute-only device: no WSI/GLFW instance extensions, no surface, no swapchain
     // — it requires a single graphics+compute queue family (the same-queue path the renderer
     // already dispatches compute on) and keeps the production feature set (BDA, sync2, …). For
@@ -105,14 +109,21 @@ private:
     {
         return mode_ == Mode::HeadlessCompute;
     }
-    // The device extensions required for the current mode (swapchain only when windowed).
-    [[nodiscard]] std::vector<const char*> requiredDeviceExtensions() const;
+    // The device extensions the engine cannot run without, for the current mode (swapchain only
+    // when windowed). A device missing any of these is rejected by isDeviceSuitable.
+    [[nodiscard]] std::vector<std::string> requiredDeviceExtensions() const;
+    // What `d` will actually be created with: the required set plus every optional extension it
+    // advertises, the missing required names, and the portability-subset decision. Suitability and
+    // device creation both go through this, so they cannot disagree.
+    [[nodiscard]] DeviceCapabilityPlan
+    deviceCapabilityPlan(const vk::raii::PhysicalDevice& d) const;
     [[nodiscard]] bool isDeviceSuitable(const vk::raii::PhysicalDevice& d);
     [[nodiscard]] std::pair<std::optional<uint32_t>, std::optional<uint32_t>>
     findQueueFamilies(const vk::raii::PhysicalDevice& d);
     void printValidationInfo() const;
 
     Mode mode_{Mode::Windowed};
+    bool requireValidation_{false};
     vk::raii::Context context_;
     vk::raii::Instance instance_{nullptr};
     vk::raii::SurfaceKHR surface_{nullptr};

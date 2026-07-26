@@ -74,14 +74,61 @@ constexpr const char* kPipelineCacheFile = "pipeline_cache.bin";
 
 } // namespace
 
-constexpr std::array validationLayers{"VK_LAYER_KHRONOS_validation"};
 // The device extensions the engine requires are built per-mode by Device::requiredDeviceExtensions
-// (swapchain is windowed-only); portability_subset is mandatory on MoltenVK and push_descriptor is
-// used by the forward path (vkCmdPushDescriptorSetKHR — per-object set 0 pushed inline, no
-// per-frame descriptor set; core in 1.4, enabled as an extension, MoltenVK advertises it).
+// (swapchain is windowed-only). Optional, enable-iff-advertised extensions and the layer/extension
+// decisions live in the pure planner (`render/device_plan.hpp`), which suitability and device
+// creation share so the coupled choices can't drift.
 
 namespace
 {
+
+// THE baseline. The renderer calls promoted-to-core 1.4 entry points (vkCmdPushDescriptorSet), VMA
+// is told the device is 1.4, and the 1.4 feature struct is queried — all of which require the
+// PHYSICAL DEVICE, not just the instance, to be 1.4. Enforced in missingDeviceCapabilities.
+constexpr std::uint32_t kMinimumDeviceApiVersion = VK_API_VERSION_1_4;
+
+// Loader/driver enumeration -> plain names for the planner.
+[[nodiscard]] std::vector<std::string>
+extensionNames(const std::vector<vk::ExtensionProperties>& properties)
+{
+    std::vector<std::string> names;
+    names.reserve(properties.size());
+    for (const vk::ExtensionProperties& e : properties)
+    {
+        names.emplace_back(e.extensionName.data());
+    }
+    return names;
+}
+
+[[nodiscard]] std::vector<std::string>
+layerNames(const std::vector<vk::LayerProperties>& properties)
+{
+    std::vector<std::string> names;
+    names.reserve(properties.size());
+    for (const vk::LayerProperties& l : properties)
+    {
+        names.emplace_back(l.layerName.data());
+    }
+    return names;
+}
+
+[[nodiscard]] std::string joinNames(std::span<const std::string> names)
+{
+    std::string joined;
+    for (const std::string& name : names)
+    {
+        joined += joined.empty() ? "" : ", ";
+        joined += name;
+    }
+    return joined;
+}
+
+[[nodiscard]] std::string versionString(std::uint32_t version)
+{
+    return std::to_string(VK_API_VERSION_MAJOR(version)) + "." +
+           std::to_string(VK_API_VERSION_MINOR(version)) + "." +
+           std::to_string(VK_API_VERSION_PATCH(version));
+}
 
 // One required device feature: the `vk::Bool32` bit inside a Vulkan feature struct, plus a name for
 // diagnostics. A pointer-to-member so the SAME entry drives both directions — enabling the bit on
@@ -133,6 +180,15 @@ constexpr std::array kRequiredFeatures13{
     Feature13{&vk::PhysicalDeviceVulkan13Features::dynamicRendering, "dynamicRendering"},
 };
 
+using Feature14 = RequiredFeature<vk::PhysicalDeviceVulkan14Features>;
+constexpr std::array kRequiredFeatures14{
+    // Per-object set 0 is pushed inline (no per-frame descriptor set). Promoted to core in 1.4,
+    // where it is an opt-in FEATURE rather than an extension — so this is the request that makes
+    // vkCmdPushDescriptorSet legal, and VK_KHR_push_descriptor is deliberately NOT required
+    // (a conformant 1.4 device need not still advertise the promoted extension).
+    Feature14{&vk::PhysicalDeviceVulkan14Features::pushDescriptor, "pushDescriptor"},
+};
+
 using FeaturePortability = RequiredFeature<vk::PhysicalDevicePortabilitySubsetFeaturesKHR>;
 constexpr std::array kRequiredFeaturesPortability{
     FeaturePortability{&vk::PhysicalDevicePortabilitySubsetFeaturesKHR::mutableComparisonSamplers,
@@ -170,23 +226,49 @@ void collectMissingFeatures(const FeatureStruct& supported,
 // of the missing capabilities. Driven by the kRequiredFeatures* tables above (shared with the
 // enable path).
 [[nodiscard]] std::optional<std::string>
-missingDeviceCapabilities(const vk::raii::PhysicalDevice& d)
+missingDeviceCapabilities(const vk::raii::PhysicalDevice& d, bool portabilitySubset)
 {
+    // The version gate comes FIRST and returns early: every feature struct below is only written
+    // by a driver that knows it, so querying a 1.4 struct on a 1.3 device silently reads back
+    // zeros and would report a pile of "missing features" instead of the one real reason. (macOS
+    // 26 makes this concrete — the same machine exposes MoltenVK at 1.4 and Apple's conformant
+    // native driver at 1.3, and only the former can service this renderer.)
+    const std::uint32_t apiVersion = d.getProperties().apiVersion;
+    if (apiVersion < kMinimumDeviceApiVersion)
+    {
+        return "Vulkan " + versionString(kMinimumDeviceApiVersion) + " (device reports " +
+               versionString(apiVersion) + ")";
+    }
+
     const auto features =
         d.getFeatures2<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan12Features,
-                       vk::PhysicalDeviceVulkan13Features,
-                       vk::PhysicalDevicePortabilitySubsetFeaturesKHR>();
+                       vk::PhysicalDeviceVulkan13Features, vk::PhysicalDeviceVulkan14Features>();
     const vk::PhysicalDeviceFeatures& f10 = features.get<vk::PhysicalDeviceFeatures2>().features;
     const auto& f12 = features.get<vk::PhysicalDeviceVulkan12Features>();
     const auto& f13 = features.get<vk::PhysicalDeviceVulkan13Features>();
-    const auto& fp = features.get<vk::PhysicalDevicePortabilitySubsetFeaturesKHR>();
+    const auto& f14 = features.get<vk::PhysicalDeviceVulkan14Features>();
 
     std::vector<std::string> missing;
     collectMissingFeatures<vk::PhysicalDeviceFeatures>(f10, kRequiredFeatures10, missing);
     collectMissingFeatures<vk::PhysicalDeviceVulkan12Features>(f12, kRequiredFeatures12, missing);
     collectMissingFeatures<vk::PhysicalDeviceVulkan13Features>(f13, kRequiredFeatures13, missing);
-    collectMissingFeatures<vk::PhysicalDevicePortabilitySubsetFeaturesKHR>(
-        fp, kRequiredFeaturesPortability, missing);
+    collectMissingFeatures<vk::PhysicalDeviceVulkan14Features>(f14, kRequiredFeatures14, missing);
+
+    // The portability-subset feature bits describe which parts of core Vulkan a NON-conformant
+    // implementation actually supports, so they are only meaningful — and only written by the
+    // driver — when the device advertises the extension. On a conformant device the extension is
+    // absent and that functionality is unconditionally present, so there is nothing to check;
+    // querying the struct anyway would read back the all-false struct the driver never touched
+    // and reject every conformant GPU.
+    if (portabilitySubset)
+    {
+        const auto portabilityFeatures =
+            d.getFeatures2<vk::PhysicalDeviceFeatures2,
+                           vk::PhysicalDevicePortabilitySubsetFeaturesKHR>();
+        collectMissingFeatures<vk::PhysicalDevicePortabilitySubsetFeaturesKHR>(
+            portabilityFeatures.get<vk::PhysicalDevicePortabilitySubsetFeaturesKHR>(),
+            kRequiredFeaturesPortability, missing);
+    }
 
     // The global bindless texture array (forward set 2) is kMaxBindlessTextures update-after-bind
     // combined-image-samplers; each counts against both the sampler and the sampled-image
@@ -228,7 +310,8 @@ missingDeviceCapabilities(const vk::raii::PhysicalDevice& d)
 
 } // namespace
 
-Device::Device(const Window& window)
+Device::Device(const Window& window, bool requireValidation)
+    : requireValidation_(requireValidation)
 {
     createInstance();
     createSurface(window);
@@ -256,18 +339,23 @@ Device Device::headlessCompute()
     return Device(Mode::HeadlessCompute);
 }
 
-std::vector<const char*> Device::requiredDeviceExtensions() const
+std::vector<std::string> Device::requiredDeviceExtensions() const
 {
-    // portability_subset is mandatory on MoltenVK; push_descriptor is used by the forward path and
-    // harmless elsewhere. The swapchain extension is windowed-only — a headless compute device must
-    // not require or enable it.
-    std::vector<const char*> exts{"VK_KHR_portability_subset",
-                                  VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME};
+    // Push descriptors are a 1.4 core FEATURE (kRequiredFeatures14), not an extension — the
+    // promoted VK_KHR_push_descriptor is deliberately not required. The swapchain extension is
+    // windowed-only: a headless compute device must not require or enable it.
+    std::vector<std::string> exts;
     if (!headless())
     {
-        exts.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
+        exts.emplace_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
     }
     return exts;
+}
+
+DeviceCapabilityPlan Device::deviceCapabilityPlan(const vk::raii::PhysicalDevice& d) const
+{
+    return planDeviceCapabilities(extensionNames(d.enumerateDeviceExtensionProperties()),
+                                  requiredDeviceExtensions());
 }
 
 void Device::createInstance()
@@ -283,28 +371,75 @@ void Device::createInstance()
     // Windowed needs GLFW's WSI instance extensions (surface creation); a headless compute device
     // creates no surface, so it enables none of them — only the portability enumeration MoltenVK
     // needs. (This also means the headless path never touches GLFW.)
-    std::vector<const char*> exts;
+    std::vector<std::string> windowExtensions;
     if (!headless())
     {
-        exts = Window::requiredVulkanExtensions();
+        for (const char* ext : Window::requiredVulkanExtensions())
+        {
+            windowExtensions.emplace_back(ext);
+        }
     }
-    exts.push_back(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
 
     if (enableValidation && log::enabled(log::Level::Debug, log::category::render))
     {
         printValidationInfo();
     }
 
+    // Layers and platform extensions are enable-iff-available: requesting an absent one is a hard
+    // VK_ERROR_LAYER_NOT_PRESENT / VK_ERROR_EXTENSION_NOT_PRESENT at instance creation, not a
+    // degraded mode. The decisions are the pure planner's; this function only enumerates and obeys.
+    const InstanceCapabilityPlan plan =
+        planInstanceCapabilities(extensionNames(context_.enumerateInstanceExtensionProperties()),
+                                 layerNames(context_.enumerateInstanceLayerProperties()),
+                                 windowExtensions, enableValidation);
+
+    // The validation layer ships with the Vulkan SDK (or a distro package), NOT with the loader
+    // vcpkg provides. A miss is a warning by default (a fresh machine must still be able to run)
+    // and a hard failure under --require-validation, for runs that must not silently degrade.
+    if (requireValidation_ && !plan.validation)
+    {
+        // Not gated on enableValidation, so this also catches an NDEBUG build where the layer is
+        // compiled out entirely and no warning would otherwise be emitted — the exact hole that
+        // lets an unvalidated run be mistaken for a clean one.
+        throw std::runtime_error(
+            enableValidation
+                ? std::string("--require-validation: validation layer ") + kValidationLayer +
+                      " is not installed"
+                : std::string("--require-validation: this build has validation compiled out "
+                              "(NDEBUG); use a Dev build"));
+    }
+    if (enableValidation && !plan.validation)
+    {
+        log::warn(log::category::render,
+                  "Vulkan validation NOT INSTALLED ({}) — running WITHOUT validation; install the "
+                  "Vulkan SDK (on Linux the tarball, then source setup-env.sh) to restore VUID "
+                  "checking",
+                  kValidationLayer);
+    }
+
+    const std::vector<const char*> layers =
+        plan.validation ? std::vector<const char*>{kValidationLayer} : std::vector<const char*>{};
+    const std::vector<const char*> exts = toCStrings(plan.extensions);
     vk::InstanceCreateInfo ci{
-        .flags = vk::InstanceCreateFlagBits::eEnumeratePortabilityKHR,
+        .flags = plan.portabilityEnumeration ? vk::InstanceCreateFlagBits::eEnumeratePortabilityKHR
+                                             : vk::InstanceCreateFlags{},
         .pApplicationInfo = &appInfo,
-        .enabledLayerCount = enableValidation ? static_cast<uint32_t>(validationLayers.size()) : 0u,
-        .ppEnabledLayerNames = enableValidation ? validationLayers.data() : nullptr,
+        .enabledLayerCount = static_cast<uint32_t>(layers.size()),
+        .ppEnabledLayerNames = layers.data(),
         .enabledExtensionCount = static_cast<uint32_t>(exts.size()),
         .ppEnabledExtensionNames = exts.data(),
     };
 
     instance_ = vk::raii::Instance(context_, ci);
+
+    // Reported AFTER the instance exists, so the line means "validation is live on a created
+    // instance" and not merely "we intended to ask for it". The render smoke asserts this token
+    // (CLAUDE.md § Build) — logging it before construction would let a later startup failure still
+    // produce the expected greps.
+    if (plan.validation)
+    {
+        log::info(log::category::render, "Vulkan validation enabled ({})", kValidationLayer);
+    }
 }
 
 void Device::printValidationInfo() const
@@ -368,14 +503,16 @@ bool Device::isDeviceSuitable(const vk::raii::PhysicalDevice& d)
         log::debug(log::category::render, "{}", deviceExtensionsList);
     }
 
-    const std::vector<const char*> wanted = requiredDeviceExtensions();
-    std::set<std::string> required(wanted.begin(), wanted.end());
-    for (auto& e : avail)
+    // The SAME planner createLogicalDevice uses, on the same inputs — so what suitability accepts
+    // and what device creation enables are one decision, not two that happen to agree.
+    const DeviceCapabilityPlan plan = deviceCapabilityPlan(d);
+    if (!plan.missingRequired.empty())
     {
-        required.erase(e.extensionName);
-    }
-    if (!required.empty())
-    {
+        // Named, like the feature check below: "no suitable GPU found" with no reason is the
+        // hardest failure to diagnose remotely, and a missing extension is the likeliest way a
+        // machine with a perfectly capable GPU gets rejected.
+        log::warn(log::category::render, "GPU '{}' unsuitable: missing device extension(s) {}",
+                  d.getProperties().deviceName.data(), joinNames(plan.missingRequired));
         return false;
     }
 
@@ -393,7 +530,7 @@ bool Device::isDeviceSuitable(const vk::raii::PhysicalDevice& d)
     // Verify every feature/limit createLogicalDevice enables is actually advertised, so a device
     // that clears queues+extensions+swapchain but lacks (say) update-after-bind is rejected here
     // with a named reason rather than crashing an opaque call during device/pipeline creation.
-    if (auto reason = missingDeviceCapabilities(d))
+    if (auto reason = missingDeviceCapabilities(d, plan.portabilitySubset))
     {
         log::warn(log::category::render, "GPU '{}' unsuitable: missing {}",
                   d.getProperties().deviceName.data(), *reason);
@@ -483,21 +620,31 @@ void Device::createLogicalDevice()
     vk::PhysicalDeviceFeatures features{};
     enableFeatures<vk::PhysicalDeviceFeatures>(features, kRequiredFeatures10);
 
+    vk::PhysicalDeviceVulkan14Features features14{};
+    enableFeatures<vk::PhysicalDeviceVulkan14Features>(features14, kRequiredFeatures14);
+
     vk::PhysicalDeviceVulkan13Features features13{};
     enableFeatures<vk::PhysicalDeviceVulkan13Features>(features13, kRequiredFeatures13);
+    features14.pNext = &features13;
 
     vk::PhysicalDeviceVulkan12Features features12{};
     enableFeatures<vk::PhysicalDeviceVulkan12Features>(features12, kRequiredFeatures12);
     features13.pNext = &features12;
 
+    // Same planner, same inputs as the suitability check — one decision. The portability struct is
+    // chained ONLY when its extension is enabled: it is defined by that extension, so passing it to
+    // a conformant driver that never advertised it is invalid (and the bits would be meaningless
+    // there — the functionality is unconditionally present).
+    const DeviceCapabilityPlan plan = deviceCapabilityPlan(physDevice_);
+    const std::vector<const char*> enabledExtensions = toCStrings(plan.extensions);
+
     vk::PhysicalDevicePortabilitySubsetFeaturesKHR portability{};
     enableFeatures<vk::PhysicalDevicePortabilitySubsetFeaturesKHR>(portability,
                                                                    kRequiredFeaturesPortability);
-    portability.pNext = &features13;
+    portability.pNext = &features14;
 
-    const std::vector<const char*> enabledExtensions = requiredDeviceExtensions();
     vk::DeviceCreateInfo ci{
-        .pNext = &portability,
+        .pNext = plan.portabilitySubset ? static_cast<const void*>(&portability) : &features14,
         .queueCreateInfoCount = static_cast<uint32_t>(qcis.size()),
         .pQueueCreateInfos = qcis.data(),
         .enabledExtensionCount = static_cast<uint32_t>(enabledExtensions.size()),

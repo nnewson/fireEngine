@@ -52,9 +52,20 @@ Assets copied via `cmake/copy_assets.cmake`.
 - Assets are copied **flat** into the build dir, so scene paths are relative to `build/` with **no `assets/` prefix** — e.g. `./fireEngineApp DamagedHelmet/DamagedHelmet.gltf skybox.hdr`. Skyboxes: `skybox.hdr` (default), `nightbox.hdr`. Useful test scenes: `AlphaBlendModeTest/AlphaBlendModeTest.gltf` (blend + double-sided), `TransmissionTest/TransmissionTest.gltf` (transmission), `DamagedHelmet/DamagedHelmet.gltf` (opaque PBR).
 - **Validation layers are on in non-`NDEBUG` builds** (`Device::enableValidation`), so a quick render smoke-test catches Vulkan misuse (dynamic-state / barrier / descriptor errors). The app opens a window; for a headless-ish check, background it and grep stderr:
   ```bash
-  cd build && (./fireEngineApp DamagedHelmet/DamagedHelmet.gltf skybox.hdr >/tmp/fe.log 2>&1 & p=$!; sleep 6; kill $p; wait $p 2>/dev/null)
-  grep -icE 'VUID|validation error' /tmp/fe.log   # expect 0; SIGTERM exit 143 = ran fine
+  cd build
+  FE_LOG=render:info ./fireEngineApp --require-validation DamagedHelmet/DamagedHelmet.gltf skybox.hdr >/tmp/fe.log 2>&1 & p=$!
+  sleep 6; alive=0; kill -0 $p 2>/dev/null && { alive=1; kill $p; }; rc=0; wait $p || rc=$?
+  vuid=$(grep -icE 'VUID|validation error' /tmp/fe.log || true)
+  active=$(grep -c 'Vulkan validation enabled' /tmp/fe.log || true)
+  test $alive -eq 1 && test $rc -eq 143 && test $vuid -eq 0 && test $active -eq 1 \
+    && echo PASS || { echo "FAIL (alive=$alive rc=$rc vuid=$vuid validation=$active)"; false; }
   ```
+  All four conditions are the pass. **`alive` + status 143** prove the app survived to *our*
+  SIGTERM (an early exit — no suitable GPU, a startup throw — otherwise yields a clean-looking log);
+  **0 VUIDs** proves nothing went wrong; **the token** proves something was checking. The layer is
+  enable-iff-available (it ships with the Vulkan SDK, not vcpkg's loader), so without
+  `--require-validation` a machine lacking it — or an `NDEBUG` build — runs unvalidated and reports
+  zero VUIDs *vacuously*.
   Runtime diagnostics go through `FE_LOG` (`debug`, `info`, `warn`, `error`, `off`; categories:
   `app`, `general`, `gltf`, `physics`, `ragdoll`, `render`). Vulkan instance/device extension
   lists are quiet by default; enable them with `FE_LOG=render:debug`. Ragdoll settle diagnostics

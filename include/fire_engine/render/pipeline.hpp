@@ -20,7 +20,7 @@ struct PipelineConfig
     // SSBO), allocated per object. Material data is bindless (set 2).
     std::vector<vk::DescriptorSetLayoutBinding> bindings;
     // When true, set 0 is created as a push-descriptor layout
-    // (VK_KHR_push_descriptor): its buffers are pushed inline at draw time
+    // (core 1.4 push descriptors): its buffers are pushed inline at draw time
     // rather than allocated as a per-object descriptor set. Forward pipelines
     // only — such a layout cannot be used to allocate descriptor sets.
     bool pushDescriptorSet0{false};

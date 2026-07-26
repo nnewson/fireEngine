@@ -79,7 +79,7 @@ void enableAdditiveBlend(PipelineConfig& config)
 // The per-object set 0 shared by the forward pipeline and the depth prepass:
 // per-object frame UBO + per-frame camera UBO + skin / morph UBOs + morph-targets
 // and VIPM SSBOs, all vertex-stage (Frame and Camera are also fragment-visible for
-// the forward shader). Pushed inline per draw (VK_KHR_push_descriptor) by
+// the forward shader). Pushed inline per draw (core 1.4 push descriptors) by
 // pushForwardObjectDescriptors.
 [[nodiscard]]
 std::vector<vk::DescriptorSetLayoutBinding> perObjectSet0Bindings()
@@ -196,7 +196,7 @@ PipelineConfig Pipeline::forwardConfig()
         globalSampler(ForwardGlobalBinding::SceneColour),
         globalSampler(ForwardGlobalBinding::SsaoMap),
     };
-    // Set 0 is pushed inline per draw (VK_KHR_push_descriptor) — no per-object
+    // Set 0 is pushed inline per draw (core 1.4 push descriptors) — no per-object
     // descriptor-set allocation. forwardBlendConfig inherits this (it copies
     // forwardConfig), so blend draws push their set 0 too.
     config.pushDescriptorSet0 = true;
@@ -275,7 +275,7 @@ PipelineConfig Pipeline::shadowConfig()
         {bindingIndex(ShadowBinding::SelfShadowDepthSampler), vk::DescriptorType::eSampler, 1,
          vk::ShaderStageFlagBits::eFragment},
     };
-    // Set 0 is pushed inline per draw (VK_KHR_push_descriptor) — no per-object
+    // Set 0 is pushed inline per draw (core 1.4 push descriptors) — no per-object
     // descriptor-set allocation, mirroring the forward pass. The per-object
     // ShadowUBO/skin/morph buffers and the shared self-shadow image+sampler are
     // pushed by pushShadowObjectDescriptors. selfShadowFirst/Second inherit this

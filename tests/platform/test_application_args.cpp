@@ -99,6 +99,19 @@ TEST_CASE("ApplicationArgs.VdpmGpuBackendTriStateFlags", "[ApplicationArgs]")
     }
 }
 
+TEST_CASE("ApplicationArgs.RequireValidationFlag", "[ApplicationArgs]")
+{
+    // Off by default: a machine without the Vulkan SDK must still be able to run the app.
+    CHECK_FALSE(parseArgs({"fireEngineApp"}).args.debug.requireValidation);
+    // On demand it becomes a startup precondition (Device::createInstance throws) so an automated
+    // run cannot report a clean frame that nothing validated.
+    CHECK(parseArgs({"fireEngineApp", "--require-validation"}).args.debug.requireValidation);
+    // Composes with the positional scene path rather than swallowing it.
+    const auto parsed = parseArgs({"fireEngineApp", "--require-validation", "scene.gltf"});
+    CHECK(parsed.args.debug.requireValidation);
+    CHECK(parsed.args.scenePath == "scene.gltf");
+}
+
 TEST_CASE("ApplicationArgs.LodModeFlagSelectsMode", "[ApplicationArgs]")
 {
     struct LodModeCase

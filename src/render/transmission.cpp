@@ -43,7 +43,7 @@ void recordTransmissionDrawBucket(vk::CommandBuffer cmd, std::span<const DrawCom
             dc.indexType == DrawIndexType::UInt32 ? vk::IndexType::eUint32 : vk::IndexType::eUint16;
         cmd.bindIndexBuffer(resources.vulkanBuffer(dc.indexBuffer), 0, indexType);
 
-        // Forward set 0 pushed inline (VK_KHR_push_descriptor); transmissive draws
+        // Forward set 0 pushed inline (core 1.4 push descriptors); transmissive draws
         // are always the merged opaque/double-sided forward pipeline.
         pushForwardObjectDescriptors(cmd, resources, resources.vulkanPipelineLayout(dc.pipeline),
                                      dc);
