@@ -135,7 +135,7 @@ void Object::load(Resources& resources, VdpmGpuRegistry* registry)
 void Object::createForwardBindings(Resources& resources, VdpmGpuRegistry* registry)
 {
     // Shared per-object UBO (model/view/proj), pushed as forward set-0 binding 0
-    // per draw via VK_KHR_push_descriptor — no per-object descriptor set.
+    // per draw via core 1.4 push descriptors — no per-object descriptor set.
     auto uniformSet = resources.createMappedUniformBuffers(sizeof(ObjectUBO));
     for (int i = 0; i < kMaxFramesInFlight; ++i)
     {

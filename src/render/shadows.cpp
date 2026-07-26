@@ -83,7 +83,7 @@ void recordShadowDrawBucket(vk::CommandBuffer cmd, std::span<const DrawCommand> 
             dc.indexType == DrawIndexType::UInt32 ? vk::IndexType::eUint32 : vk::IndexType::eUint16;
         cmd.bindIndexBuffer(resources.vulkanBuffer(dc.indexBuffer), 0, indexType);
 
-        // Shadow set 0 is pushed inline (VK_KHR_push_descriptor) — no allocated
+        // Shadow set 0 is pushed inline (core 1.4 push descriptors) — no allocated
         // per-object descriptor set, mirroring the forward pass.
         pushShadowObjectDescriptors(cmd, resources, resources.vulkanPipelineLayout(pipelineHandle),
                                     dc);

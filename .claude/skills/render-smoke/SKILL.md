@@ -18,14 +18,41 @@ background it, kill it, grep stderr.
 Build first (`cmake --build build`). Then from the repo root:
 
 ```bash
-log=$(mktemp)
-cd build && (./fireEngineApp DamagedHelmet/DamagedHelmet.gltf skybox.hdr >"$log" 2>&1 & p=$!; sleep 6; kill $p 2>/dev/null; wait $p 2>/dev/null)
-grep -icE 'VUID|validation error' "$log"   # expect 0
+log=$(mktemp); scene=(DamagedHelmet/DamagedHelmet.gltf skybox.hdr)
+cd build
+FE_LOG=render:info ./fireEngineApp --require-validation "${scene[@]}" >"$log" 2>&1 & p=$!
+sleep 6
+alive=0; kill -0 "$p" 2>/dev/null && { alive=1; kill "$p"; }
+rc=0; wait "$p" || rc=$?
+vuid=$(grep -icE 'VUID|validation error' "$log" || true)
+active=$(grep -c 'Vulkan validation enabled' "$log" || true)
+if test "$alive" -eq 1 && test "$rc" -eq 143 && test "$vuid" -eq 0 && test "$active" -eq 1
+then echo "SMOKE PASS"
+else echo "SMOKE FAIL (alive=$alive rc=$rc vuid=$vuid validation=$active)"; tail -25 "$log"; false; fi
 ```
 
-- **0 = pass.** Non-zero = a validation error; open `$log` and read the first `VUID-...` message.
-- SIGTERM exit **143** is normal (we killed it) — not a failure.
-- `mktemp` per run so parallel smokes don't clobber one log.
+All four conditions are the pass, and every one of them closes a way to pass vacuously:
+
+- **`alive` after 6s** — the process must still have been running when we went to kill it. Without
+  this an early exit (no suitable GPU, missing asset, a throw during startup) leaves a log with 0
+  VUIDs and, if it got far enough, the validation token: the exact false pass.
+- **`rc == 143`** — it died from *our* SIGTERM, not on its own. `wait` is what reports it. (Named
+  `rc`, not `status`: `$status` is read-only in zsh, the default shell here.)
+- **`vuid == 0`** — nothing went wrong. Non-zero: open `$log`, read the first `VUID-...`.
+- **`active == 1`** — something was actually checking. The token is logged only *after* the
+  instance is successfully created, so it means validation is live, not merely requested.
+
+Shell details that are load-bearing, not style: `scene` is an **array** (`"${scene[@]}"`) because
+zsh doesn't word-split a scalar, so `$scene` would hand the app one combined path; the failure
+branch ends in **`false`** so automation sees a non-zero status instead of a success that merely
+printed FAIL; `rc=0; wait || rc=$?` and `|| true` on the greps keep it correct under `set -e`
+(`grep -c` exits 1 on a zero count).
+
+Both switches matter: **`--require-validation`** makes a missing layer a startup failure (exit 1,
+`Fatal: --require-validation: …`) instead of a silent unvalidated run — including in an `NDEBUG`
+build where the layer is compiled out; **`FE_LOG=render:info`** because the token is an `info` on
+the `render` category and a quieter level would hide it. `mktemp` per run so parallel smokes don't
+clobber one log. Swap `$scene` for any row in the matrix below.
 
 ## Scene matrix — cover the surface your change touches
 

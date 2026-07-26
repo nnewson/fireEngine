@@ -174,13 +174,13 @@ private:
 };
 
 // Pushes a forward draw's per-object set 0 (frame/skin/morph UBOs + morph SSBO)
-// inline via VK_KHR_push_descriptor — no allocated descriptor set. Shared by the
+// inline via core 1.4 push descriptors — no allocated descriptor set. Shared by the
 // forward pass and the transmission pass; the buffer handles come off the
 // DrawCommand. `layout` is the draw's pipeline layout (set 0 is a push layout).
 void pushForwardObjectDescriptors(vk::CommandBuffer cmd, const Resources& resources,
                                   vk::PipelineLayout layout, const DrawCommand& dc);
 
-// Pushes a shadow draw's per-object set 0 inline via VK_KHR_push_descriptor — no
+// Pushes a shadow draw's per-object set 0 inline via core 1.4 push descriptors — no
 // allocated descriptor set. Bindings 0..3 are the per-object ShadowUBO + the
 // skin/morph UBOs + morph SSBO carried on the DrawCommand; bindings 4/5 are the
 // shared self-shadow first-depth image + sampler, read straight from Resources

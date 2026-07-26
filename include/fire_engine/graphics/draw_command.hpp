@@ -54,7 +54,7 @@ struct DrawCommand
     DrawIndexType indexType{DrawIndexType::UInt16};
     // Set 0 for skybox draws (an allocated descriptor set). Forward, transmissive,
     // and shadow draws leave this null and instead carry the per-object buffers
-    // below, which the renderer pushes inline via VK_KHR_push_descriptor.
+    // below, which the renderer pushes inline via core 1.4 push descriptors.
     DescriptorSetHandle descriptorSet{NullDescriptorSet};
     // Forward set-0 push buffers: per-object (frame) + per-frame camera + skin/morph UBOs + morph
     // SSBO. cameraUbo is the same handle for every draw in a frame (written once by the Renderer).

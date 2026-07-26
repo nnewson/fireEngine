@@ -33,8 +33,10 @@ ctest --preset fast          # or: (cd build && ./test_fire_engine)
 cmake --build --preset full  # builds + runs the all-tags binary incl. [slow] + the layering guard
 ```
 
-## 5. Render smoke (0 VUID)
-Use the **render-smoke** skill on the scene(s) your change affects (default: DamagedHelmet). Expect 0.
+## 5. Render smoke (0 VUID, validation proven active)
+Use the **render-smoke** skill on the scene(s) your change affects (default: DamagedHelmet). Expect 0
+VUIDs **and** a `Vulkan validation enabled` line — the skill's recipe passes `--require-validation`
+so an unvalidated machine fails loudly instead of reporting a vacuous zero.
 
 ## 6. Linux CI parity (the real gate)
 ```bash

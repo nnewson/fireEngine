@@ -70,6 +70,10 @@ struct RendererDebug
     // values always win, and repeated flags are last-one-wins. Only takes effect with lodMode
     // view-dependent; the overlay checkbox toggles it at runtime thereafter.
     std::optional<bool> vdpmGpuBackend{};
+    // --require-validation: refuse to start unless the Vulkan validation layer is actually active.
+    // For the render smoke and any automated run where "zero VUIDs" must mean "checked and clean"
+    // rather than "nothing was checking". Off by default so a machine without the SDK still runs.
+    bool requireValidation{false};
 };
 
 class Renderer

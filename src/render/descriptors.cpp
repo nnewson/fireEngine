@@ -199,8 +199,10 @@ void pushForwardObjectDescriptors(vk::CommandBuffer cmd, const Resources& resour
          .pBufferInfo = &vipmInfo},
     }};
     // Core 1.4 entry point (vkCmdPushDescriptorSet) — the vcpkg loader exports
-    // this, not the KHR-suffixed alias. Validity comes from the enabled
-    // VK_KHR_push_descriptor extension plus the 1.4 device.
+    // this, not the KHR-suffixed alias. Validity comes from the enabled 1.4
+    // feature Vulkan14Features::pushDescriptor on a device the suitability
+    // check proved is >= 1.4; VK_KHR_push_descriptor is NOT enabled (see
+    // Device::requiredDeviceExtensions).
     cmd.pushDescriptorSet(vk::PipelineBindPoint::eGraphics, layout, 0, writes);
 }
 

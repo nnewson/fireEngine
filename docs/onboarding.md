@@ -433,7 +433,8 @@ and local URI images stay behaviorally aligned.
   belongs in that helper.
 - Owns descriptor pools and descriptor sets for the per-object **shadow** set 0 plus the
   per-frame forward-globals set 1. The **forward** set 0 is no longer allocated — it is a
-  `VK_KHR_push_descriptor` layout pushed inline per draw (`pushForwardObjectDescriptors`). Forward
+  push-descriptor layout (core 1.4, promoted from `VK_KHR_push_descriptor`) pushed inline per draw
+  (`pushForwardObjectDescriptors`). Forward
   set 0 carries two UBOs: a slim per-object **`ObjectUBO`** (model/hasSkin/previousModel, binding 0)
   and a per-frame **`CameraUBO`** (view/proj/cameraPos/view-projections, binding 29). `CameraUBO`
   lives in set 0 (not the global set 1) on purpose — the depth prepass reuses `shader.vert` but binds
@@ -492,7 +493,7 @@ The render layer is where most difficult bugs live.
 - `Descriptors`: descriptor layout/write helpers. Neither the forward nor the shadow set 0
   is allocated — the free functions `pushForwardObjectDescriptors` /
   `pushShadowObjectDescriptors` push their per-object buffers inline per draw
-  (`VK_KHR_push_descriptor`); the shadow push also carries the shared self-shadow
+  (core 1.4 push descriptors); the shadow push also carries the shared self-shadow
   image+sampler read from `Resources`. `createGlobalDescriptors` allocates `kMaxFramesInFlight`
   set-1 descriptors with the shared globals (light UBO, shadow maps, IBL textures, scene
   colour). `updateGlobalDescriptors` rewrites those globals after swapchain resize so
@@ -871,6 +872,28 @@ the same change — most have a test or guard that will catch you, but not all.
   preserves the lower set when the higher sets are bound. Keep `Renderer::recordDrawBucket` and
   `recordTransmissionDrawBucket` in lockstep: reversing this order exposes a Vulkan Validation Layers
   1.4.350 first-use push-state defect in an all-blend pass with no preceding depth-prepass push.
+- **Platform-conditional Vulkan capabilities are *queried*, never `#ifdef`'d** — and the decisions
+  come from **one** pure planner (`render/device_plan.hpp`, unit-tested in
+  `tests/render/test_device_plan.cpp`; `render/device.cpp` only enumerates and obeys). One binary
+  must start on a MoltenVK Mac, a conformant Linux driver, and a machine with no Vulkan SDK, so
+  anything not guaranteed everywhere is requested only after the loader/device says it has it: the
+  validation layer, `VK_KHR_portability_enumeration` (+ its instance flag, legal only alongside it),
+  and `VK_KHR_portability_subset`. The subset has three coupled sites — enable the extension, check
+  its feature bits, chain its struct into `pNext` — which must fire together and only together;
+  suitability and device creation therefore call `deviceCapabilityPlan()` rather than each
+  re-deriving "is it advertised". A new extension only some platforms expose goes in the planner's
+  optional set, **not** in `requiredDeviceExtensions()`, whose members are hard rejection criteria.
+  Querying a feature struct the driver doesn't know is the trap this guards: it reads back zeroed
+  and looks like "feature missing" (so the **Vulkan 1.4 version gate runs first and returns early**
+  — below 1.4 there is exactly one honest reason to report).
+- **Vulkan 1.4 is the device baseline, and it is enforced.** The renderer calls promoted-to-core 1.4
+  entry points (`vkCmdPushDescriptorSet`), VMA is told `vulkanApiVersion = 1.4`, and
+  `PhysicalDeviceVulkan14Features::pushDescriptor` is required + enabled — so
+  `missingDeviceCapabilities` rejects any physical device below 1.4 by name. macOS 26 makes this
+  concrete: the same Mac exposes MoltenVK at 1.4 *and* a conformant native driver at 1.3, and only
+  the former can service this renderer. Push descriptors are requested as the **1.4 feature**, not
+  the promoted `VK_KHR_push_descriptor` extension — don't re-add the extension as a requirement, or
+  a conformant 1.4 device that no longer advertises it gets rejected for nothing.
 - **UBO/push-constant structs ↔ GLSL std140 layout.** `render/ubo.hpp` structs are memcpy'd into
   mapped GPU memory, so their field order, `alignas`, and padding must mirror the matching GLSL
   block exactly. `tests/render/test_ubo.cpp` asserts sizes/offsets — extend it when you add a field.

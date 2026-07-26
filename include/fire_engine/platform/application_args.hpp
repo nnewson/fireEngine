@@ -146,6 +146,14 @@ struct ApplicationArgs
             args.debug.physicsDebug = true;
             continue;
         }
+        if (arg == "--require-validation")
+        {
+            // Fail startup unless the Vulkan validation layer is actually active, so an automated
+            // run can't report a clean frame when nothing was validating it (a Dev build on a
+            // machine with no SDK, or an NDEBUG build). Used by the render smoke.
+            args.debug.requireValidation = true;
+            continue;
+        }
         if (arg == "--vdpm-gpu")
         {
             // Force the GPU-driven VDPM backend ON (rendering-spine #3). Effective only with

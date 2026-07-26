@@ -154,7 +154,7 @@ Mat4 fitSelfShadowMatrix(const Bounds3& bounds, Vec3 lightDir) noexcept
 } // namespace
 
 Renderer::Renderer(const Window& window, std::string environmentPath, RendererDebug debug)
-    : device_(window),
+    : device_(window, debug.requireValidation),
       swapchain_(device_, window),
       pipelineOpaque_(device_, Pipeline::forwardConfig()),
       pipelineBlend_(device_, Pipeline::forwardBlendConfig()),
@@ -658,7 +658,7 @@ void Renderer::recordDrawBucket(vk::CommandBuffer cmd, std::span<const DrawComma
 
         if (isForwardPipeline)
         {
-            // Forward set 0 is pushed inline (VK_KHR_push_descriptor) — no
+            // Forward set 0 is pushed inline (core 1.4 push descriptors) — no
             // per-object descriptor set — plus the per-draw push constants.
             // Skybox (also in this bucket) keeps its allocated set 0.
             pushForwardObjectDescriptors(cmd, resources_,
