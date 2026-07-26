@@ -23,7 +23,7 @@ the open items so they can't fork:
 | Doc | What it is | Status of its items |
 |---|---|---|
 | [`codereview.md`](codereview.md) | Rolling **tiered static review**, following the [`review-order.md`](review-order.md) tiers (Tier 0 math, 18 Jul 2026; Tier 1 handles/limits/tunables, 19 Jul 2026). Further tiers expected. | **All open** — arc 3 below |
-| [`architecturalreview.md`](architecturalreview.md) | One-shot **architectural review** (25 Jul 2026) of rendering, shadows/AA, physics, simplifier/VDPM. Its §6 table is the status of record. | 8 of 14 landed; the rest is arc 2 |
+| [`architecturalreview.md`](architecturalreview.md) | One-shot **architectural review** (25 Jul 2026) of rendering, shadows/AA, physics, simplifier/VDPM. Audited 26 Jul so every finding now maps to a §6 row or an explicit "informational" tag. **Retire it once reviewed** — arc 2 below is self-contained. | 8 of 19 landed; the rest is arc 2 |
 | [`shadowplans.md`](shadowplans.md) | The **shadow-LOD improvement plan** (SH-01…SH-09) spun out of the architectural review's §2. | All open — arc 1 |
 
 Suggested order below — not binding. One branch per item, off local `main`.
@@ -70,8 +70,9 @@ family is skipped.
 
 ## Arc 2 — Architectural-review remainder ([`architecturalreview.md`](architecturalreview.md) §6)
 
-The eight small/XS items landed on `review-shadow-taa-fixes` + `review-xs-cleanups`. What remains,
-in the review's priority order:
+The eight small/XS items landed on `review-shadow-taa-fixes` + `review-xs-cleanups`. Ten remain —
+the five the review prioritised, then five a later coverage audit found had no action item. In the
+review's priority order:
 
 - **#4 [B/M] Static-scene CSM caching** (§2.1) — the renderer currently re-records every shadow pass
   every frame. Needs the lightweight **epoch** idea from §5.1 (scene-transform / light / caster-set
@@ -89,6 +90,34 @@ in the review's priority order:
 - **#10 [B/S] Front-to-back sort of the opaque bucket** (§1.1) — improves depth-prepass rejection.
 - **#6 [C/S] Batch image barriers into single `DependencyInfo`s** (§1.2) — compounds on MoltenVK
   (§5.2); coordinate with SH-* so barrier grouping doesn't change per-view LOD decisions.
+
+**Added by a coverage audit** (2026-07-26). The review's §6 table was a *prioritised* list, not an
+exhaustive one: five actionable findings in its body had no row. They are now rows 15–19 there and
+items here. All five are genuinely lower-value than the above — three are conditional or watch-items
+in the review's own words — and are recorded so the arc is scoped honestly, not because each is
+worth doing:
+
+- **#15 [B/C, M] Punctual-shadow change detection** (§2.3) — spot and point casters re-render every
+  face every frame even when the light and the geometry in range are static; a point light is
+  6 × 1024² per frame. Same epoch/dirty-bit mechanism as #4, so do them together. (Per-face frustum
+  filtering already exists and is correct — this is about skipping the re-render entirely.)
+- **#16 [C, XS] `hash_combine`-style mix for the mesh-triangle warm-start key** (§3.3) —
+  `in.key ^= subKey * 0x9E3779B97F4A7C15ULL` (`physics_world.cpp`) is a decent mix, but XOR over the
+  pair key admits collisions across (pair, triangle) combinations. The consequence is only a wrong
+  warm-start seed, which self-corrects within iterations — cosmetic, but a proper combine makes it
+  principled. **Touches the solver ⇒ re-baseline the determinism golden on BOTH platforms.**
+- **#17 [C, M] Retire the TAA resolve→blit full-res copy** (§2.5) — the resolve renders into
+  `history[cur]`, then blits back into the offscreen HDR target so particles/bloom/post keep a stable
+  input. Treating `history[cur]` as *the* scene target for the rest of the frame removes a full-res
+  16F copy per frame, at the cost of per-frame (or double-buffered) descriptor updates for those
+  three consumers. **Measure on MoltenVK before committing** — the current design is defensible.
+- **#18 [C, XS] `vdpmDrawCounts_` accumulation is O(fronts²)** (§1.6) — linear `find` per draw
+  (`renderer.cpp`), and the same pattern in `findSelfShadowViewProj`. Harmless at today's front
+  counts; a **watch-item** to revisit if instance counts rise, not a defect.
+- **#19 [C, S] Hoist the simplifier's per-collapse allocations** (§4.3) — `collapse()` allocates
+  `oneRing`, `removedWedgeUv`, and a `neighbours` map per collapse. Already assessed as "in the noise
+  next to the neighbour re-cost". Load-time only; do it **only if load times start to matter**, as
+  member scratch + `clear()` per collapse.
 
 ---
 
