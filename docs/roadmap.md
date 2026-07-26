@@ -1,460 +1,177 @@
 # Fire Engine — Roadmap
 
-Open work only. Everything major is **complete** — the physics & collision track (P0–P9), the
+**Open work only.** This file is the *index* of what is still to do; it deliberately carries no
+record of landed work. Everything major is complete — the physics & collision track (P0–P9), the
 rendering foundations (particles, cloth/XPBD, Vulkan 1.3/1.4 modernization, bindless materials, TAA,
-SSAO, frustum culling, overlay), the 26-item staff-engineer code review (CR-01…26), and rendering
-spine **#3 — progressive-mesh LOD** end to end (discrete → VIPM → VDPM). The design + rationale for
-landed work lives in the authority docs, not here:
+SSAO, frustum culling, overlay), the 26-item staff-engineer code review (CR-01…26), the post-VDPM
+review pass (VDPM hardening, renderer hygiene, static GPU residency, capability-driven device
+setup), and rendering spine **#3 — progressive-mesh LOD** end to end (discrete → VIPM → VDPM →
+**GPU-driven front, now the default on any device that supports it**).
+
+The design + rationale for landed work lives in the authority docs, never here:
 
 - **Physics / collision** → [`collision.md`](collision.md)
-- **Mesh LOD (discrete / VIPM / VDPM)** → [`lod.md`](lod.md)
+- **Mesh LOD (discrete / VIPM / VDPM, CPU + GPU front)** → [`lod.md`](lod.md)
 - **Everything else** (subsystems, invariants, reading order) → [`onboarding.md`](onboarding.md),
   [`review-order.md`](review-order.md), [`README.md`](../README.md)
 
-Suggested order below — not binding.
+## How the review docs relate
+
+Three review/plan documents feed this roadmap. Each owns its own detail; the roadmap only indexes
+the open items so they can't fork:
+
+| Doc | What it is | Status of its items |
+|---|---|---|
+| [`codereview.md`](codereview.md) | Rolling **tiered static review**, following the [`review-order.md`](review-order.md) tiers (Tier 0 math, 18 Jul 2026; Tier 1 handles/limits/tunables, 19 Jul 2026). Further tiers expected. | **All open** — arc 3 below |
+| [`architecturalreview.md`](architecturalreview.md) | One-shot **architectural review** (25 Jul 2026) of rendering, shadows/AA, physics, simplifier/VDPM. Its §6 table is the status of record. | 8 of 14 landed; the rest is arc 2 |
+| [`shadowplans.md`](shadowplans.md) | The **shadow-LOD improvement plan** (SH-01…SH-09) spun out of the architectural review's §2. | All open — arc 1 |
+
+Suggested order below — not binding. One branch per item, off local `main`.
 
 ---
 
-## Immediate — post-VDPM review ([`codereview.md`](../codereview.md))
+## Arc 1 — Shadow LOD & shadow correctness ([`shadowplans.md`](shadowplans.md))
 
-A refreshed static review of the VDPM/LOD tree, renderer resource paths, and C++23/Vulkan practice.
-Handled as a unit, exactly as CR-01…26 was cleared before the spine. Two real correctness bugs, the
-rest fidelity/robustness/cleanup; several items *subsume* the "Known limits" in [`lod.md`](lod.md).
-One branch per item. (Findings map to `codereview.md` by **title** — its list restarts numbering per
-severity tier, so titles are the stable reference, not a global number.)
+The central defect: a shadow caster's LOD is inherited from the camera view instead of being
+selected for the shadow view that rasterises it, in shadow-map texels. Milestones 0–2 are the
+correctness work; milestone 3 is evidence-gated. Detail, contracts, and verification gates are in
+the plan; the priority order is its § Suggested priority.
 
-**(A) VDPM hardening.**
-- ✅ **Chart-veto reversal bypasses the error ceiling** *(branch `cr-vdpm-correctness`)* — when the
-  veto flips the collapse direction, the reversed (larger) endpoint error is now re-checked against
-  `kErrorCeilingFactor` (and `continue`, not `break` — the heap is ordered by each edge's *minimum*
-  endpoint cost). Real bug, fixed. (No minimal regression test: the trigger needs a seam-reversal
-  collapse exceeding the *generous* 40× ceiling, and its only public observable, `MeshCollapse::error`,
-  is an RMS that normalises the boundary weight out — so the violation is masked in every black-box
-  signal. Guarded by the existing determinism/replay tests.)
-- ✅ **`QemRun::sequence()` `noexcept`+copy → `&&`-move** *(same branch)* — consuming rvalue accessor;
-  `noexcept` is now honest (a vector move can't allocate).
-- ✅ **Forest replay after an unreplayable collapse → fixed via the shared-topology util below**
-  *(branch `cr08-shared-topology`)*. Root-caused: the "7 forest skips" are genuine **non-manifold
-  welded edges** (position-welding fuses coincident chart pieces into >2-face edges), which the vl/vr
-  vertex-split encoding can't represent; the old `buildVertexForest` re-derived that adjacency by an
-  independent replay that then desynced and cascaded (19 skips). *Truncate* rejected (5.6× coarser
-  floor); *veto in the simplifier* rejected (the two topology trackers diverge beyond the non-manifold
-  edges, and it changes discrete/VIPM output). The fix landed: the simplifier now **records (vl, vr)
-  per collapse** on the true canonical topology it coarsens (ground truth), and `buildVertexForest`
-  transcribes that stream instead of re-deriving — faithful by construction. The few genuinely
-  non-manifold edges carry `kNoCollapseApex` and leave `removed` a root (always active), isolated with
-  no cascade and no coarsening loss (19 skips → 7 roots).
-- ✅ **Coverage repair precision (partial)** *(branch `cr-vdpm-correctness`)* — the area gate is now
-  **viewport-relative** (a pixel-area constant → NDC via the passed viewport, so it doesn't drift with
-  resolution), and near-plane-crossing faces (some corners behind the camera) are now **conservatively
-  refined** instead of silently skipped. The **multi-sample** corner-coverage idea was deliberately
-  NOT taken: measured, sampling a fine triangle's corners against its OWN replacement flags ~5800
-  mostly-false positives (the neighbour's replacement covers them), so it would massively over-refine;
-  a correct version needs true point-location against the active mesh — deferred, and the centroid +
-  degenerate handling already closes the visible holes. (Supersedes the `lod.md` coverage-precision
-  note for the two parts done.)
-- ✅ **Non-uniform-scale transforms** *(same branch)* — facing now uses the inverse-transpose normal
-  matrix, and foldover winding is compared in **world space** (what the rasteriser culls on). Guarded
-  by a non-uniform-scale case in the foldover test.
-- ✅ **Cheap hygiene** *(same branch)* — `ActiveFront`'s `std::vector<bool>` → `uint8_t`; the
-  `writeMapped` guard is now release-visible (clamps so it can't corrupt neighbouring GPU memory, and
-  logs once instead of overflowing silently).
-- ✅ **Shared mesh-topology / wedge util** *(branch `cr08-shared-topology`)* — position weld, wedge
-  distance, nearest-wedge, canonical-wedge grouping were duplicated across simplifier / VIPM / VDPM /
-  tests, exactly where the recent bugs clustered. Now one module `graphics/mesh_topology.{hpp,cpp}`
-  (`weldByPosition`, `wedgeDistance`, `nearestWedge`, `canonicalWedges`) that all four consume, so the
-  canonical-id contract can't drift between them. Step 2 recorded (vl, vr) per collapse in the
-  simplifier (see the forest-replay item above), so `buildVertexForest` transcribes ground-truth
-  adjacency instead of re-deriving it. De-risks all future LOD work.
+**Milestone 0 — evidence before policy**
+- **SH-01** — shadow diagnostics (per-group GPU time, draw/triangle counts, per-view LOD histograms,
+  projected-deviation estimate, LOD0-fallback reasons, a shadow-LOD debug view) + a purpose-built
+  owned glTF acceptance scene, recorded in [`acceptance-testing.md`](acceptance-testing.md).
 
-**(B) Renderer hygiene — independent of VDPM.** *(all landed, branch `cr-renderer-hygiene`)*
-- ✅ **Device suitability validates all requested features/limits** — `missingDeviceCapabilities`
-  queries one `PhysicalDeviceFeatures2` chain (1.0/1.2/1.3 + portability-subset) plus the
-  descriptor-indexing update-after-bind limits during selection, and rejects an unsuitable GPU with a
-  named reason (logged) instead of failing an opaque call later. `createLogicalDevice` dropped its
-  redundant per-feature re-checks (suitability is now authoritative) and the dead
-  `descriptorBindingVariableDescriptorCount` request (the bindless array is fixed-size + partiallyBound,
-  not an `eVariableDescriptorCount` binding).
-- ✅ **Descriptor-pool lifecycle + `createMappedStorageBuffer` misnaming** — the per-group pools drop
-  `eFreeDescriptorSet` (sets are never freed individually; the pool is destroyed as a unit at
-  shutdown) and now own their sets as plain handles rather than per-set RAII. `createMappedStorageBuffer`
-  (which built one shared buffer, duplicated its handle into every frame slot, and returned empty
-  mapped spans) became `createSharedStorageBuffer` returning a single `BufferHandle`; particle-system
-  and morph/VIPM-dummy call sites updated.
-- ✅ **Static vertex/index buffers are now device-local** — new `createDeviceLocalBuffer` (device-local
-  + transient staging buffer + one-time copy). `createVertexBuffer` / both `createIndexBuffer`
-  overloads (so base mesh + every LOD cut) and the VIPM geomorph table (`createStaticStorageBuffer`)
-  use it; per-frame dynamic buffers (UBOs, VDPM index sets, debug lines, cloth storage-vertex) stay
-  host-visible/mapped. The batched-upload optimisation (join the image `uploadBatch_` instead of a
-  per-buffer submit) is left as a follow-up under static-residency below.
+**Milestone 1 — correct discrete shadow LOD**
+- **SH-02** — the pure, Vulkan-free shadow-view projection model (`ShadowView`, per-cut shadow
+  deviation metric, `projectShadowErrorTexels`, `selectShadowLod`, hysteresis), headless-tested.
+- **SH-03** — thread per-shadow-view discrete LOD through the renderer (the requested architectural
+  fix: one caster may select different levels for different shadow views).
+- **SH-04** — deformation / proxy policy (skinned, morphed, cloth: no invalid error claims, explicit
+  conservative full-detail fallback).
 
-- ✅ **(C) `DamagedHelmetBlend` validation-layer crash — resolved** *(branch
-  `fix-vvl-push-descriptor-order`).* This was a **Vulkan Validation Layers 1.4.350
-  push-descriptor state-tracking defect**, not a MoltenVK rendering failure, VIPM-buffer defect, sparse
-  binding problem, or GPU-front problem. The old roadmap hypothesis overfit the asset. The decisive
-  control was command order:
-  - The failing forward transition bound allocated sets 1/2 and then first established pushed set 0.
-    In an all-blend scene no earlier depth-prepass forward push happened to seed VVL's synthetic
-    push-set state. VVL first reported an invalid null set-0 binding, then faulted in
-    `vvl::DescriptorSet::PerformWriteUpdate` while applying the next push.
-  - Replacing the real VIPM buffer with another valid SSBO, removing the skybox, selecting CPU VDPM,
-    and selecting direct instead of indirect draw all still reproduced the crash. Adding any opaque
-    primitive hid it only because the depth prepass performed an earlier push.
-  - The fix establishes pushed set 0 **before** binding allocated sets 1/2 whenever a forward pipeline
-    becomes active. Those higher sets are bound through the same pipeline layout, so Vulkan pipeline
-    layout compatibility preserves lower set 0. The main forward recorder and the transmission
-    recorder share this command-order invariant.
-  - Validation smoke is now clean for `DamagedHelmetBlend` on CPU/GPU VDPM and with/without the
-    skybox/direct-draw controls, plus the opaque helmet and `TransmissionTest`. Both command orders are
-    valid Vulkan; this is a principled validation-layer compatibility ordering, not an asset workaround.
+**Milestone 2 — shadow silhouette correctness**
+- **SH-05** — material-aware casters (alpha-mask cutout, double-sided sheets).
+- **SH-06** — cascade caster fit (remove fixed-depth clipping, align candidate sets).
+- **SH-07** — scale-derived bias & filtering tied to each map's actual texel footprint.
+
+**Milestone 3 — only if measured**
+- **SH-08** — shadow VIPM, *if* discrete transitions remain visibly popping.
+- **SH-09** — shadow VDPM checkpoint; highest complexity, requires evidence before committing.
+
+**Independent shadow hygiene** (need not block the milestones; see the plan's § Independent shadow
+hygiene): make `noShadows` suppress *recording*, not just sampling; skip directional/world/self maps
+with no active primary directional light; generate the GLSL shadow-limits include from the C++
+authority instead of repeating `SHADOW_TOTAL_MATRIX_COUNT` / `SHADOW_POINT_MATRIX_BASE` / the
+self-shadow slot count (**same fix as arc 3's Tier 1 finding 2**); keep map validity explicit when a
+family is skipped.
 
 ---
 
-## Could — opportunistic / supporting
+## Arc 2 — Architectural-review remainder ([`architecturalreview.md`](architecturalreview.md) §6)
 
-- ✅ **VDPM per-frame CPU emission scratch + repair counters** *(branch `cr-vdpm-emit-scratch`; the
-  CPU-only, no-GPU-rewrite subset of codereview.md "VDPM per-frame work is correct but expensive")*.
-  Three pieces: **(a)** `emitActiveIndices` now fills a caller-owned reused buffer (`object.cpp` passes
-  a per-binding scratch vector) — no per-frame heap allocation; a vector-returning overload is kept for
-  tests. **(b)** `refineForView` memoised `facingOf(v)` per canonical vertex and `emit` precomputes
-  `activeAncestor` once per frame (the front is settled there); both are pure per-frame functions, so
-  behaviour is byte-identical to the inline computation. (The `facingOf` cache was later removed by the
-  visibility-cone arc, which replaced the smooth-normal facing with the per-split normal cone.) **(c)**
-  `ActiveFront` exposes per-frame repair counters (vertices each pass pulled back in, `active_==0`-guard
-  dedup'd), plumbed `Object → SceneDrawContext → CullStats → FrameStats` into the overlay's LOD panel
-  ("VDPM repairs (verts): foldover X, coverage Y", shown in View-dependent mode) so a repair-count
-  regression is visible. Verified: build clean, fast suite (incl. `[vdpm]`) green, 0 VUID smoke. The
-  full GPU active front stays the separate arc below.
-- ✅ **Split the per-frame vs per-object forward UBO** *(branch `cr-ubo-split`)* — the old
-  `UniformBufferObject` bundled per-frame camera data with per-object data and was re-uploaded per
-  object per frame. Now split into **`CameraUBO`** (view / proj / cameraPos / view-projections) and a
-  slim **`ObjectUBO`** (model / previousModel / hasSkin). `CameraUBO` is written **once per frame** by
-  the Renderer (no more duplicating view/proj into every object). `ObjectUBO` is re-uploaded only when
-  it changes — `Object` caches the last world/previousWorld/hasSkin per frame slot and skips a
-  byte-identical rewrite, so a static object does no per-frame UBO write. **Design note:** camera went
-  into the *push* set 0 (binding 29), **not** the global set 1 — the depth prepass reuses `shader.vert`
-  but binds no globals, and set 0 is already pushed there, so set 0 is the only place both passes see
-  it (a first cut using set 1 failed pipeline creation exactly here). Camera is still only *bound* per
-  draw (a cheap push, not a re-upload). Touched `ubo.hpp` (+static_asserts), both forward shaders, the
-  set-0 layout, `pushForwardObjectDescriptors`, `DrawCommand`/`FrameInfo`, `Object`, and the Renderer.
-- ✅ **Route the active camera through the `RenderableScene` seam** *(branch `cr-camera-through-seam`)*
-  — the camera was the one piece of scene-owned per-frame data that bypassed the seam (passed as two
-  loose `drawFrame(… Vec3 cameraPosition, Vec3 cameraTarget …)` args the app extracted). Now
-  `RenderableScene::activeCamera()` returns a `CameraView{position, target}` and `drawFrame` drops the
-  args. `SceneGraph` owns the active camera as a **`Node*`** (`activeCamera(Node*)` setter, asserts the
-  node carries a `Camera` component); it reads the node's **live** world pose, so a moved camera node
-  (e.g. a future route system animating its `Transform`) moves the view for free. No authored camera →
-  a fixed debug fallback pose ({2,2,2}→origin, **not** a scene node, warns once) so a missing camera is
-  visible, not a crutch. Camera *types* (FlyCamera/FirstPersonCamera + per-type input) are deliberately
-  out of scope — this is the seam they'll plug into. `[SceneGraph]` tests cover the setter/getter +
-  fallback.
-- ✅ **TAA skinned-deformation velocity** *(branch `cr-taa-skinned-velocity`)* — skinned meshes used
-  to reproject on camera motion only (`prevWorldPos = worldPos` for `hasSkin`), so animated
-  deformation ghosted. Now a **`PrevSkin`** UBO (forward set-0 binding 30) carries last frame's joint
-  matrices, and `shader.vert` skins the bind-pose vertex with them to get exact per-vertex velocity.
-  Unified with the rigid path via `prevTransform` (previous joints when skinned, `previousModel`
-  otherwise). `Object` caches `previousJointMatrices_` (previous == current on frame one → zero
-  velocity). Camera-only was the *v1*; this is the exact form. Verified: skinned (CesiumMan) + rigid
-  render 0 VUID; the velocity debug view (=5) shows the deformation motion.
-- ✅ **`Mat4::transformPoint` helper** *(branch `cr-mat4-transformpoint`)* — the free
-  `transformPoint(const Mat4&, Vec3)` copy-pasted in `physics_world.cpp`, `physics_world_shapes.cpp`,
-  `scene_culler.cpp` is now one affine `Mat4::transformPoint(Vec3)` method (drops the homogeneous w, no
-  perspective divide — correct for the composed model/world matrices all three sites use; the
-  `scene_culler` copy's defensive `/w` was dead for its affine input). All copies replaced; three
-  `[Mat4TransformPoint]` tests added. Determinism golden unchanged (physics behaviour byte-identical).
+The eight small/XS items landed on `review-shadow-taa-fixes` + `review-xs-cleanups`. What remains,
+in the review's priority order:
+
+- **#4 [B/M] Static-scene CSM caching** (§2.1) — the renderer currently re-records every shadow pass
+  every frame. Needs the lightweight **epoch** idea from §5.1 (scene-transform / light / caster-set
+  epochs) so individual passes can skip without a frame-graph rewrite. **Consumes SH-01's
+  diagnostics and SH-03's per-view LOD contract** — a map's content signature must include the
+  shadow view descriptor and every selected LOD/front generation, not just a camera epoch
+  ([`shadowplans.md`](shadowplans.md) § Interaction).
+- **#5 [B/L] Compute pre-skinning pass** (§1.3) — skinning/morphing re-runs in every pass's vertex
+  shader (~11× per skinned vertex per frame). `SoftBodySystem` already proves the compute pattern
+  in-engine. The one genuinely architectural piece here; it also retires SH-04's deformable
+  full-detail fallback by exposing pre-deformed vertices + exact deformed bounds + a deformation
+  revision.
+- **#7 [B/S] Physics per-step scratch persistence** (§3.1) — remove the per-step heap allocation in
+  the solver hot path. Golden-neutral if done as pure allocation reuse.
+- **#10 [B/S] Front-to-back sort of the opaque bucket** (§1.1) — improves depth-prepass rejection.
+- **#6 [C/S] Batch image barriers into single `DependencyInfo`s** (§1.2) — compounds on MoltenVK
+  (§5.2); coordinate with SH-* so barrier grouping doesn't change per-view LOD decisions.
 
 ---
 
-## Maybe — cosmetic / on demand
+## Arc 3 — Tiered static code review ([`codereview.md`](codereview.md))
 
-- ✅ **Ragdoll per-joint hinge limits** *(branch `cr-ragdoll-hinge-limits`)* — knees/elbows are now
-  authored as true 1-DOF **Revolute** hinges with an asymmetric angle range, not the uniform swing
-  cone. Three parts: (1) **physics** — `ArticulationLinkDesc` gained `jointLowerLimit`/`jointUpperLimit`
-  and `solveJointLimits` a Revolute branch enforcing them via the same velocity-level unilateral
-  push-back as the cone-twist; `jointImpulseResponse` generalised from spherical-only to any DOF count
-  (the **extensibility hook** for future joint types). (2) **authoring** — `extras.Ragdoll.Joints` maps
-  a bone node name → `{Type:"Hinge", Axis, Min, Max}` (unlisted bones keep the uniform cone). (3)
-  **build** — `makeArticulated` builds a Revolute for a hinge-authored bone. Purely additive/opt-in, so
-  **the determinism golden is unchanged** (no re-baseline). Tests: `[Articulation]` limit,
-  `[GltfNodeExtras]` parse ×2, `[Ragdoll]` build. (Post-settle arm-drift + settle-yaw were already
-  fixed on `ragdoll-joint-settle` — see [`collision.md`](collision.md).)
-  - **Joint debug view + authored ragdoll** *(same branch)* — a `DebugView::Joints` mode (overlay
-    "View → Joints", or `--debug-joints`) **replaces the scene mesh** (keeping the collider wireframes
-    for context) with a per-link RGB axis gizmo (the link's local frame — pick the hinge `Axis` off
-    it), a **degree-of-freedom overlay** (bright hinge-axis line for a 1-DOF Revolute; the triad spans
-    a Spherical), and an on-screen "index: bone-name (Type)" label, so a skeleton's joints — and their
-    DOF — can be found without guessing.
-  - **Base roll/pitch settle damper** *(same branch)* — with the knees now folding correctly, a
-    collapsed ragdoll rocked left-right for a while: the base's **roll/pitch** was the one settled DOF
-    with no dedicated damper (linear + yaw had one; full base-angular damping was left out because it
-    destabilises a near-planar chain). Added `kBaseRockSettle*` — decays the residual non-yaw base
-    spin, double-gated on *settling* + a slow angular so a violent impact is untouched. Articulation-
-    only ⇒ **golden-neutral**; the `[slow]` settle/soak gate stays green.
-  - **Hip-wiggle settle (landed-widened joint gate)** *(same branch)* — after the base-roll fix a
-    residual *hip* wiggle remained (traced: `leg_joint_*_1` ringing at ~1–4 rad/s for ~1 s after
-    landing, re-exciting the base rock). It sat in a band too fast for `kJointSettleSpeed` (0.5) yet
-    far below the collapse (6–13 rad/s). Fix: once the base has **landed** (linear < `kBaseSettleSpeed`)
-    the joint settle gate widens to `kJointSettleSpeedLanded` (4 rad/s), bleeding the wiggle while the
-    speed gate still protects the fast airborne collapse (which can momentarily read "landed"). Cut
-    the hip wiggle ~½ and killed the 1.5 s base-rock re-spike; collapse **shape** (gyration / head-foot
-    chord gates) preserved, golden-neutral.
-  - **Near-rest snap (straggler sleep)** *(same branch)* — after the wiggle fix a lone shoulder DOF
-    still crept in at ~0.15 rad/s for ~1 s after the body stopped (traced: hand moved ~3 mm while the
-    joint held ~terminal velocity — a straggler hovering at the 0.15 sleep threshold, resetting the
-    dwell). Added `kArticulationRestSnap*`: once the whole articulation sits within a wider near-rest
-    band (0.30) for a short dwell (0.25 s), zero the residual so it sleeps as a unit. Cut settle from
-    ~4.8 s → ~2.9 s; collapse untouched (byte-identical early frames), shape gates green, golden-
-    neutral. Snap magnitude is tiny (fires ~0.15 rad/s) so it shouldn't pop — pending visual confirm. Labels project through the ImGui foreground
-    draw list (`DebugOverlay::drawWorldLabels`) using `DisplaySize` (retina-correct) and this frame's
-    finalised `viewProj` (no lag). With this, `CesiumManRagdoll.gltf` is now authored with real 1-DOF
-    knees (`leg_joint_L/R_3`), ankles (`leg_joint_L/R_5`), and elbows (`Skeleton_arm_joint_R__3_` /
-    `Skeleton_arm_joint_L__2_` — note the L/R numbering asymmetry the labels expose).
+Handled as a unit the way CR-01…26 was, one branch per phase. Findings map to `codereview.md` by
+**title** — its numbering restarts per tier, so titles are the stable reference.
+
+**Tier 0 — math & value types.** 3 high (`Mat3::inverse()` rejects valid small transforms;
+`approxEqual()` accepts NaNs as equal; rotation quaternions don't enforce their invariant), 5 medium
+(non-robust norms, "bitwise equality" isn't bitwise, affine/projective mixed, hidden projection
+conventions, duplicated conversion authority) + a standardisation list. Sequenced by the doc:
+1. **Correctness foundation** — NaN/tiny-matrix regression tests, shared scalar comparison, robust
+   scaled norms, scale-aware `Mat3::tryInverse()` + caller migration, fix/remove the bitwise API.
+2. **Rotation redesign** — `UnitQuaternion`/`Rotation3`, one quaternion→matrix authority, migrate
+   transform/animation/render/physics users. *(Touches physics orientation ⇒ expect a determinism
+   golden re-baseline on BOTH platforms — see CLAUDE.md § Testing.)*
+3. **Transform & API redesign** — `Affine3` + direct TRS, split affine point/vector/normal from
+   projective, explicit projection conventions, standardise the access/operator surface.
+
+**Tier 1 — handles, limits, tunables.** 4 high (texture generations not enforced on lookup/release;
+GPU layout limits have no machine-enforced C++/GLSL authority; `ColliderId` registration inconsistent
+between broadphases; handle packing silently aliases invalid inputs), 5 medium, 2 low. Sequenced:
+1. **Close correctness holes** — enforce texture generation everywhere, fix dynamic-tree collider-ID
+   clearing/re-registration + broadphase parity tests, derive the shadow matrix ranges with
+   compile-time relationship asserts, add the build-enforced C++/GLSL limits authority (**the same
+   authority arc 1's hygiene item needs**).
+2. **Identity foundation** — neutral raw-index + generational strong-handle primitives, move
+   `GenerationalSlotPool` out of `graphics/` with occupancy tracking and invalid-release rejection,
+   pick a no-resurrection generation policy, migrate the GPU/physics handle families.
+3. **Configuration & diagnostics** — frame-ring logic independent of the literal 2, derived mip
+   counts + compile-time render-default relationships, enum logger categories with an indexed
+   immutable config, parser/output state into a `.cpp` with precedence tests.
+
+Further tiers of this review are expected to follow the [`review-order.md`](review-order.md) tiers.
 
 ---
 
-## Parked with data — revisit only on a concrete need
+## Parked & revisit — trigger-based
 
-- **P9.6 Stage 2** — per-substep re-detection for >20 rad/s spinners resting on floors (boundary
-  quantified + gated by `Demos.RotationalTunnellingBoundedTo20RadPerSec`).
-- **Mesh-contact mid-step refresh.**
-- **Link-vs-dynamic-rigid articulation contacts** (link colliders are link-vs-static only today).
-- **Joint split-position pass** (P9 item 4).
+Not a backlog. Each item was investigated, has data behind the decision, and is picked up only on
+the stated trigger.
 
----
+### Physics / collision
 
-## Larger arcs — GPU-driven direction (optional; opened up by #3)
+- **P9.6 Stage 2 — per-substep re-detection** for >20 rad/s spinners resting on floors. Boundary is
+  quantified and gated by `Demos.RotationalTunnellingBoundedTo20RadPerSec`. **Trigger:** a scene that
+  genuinely needs faster resting spinners.
+- **Mesh-contact mid-step refresh.** **Trigger:** observed tunnelling/jitter against triangle-mesh
+  level geometry.
+- **Link-vs-dynamic-rigid articulation contacts** — link colliders are link-vs-static only today.
+  **Trigger:** a ragdoll that must interact with dynamic props.
+- **Joint split-position pass** (P9 item 4). **Trigger:** a joint-stretch case the soft-joint path
+  can't hold.
 
-Not new features — the maturation of things already noted. `codereview.md`'s "Larger Rewrite
-Candidates" section folds in here:
+### LOD / VDPM — see [`lod.md`](lod.md) § Known limits & future directions
 
-- 🔨 **VDPM metric fidelity** *(branch `cr-vdpm-metric-instrumentation`; in progress)* — the four-channel
-  refine metric is correct in shape but not a reliable perceptual bound: the angular (normal/tangent)
-  channels aren't scale-invariant (angular error projected as a world length), and the shading channels
-  can silently read zero when a collapse's removed vertex projects outside every surviving face (no
-  covering-face fallback, unlike UV) — the likely cause of close-range interior faceting. Sequenced:
-  **(1) instrumentation + invariant tests** *(done)* — `ActiveFront::channelStats()` per-channel refine
-  attribution + overlay "VDPM splits" line + a `[!shouldfail]` scale-invariance test.
-  **(2) shading correspondence decoupled** *(done)* — normal/tangent now measure against the closest
-  point on the nearest surviving triangle (`closestPointBary`), not only a *containing* face, so
-  endpoint collapses stop silently recording zero shading error (the holes).
-  **(3) geometry vs the nearest actual triangle** *(done)* — the geometry channel measures point-to-plane
-  against the nearest surviving *triangle*, not the `min` over every one-ring *infinite plane* (an
-  unrelated coincident plane no longer quiets a curved patch).
-  **(4) support bounds + scale-invariant angular projection** *(done)* — each collapse records a support
-  radius (bounding sphere); the angular channels project it as a screen extent × the chord `2·sin(θ/2)`
-  from the parent near-sphere depth, with object-space radii bounded into world space by the world
-  matrix's largest singular value (so instanced non-unit scale refines correctly), and the angular
-  radii capped at π. Scale-invariance test now passes on the production instance path. Instrumentation
-  refined to per-channel *triggers* + max score/budget ratios (a zero count with a near-1 ratio = a
-  hair under budget). Review follow-ups also done: the collapse measurement is now a unit-testable
-  `detail::measureCollapseDeviation` (the no-containing-face regression feeds it a hand-built one-ring
-  where `removed` is provably outside every face and asserts non-zero shading — not a `(parent,vl,vr)`
-  proxy); the two closest-point helpers merged into one `closestOnTriangle` (barycentric + squared
-  distance) with a conservative MAX over equal-distance ties; and a normal-channel test at the
-  production `kVdpmNormalScale`.
-  **(5) full TBN tangent metric** *(branch `cr-vdpm-tbn-tangent`)* — the tangent channel compared raw
-  tangent xyz, but the shader samples a normal map in the per-vertex TBN frame (T Gram-Schmidt'd
-  against N, B = cross(N,T)·handedness), so a handedness (`w`) flip read as zero. The simplifier now
-  precomputes the frame axes and the channel measures the MAX of the T- and B-axis deviation (catches
-  roll + handedness flip); unit-tested via `measureCollapseDeviation`.
-  **(6) material-aware tolerances** *(branch `cr-vdpm-material-tolerances`)* — `vdpmChannelScales(material)`
-  (pure `graphics/vdpm_material.*`) derives the per-channel refine scales at refine time, so a channel a
-  material can't show is disabled: unlit → normal+tangent off; no normal/clearcoat map → tangent off (a
-  mesh with tangents stops protecting a frame nothing samples); no textures → UV off; glossy → normal
-  channel scaled up. Passed into `refineForView`'s existing scale args at the `object.cpp` call site — no
-  simplifier/forest/front change; unit-tested per rule.
-  **(7) persistent front + hysteresis** *(branch `cr-vdpm-persistent-front`)* — `refineForView` no
-  longer `coarsenAll()`s each frame; the front persists. Score pass → refine pass (over budget) →
-  coarsen pass (under `kVdpmCoarsenRatio × budget`); the dead band between stops splits popping in/out
-  under small camera moves / TAA jitter (a static camera now yields an identical front every frame).
-  Repairs still run each frame, and steady-state does *less* work than the old full rebuild. Tests:
-  static-view stability + sub-band hold. **This completes the VDPM metric-fidelity arc.** Parked
-  next-steps if it's ever revisited: a GPU-driven active front (also the only path to retiring the
-  per-frame repair sweeps — the visibility cones below could NOT), texel-density UV budget.
-  See [`lod.md`](lod.md) § Known limits (Metric fidelity). Render-path only ⇒ golden-neutral.
-- ✅ **VDPM visibility cones** *(branch `cr-vdpm-visibility-cones`)* — a precomputed per-split
-  **conservative normal cone** replaces the unreliable smooth-vertex-normal visibility proxy with a
-  GPU-compatible, conservative face-**orientation** bound. Outcome, narrower than first hoped: it
-  **improves back-face suppression and silhouette targeting but CANNOT replace screen-space coverage
-  or topological foldover repair** — both remain. **(1) measure** *(done)* — the retained hidden
-  benchmark `[.][RepairBench]` (`test_vdpm.cpp`) times the per-frame cycle on a dense (~24.6k-face)
-  silhouette-heavy sphere. **(2) precompute the cone** *(done)* — `MeshCollapse`/`VertexSplit` carry a
-  normal cone `{axis, cosHalfAngle}` accumulated bottom-up like `supportRadius` (`mergeCones`),
-  conservative *by construction* (double math with re-normalised axes; the union axis is re-checked
-  against both children so rounding can only widen; a one-ULP outward round — no magic margin); a cone
-  wider than a hemisphere is the `cosHalfAngle <= 0` no-cull sentinel. A headless test replays the raw
-  collapse stream and proves the cone bounds *every* finest-face normal in each subtree. **(3) wire it
-  into `refineForView`** *(done)* — `detail::coneVisibility` does an **exact evaluation of the
-  conservative bound**: the region is back-face-culled only if its whole cone provably faces away over
-  the support-sphere view-direction spread (a one-sided proof of hiddenness — never a claim of
-  visibility); a straddle of edge-on drives the silhouette boost. Done in **object space** (the facing
-  sign is invariant under any linear transform, so it's exact under non-uniform scale and keeps the
-  cone circular), trig-free (cosine sum identity, GPU-friendly), reflection-exact via the determinant
-  sign, and singular-transform-safe. Gated by `rasterBackfaceCulling` (a double-sided or blended
-  material culls nothing, so its refinement must NOT be suppressed). The cone HALVED `refineForView`
-  (~1.45 → ~0.69 ms on the bench), which now makes `repairCoverage` the dominant ~50% of the ~2.0 ms
-  cycle. **Coverage is a screen-space property, not orientation** — a force-refine-on-straddle
-  experiment reduced but could not zero coverage repairs (10/19/85), so `repairCoverage` (and
-  `repairFoldovers`, topological) STAY and step 4 is dropped. Retiring them eventually needs a GPU
-  worklist/fixpoint or a representation-level guarantee — not this cone. (Bounding-cone caveats per
-  Hoppe, *View-Dependent Refinement of Progressive Meshes*, SIGGRAPH 97, §4.)
-- 🔨 **GPU-driven active front (in progress)** — drive the whole per-frame front lifecycle (score →
-  refine/coarsen → repair → emit) + indirect draw on the GPU; the CPU `vdpm` stays the tested oracle +
-  fallback. **Stage 0** (`graphics/vdpm_parallel`, merged) proved the parallel rank-ordered scheduling
-  byte-for-byte against the oracle. Two oracle prerequisites landed on the way: the no-cull coverage gap
-  (P1), and the **joint foldover+coverage repair** *(branch `cr-vdpm-joint-repair`)* — the two repairs
-  were sequential (`refineForView`'s foldover fixpoint, then `repairCoverage`), so a coverage
-  force-refine could re-fold a neighbour *after* the foldover fixpoint finished, leaving foldovers (a
-  real shipped silhouette-hole bug). Now one public `repairFront` alternates the two private sweeps to a
-  JOINT fixed point (≈2 sweeps in practice); `Object` can't misorder them; a named regression pins the
-  six cases. The **parallel repairs** then landed on the GPU-shaped model *(branch
-  `cr-vdpm-parallel-repairs`)*: the joint repair's per-face geometry was extracted into pure `detail::`
-  classifiers (`isFoldover` / `classifyCoverageRepair`) the sequential sweeps now route through, and
-  `ParallelFront::repairFront` reuses them as a **snapshot** detector — detect every violation against a
-  settled front, close + apply targets in rank order, re-detect — an inflationary fixed point sharing
-  the per-face policy + final invariants but not the sequential schedule (may reach a different valid
-  front). Evidence: converges in 2 detection passes / 1 apply round, over-refines the sequential by
-  1–3 tris (≤0.2%). Finally the **deterministic seam-preserving emit** *(branch `cr-vdpm-parallel-emit`)*:
-  `ParallelFront::emitActiveIndices` is the GPU-shaped compaction — per-face survival flag → exclusive
-  prefix sum → stable scatter (no atomic append, so triangle order is preserved) with `nearestWedge`
-  restoration via a CSR wedge adjacency (`mesh_topology::canonicalWedgesCsr`) — proven **byte-identical**
-  to the oracle's emit (indices, order, wedges). **Stage 0 is complete**: scheduling, repair
-  convergence + overhead, and emit are all proven on CPU in CI, with the rank-depth and wedge-ABI
-  evidence reported. **Stage A — indirect draw** *(branch `cr-vdpm-indirect-draw`)* is done too: a
-  Vulkan-free `DrawIndexedIndirectCommand` mirror + `DrawCommand::indirectBuffer`/`indirectOffset`
-  sentinel, a per-instance per-frame host-visible indirect-command buffer CPU-written from the emit
-  count, and the three VDPM draw sites (forward / depth prepass / transmission) routed through
-  `recordIndexedDraw` — shadows keep discrete LOD + direct draw. Mechanical, no behaviour change; it
-  de-risks `drawIndexedIndirect` on MoltenVK (smoke-tested 0 VUID on DamagedHelmet + TransmissionTest
-  via the new `--lod-mode view-dependent` launch flag) before any compute writes that buffer. The GPU
-  port then began. **B1 foundation** *(branch `cr-vdpm-gpu-score`)*: a surface-free `Device`
-  compute mode (no swapchain/present; graphics+compute queue), the per-instance scoring extracted
-  into ONE Vulkan-free authority (`makeVdpmViewParams` / `scoreVdpmSplit`, which `refineForView` now
-  consumes — with a camera-relative affine that reproduces world distance under any linear transform),
-  a corrected conservative σ_max bound (the old power iteration under-estimated an orthogonal shear
-  10×), and the std430 GPU ABI (`ubo.hpp` structs + pack helpers, fully offset-asserted). **B1 GPU
-  scoring** *(branch `cr-vdpm-gpu-score-shader`)*: `shaders/vdpm_score.comp` (typed buffer_reference,
-  reproducing `scoreVdpmSplit`), `VdpmGpuMesh` (shared static splits + positions) + `VdpmGpuFront`
-  (per-instance output + per-frame mapped params), a compute-only `Resources` path, and a `[.][gpu]`
-  readback harness that cross-checks the shader against the CPU authority (scores close, back-face
-  decisions exact) on sphere/synthetic/singular/zero-split cases. **Stage B1 complete.** **B2 emit**
-  *(prep branches `cr-vdpm-gpu-emit-shaders`/scan; passes on `cr-vdpm-gpu-emit-passes`)*: the GPU
-  reproduces `ParallelFront::emitActiveIndices` **byte-identically** from a CPU-uploaded front. A
-  reusable **exclusive-scan** primitive (`VdpmScan`, recursive Blelloch, 256-element blocks) and
-  precomputed **wedge choices** (`buildWedgeChoices` — the CPU's `nearestWedge` decision per (original
-  vertex, ancestor depth), so restoration is pure integer indexing and byte-identity is *structural*,
-  not float-dependent) plus a collapsed **removal-parent** chain feed four passes: ancestor resolution
-  (bounded removal-parent walk → active ancestor + depth, one atomic failure counter), per-face
-  survival (three distinct, non-failed ancestors), the scan (→ stable per-face output slot + surviving
-  total), and a stable scatter (restored-wedge corners in original face order — no atomic append) +
-  a one-invocation finalize (index count = 3·survivors). `VdpmGpuMesh` gained the static emit data
-  (indices/weld/removal-parent/wedge CSR, index-range-validated); `VdpmGpuFront::recordEmit` clears a
-  single 3-uint counters buffer once and records the passes with compute→compute barriers. The
-  `[.][gpu]` harness proves byte-identity (indices, order, wedges) across coarsest/partial/full/repaired
-  fronts on sphere + per-corner-seamed grid, plus determinism, an empty mesh, an all-faces-collapse
-  front (faceCount > 0), and a deepest-chain fixture pinning the ancestor bound's off-by-one.
-  `VdpmGpuMesh::fitsComputeDispatchLimits` is the B5 backend selector's GPU-eligibility gate (static
-  dispatch counts vs the 1-D group cap, checked BEFORE allocation so the selector can pick the CPU
-  fallback); `build` enforces the same bound. **Stage B2 complete.** **B3 refine/coarsen** *(prep
-  branch `cr-vdpm-dag-dependencies` — the DAG dependency triple + a shared `validateFrontInvariants`;
-  then `cr-vdpm-gpu-refine-coarsen`)*: the persistent front STATE (active/refined/dependents/required,
-  device-resident uint32) is updated by rank-ordered compute dispatches — the port of
-  `ParallelFront::applyView`, matched INTEGER-EXACT to it. Four passes (`shaders/vdpm_mark` seeds the
-  refine predicate `backface==0 && max(4 channels) > budget` from the production `VdpmScoreOut`;
-  `vdpm_close` closes requiredness over the DAG one rank per dispatch, DESCENDING, via atomic-OR;
-  `vdpm_refine` applies ASCENDING, atomic-adding `dependents` per vertex-slot; `vdpm_coarsen` collapses
-  DESCENDING) around a **shared `recordCloseAndRefineRequired`** that owns its boundary barriers (so
-  B4's repair round reuses it). A GPU **invariant-failure flag** (refine-with-inactive-dependency /
-  dependents underflow) the harness asserts stays 0. `VdpmFrontSplitGpu` (32 B) carries the vertex +
-  dependency-split slots; `rankOffsets` stays CPU-side driving per-rank `(offset,count)` push
-  constants. The `[.][gpu]` harness cross-checks active/refined/dependents element-exact vs the CPU
-  model + `validateFrontInvariants` across moving-view / per-channel / diamond / deep-chain /
-  hot-cold / back-facing / back-to-back / single-rank+empty fixtures. **Evidence** (`[B3Evidence]`):
-  per instance-frame = `1 + 3(maxRank+1)` dispatches — sphere(24,32) maxRank 18 ⇒ 58; a deep flat
-  grid(65) maxRank 312 ⇒ **940** — so B5 must weigh batching same-mesh instances by rank (or a work
-  queue) for deep forests; helmet rank counts ride render integration. **Stage B3 complete.** **B4
-  repairs** *(branch `cr-vdpm-gpu-repair`)*: the GPU foldover ∪ coverage repair — the snapshot analogue
-  of `ParallelFront::repairFront`, run after `applyView` settles the front. Each round: clear `required`
-  → the **shared ancestor resolve** (factored out of `recordEmit`, one resolve/canonical-vertex against
-  the live front) → **detect** (`shaders/vdpm_repair_detect.comp`, a faithful port of
-  `detail::isFoldover` + `detail::classifyCoverageRepair` — world-space winding + screen-space coverage,
-  marking each violation's inactive-corner removing split) → the shared `recordCloseAndRefineRequired`.
-  Because the classifiers are screen-space FP, the contract is the P2 one, not integer-exact: after
-  repair the GPU front has **zero CPU-classified foldovers + zero coverage failures**, valid invariants,
-  no GPU failure/ancestor flags, and emitted triangles ≤ full detail. Convergence is GPU-resident with
-  no per-round readback: a **bounded round budget** then a final detect + a **full-detail fallback**
-  (`vdpm_repair_fallback.comp` — if a violation still remains it seeds every unrefined split and refines
-  to full detail, always hole-free; a `repairFallbackToFullDetail` diagnostic). A repair-control buffer
-  `{anyMarked, ancestorFailure, fallbackFired}` is SEPARATE from B3's failFlags. Sync: a leading
-  compute→(compute|clear) barrier + the per-round compute→eClear→compute reset. `VdpmRepairParams`
-  (world/viewProj/camera/viewport) uploads per repair; `canonicalFaces` + `removingSplit` join the full
-  build. The `[.][gpu]` harness proves the contract on sphere/grid, DIRECT per-face classification
-  readback matching the CPU classifiers **exactly** across mixed fronts (all branches), and the fallback
-  (tiny budget → fires → still hole-free). **Stage B4 complete.** **B5a — combined runtime front**
-  *(branch `cr-vdpm-gpu-runtime`)*: the production-shaped unit B5b wires in. `VdpmGpuFront::buildRuntime`
-  combines the whole lifecycle in one front — scoring + persistent refine/coarsen state + repair
-  scratch + emit workspace — with the DRAW-CONSUMED outputs (emitted index buffer, indirect command,
-  counters) + host-written repair params RINGED per frame-in-flight (persistent front per instance,
-  transient output per slot). Two GPU data seams remove the host round-trip: `recordApplyScoredView`
-  reads the front's OWN score output (the mark/coarsen reduction `max(4 channels)` already matches, so
-  `recordScore`'s output feeds them directly), and `recordEmitFromFront(frameIndex)` reads the live
-  refine/coarsen state into a ring slot (the emit + apply bodies were factored into shared
-  `record*Impl` recorders so a raw device address is never public). The emit finalize now writes the
-  full 5-word `VkDrawIndexedIndirectCommand` (all fields every frame, incl. the zero-face case).
-  `recordFrame(frameIndex, …)` chains score → apply-scored → repair → emit GPU-only. Local `[.][gpu]`
-  harness: OFF-THRESHOLD (cull-off, tiny budget) exact front + emit vs the CPU lifecycle; GENERAL valid
-  hole-free front + emitted ≤ finest + clean diagnostics + the 5 indirect words + `indexCount ==
-  counters[2]`; and two frames back-to-back (no CPU wait) proving the ring keeps distinct slot outputs.
-  **Stage B5a complete.** **B5b-1 — registration + live compute, CPU output still drawn**
-  *(branch `cr-vdpm-gpu-render-1`)*: a Vulkan-free registration seam (`graphics/vdpm_gpu_registry.hpp`
-  — the `VdpmGpuRegistry` interface, the generational `VdpmMeshHandle`/`VdpmFrontHandle` in
-  `gpu_handle.hpp`, the semantic `VdpmWorkRequest`) implemented by `render::VdpmGpuManager`, which owns
-  the reusable pipeline bundles + `GenerationalSlotPool`-keyed per-geometry mesh / per-instance front
-  tables and is built by the Renderer **only** past the `VdpmScan::deviceSupported` check (unsupported →
-  null, CPU front stays usable, construction never fails; per-mesh dispatch-limit ineligibility falls
-  back, logged once). The load path threads the registry (`GltfLoader::loadScene` → `Geometry::load`
-  registers the shared forest once → `Object::load` creates the per-instance front). Each frame the
-  Renderer sets the sink + selector on `FrameInfo`; `Object` tags each camera-visible forward
-  `DrawCommand` with its front handle and appends a `VdpmWorkRequest`; the Renderer filters the sink to
-  fronts whose forward draw survived the camera cull (shadow-only instances never run compute), dedups
-  by handle, and records `recordRequests` after `collectDrawCommands`. The compute was a **shadow run** —
-  the CPU front still emitted the drawn buffers. **B5b-2 flipped the draw to the GPU output**
-  *(branch `cr-vdpm-gpu-render-2`)*: a GPU-backed instance (backend selected + live front) SKIPS the CPU
-  `refineForView`/`repairFront`/`emitActiveIndices` lifecycle in `writeForwardUniforms` (the per-instance
-  CPU cost this arc set out to retire); `buildDrawCommands` tags the forward `DrawCommand` + sets
-  `indexType UInt32` / `indexCount 0`; the Renderer resolves each tag to the GPU-emitted index+indirect
-  ring via `VdpmGpuManager::resolveDrawBuffers` (one lookup, THROWS on an unresolvable tag — a
-  zero-`indexCount` draw must never slip through) and points the draw at it (`recordIndexedDraw`
-  unchanged); the compute→(index+indirect read) barrier is delayed to just before the depth prepass, after
-  the shadow pass (which overlaps the compute). Per-mesh fallback keeps the CPU path; stale CPU stats for
-  GPU instances are suppressed via `vdpmCpuRanThisFrame` until B5c. **Default CPU** selector retained.
-  Verified 0-VUID drawing GPU output on the helmet (opaque+prepass) + TransmissionTest (13 fronts,
-  transmission); CPU path unaffected; `[.][gpu]` manager test extended with the resolve-or-throw contract.
-  Still ahead: **B5c** — completed-frame delayed triangle/repair diagnostics, the deferred helmet
-  wedge/rank-count evidence (Vulkan glTF path), and a possible default flip to GPU after visual parity +
-  zero-VUID + no unexpected fallbacks.
-- ✅ **Static GPU residency** — device-local static asset upload split from dynamic mapped buffers.
-  Landed in block B (`createDeviceLocalBuffer` for static vertices/indices/LODs/VIPM), and the batching
-  follow-up is now done too *(branch `cr-static-residency-batch`)*: when a load-time `uploadBatch_` is
-  open, `createDeviceLocalBuffer` records its staging copy into the batch's shared command buffer and
-  retains the staging buffer, so the whole scene's buffer **and** texture uploads ride one submit +
-  fence instead of a per-buffer stall. Outside a batch it still submits immediately.
-- ✅ **Capability-driven device setup** *(branch `cr-capability-driven-device`)* — the required
-  features are now **one** `kRequiredFeatures*` table per feature struct (`{pointer-to-member, name}`
-  entries) that drives *both* `missingDeviceCapabilities` (the suitability check) and
-  `createLogicalDevice` (the enable-chain) via generic `collectMissingFeatures` / `enableFeatures`
-  helpers — so the check and enable lists can no longer drift. Descriptor-indexing *limits* stay a
-  separate properties check (no enable counterpart). Verified: build clean, device still suitable, 0
-  VUID render smoke.
+- **Texel-density UV budget** for the UV channel.
+- **Retiring the per-frame repair sweeps.** The visibility cones provably *cannot* (coverage is
+  screen-space, foldover topological) and the GPU front made them cheap rather than unnecessary; a
+  real retirement needs a representation-level guarantee. **Trigger:** repair becomes the measured
+  bottleneck again.
+- **The 7 forest skips + the non-zero repair floor on the real helmet** — genuinely non-manifold
+  welded edges are isolated as roots today; a per-wedge representation would remove the residual.
+- **Coarsest-level seam shift** — needs full per-wedge attribute quadrics. Real machinery,
+  diminishing returns.
+- **Discrete `selectLod` lacks instance-scale bounding** — VDPM got the `worldLengthScale` fix
+  (metric step 4); the discrete path still projects object-space error against world distance.
+  **Trigger:** picked up naturally by SH-02, which needs exactly this bound for shadow views.
+- **Multi-front emit compaction** — the only remaining dispatch lever (emit is a measured ~17–56% of
+  the GPU lifecycle). Apply+repair **fusion was measured and skipped** (0 ms reclaimable tail on the
+  proxy; same front is critical path in both stages). **Trigger:** a scene with many fronts where
+  emit dominates.
 
----
-
-## Design-review revisits — trigger-based
+### Architecture
 
 - **Character-controller as a scene component** (P7 decision). Today `CharacterController` is a
   `physics/` engine class driven from the main loop, **not** a scene `Components` variant — a variant
   `update(InputState, Transform)` has no `PhysicsWorld` access, and the controller *is* a world query,
-  so making it a component would force `PhysicsWorld` into the Vulkan-free scene layer. **Revisit when**
-  a 2nd consumer appears (authored character nodes / NPCs): the clean upgrade is a small
-  `SceneUpdateContext { const InputState&; PhysicsWorld*; }` threaded into component updates — *not* a
-  per-component back-pointer.
+  so making it a component would force `PhysicsWorld` into the Vulkan-free scene layer. **Trigger:**
+  a 2nd consumer (authored character nodes / NPCs). The clean upgrade is a small
+  `SceneUpdateContext { const InputState&; PhysicsWorld*; }` threaded into component updates — *not*
+  a per-component back-pointer.
+- **"The renderer records everything, every frame"** ([`architecturalreview.md`](architecturalreview.md)
+  §5.1) — the general epoch/frame-graph question. Arc 2 #4 is the first concrete slice; the wider
+  rewrite is parked until render cost is actually the constraint.

@@ -461,8 +461,10 @@ LOD modes.
 The discrete → VIPM → VDPM ladder is complete; VDPM matches the discrete mesh's silhouette and shading
 at a fraction of the triangles. The remaining residuals and follow-ons, in rough priority:
 
-- **Metric fidelity (active arc).** The four-channel metric is correct in shape but not yet a fully
-  reliable perceptual bound. Progress:
+- ✅ **Metric fidelity (arc complete, steps 1–7).** The four-channel metric was correct in shape but
+  not a reliable perceptual bound; the seven steps below closed that. Parked follow-ons (texel-density
+  UV budget, the discrete `selectLod` instance-scale gap) are listed under **Parked** below and in
+  [`roadmap.md`](roadmap.md). Progress:
   - **Step 1 — instrumentation (done).** Per-channel refine attribution (`ActiveFront::channelStats()`
     + the overlay "VDPM splits" line) exposes which channel drives each split; a `[!shouldfail]`
     scale-invariance test pins the invariant before the metric changes.
@@ -544,8 +546,9 @@ at a fraction of the triangles. The remaining residuals and follow-ons, in rough
   Refinement of Progressive Meshes*, SIGGRAPH 97, §4.)
 - **Parked:** texel-density UV budget; a GPU worklist/fixpoint (or representation-level guarantee) for
   the repair sweeps, which the cone cannot subsume.
-- 🔨 **GPU-driven active front (in progress).** `refineForView` + the repairs are CPU today. The whole
-  per-frame front lifecycle (score → refine/coarsen → both repairs → emit) has to move to the GPU as a
+- ✅ **GPU-driven active front (arc complete — Stage 0 → B5c-4; the GPU front is the default wherever
+  the device supports it, with the CPU front as oracle + per-mesh fallback).** The whole
+  per-frame front lifecycle (score → refine/coarsen → both repairs → emit) had to move to the GPU as a
   unit — a partial move round-trips the shared front state and erases the win — with an indirect draw
   (the CPU no longer knows the index count). The CPU `vdpm` stays the headless-tested oracle + fallback
   (the `cloth` CPU-ref ↔ `render/` GPU-impl pattern). **Stage 0 (`graphics/vdpm_parallel`, COMPLETE):**
@@ -749,7 +752,7 @@ at a fraction of the triangles. The remaining residuals and follow-ons, in rough
   can still diverge from the CPU oracle at thresholds). **Measured (helmet, R=18): CPU record 2.1 → 0.26 ms
   (~8×), GPU compute ~17.5 → ~2.4 ms (~7×), 1014 → 64 dispatches** — single-workgroup occupancy did NOT cap
   the win.
-- 🔨 **Apply persistent-kernel arc (in progress) — checkpoint 0 done.** After Stage 3 moved the
+- ✅ **Apply persistent-kernel arc — checkpoint 0 (the instrumentation that steered it).** After Stage 3 moved the
   bottleneck, `recordFrame` gained opt-in per-stage timing (CPU `steady_clock` around each of
   score/apply/repair/emit + GPU bottom-of-pipe boundary timestamps into new `ProfilePass::Vdpm{Score,
   Apply,Repair,Emit}`, written only when a SINGLE front records — the query slots are one-shot; a null
@@ -904,7 +907,9 @@ at a fraction of the triangles. The remaining residuals and follow-ons, in rough
   render_tunables.hpp / frame_info.hpp / object.cpp) are cleared. Unsupported devices and per-mesh
   ineligibility still fall back to the CPU front; the overlay checkbox toggles at runtime. **This
   completes the GPU-driven-front productionization arc (B5b → B5c).**
-- NEXT: the remaining post-VDPM code-review backlog (`roadmap.md`).
+- NEXT: see [`roadmap.md`](roadmap.md) — the post-VDPM review backlog is cleared; the live arcs are
+  shadow LOD ([`shadowplans.md`](shadowplans.md)), the architectural-review remainder, and the tiered
+  static review.
 - **7 forest skips.** `buildVertexForest` skips collapses whose edge diverged from its adjacency
   replay (7 of ~6800 on the helmet); past the first skip the forest is slightly unfaithful. The repairs
   cover the visible symptoms; truncating the stream at the first skip would be the clean structural fix.

@@ -353,11 +353,19 @@ extracting frustums for *identity* matrices (inactive slots) to get "harmless de
 frustums" does real work to add nothing — skipping slots not currently active (the counts
 are known: `activeSpotCasters_`, `activePointCasters_`, self-shadow slot count) is free.
 
-**5.4 [C] Two review docs now exist.** `docs/codereview.md` (the post-VDPM static review)
-and this file overlap in genre. Recommend treating `codereview.md` as the closed historical
-record and this file as the living architectural review, or folding surviving items from
-both into `roadmap.md` and retiring the reviews once actioned — whichever, make the
-relationship explicit so items don't fork.
+**5.4 [C] Two review docs now exist.** `docs/codereview.md` and this file overlap in genre.
+Recommend making the relationship explicit so items don't fork, and folding the surviving
+items of both into `roadmap.md`.
+
+✅ *Resolved in [`roadmap.md`](roadmap.md) § How the review docs relate.* The split is:
+`codereview.md` is the **rolling tiered static review** that walks the
+[`review-order.md`](review-order.md) tiers (Tier 0 math, 18 Jul 2026; Tier 1 handles/limits/
+tunables, 19 Jul 2026; further tiers expected) — all of its findings are open, tracked as the
+roadmap's arc 3. This file is the **dated architectural review**, and its §6 table below stays
+the status of record for its own findings. `roadmap.md` indexes the open items of both and
+carries no landed work. *(An earlier draft of this finding described `codereview.md` as "the
+post-VDPM static review" — that was a different, now-cleared review whose file no longer
+exists; the tiered review inherited the filename.)*
 
 ---
 
