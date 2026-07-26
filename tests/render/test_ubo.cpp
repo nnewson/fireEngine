@@ -378,6 +378,11 @@ TEST_CASE("UBO.ForwardPushConstantsDefaultsToNoSelfShadowSlot", "[UBO]")
 {
     ForwardPushConstants pc{};
     CHECK(pc.selfShadowSlot == -1);
+    // Absent an explicit decision a draw reports NO shadow level, never level 0 — the shader's
+    // ShadowLod tint must not colour an untouched draw as "full detail chosen".
+    CHECK(pc.shadowLodLevel == fire_engine::kNoShadowLod);
+    // shadowLodLevel took over the trailing explicit padding, so the struct's size (and the
+    // pipeline layout's push-constant range) is unchanged.
     CHECK(sizeof(ForwardPushConstants) == 16u);
 }
 

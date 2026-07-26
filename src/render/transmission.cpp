@@ -59,11 +59,9 @@ void recordTransmissionDrawBucket(vk::CommandBuffer cmd, std::span<const DrawCom
                                    resources.vulkanPipelineLayout(dc.pipeline), 2,
                                    resources.bindlessDescriptorSet(), {});
         }
-        ForwardPushConstants pc{};
-        pc.selfShadowSlot = dc.selfShadowSlot;
-        pc.materialIndex = dc.materialIndex;
         cmd.pushConstants<ForwardPushConstants>(resources.vulkanPipelineLayout(dc.pipeline),
-                                                vk::ShaderStageFlagBits::eFragment, 0, pc);
+                                                vk::ShaderStageFlagBits::eFragment, 0,
+                                                makeForwardPushConstants(dc));
         recordIndexedDraw(cmd, dc, resources);
     }
 }

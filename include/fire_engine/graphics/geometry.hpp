@@ -130,14 +130,11 @@ public:
         return vdpmMeshHandle_;
     }
 
-    [[nodiscard]] bool castsShadow() const noexcept
-    {
-        return castsShadow_;
-    }
-    void castsShadow(bool value) noexcept
-    {
-        castsShadow_ = value;
-    }
+    // NOTE: shadow eligibility is deliberately NOT here. A Geometry is SHARED by every
+    // instance that draws it (the glTF loader creates one per mesh, not per node), so a flag
+    // on it could not describe two instances of the same mesh that differ — one node's
+    // authoring would silently rewrite another's. It lives per instance on
+    // Object::GeometryBindings; see Object::addGeometry.
 
     // When set, load() allocates the vertex buffer with storage usage so the
     // soft-body compute solver can write it in place each frame (cloth meshes).
@@ -199,7 +196,6 @@ private:
     BufferHandle morphBuffer_{NullBuffer};
     std::vector<MeshCollapse> collapses_;
     VdpmMeshHandle vdpmMeshHandle_{NullVdpmMesh};
-    bool castsShadow_{true};
     bool storageVertices_{false};
 };
 

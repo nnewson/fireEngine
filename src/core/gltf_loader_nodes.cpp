@@ -300,7 +300,12 @@ Mesh& GltfLoader::GltfSceneBuilder::attachMeshToNode(std::size_t nodeIndex, std:
                                                      Node& meshNode, Node& physicsNode)
 {
     const auto& gltfMesh = context_.asset.meshes[meshIndex];
-    auto object = loadMesh(gltfMesh, meshIndex);
+    // `extras.Shadow.Casts` is authored per NODE and stays per node: it rides into this
+    // instance's Object binding, never onto the shared Geometry. Two nodes instancing one
+    // mesh with opposite settings are both honoured.
+    const auto authored = context_.shadowCastsNodes.find(nodeIndex);
+    const bool castsShadow = authored == context_.shadowCastsNodes.end() ? true : authored->second;
+    auto object = loadMesh(gltfMesh, meshIndex, castsShadow);
     meshNode.component().emplace<Mesh>(std::move(object));
 
     auto& mesh = std::get<Mesh>(meshNode.component());

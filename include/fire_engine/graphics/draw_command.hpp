@@ -92,8 +92,8 @@ struct DrawCommand
     uint32_t materialIndex{0};
     // Selected discrete LOD level for this draw (0 = full mesh). Used by the LOD debug tint and, on
     // a shadow command, by the SH-01 per-view LOD histogram. A shadow command is COPIED from its
-    // forward command, so it must reset this and re-derive it for the shadow selection — inheriting
-    // the forward level would report the wrong mesh entirely (and in VDPM mode a spurious 0).
+    // forward command, so it must OVERWRITE this from its own selection — inheriting the forward
+    // level would report the wrong mesh entirely (and in VDPM mode a spurious 0).
     uint32_t lodLevel{0};
     // Why `lodLevel` is what it is — recorded at the decision, never reconstructed from the level
     // (level 0 deliberately selected and level 0 forced are different facts). Shadow commands only;
@@ -104,6 +104,12 @@ struct DrawCommand
     // trips `addLodReason`'s assert instead of quietly manufacturing valid-looking evidence. The
     // shadow branch's three cases are exhaustive, so a real shadow command always overwrites it.
     ShadowLodReason shadowLodReason{ShadowLodReason::Count};
+    // The level this mesh's SHADOW draw selected, mirrored onto the FORWARD command so the
+    // ShadowLod debug view can tint a shaded surface by the geometry its shadow used — shadow draws
+    // are depth-only and never reach a fragment shader that could tint anything. `kNoShadowLod`
+    // when the mesh casts no shadow this frame. Meaningless on a shadow command itself (there,
+    // `lodLevel` is the real answer); the two are set from one decision, so they cannot disagree.
+    uint32_t shadowLodLevel{kNoShadowLod};
     Bounds3 shadowBounds{};
     Mat4 selfShadowViewProj{Mat4::identity()};
     // Indirect draw (rendering-spine #3, GPU-driven-front Stage A). When `indirectBuffer` is not

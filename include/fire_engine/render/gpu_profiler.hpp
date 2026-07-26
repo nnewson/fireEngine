@@ -64,6 +64,32 @@ inline constexpr std::array kProfilePassNames{
 static_assert(kProfilePassNames.size() == kProfilePassCount,
               "every ProfilePass needs a display name, in enum order");
 
+// The timing row that covers a shadow view family's raster work. The single mapping between the
+// two SH-01 halves — the counters keyed by ShadowViewGroup and the timestamps keyed by ProfilePass
+// — so the overlay cannot print one family's triangles beside another's milliseconds. The recorder
+// (`shadows.cpp`) brackets exactly these spans.
+[[nodiscard]] constexpr ProfilePass shadowProfilePass(ShadowViewGroup group) noexcept
+{
+    switch (group)
+    {
+    case ShadowViewGroup::Cascade:
+        return ProfilePass::ShadowCascades;
+    case ShadowViewGroup::WorldOnly:
+        return ProfilePass::ShadowWorldOnly;
+    case ShadowViewGroup::Self:
+        return ProfilePass::ShadowSelf;
+    case ShadowViewGroup::Spot:
+        return ProfilePass::ShadowSpot;
+    case ShadowViewGroup::Point:
+        return ProfilePass::ShadowPoint;
+    case ShadowViewGroup::Count:
+        break;
+    }
+    // `Count` is a bound, not a family. Returning ProfilePass::Count keeps that honest — a caller
+    // that reaches here has no timing row to show, rather than silently borrowing another family's.
+    return ProfilePass::Count;
+}
+
 // Whether a pass's time belongs in the frame total. The four VDPM breakdown rows are SUBRANGES of
 // VdpmCompute, so summing them alongside it double-counts that work; every other pass is a disjoint
 // span and contributes. Pure, so the overlay and any future consumer share one policy.

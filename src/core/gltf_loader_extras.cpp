@@ -334,6 +334,46 @@ GltfLoader::nodeExtrasPhysics(simdjson::dom::object* extras)
     return config;
 }
 
+std::optional<bool> GltfLoader::nodeExtrasShadowCasts(simdjson::dom::object* extras)
+{
+    if (extras == nullptr)
+    {
+        return std::nullopt;
+    }
+
+    simdjson::dom::object shadowObject;
+    auto shadowElement = extras->at_key("Shadow");
+    if (shadowElement.error() == simdjson::NO_SUCH_FIELD)
+    {
+        return std::nullopt;
+    }
+    if (shadowElement.get_object().get(shadowObject) != simdjson::SUCCESS)
+    {
+        throw std::runtime_error("glTF Shadow extras must be an object");
+    }
+
+    // `Casts` is the only key, and it is required: an empty `Shadow: {}` means the author
+    // asked for something the engine then silently didn't do. Say so instead.
+    if (shadowObject.at_key("Casts").error() == simdjson::NO_SUCH_FIELD)
+    {
+        throw std::runtime_error("glTF Shadow extras must contain Casts");
+    }
+    // Any OTHER key is rejected rather than ignored. `Receives` is the obvious one to reach
+    // for, and nothing implements it — accepting it would tell the author their surface stops
+    // receiving shadows when it does not. Unlike the physics blocks, which have many optional
+    // fields, this block is closed.
+    for (auto field : shadowObject)
+    {
+        if (field.key != "Casts")
+        {
+            throw std::runtime_error("glTF Shadow extras has no key '" + std::string(field.key) +
+                                     "' (only Casts is supported)");
+        }
+    }
+    const ExtrasReader reader{shadowObject, "Shadow"};
+    return reader.readBool("Casts", true, "Casts");
+}
+
 std::optional<ClothMeshParams> GltfLoader::nodeExtrasCloth(simdjson::dom::object* extras)
 {
     if (extras == nullptr)
