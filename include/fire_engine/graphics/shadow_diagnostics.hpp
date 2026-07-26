@@ -40,6 +40,13 @@ enum class ShadowLodReason : std::uint8_t
 inline constexpr std::size_t kShadowLodReasonCount =
     static_cast<std::size_t>(ShadowLodReason::Count);
 
+// "This draw reports no shadow level." Carried on a FORWARD draw (and into its push constants) for
+// the ShadowLod debug view, which tints a shaded mesh by the level its depth-only shadow draw
+// picked. A mesh that casts no shadow this frame has no level to report, and level 0 would be a
+// lie — it would read as "full detail chosen" in exactly the view built to find over-detailed
+// shadow casters. The shader mirrors this value; keep the two in lockstep.
+inline constexpr std::uint32_t kNoShadowLod = 0xFFFFFFFFu;
+
 [[nodiscard]] std::string_view toString(ShadowLodReason reason) noexcept;
 
 // The five shadow view families, each timed and counted separately.

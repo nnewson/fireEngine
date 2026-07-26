@@ -7,8 +7,9 @@
 namespace fire_engine
 {
 
-Swapchain::Swapchain(const Device& device, const Window& window)
-    : device_(&device.device())
+Swapchain::Swapchain(const Device& device, const Window& window, bool allowCapture)
+    : device_(&device.device()),
+      allowCapture_(allowCapture)
 {
     createSwapchain(device, window);
     createImageViews();
@@ -69,6 +70,22 @@ void Swapchain::createSwapchain(const Device& device, const Window& window)
     auto mode = chooseSwapPresentMode(device);
     auto extent = chooseSwapExtent(window, caps);
 
+    // Frame capture copies the presented image out, which needs TRANSFER_SRC. Ask for it only
+    // when capture was requested, and only after the surface says it supports it — a driver that
+    // doesn't must fail here with a clear reason, not hand back a swapchain the copy will trip
+    // validation on later.
+    vk::ImageUsageFlags usage = vk::ImageUsageFlagBits::eColorAttachment;
+    if (allowCapture_)
+    {
+        if (!(caps.supportedUsageFlags & vk::ImageUsageFlagBits::eTransferSrc))
+        {
+            throw std::runtime_error(
+                "--capture requires swapchain TRANSFER_SRC usage, which this surface does not "
+                "support");
+        }
+        usage |= vk::ImageUsageFlagBits::eTransferSrc;
+    }
+
     uint32_t imgCount = caps.minImageCount + 1;
     if (caps.maxImageCount > 0)
     {
@@ -95,7 +112,7 @@ void Swapchain::createSwapchain(const Device& device, const Window& window)
         .imageColorSpace = fmt.colorSpace,
         .imageExtent = extent,
         .imageArrayLayers = 1,
-        .imageUsage = vk::ImageUsageFlagBits::eColorAttachment,
+        .imageUsage = usage,
         .imageSharingMode = concurrent ? vk::SharingMode::eConcurrent : vk::SharingMode::eExclusive,
         .queueFamilyIndexCount = concurrent ? 2u : 0u,
         .pQueueFamilyIndices = concurrent ? families : nullptr,

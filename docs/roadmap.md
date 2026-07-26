@@ -39,12 +39,16 @@ the plan; the priority order is its § Suggested priority.
 
 **Milestone 0 — evidence before policy**
 - **SH-01** — shadow diagnostics (per-group GPU time, draw/triangle counts, per-view LOD histograms,
-  projected-deviation estimate, LOD0-fallback reasons, a shadow-LOD debug view) + a purpose-built
-  owned glTF acceptance scene, recorded in [`acceptance-testing.md`](acceptance-testing.md).
+  LOD-selection reasons, a shadow-LOD debug view) + a purpose-built owned glTF acceptance scene,
+  recorded in [`acceptance-testing.md`](acceptance-testing.md). The **projected shadow-texel
+  deviation** moved to SH-02, which defines the metric: SH-01 can only report the level that was
+  chosen and what it cost, not how wrong it was.
 
 **Milestone 1 — correct discrete shadow LOD**
 - **SH-02** — the pure, Vulkan-free shadow-view projection model (`ShadowView`, per-cut shadow
   deviation metric, `projectShadowErrorTexels`, `selectShadowLod`, hysteresis), headless-tested.
+  Owns the **projected shadow-texel deviation** SH-01 could not define, and with it the numerical
+  silhouette bound SH-01's reference images are the baseline for.
 - **SH-03** — thread per-shadow-view discrete LOD through the renderer (the requested architectural
   fix: one caster may select different levels for different shadow views).
 - **SH-04** — deformation / proxy policy (skinned, morphed, cloth: no invalid error claims, explicit

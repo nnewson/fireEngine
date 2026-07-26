@@ -198,12 +198,16 @@ Add diagnostics before changing selection:
 - shadow GPU time split into directional, world-only, self, spot, and point groups;
 - submitted and surviving draw/triangle counts per group and cascade/face;
 - per-view LOD histograms;
-- maximum projected LOD shadow-deviation estimate in shadow texels;
-- LOD0 fallback counts by reason; and
+- LOD-selection reasons, recorded at the decision (selected / LOD disabled / single-level); and
 - a debug view that identifies the selected shadow LOD independently of the forward LOD.
 
 The current single `ProfilePass::Shadow` total cannot say whether a change moved cost between
 cascades, punctual lights, or self-shadowing.
+
+**Projected shadow-texel deviation belongs to SH-02, not here.** SH-01 can honestly report which
+level a view rasterised and what it cost; it cannot say how wrong that level was, because the metric
+that would answer it — per-cut shadow deviation projected into shadow-map texels — is the thing
+SH-02 defines. Reporting a number before then would mean inventing one.
 
 Create a small owned glTF acceptance scene instead of relying only on sample assets. It should
 contain:
@@ -217,9 +221,30 @@ contain:
 - an alpha-masked cutout and a double-sided sheet; and
 - a recognisable high-detail silhouette at several distances.
 
-Record fixed camera/light poses in `docs/acceptance-testing.md` when the scene lands. Capture a
-full-detail reference and compare shadow masks or screenshots at the same poses. The acceptance
-criterion is a bounded silhouette displacement, not merely “looks similar”.
+**Split the static baseline from the motion check.** `assets/shadow_lod/generate.py` emits two files:
+`ShadowLodDemo.gltf` is entirely static, so its authored poses make overlay numbers and screenshots
+reproducible run to run; `ShadowLodMotionDemo.gltf` adds the moving caster, swinging sun, swinging
+skinned limb and pulsing morph. An animated frame has no reproducible timestamp, so the motion file
+is a qualitative "no chatter, no flicker" loop, never a screenshot reference. Fixed poses live in
+[`acceptance-testing.md`](acceptance-testing.md).
+
+SH-01's captures are the **measurement baseline** — the record of what the engine does today, taken
+before any selection change. They are not yet an acceptance gate: the criterion "a bounded
+silhouette displacement, not merely *looks similar*" needs a bound, and the bound is a shadow-texel
+number SH-02 defines. When SH-02 lands, these images become the reference the bound is measured
+against.
+
+**Known exposures the baseline records, each labelled by the item that owns the fix.** They are
+present in the scene deliberately: a scene that only contained cases the engine already handles
+would certify nothing.
+
+| Observed today | Owner |
+|---|---|
+| Every shadow view rasterises the level the **camera** picked; one command is replayed into all of them | **SH-03** |
+| Skinned and morphed casters select simplified levels like any rigid mesh — there is no deformation fallback, and their error claims are unverified | **SH-04** |
+| The alpha-masked cutout casts a solid silhouette — `shadow.frag` samples no texture, so the mask has no effect on its shadow | **SH-05** |
+| The double-sided sheet casts nothing at all: it is authored face-on to the sun, and the shadow pipeline fixes `cullMode = eFront` while the forward pass draws both sides of a double-sided material, so the shadow pass culls the only faces it has. The verdict is per-light — a punctual light on the quad's *back* side keeps exactly the faces the sun's view culls, so the same quad would cast a grazing sliver from it; the scene places both flat quads out of punctual reach so this second effect doesn't sit on top of the first | **SH-05** |
+| Node scale (including the non-uniform caster) does not participate in a projected-texel policy, because there is no such policy yet | **SH-02** |
 
 Likely branch: `shadow-lod-diagnostics`.
 

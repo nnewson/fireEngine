@@ -79,7 +79,10 @@ Object::writeForwardUniforms()            [per draw, per frame]
 - **Select** — `selectLod` (`include/fire_engine/graphics/lod.hpp`, header-only, headless-testable)
   runs in `Object`'s draw-build (`src/graphics/object.cpp`) using `FrameInfo`'s camera position,
   `proj[1][1]`, and viewport height. It sets the chosen level's `indexBuffer`/`indexCount` on the
-  `DrawCommand`, plus `lodLevel` (used only by the LOD-tint debug view).
+  `DrawCommand`, plus `lodLevel` (used only by the LOD-tint debug view). A caster's *shadow* level is
+  chosen by the same call in a separate `chooseShadowLod` step, staged before either command is
+  pushed so the shadow draw binds it and the forward draw carries it (`shadowLodLevel`,
+  `kNoShadowLod` for a non-caster) for the Shadow-LOD tint.
 - **Morph** — `selectVipm` (`include/fire_engine/graphics/vipm.hpp`) uses the same screen-space
   selection curve as `selectLod`, but returns the next exact LOD level and a 0→1 factor. The vertex
   shader morphs only vertices whose `collapseLevel` equals that target level.
@@ -409,6 +412,13 @@ budget slider + a live "Triangles drawn" readout from `FrameStats::trianglesDraw
 **"LOD tint"** debug view (`DebugView::Lod`, view index 7) colours each mesh by its selected level —
 green LOD0 / yellow LOD1 / red LOD2 / magenta 3+ — via the per-draw `lodLevel` threaded through
 `ForwardPushConstants` into `shader.frag`. Toggling LOD off (all green, full mesh) is the A/B.
+
+**"Shadow LOD tint"** (`DebugView::ShadowLod`, view index 8) is the same palette applied to
+`shadowLodLevel` — the level the mesh's *shadow* draw selected — plus neutral grey for a mesh that
+casts no shadow (`kNoShadowLod`, never LOD0 green, which would read as "full detail chosen"). Both
+levels reach the shader through one packer, `makeForwardPushConstants` in `render/descriptors.cpp`;
+build push constants there, not at a recording site, or a pass drifts (the transmission recorder
+used to omit `lodLevel`, so every transmissive draw tinted as LOD0).
 
 Confirm behaviour by backing the camera off or cranking the pixel error budget slider: the tint should step
 green → yellow → red and the triangle count should drop.

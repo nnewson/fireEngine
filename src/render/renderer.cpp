@@ -156,7 +156,7 @@ Mat4 fitSelfShadowMatrix(const Bounds3& bounds, Vec3 lightDir) noexcept
 
 Renderer::Renderer(const Window& window, std::string environmentPath, RendererDebug debug)
     : device_(window, debug.requireValidation),
-      swapchain_(device_, window),
+      swapchain_(device_, window, !debug.capturePath.empty()),
       pipelineOpaque_(device_, Pipeline::forwardConfig()),
       pipelineBlend_(device_, Pipeline::forwardBlendConfig()),
       skyboxPipeline_(device_, Pipeline::skyboxConfig()),
@@ -180,6 +180,16 @@ Renderer::Renderer(const Window& window, std::string environmentPath, RendererDe
     tunables_.taaEnabled = debug.taa;
     tunables_.debugView = debug.view;
     tunables_.lodMode = debug.lodMode;
+    tunables_.lodEnabled = debug.lod;
+    capturePath_ = std::string{debug.capturePath};
+    captureFrame_ = static_cast<std::uint64_t>(debug.captureFrame);
+    if (captureWanted())
+    {
+        // Fail at STARTUP on an unsupported format rather than at the capture frame — a run that
+        // renders for a while and only then reports it can't write the image wastes the operator's
+        // time. Re-resolved when the copy is recorded, in case a recreation changed it.
+        captureFormat_ = resolveCaptureFormat(swapchain_.format());
+    }
     // B5c-4 default flip: an unset backend request resolves to ON wherever the device supports the
     // GPU-driven front (VdpmScan::deviceSupported — the same predicate that builds the manager
     // below), so the GPU path is the default; --vdpm-gpu / --no-vdpm-gpu force it explicitly.
@@ -688,12 +698,9 @@ void Renderer::recordDrawBucket(vk::CommandBuffer cmd, std::span<const DrawComma
                                        resources_.vulkanPipelineLayout(dc.pipeline), 2,
                                        resources_.bindlessDescriptorSet(), {});
             }
-            ForwardPushConstants pc{};
-            pc.selfShadowSlot = dc.selfShadowSlot;
-            pc.materialIndex = dc.materialIndex;
-            pc.lodLevel = dc.lodLevel;
             cmd.pushConstants<ForwardPushConstants>(resources_.vulkanPipelineLayout(dc.pipeline),
-                                                    vk::ShaderStageFlagBits::eFragment, 0, pc);
+                                                    vk::ShaderStageFlagBits::eFragment, 0,
+                                                    makeForwardPushConstants(dc));
         }
         else
         {
@@ -1309,10 +1316,24 @@ void Renderer::drawFrame(Window& display, RenderableScene& scene, float dt)
     // Post-process leaves the swap image in ColorAttachmentOptimal; the overlay
     // draws over it, then we transition to present.
     overlay_.record(cmd, *swapchain_.imageViews()[*imageIndex], swapchain_.extent());
-    transitionSwapchainToPresent(cmd, *imageIndex);
+    // Capture (if this is the requested frame) reads the FINAL swapchain content — after
+    // post-process and the overlay, immediately before present — so the file is exactly what the
+    // screen showed, tone-mapped and all. Capturing the HDR offscreen target instead would produce
+    // an image no viewer ever saw.
+    ++framesRendered_;
+    const bool capturingThisFrame = captureWanted() && framesRendered_ == captureFrame_;
+    if (capturingThisFrame)
+    {
+        recordCaptureCopy(cmd, *imageIndex);
+    }
+    transitionSwapchainToPresent(cmd, *imageIndex, capturingThisFrame);
 
     cmd.end();
     submitAndPresent(display, cmd, *imageIndex);
+    if (capturingThisFrame)
+    {
+        writeCapture();
+    }
 
     // Only now is this slot's collection eligible to become "completed": marking it after
     // recordShadowPass would mean "recorded", and a frame that threw or bailed before submit would
@@ -1467,15 +1488,112 @@ void Renderer::endForwardRendering(vk::CommandBuffer cmd)
         vk::AccessFlagBits2::eShaderRead);
 }
 
-void Renderer::transitionSwapchainToPresent(vk::CommandBuffer cmd, uint32_t imageIndex)
+void Renderer::transitionSwapchainToPresent(vk::CommandBuffer cmd, uint32_t imageIndex,
+                                            bool afterCapture)
 {
     // The render→present dependency is carried by the renderFinished semaphore
     // signalled at submit, so dstStage is bottom-of-pipe with no access mask.
+    // After a capture the image is already in TransferSrcOptimal (the copy left it there), so
+    // the present transition starts from that layout instead of ColorAttachmentOptimal.
+    const vk::ImageLayout from = afterCapture ? vk::ImageLayout::eTransferSrcOptimal
+                                              : vk::ImageLayout::eColorAttachmentOptimal;
+    const vk::PipelineStageFlags2 srcStage =
+        afterCapture ? vk::PipelineStageFlagBits2::eCopy
+                     : vk::PipelineStageFlagBits2::eColorAttachmentOutput;
+    const vk::AccessFlags2 srcAccess = afterCapture ? vk::AccessFlagBits2::eTransferRead
+                                                    : vk::AccessFlagBits2::eColorAttachmentWrite;
+    forwardImageBarrier(cmd, swapchain_.images()[imageIndex], vk::ImageAspectFlagBits::eColor, from,
+                        vk::ImageLayout::ePresentSrcKHR, srcStage, srcAccess,
+                        vk::PipelineStageFlagBits2::eBottomOfPipe, {});
+}
+
+CaptureFormat Renderer::resolveCaptureFormat(vk::Format format)
+{
+    // Rejects anything that isn't 8-bit RGBA/BGRA rather than guessing: a wrong channel order
+    // still yields a picture, just with the colours swapped — which would be committed as a
+    // reference image and believed.
+    switch (format)
+    {
+    case vk::Format::eB8G8R8A8Unorm:
+    case vk::Format::eB8G8R8A8Srgb:
+        return CaptureFormat::Bgra8;
+    case vk::Format::eR8G8B8A8Unorm:
+    case vk::Format::eR8G8B8A8Srgb:
+        return CaptureFormat::Rgba8;
+    default:
+        break;
+    }
+    throw std::runtime_error(
+        "--capture supports 8-bit RGBA/BGRA swapchain formats only; this surface uses " +
+        std::string(vk::to_string(format)));
+}
+
+void Renderer::recordCaptureCopy(vk::CommandBuffer cmd, uint32_t imageIndex)
+{
+    // Snapshot the geometry AND the format now, with the copy. submitAndPresent may recreate
+    // the swapchain (a resize, or an out-of-date present) before writeCapture runs, and the
+    // buffer would then be decoded against an extent and format the pixels in it never had.
+    captureExtent_ = swapchain_.extent();
+    captureFormat_ = resolveCaptureFormat(swapchain_.format());
+    const vk::Extent2D extent = captureExtent_;
+    // Allocated on first use: a capture happens once, and a run without --capture must not pay
+    // for a full-frame host-visible buffer.
+    if (captureBuffer_.buffers[0] == NullBuffer)
+    {
+        captureBuffer_ = resources_.createMappedReadbackBuffers(
+            static_cast<std::size_t>(extent.width) * extent.height * 4);
+    }
+
     forwardImageBarrier(cmd, swapchain_.images()[imageIndex], vk::ImageAspectFlagBits::eColor,
-                        vk::ImageLayout::eColorAttachmentOptimal, vk::ImageLayout::ePresentSrcKHR,
+                        vk::ImageLayout::eColorAttachmentOptimal,
+                        vk::ImageLayout::eTransferSrcOptimal,
                         vk::PipelineStageFlagBits2::eColorAttachmentOutput,
                         vk::AccessFlagBits2::eColorAttachmentWrite,
-                        vk::PipelineStageFlagBits2::eBottomOfPipe, {});
+                        vk::PipelineStageFlagBits2::eCopy, vk::AccessFlagBits2::eTransferRead);
+
+    // bufferRowLength/ImageHeight 0 ⇒ tightly packed to the copy extent, so the readback rows
+    // have no padding and the converter's row pitch is exactly width * 4.
+    const vk::BufferImageCopy region{
+        .bufferRowLength = 0,
+        .bufferImageHeight = 0,
+        .imageSubresource = {.aspectMask = vk::ImageAspectFlagBits::eColor,
+                             .mipLevel = 0,
+                             .baseArrayLayer = 0,
+                             .layerCount = 1},
+        .imageExtent = {.width = extent.width, .height = extent.height, .depth = 1},
+    };
+    cmd.copyImageToBuffer(swapchain_.images()[imageIndex], vk::ImageLayout::eTransferSrcOptimal,
+                          resources_.vulkanBuffer(captureBuffer_.buffers[0]), region);
+}
+
+void Renderer::writeCapture()
+{
+    // One-shot at shutdown: waiting for the whole device is simpler than threading a fence
+    // through, and obviously correct — the copy must have completed before the mapping is read.
+    device_.device().waitIdle();
+
+    // The extent and format snapshotted WITH the copy, not the swapchain's current ones: a
+    // recreation between the submit and here would otherwise reinterpret the captured pixels.
+    const vk::Extent2D extent = captureExtent_;
+    const std::vector<std::uint8_t> rgba =
+        toRgba8(captureBuffer_.mapped[0], extent.width, extent.height,
+                static_cast<std::size_t>(extent.width) * 4, captureFormat_);
+    // Throwing rather than flagging: a capture command that prints an error and still exits 0
+    // is worse than useless in a script, and the top-level handler already logs a fatal error
+    // and returns EXIT_FAILURE.
+    if (rgba.empty())
+    {
+        throw std::runtime_error("capture readback conversion failed for '" + capturePath_ + "'");
+    }
+    if (!writeRgba8Png(capturePath_.c_str(), rgba, extent.width, extent.height))
+    {
+        throw std::runtime_error("capture could not write '" + capturePath_ + "'");
+    }
+    // Only now: `captureComplete()` means the file EXISTS, which is what the main loop ends on.
+    // Set before the write, a failure would briefly claim a capture that isn't there.
+    captureDone_ = true;
+    log::info(log::category::render, "captured frame {} ({}x{}) to '{}'", captureFrame_,
+              extent.width, extent.height, capturePath_);
 }
 
 void Renderer::submitAndPresent(Window& display, vk::CommandBuffer cmd, uint32_t imageIndex)
@@ -1487,11 +1605,16 @@ void Renderer::submitAndPresent(Window& display, vk::CommandBuffer cmd, uint32_t
         .stageMask = vk::PipelineStageFlagBits2::eColorAttachmentOutput,
     };
     // Signal both: the binary renderDone (present waits on it) and the timeline at
-    // the next monotonic value (CPU frame pacing waits on it). The timeline signal
-    // is all-commands so its value only advances once the whole frame is done.
+    // the next monotonic value (CPU frame pacing waits on it). BOTH are all-commands.
+    //
+    // renderDone must not be narrowed to eColorAttachmentOutput: work recorded AFTER the
+    // colour attachment writes — the --capture image-to-buffer copy (eCopy) and the
+    // present-layout transition — would not be covered, so presentation could race them.
+    // Presentation needs the finished frame regardless, so there is no overlap to win here,
+    // and synchronization validation is not enabled: zero VUIDs would not have caught it.
     const uint64_t signalValue = ++timelineValue_;
     const std::array<vk::SemaphoreSubmitInfo, 2> signalInfos{{
-        {.semaphore = renderDone, .stageMask = vk::PipelineStageFlagBits2::eColorAttachmentOutput},
+        {.semaphore = renderDone, .stageMask = vk::PipelineStageFlagBits2::eAllCommands},
         {.semaphore = frame_.timeline(),
          .value = signalValue,
          .stageMask = vk::PipelineStageFlagBits2::eAllCommands},

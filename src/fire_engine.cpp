@@ -108,11 +108,10 @@ void FireEngine::addFloorPlane()
     floorGeo.vertices(std::move(verts));
     floorGeo.indices(std::move(indices));
     floorGeo.material(&mat);
-    floorGeo.castsShadow(false);
     floorGeo.load(renderer_->resources(), renderer_->vdpmRegistry());
 
     Object floorObject;
-    floorObject.addGeometry(floorGeo);
+    floorObject.addGeometry(floorGeo, /*castsShadow=*/false);
     floorObject.load(renderer_->resources(), renderer_->vdpmRegistry());
 
     auto floorNode = std::make_unique<Node>("Floor");
@@ -581,6 +580,14 @@ void FireEngine::mainLoop()
         syncRenderState(now);
 
         renderer_->drawFrame(*window_, scene_, dt);
+
+        // --capture is a one-shot: once the requested frame has been written there is nothing
+        // further to render, so the run ends by itself rather than waiting to be closed. That
+        // makes a capture scriptable — the command returns when the file exists.
+        if (renderer_->captureComplete())
+        {
+            break;
+        }
     }
     renderer_->waitIdle();
 }
