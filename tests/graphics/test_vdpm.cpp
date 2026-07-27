@@ -1,3 +1,4 @@
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
@@ -1134,7 +1135,7 @@ TEST_CASE("measureCollapseDeviation: shading is measured for a no-containing-fac
     const std::array<std::array<uint32_t, 3>, 1> faces{{{1u, 2u, 3u}}};
 
     const CollapseDeviation outside =
-        measureCollapseDeviation(0u, faces, pos, nrm, zeroFrame, zeroFrame, uv, {});
+        measureCollapseDeviation(0u, 1u, faces, pos, nrm, zeroFrame, zeroFrame, uv, {});
     CHECK_FALSE(outside.hadContainingFace); // removed projects outside every surviving face
     CHECK(outside.normal > 0.0f);           // yet the shading channel measured the fan (the fix)
     CHECK(outside.tangent == 0.0f);         // no tangents ⇒ tangent channel silent
@@ -1144,7 +1145,7 @@ TEST_CASE("measureCollapseDeviation: shading is measured for a no-containing-fac
     std::vector<Vec3> posIn = pos;
     posIn[0] = Vec3{0.25f, 0.25f, 0.0f};
     const CollapseDeviation inside =
-        measureCollapseDeviation(0u, faces, posIn, nrm, zeroFrame, zeroFrame, uv, {});
+        measureCollapseDeviation(0u, 1u, faces, posIn, nrm, zeroFrame, zeroFrame, uv, {});
     CHECK(inside.hadContainingFace);
     CHECK(inside.geometry < 1.0e-4f);
     CHECK(inside.normal > 0.0f);
@@ -1172,13 +1173,13 @@ TEST_CASE(
     const std::vector<Vec3> tanBflip{Vec3{0.0f, -1.0f, 0.0f}, Vec3{0.0f, 1.0f, 0.0f},
                                      Vec3{0.0f, 1.0f, 0.0f}, Vec3{0.0f, 1.0f, 0.0f}};
     const CollapseDeviation flipped =
-        measureCollapseDeviation(0u, faces, pos, nrm, tanT, tanBflip, uv, {});
+        measureCollapseDeviation(0u, 1u, faces, pos, nrm, tanT, tanBflip, uv, {});
     CHECK(flipped.tangent > 3.0f); // ~π — the bitangent flipped
 
     // Consistent handedness everywhere → no frame error.
     const std::vector<Vec3> tanBsame(4, Vec3{0.0f, 1.0f, 0.0f});
     const CollapseDeviation consistent =
-        measureCollapseDeviation(0u, faces, pos, nrm, tanT, tanBsame, uv, {});
+        measureCollapseDeviation(0u, 1u, faces, pos, nrm, tanT, tanBsame, uv, {});
     CHECK(consistent.tangent < 1.0e-4f);
 }
 
@@ -1382,4 +1383,185 @@ TEST_CASE("VDPM per-frame phase timings (dense sphere, close view)", "[.][vdpm][
          << " coverage repairs)\n  emitActiveIndices                    = " << (emitUs / n)
          << " us");
     CHECK(lastEmitted > 0);
+}
+
+// SH-02: the shadow channel measures EUCLIDEAN distance to the nearest surviving triangle, where
+// the geometric channel measures point-to-PLANE. The distinction is invisible whenever the removed
+// vertex projects inside a surviving face — the two agree exactly there — and decisive when it
+// lands outside one, which is precisely the in-plane silhouette movement a shadow shows and a
+// camera view barely does.
+TEST_CASE("measureCollapseDeviation: a coplanar collapse outside the surviving triangle reads zero "
+          "plane deviation but non-zero shadow deviation",
+          "[MeshSimplifier]")
+{
+    using fire_engine::detail::measureCollapseDeviation;
+
+    // Everything in the y = 0 plane. Vertex 0 (removed) sits 2 units beyond the triangle's edge,
+    // so it is coplanar with the surviving face but well outside it.
+    const std::vector<Vec3> pos{
+        Vec3{3.0f, 0.0f, 0.0f}, // removed — outside, in-plane
+        Vec3{0.0f, 0.0f, 0.0f}, // kept
+        Vec3{1.0f, 0.0f, 0.0f},
+        Vec3{0.0f, 0.0f, 1.0f},
+    };
+    const std::vector<Vec3> nrm(pos.size(), Vec3{0.0f, 1.0f, 0.0f});
+    const std::vector<Vec2> uv(pos.size(), Vec2{0.0f, 0.0f});
+    const std::vector<Vec3> zeroFrame(pos.size(), Vec3{0.0f, 0.0f, 0.0f});
+    const std::vector<std::array<std::uint32_t, 3>> faces{{1u, 2u, 3u}};
+
+    const auto deviation =
+        measureCollapseDeviation(0u, 1u, faces, pos, nrm, zeroFrame, zeroFrame, uv, {});
+
+    // The plane through the surviving triangle contains the removed vertex: distance 0.
+    CHECK(deviation.geometry == Catch::Approx(0.0f).margin(1e-5f));
+    // The nearest point ON the triangle is its (1,0,0) corner, 2 units away.
+    CHECK(deviation.shadow == Catch::Approx(2.0f).margin(1e-4f));
+}
+
+TEST_CASE("measureCollapseDeviation: shadow deviation falls back to the collapsed edge length when "
+          "no surviving triangle can be measured",
+          "[MeshSimplifier]")
+{
+    using fire_engine::detail::measureCollapseDeviation;
+
+    // An empty one-ring: nothing to measure against. Zero would claim the collapse was free, but a
+    // subset collapse maps `removed` onto `kept`, so that edge length is the displacement.
+    const std::vector<Vec3> pos{Vec3{0.0f, 0.0f, 0.0f}, Vec3{0.0f, 0.0f, 4.0f}};
+    const std::vector<Vec3> nrm(pos.size(), Vec3{0.0f, 1.0f, 0.0f});
+    const std::vector<Vec2> uv(pos.size(), Vec2{0.0f, 0.0f});
+    const std::vector<Vec3> zeroFrame(pos.size(), Vec3{0.0f, 0.0f, 0.0f});
+
+    const auto deviation =
+        measureCollapseDeviation(0u, 1u, {}, pos, nrm, zeroFrame, zeroFrame, uv, {});
+
+    CHECK(deviation.shadow == Catch::Approx(4.0f).margin(1e-4f));
+}
+
+TEST_CASE("measureCollapseDeviation: non-finite positions force an infinite shadow deviation",
+          "[MeshSimplifier]")
+{
+    using fire_engine::detail::measureCollapseDeviation;
+
+    // A NaN must not read as a small error — the caller has to be pushed to LOD0.
+    const std::vector<Vec3> pos{Vec3{std::numeric_limits<float>::quiet_NaN(), 0.0f, 0.0f},
+                                Vec3{0.0f, 0.0f, 0.0f}};
+    const std::vector<Vec3> nrm(pos.size(), Vec3{0.0f, 1.0f, 0.0f});
+    const std::vector<Vec2> uv(pos.size(), Vec2{0.0f, 0.0f});
+    const std::vector<Vec3> zeroFrame(pos.size(), Vec3{0.0f, 0.0f, 0.0f});
+
+    const auto deviation =
+        measureCollapseDeviation(0u, 1u, {}, pos, nrm, zeroFrame, zeroFrame, uv, {});
+
+    CHECK(std::isinf(deviation.shadow));
+}
+
+// ---------------------------------------------------------------------------
+// SH-02 cut-level policy: shadowDeviationForCut.
+//
+// The per-collapse measurement is tested above; this is the reduction that turns a collapse stream
+// plus an authoritative collapseCount into one cut's deviation. Its failure modes are quiet ones —
+// reducing over the wrong prefix, or clamping an invalid one into a plausible small number.
+// ---------------------------------------------------------------------------
+
+namespace
+{
+std::vector<fire_engine::MeshCollapse> collapsesWithShadowRadii(std::span<const float> radii)
+{
+    std::vector<fire_engine::MeshCollapse> collapses(radii.size());
+    for (std::size_t i = 0; i < radii.size(); ++i)
+    {
+        collapses[i].shadowDeviationRadius = radii[i];
+    }
+    return collapses;
+}
+} // namespace
+
+TEST_CASE("shadowDeviationForCut: LOD0's empty prefix is zero", "[MeshSimplifier]")
+{
+    const std::array<float, 3> radii{0.5f, 0.25f, 2.0f};
+    const auto collapses = collapsesWithShadowRadii(radii);
+
+    CHECK(fire_engine::shadowDeviationForCut(collapses, 0) == Catch::Approx(0.0f));
+}
+
+TEST_CASE("shadowDeviationForCut: takes the maximum over the EXACT prefix, not the last value",
+          "[MeshSimplifier]")
+{
+    // Deliberately non-monotonic across the sequence: the cumulative channel is monotone up any one
+    // collapse CHAIN, but the recorded stream interleaves chains, so the last entry is not the
+    // largest. Taking collapses.back() would under-report; taking the whole stream would
+    // over-report a shallow cut.
+    const std::array<float, 5> radii{0.5f, 2.0f, 0.25f, 1.0f, 4.0f};
+    const auto collapses = collapsesWithShadowRadii(radii);
+
+    CHECK(fire_engine::shadowDeviationForCut(collapses, 1) == Catch::Approx(0.5f));
+    CHECK(fire_engine::shadowDeviationForCut(collapses, 2) == Catch::Approx(2.0f));
+    CHECK(fire_engine::shadowDeviationForCut(collapses, 3) == Catch::Approx(2.0f));
+    CHECK(fire_engine::shadowDeviationForCut(collapses, 4) == Catch::Approx(2.0f));
+    CHECK(fire_engine::shadowDeviationForCut(collapses, 5) == Catch::Approx(4.0f));
+}
+
+TEST_CASE("shadowDeviationForCut: a negative or NaN radius in the prefix yields infinity",
+          "[MeshSimplifier]")
+{
+    // A deviation is a magnitude, so these are invalid data, not cheap collapses. std::max would
+    // swallow both (NaN loses every comparison; a negative simply loses), leaving a plausible small
+    // number for a cut that cannot be described. This runs in every build — the prefix is valid, so
+    // no assertion is involved, only the value policy.
+    const std::array<float, 3> withNegative{0.5f, -1.0f, 0.25f};
+    const std::array<float, 3> withNan{0.5f, std::numeric_limits<float>::quiet_NaN(), 0.25f};
+    const auto negative = collapsesWithShadowRadii(withNegative);
+    const auto nan = collapsesWithShadowRadii(withNan);
+
+    CHECK(std::isinf(fire_engine::shadowDeviationForCut(negative, 3)));
+    CHECK(std::isinf(fire_engine::shadowDeviationForCut(nan, 3)));
+    // A prefix that stops SHORT of the bad entry is unaffected — the policy is per selected
+    // prefix, not per stream.
+    CHECK(fire_engine::shadowDeviationForCut(negative, 1) == Catch::Approx(0.5f));
+    CHECK(fire_engine::shadowDeviationForCut(nan, 1) == Catch::Approx(0.5f));
+
+    // Infinity is a legitimate recorded value (the measurement's own non-finite fallback) and must
+    // propagate rather than trip the invalid check.
+    const std::array<float, 2> withInf{0.5f, std::numeric_limits<float>::infinity()};
+    CHECK(std::isinf(fire_engine::shadowDeviationForCut(collapsesWithShadowRadii(withInf), 2)));
+}
+
+// An invalid prefix has TWO required behaviours that cannot both be observed in one build: the
+// debug assert aborts before the release fallback is reached. In a Dev build (asserts live — our
+// default, and CI's) the abort IS the contract, so this case compiles only under NDEBUG rather
+// than pretending to cover it. Dropping the assert to make it runnable everywhere would trade a
+// loud programming-error signal for a quiet one, the wrong direction for a value that decides how
+// much geometry a shadow keeps.
+#ifdef NDEBUG
+TEST_CASE("shadowDeviationForCut: a prefix beyond the stream yields infinity", "[MeshSimplifier]")
+{
+    // Never a clamped reduction over a shorter prefix: that would hand back a plausible
+    // under-estimate for a cut whose real collapses are unknown. Infinity forces LOD0.
+    const std::array<float, 2> radii{0.5f, 1.0f};
+    const auto collapses = collapsesWithShadowRadii(radii);
+
+    CHECK(std::isinf(fire_engine::shadowDeviationForCut(collapses, 3)));
+    CHECK(std::isinf(fire_engine::shadowDeviationForCut({}, 1)));
+}
+#endif
+
+TEST_CASE("buildProgressive: every cut's shadow deviation equals the max over its declared prefix",
+          "[MeshSimplifier]")
+{
+    // The end-to-end chain on a real simplification: whatever collapseCount each cut declares, its
+    // recorded deviation must be exactly the reduction over that prefix of the emitted stream.
+    const Mesh mesh = makeGrid(24);
+    const fire_engine::QuadricSimplifier simplifier;
+    const fire_engine::ProgressiveMesh progressive =
+        simplifier.buildProgressive(mesh.verts, mesh.indices, fire_engine::kLodRatios);
+
+    REQUIRE(progressive.lods.size() >= 2);
+    CHECK(progressive.lods[0].collapseCount == 0);
+    CHECK(progressive.lods[0].shadowDeviation == Catch::Approx(0.0f));
+
+    for (const auto& lod : progressive.lods)
+    {
+        CHECK(lod.shadowDeviation == Catch::Approx(fire_engine::shadowDeviationForCut(
+                                         progressive.collapses, lod.collapseCount)));
+    }
 }

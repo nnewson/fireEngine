@@ -1,5 +1,7 @@
 #include <fire_engine/graphics/vdpm.hpp>
 
+#include <fire_engine/math/singular_value.hpp>
+
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -18,47 +20,6 @@ namespace fire_engine
 
 namespace
 {
-
-// A CONSERVATIVE bound on the largest singular value of a 3x3 (its spectral norm): the greatest
-// factor by which the matrix stretches any direction. σ_max(m) = sqrt(λ_max(mᵀm)); bound
-// λ_max(mᵀm) by the Gershgorin / induced-∞-norm bound ‖mᵀm‖∞ (the max absolute row sum of the
-// symmetric Gram matrix), which for any symmetric PSD matrix is a GUARANTEED upper bound on its
-// spectral radius. So σ_max is never UNDER-estimated — the object-space deviation/support radii
-// bounded into world space stay conservative (an instance never under-refines) and the conditioning
-// test never wrongly trusts a near-singular transform. EXACT for orthogonal (mᵀm = I) and diagonal
-// (scale) transforms; a modest over-estimate for a sheared/rotated mix (off-diagonal mass inflates
-// the row sum), which only over-refines — the safe direction.
-//
-// The Gram matrix + row sums are computed in DOUBLE and the float result is outward-rounded one ULP
-// toward +∞, so float rounding of the products can't push the answer below the true bound (the
-// bound is only conservative in exact arithmetic otherwise).
-//
-// A finite power iteration is NOT usable here: a fixed start vector orthogonal to the dominant
-// eigenvector converges to the WRONG (smaller) eigenvalue no matter how many iterations run — e.g.
-// the in-plane shear [[5.5,-4.5,0],[-4.5,5.5,0],[0,0,1]] has σ_max = 10 but its dominant mᵀm
-// eigenvector (1,-1,0) is orthogonal to (1,1,1), so power iteration returns 1 (a 10×
-// under-estimate).
-[[nodiscard]] float largestSingularValue(const Mat3& m) noexcept
-{
-    double maxRowSum = 0.0;
-    for (int i = 0; i < 3; ++i)
-    {
-        double rowSum = 0.0;
-        for (int j = 0; j < 3; ++j)
-        {
-            double gram = 0.0; // (mᵀm)_ij = Σ_k m_ki · m_kj
-            for (int k = 0; k < 3; ++k)
-            {
-                gram += static_cast<double>(m[k, i]) * static_cast<double>(m[k, j]);
-            }
-            rowSum += std::abs(gram);
-        }
-        maxRowSum = std::max(maxRowSum, rowSum);
-    }
-    const double sigma = std::sqrt(std::max(0.0, maxRowSum));
-    // Outward round: the returned float is the smallest float >= the double bound >= true σ_max.
-    return std::nextafter(static_cast<float>(sigma), std::numeric_limits<float>::infinity());
-}
 
 } // namespace
 
@@ -483,9 +444,9 @@ VdpmViewParams makeVdpmViewParams(const Mat4& world, const Vec3& cameraPos, floa
                                   bool rasterBackfaceCulling, float uvScale, float normalScale,
                                   float tangentScale)
 {
-    const Mat3 linear = Mat3::fromColumns({world[0, 0], world[1, 0], world[2, 0]},
-                                          {world[0, 1], world[1, 1], world[2, 1]},
-                                          {world[0, 2], world[1, 2], world[2, 2]});
+    // Shared with the shadow-LOD projection (SH-02) — one implementation of the conservative
+    // σ_max bound, so the two selectors cannot drift apart numerically.
+    const Mat3 linear = linearPart(world);
     // Object-space deviation/support radii are projected against a WORLD distance, so they must be
     // bounded into world space by σ_max (exact for uniform scale, conservative otherwise) or a
     // scaled instance would under-refine. (UV error is texture-space, so NOT scaled — see below.)

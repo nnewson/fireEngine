@@ -220,9 +220,11 @@ projects to `e · projScaleY · viewportHeight / (2d)` pixels, where `projScaleY
 (= 1/tan(fovY/2)). Levels are ordered fine→coarse with non-decreasing error, so the first that
 overflows the budget ends the search; LOD0 is the fallback when nothing coarser fits.
 
-Shadow draws pass `kLodPixelErrorBudget × kShadowLodBias` (coarser — silhouette detail matters less in a
-shadow). Selection uses the camera's projection/viewport as an approximation for shadow passes too;
-good enough because a mesh far from the camera has little shadow footprint.
+Shadow draws currently pass `kLodPixelErrorBudget × kShadowLodBias` (coarser — silhouette detail
+matters less in a shadow), selecting from the CAMERA's projection/viewport. That approximation is the
+defect the shadow-LOD arc exists to fix: a shadow's error budget belongs to the view that rasterises
+it, in shadow-map texels. SH-02 (below) landed the replacement model; SH-03 threads it through and
+retires `kShadowLodBias`.
 
 Continuous mode deliberately keeps the same topology level that `selectLod` would choose. When level
 `L` is selected, `selectVipm` computes how far the current tolerated error has advanced toward
@@ -233,6 +235,59 @@ errors, so non-monotonic collapse costs cannot make a vertex morph during the wr
 The morph target is a full render wedge: position, normal, tangent, TEXCOORD_0, and TEXCOORD_1. At
 `morphFactor == 1`, a fine-level vertex removed by the next LOD has the same attributes as the wedge
 the next LOD index buffer will draw. This is the load-bearing no-pop invariant.
+
+---
+
+## The shadow-deviation channel (SH-02)
+
+Shadow-LOD selection cannot use `GeometryLod::error`. That value is the simplifier's **RMS** quadric
+error — an average, which a locally bad region hides inside. Measured on a UV sphere it read
+**0.0085 against a true surface movement of 0.0170**: half the real deviation. Selecting a shadow
+level against it would silently exceed any budget it was given.
+
+So the LOD system records a second, separate per-cut number for shadows:
+
+| Stage | Value | Where |
+|---|---|---|
+| Per collapse | `CollapseDeviation::shadow` — EUCLIDEAN distance to the nearest surviving triangle | `measureCollapseDeviation` |
+| Accumulated | `MeshCollapse::shadowDeviationRadius` — running-sum envelope up the collapse tree | the simplifier's inner loop |
+| Per cut | `ProgressiveLod::shadowDeviation` — max over the cut's EXACT `collapseCount` prefix | `shadowDeviationForCut` |
+| GPU-side carrier | `GeometryLod::shadowDeviation` — validated on copy | `Geometry::load` |
+
+**Why Euclidean and not the existing geometric channel.** `MeshCollapse::deviationRadius` measures
+point-to-**plane** against the nearest surviving triangle, so it reads ~0 for a coplanar collapse
+whose removed vertex lands *outside* every surviving face — precisely the in-plane silhouette
+movement a shadow shows and a camera view barely does. The Euclidean distance was already being
+computed there (`nearestTriSq`) and thrown away. The distinction is pinned by a unit test: a
+coplanar vertex 2 units outside the surviving triangle gives `geometry == 0` and `shadow == 2.0`.
+
+**Why the prefix maximum.** The channel is cumulative and monotone up any one collapse chain, but
+the recorded stream interleaves chains — so the last entry is not the largest, and reducing over the
+whole stream would over-report a shallow cut. `shadowDeviationForCut` takes the max over exactly the
+collapses the cut declares, which is its authoritative topology identity.
+
+**It is an ESTIMATE, not a bound.** It measures the tangential displacement of the *removed sample*,
+one-sided: a coplanar collapse bridging a concavity adds simplified surface outside the original
+outline that the removed vertex never sees. Measured on a sphere at LOD2, simplified surface sat
+**0.069** from the original while original→simplified sampling reported **0.044**. The accumulated
+estimate covered both at 2.27×, but that is empirical cushion, not a guarantee. A certified symmetric
+surface bound is a swappable future metric — see [`shadowplans.md`](shadowplans.md) § SH-02.
+
+(A support-radius bound WOULD be safe in principle, and was measured before being rejected: 12× loose
+on a sphere, **21,000×** on a near-flat plate, where it grows toward the object's own size. It would
+pin every planar caster to LOD0 permanently.)
+
+**Invalid-value policy — the same rule at every stage.** A deviation is a magnitude, so negative,
+NaN and non-finite all mean invalid data, never a cheap collapse, and each becomes **infinity** so
+the selector is forced to LOD0. Note that `std::max(0.0f, x)` is exactly the wrong idiom here — it
+returns 0 for a NaN *and* for a negative, converting invalid data into a claim that the cut is free —
+and is deliberately not used anywhere in this chain. A collapse prefix longer than the recorded
+stream asserts in debug and returns infinity in release, rather than clamping to a shorter prefix and
+manufacturing a plausible under-estimate.
+
+The projection and selection built on top of this value are Vulkan-free in
+`graphics/shadow_view.hpp`; that file documents the texel projection, the view descriptors, and the
+hysteresis.
 
 ---
 

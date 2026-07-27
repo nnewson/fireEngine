@@ -15,6 +15,14 @@ std::string_view toString(ShadowLodReason reason) noexcept
         return "LOD disabled";
     case ShadowLodReason::SingleLevel:
         return "single-level geometry";
+    case ShadowLodReason::InvalidView:
+        return "invalid shadow view";
+    case ShadowLodReason::InvalidCaster:
+        return "invalid caster input";
+    case ShadowLodReason::NearPlane:
+        return "near-plane intersection";
+    case ShadowLodReason::InvalidPreviousLevel:
+        return "invalid previous level";
     case ShadowLodReason::Count:
         break;
     }

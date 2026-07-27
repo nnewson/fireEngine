@@ -62,6 +62,7 @@ add_library(fireengine SHARED
     src/graphics/mesh_simplifier.cpp
     src/graphics/mesh_topology.cpp
     src/graphics/shadow_diagnostics.cpp
+    src/graphics/shadow_view.cpp
     src/graphics/vipm.cpp
     src/graphics/vdpm.cpp
     src/graphics/vdpm_material.cpp
@@ -336,6 +337,7 @@ add_executable(test_fire_engine
     tests/physics/test_physics_determinism.cpp
     tests/physics/test_demos.cpp
     tests/math/test_mat3.cpp
+    tests/math/test_singular_value.cpp
     tests/math/test_mat4.cpp
     tests/math/test_quaternion.cpp
     tests/math/test_vec2.cpp
@@ -368,6 +370,7 @@ add_executable(test_fire_engine
     tests/graphics/test_frame_capture.cpp
     tests/graphics/test_frame_info.cpp
     tests/graphics/test_shadow_diagnostics.cpp
+    tests/graphics/test_shadow_view.cpp
     tests/graphics/test_texture.cpp
     tests/graphics/test_sampler_settings.cpp
     tests/render/test_ubo.cpp
