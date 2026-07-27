@@ -30,6 +30,14 @@ struct GeometryLod
     BufferHandle indexBuffer{NullBuffer};
     uint32_t indexCount{0};
     float error{0.0f};
+    // Object-space shadow-silhouette deviation for this cut, carried from the authoritative
+    // ProgressiveLod::shadowDeviation and VALIDATED on the way (negative or non-finite becomes
+    // infinity, so invalid data forces LOD0 instead of reading as a free collapse). `error` above
+    // is an RMS quadric value — an AVERAGE, which a locally bad region hides inside, and which
+    // measured up to 2x below true deviation on a sphere; it is unsafe as a shadow authority. This
+    // channel is the cumulative Euclidean estimate the shadow-LOD selector projects into texels. 0
+    // for LOD0.
+    float shadowDeviation{0.0f};
 };
 
 // Simplification ratios for the discrete LODs built beyond LOD0 (the full mesh), in order.

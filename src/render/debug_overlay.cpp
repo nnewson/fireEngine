@@ -85,13 +85,27 @@ void drawShadowDiagnostics(const FrameStats& stats)
     }
 
     const auto& shadow = stats.shadow;
-    ImGui::Text("Selection: %llu selected, %llu LOD off, %llu single-level",
-                static_cast<unsigned long long>(
-                    shadow.lodReasons[static_cast<std::size_t>(ShadowLodReason::Selected)]),
-                static_cast<unsigned long long>(
-                    shadow.lodReasons[static_cast<std::size_t>(ShadowLodReason::LodDisabled)]),
-                static_cast<unsigned long long>(
-                    shadow.lodReasons[static_cast<std::size_t>(ShadowLodReason::SingleLevel)]));
+    // Every reason, by iterating the enum rather than naming a subset: a hard-coded list silently
+    // hides new ones (the SH-02 fallbacks were invisible here until this changed), and a forced
+    // LOD0 that looks like a deliberate one defeats the point of having reasons at all.
+    //
+    // A two-column table rather than one line: the fallback names are long ("near-plane
+    // intersection", "invalid previous level") and would clip off the panel edge, which would make
+    // "visible" true only in the source.
+    if (ImGui::BeginTable("shadowreasons", 2,
+                          ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_RowBg))
+    {
+        for (std::size_t reason = 0; reason < kShadowLodReasonCount; ++reason)
+        {
+            const auto label = toString(static_cast<ShadowLodReason>(reason));
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::Text("%.*s", static_cast<int>(label.size()), label.data());
+            ImGui::TableNextColumn();
+            ImGui::Text("%llu", static_cast<unsigned long long>(shadow.lodReasons[reason]));
+        }
+        ImGui::EndTable();
+    }
 
     constexpr int kColumns = 5 + static_cast<int>(kShadowLodBinCount);
     if (ImGui::BeginTable("shadowviews", kColumns,

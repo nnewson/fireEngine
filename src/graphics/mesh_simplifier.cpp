@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cassert>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -445,6 +446,7 @@ public:
         quad_.resize(vertexCount);
         vertexTris_.resize(vertexCount);
         deviation_.assign(vertexCount, 0.0f);
+        shadowDeviation_.assign(vertexCount, 0.0f);
         uvDeviation_.assign(vertexCount, 0.0f);
         normalDeviation_.assign(vertexCount, 0.0f);
         tangentDeviation_.assign(vertexCount, 0.0f);
@@ -1044,7 +1046,7 @@ private:
             removedWedgeUv.push_back(uv_[w]);
         }
         const detail::CollapseDeviation step = detail::measureCollapseDeviation(
-            removed, oneRing, pos_, nrm_, tanFrameT_, tanFrameB_, uv_, removedWedgeUv);
+            removed, kept, oneRing, pos_, nrm_, tanFrameT_, tanFrameB_, uv_, removedWedgeUv);
         // Accumulate the per-collapse step up the tree. Geometry accumulates by running sum (a
         // spatial envelope that genuinely compounds). UV accumulates by MAX: it is a screen-space
         // texture discontinuity — the eye sees the single WORST jump in the region, not a
@@ -1055,6 +1057,11 @@ private:
         // — a normal cone is the tight replacement, a later step). All stay monotone (kept >=
         // removed) for the VDPM front.
         deviation_[kept] = std::max(deviation_[kept], deviation_[removed]) + step.geometry;
+        // Same running-sum envelope as the geometric channel (a spatial displacement genuinely
+        // compounds up a collapse chain), but fed by the Euclidean step, so an in-plane collapse
+        // contributes instead of vanishing.
+        shadowDeviation_[kept] =
+            std::max(shadowDeviation_[kept], shadowDeviation_[removed]) + step.shadow;
         uvDeviation_[kept] = std::max({uvDeviation_[kept], uvDeviation_[removed], step.uv});
         constexpr float pi = std::numbers::pi_v<float>;
         normalDeviation_[kept] =
@@ -1070,6 +1077,7 @@ private:
         // subsumes. Monotone (merging only widens), so it stays valid up the tree.
         normalCone_[kept] = mergeCones(normalCone_[kept], normalCone_[removed]);
         sequence_.back().deviationRadius = deviation_[kept];
+        sequence_.back().shadowDeviationRadius = shadowDeviation_[kept];
         sequence_.back().uvDeviationRadius = uvDeviation_[kept];
         sequence_.back().normalDeviationRadius = normalDeviation_[kept];
         sequence_.back().tangentDeviationRadius = tangentDeviation_[kept];
@@ -1132,8 +1140,11 @@ private:
     std::vector<std::uint8_t> triAlive_;
     std::vector<std::uint32_t> remap_;
     std::vector<std::uint32_t> version_;
-    std::vector<double> weight_;         // accumulated face-plane weight per vertex (for RMS error)
-    std::vector<float> deviation_;       // cumulative geometric deviation radius per vertex (VDPM)
+    std::vector<double> weight_;   // accumulated face-plane weight per vertex (for RMS error)
+    std::vector<float> deviation_; // cumulative geometric deviation radius per vertex (VDPM)
+    // Cumulative EUCLIDEAN deviation per vertex — the shadow-silhouette channel (SH-02). Separate
+    // from deviation_ because that one is point-to-plane and blind to in-plane movement.
+    std::vector<float> shadowDeviation_;
     std::vector<float> uvDeviation_;     // cumulative UV deviation radius per vertex (VDPM)
     std::vector<float> normalDeviation_; // cumulative shading-normal deviation (radians) per vertex
     std::vector<float> tangentDeviation_; // cumulative tangent deviation (radians) per vertex
@@ -1154,7 +1165,7 @@ private:
 namespace detail
 {
 
-CollapseDeviation measureCollapseDeviation(std::uint32_t removed,
+CollapseDeviation measureCollapseDeviation(std::uint32_t removed, std::uint32_t kept,
                                            std::span<const std::array<std::uint32_t, 3>> faces,
                                            std::span<const Vec3> pos, std::span<const Vec3> nrm,
                                            std::span<const Vec3> tanT, std::span<const Vec3> tanB,
@@ -1249,6 +1260,25 @@ CollapseDeviation measureCollapseDeviation(std::uint32_t removed,
     {
         out.geometry = nearestPlane;
     }
+    // Shadow channel: the EUCLIDEAN distance to that same nearest surviving triangle. Unlike
+    // `geometry` (point-to-plane) it stays non-zero for a coplanar collapse whose removed vertex
+    // lands outside every face — the in-plane silhouette movement a shadow shows.
+    if (nearestTriSq != std::numeric_limits<float>::max())
+    {
+        out.shadow = std::sqrt(nearestTriSq);
+    }
+    else if (kept < pos.size() && removed < pos.size())
+    {
+        // No valid surviving triangle to measure against. A subset collapse maps `removed` onto
+        // `kept`, so that edge length is the displacement; returning 0 would claim a free collapse.
+        out.shadow = (pos[removed] - pos[kept]).magnitude();
+    }
+    if (!std::isfinite(out.shadow))
+    {
+        // Non-finite input (a NaN position) must not read as a small error: infinity forces the
+        // caller to LOD0 rather than trusting a number derived from garbage.
+        out.shadow = std::numeric_limits<float>::infinity();
+    }
     return out;
 }
 
@@ -1275,6 +1305,32 @@ QuadricSimplifier::collapseSequence(std::span<const Vertex> vertices,
     QemRun run(vertices, indices);
     run.run(1); // collapse as far as the mesh allows
     return std::move(run).sequence();
+}
+
+float shadowDeviationForCut(std::span<const MeshCollapse> collapses,
+                            std::size_t collapseCount) noexcept
+{
+    assert(collapseCount <= collapses.size() &&
+           "cut declares more collapses than the recorded stream holds");
+    if (collapseCount > collapses.size())
+    {
+        return std::numeric_limits<float>::infinity();
+    }
+    float worst = 0.0f;
+    for (std::size_t i = 0; i < collapseCount; ++i)
+    {
+        const float radius = collapses[i].shadowDeviationRadius;
+        // A deviation is a MAGNITUDE: negative or NaN means the data is invalid, not that the
+        // collapse was cheap. `std::max` would hide both — NaN loses every comparison, and a
+        // negative simply loses — leaving a plausible small number for a cut we cannot describe.
+        // Positive infinity needs no special case: it survives the max and propagates.
+        if (!(radius >= 0.0f))
+        {
+            return std::numeric_limits<float>::infinity();
+        }
+        worst = std::max(worst, radius);
+    }
+    return worst;
 }
 
 ProgressiveMesh QuadricSimplifier::buildProgressive(std::span<const Vertex> vertices,
@@ -1310,6 +1366,14 @@ ProgressiveMesh QuadricSimplifier::buildProgressive(std::span<const Vertex> vert
 
     run.run(1); // keep the full stream available for future/debug consumers.
     out.collapses = std::move(run).sequence();
+
+    // Per-cut shadow deviation, reduced AFTER the full stream is recorded so every cut reads the
+    // authoritative sequence rather than a partial one. The policy itself lives in
+    // shadowDeviationForCut (pure + directly tested), including what an invalid prefix means.
+    for (ProgressiveLod& lod : out.lods)
+    {
+        lod.shadowDeviation = shadowDeviationForCut(out.collapses, lod.collapseCount);
+    }
     return out;
 }
 

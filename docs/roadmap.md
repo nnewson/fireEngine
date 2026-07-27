@@ -45,12 +45,18 @@ the plan; the priority order is its § Suggested priority.
   chosen and what it cost, not how wrong it was.
 
 **Milestone 1 — correct discrete shadow LOD**
-- **SH-02** — the pure, Vulkan-free shadow-view projection model (`ShadowView`, per-cut shadow
-  deviation metric, `projectShadowErrorTexels`, `selectShadowLod`, hysteresis), headless-tested.
-  Owns the **projected shadow-texel deviation** SH-01 could not define, and with it the numerical
-  silhouette bound SH-01's reference images are the baseline for.
+- ~~**SH-02** — the pure, Vulkan-free shadow-view projection model~~ ✅ **landed**
+  (`shadow-view-lod-model`): `ShadowView` + `projectShadowErrorTexels` + `selectShadowLod` +
+  hysteresis, plus a dedicated per-cut Euclidean shadow-deviation channel through the simplifier
+  (the RMS error measured 2x BELOW true deviation; point-to-plane misses in-plane silhouette
+  movement; the support radius measured 12x-21,000x loose). Deliberately an **estimate, not a
+  bound** — see [`shadowplans.md`](shadowplans.md) § SH-02 for why, and for the one-sided limitation
+  it carries. No runtime behaviour changed; SH-03 threads it through.
 - **SH-03** — thread per-shadow-view discrete LOD through the renderer (the requested architectural
-  fix: one caster may select different levels for different shadow views).
+  fix: one caster may select different levels for different shadow views). Also owns the tuning
+  SH-02 deliberately refused to guess: `kShadowLodPixelBudget` + the coarsening ratio in
+  `render/constants.hpp`, threaded explicitly into the pure selector; retiring `kShadowLodBias`; and
+  calibrating both against SH-01's captures and diagnostics.
 - **SH-04** — deformation / proxy policy (skinned, morphed, cloth: no invalid error claims, explicit
   conservative full-detail fallback).
 

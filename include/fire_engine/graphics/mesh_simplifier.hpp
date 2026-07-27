@@ -34,6 +34,12 @@ struct MeshCollapse
     // accumulated up the collapse tree so a coarse collapse over a curved region carries the whole
     // region's deviation. `error` (RMS) is left untouched for discrete/VIPM selection.
     float deviationRadius{0.0f};
+    // Cumulative EUCLIDEAN deviation radius — the SH-02 shadow-silhouette channel. Accumulated with
+    // the same running-sum envelope as deviationRadius but from the Euclidean step, so an in-plane
+    // collapse (which point-to-plane reads as ~0) still contributes. A conservative cumulative
+    // ESTIMATE, explicitly NOT a Hausdorff bound: it measures the removed sample's displacement and
+    // is one-sided, so simplified surface added outside the original outline isn't counted.
+    float shadowDeviationRadius{0.0f};
     // UV deviation radius: the worst-case texture-space error the region will show, so VDPM can
     // refine regions whose parameterisation stretches — or whose welded seam wedges span charts —
     // even where the geometry is flat (the geometric radius alone can't see that). Per collapse it
@@ -107,7 +113,24 @@ struct ProgressiveLod
     std::vector<uint32_t> indices;
     float error{0.0f};
     std::size_t collapseCount{0};
+    // Max cumulative shadowDeviationRadius over this cut's EXACT collapse prefix (the first
+    // `collapseCount` collapses — the authoritative topology identity, not an error-derived guess).
+    // The shadow-LOD selector projects this into shadow-map texels; a conservative estimate, not a
+    // bound. LOD0 is 0.
+    float shadowDeviation{0.0f};
 };
+
+// The cut-level shadow-deviation policy, pure so it is directly testable and so buildProgressive
+// stays declarative: the MAX cumulative `shadowDeviationRadius` over the first `collapseCount`
+// collapses. The channel is cumulative and monotone up the collapse tree, so the prefix max is the
+// cut's value; an empty prefix (LOD0) is 0.
+//
+// An INVALID prefix — `collapseCount` beyond the recorded stream — asserts in debug and returns
+// infinity in release. Clamping instead would silently reduce over a shorter prefix and hand back a
+// plausible UNDER-estimate for a cut whose real collapses are unknown; infinity forces LOD0, which
+// is the only honest answer when the authoritative identity doesn't match the stream.
+[[nodiscard]] float shadowDeviationForCut(std::span<const MeshCollapse> collapses,
+                                          std::size_t collapseCount) noexcept;
 
 // A single replay artifact for discrete LOD + VIPM. Every LOD index buffer and every geomorph
 // target must be derived from this same collapse stream and these exact cuts; error values are not
@@ -128,6 +151,20 @@ struct CollapseDeviation
 {
     float geometry{
         0.0f}; // point-to-plane vs the nearest surviving triangle (0 across an in-plane gap)
+    // EUCLIDEAN distance to the nearest surviving triangle — the shadow-silhouette channel (SH-02).
+    // `geometry` above measures point-to-PLANE, which reads ~0 for a coplanar collapse even when
+    // the removed vertex lands well outside every surviving triangle: exactly the in-plane
+    // silhouette movement a shadow shows and the camera view barely does. This channel measures
+    // that displacement.
+    //
+    // Scope, stated precisely: it measures the tangential displacement OF THE REMOVED SAMPLE, and
+    // is one-sided. A coplanar collapse that bridges a concavity adds simplified surface outside
+    // the original outline while the removed vertex stays close to the new surface — that addition
+    // is not measured here. Conservative ESTIMATE, never a Hausdorff bound.
+    //
+    // Infinity when the inputs are non-finite, so a caller forces LOD0 rather than trusting a
+    // number derived from NaNs.
+    float shadow{0.0f};
     float normal{
         0.0f}; // shading-normal angular step, radians (vs the clamped closest-point interp)
     // Tangent-frame angular step, radians: the MAX of the T-axis and B-axis deviation of the
@@ -149,8 +186,13 @@ struct CollapseDeviation
 // (seam-spread term). Pure + free-standing, so a test can feed a hand-built one-ring — including
 // one where `removed` sits outside every face, or a handedness-flipped frame — and assert the
 // channels directly. Mirrors exactly what the simplifier's inner loop records per collapse.
+// `kept` is the collapse's surviving representative: with no valid surviving triangle to measure
+// against (every face degenerate, or an empty one-ring) the shadow channel falls back to
+// |removed - kept|, because a subset collapse maps the removed vertex onto exactly that vertex —
+// defaulting to zero there would claim a free collapse.
 [[nodiscard]] CollapseDeviation
-measureCollapseDeviation(std::uint32_t removed, std::span<const std::array<std::uint32_t, 3>> faces,
+measureCollapseDeviation(std::uint32_t removed, std::uint32_t kept,
+                         std::span<const std::array<std::uint32_t, 3>> faces,
                          std::span<const Vec3> pos, std::span<const Vec3> nrm,
                          std::span<const Vec3> tanT, std::span<const Vec3> tanB,
                          std::span<const Vec2> uv, std::span<const Vec2> removedWedgeUv) noexcept;

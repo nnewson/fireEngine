@@ -1,6 +1,8 @@
 #include <fire_engine/graphics/geometry.hpp>
 
 #include <algorithm>
+#include <cmath>
+#include <limits>
 #include <string>
 
 #include <fire_engine/core/log.hpp>
@@ -11,6 +13,26 @@
 
 namespace fire_engine
 {
+
+namespace
+{
+
+// Validates ProgressiveLod's authoritative value on the way to the GPU-side LOD record. A deviation
+// is a MAGNITUDE, so anything negative or non-finite is invalid data — and both must become
+// infinity (forcing the shadow-LOD selector to LOD0) rather than a small number. `std::max(0.0f,
+// x)` does the opposite on both counts: it returns 0 for a NaN (the comparison is false, so the
+// first argument wins) and 0 for a negative, converting invalid data into a claim that the cut is
+// free. A valid value passes through UNCHANGED — no clamping, so nothing is silently adjusted.
+[[nodiscard]] float shadowDeviationForGpu(float deviation) noexcept
+{
+    if (!(deviation >= 0.0f) || !std::isfinite(deviation))
+    {
+        return std::numeric_limits<float>::infinity();
+    }
+    return deviation;
+}
+
+} // namespace
 
 void Geometry::load(Resources& resources, VdpmGpuRegistry* registry)
 {
@@ -38,7 +60,8 @@ void Geometry::load(Resources& resources, VdpmGpuRegistry* registry)
             }
             const BufferHandle buffer = resources.createIndexBuffer(simplified.indices);
             lods_.push_back(GeometryLod{buffer, static_cast<uint32_t>(simplified.indices.size()),
-                                        std::max(0.0f, simplified.error)});
+                                        std::max(0.0f, simplified.error),
+                                        shadowDeviationForGpu(simplified.shadowDeviation)});
         }
         if (lods_.size() > 1)
         {

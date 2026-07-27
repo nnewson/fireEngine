@@ -250,30 +250,76 @@ Likely branch: `shadow-lod-diagnostics`.
 
 ### Milestone 1 — correct discrete shadow LOD
 
-#### SH-02: Pure shadow-view projection model
+#### SH-02: Pure shadow-view projection model — ✅ landed (branch `shadow-view-lod-model`)
 
-Extract/test the projection math before threading it through the renderer:
+The Vulkan-free selection model, headless-testable, with no renderer changes: SH-03 threads it
+through. What landed:
 
-- a `ShadowView` value describing orthographic or perspective map layers;
-- a per-cut shadow deviation metric distinct from the existing QEM RMS selection error;
-- conservative world-error scaling under uniform, non-uniform, reflected, and singular transforms;
-- nearest-depth calculation from world bounds for perspective views;
-- `projectShadowErrorTexels`;
-- `selectShadowLod`; and
-- hysteresis state transitions.
+**The metric.** `GeometryLod::error` is an RMS quadric value — an AVERAGE, which a locally bad
+region hides inside; measured on a sphere it read **2x BELOW** the surface's true movement, so it is
+unsafe as a shadow authority. `MeshCollapse::deviationRadius` is point-to-PLANE and reads ~0 across
+an in-plane gap, so it can miss the tangential displacement a shadow shows and a camera view barely
+does. `supportRadius` is safe but measured **12x-21,000x** loose (it grows toward the object's own
+size), which would pin every planar caster to LOD0 permanently.
 
-Keep this in the Vulkan-free layer so it is headless-testable. Unit tests should prove:
+So SH-02 added a dedicated channel: `CollapseDeviation::shadow`, the EUCLIDEAN distance to the
+nearest surviving triangle — a value `measureCollapseDeviation` already computed and discarded. It
+accumulates with the same running-sum envelope as the geometric channel into
+`MeshCollapse::shadowDeviationRadius`, reduces per cut via the pure `shadowDeviationForCut` (max over
+the EXACT `collapseCount` prefix) onto `ProgressiveLod::shadowDeviation`, and is carried — validated
+— to `GeometryLod::shadowDeviation`.
 
-- camera movement alone cannot alter a fixed light-view selection;
-- cuts with a large local/cumulative deviation cannot hide behind a small RMS QEM value;
-- doubling orthographic world-units-per-texel permits the expected coarser level;
-- doubling object scale doubles projected error;
-- increasing spot/point distance reduces projected error;
-- near-plane intersection and invalid inputs choose LOD0;
-- selection differs correctly between near and far cascades; and
-- refine/coarsen thresholds do not chatter.
+**It is an ESTIMATE, not a bound, and this doc must keep saying so.** It measures the tangential
+displacement of the REMOVED SAMPLE and is one-sided: a coplanar collapse bridging a concavity adds
+simplified surface outside the original outline that the removed vertex never sees. Measured
+directly: on a sphere at LOD2 the simplified surface sat **0.069** from the original while
+original->simplified sampling reported only **0.044**. The accumulated estimate covered both, at
+2.27x, but that is empirical cushion rather than guarantee. A certified symmetric surface bound
+remains a swappable future metric, not hidden unfinished work inside SH-02.
 
-Likely branch: `shadow-view-lod-model`.
+**Invalid-value policy, everywhere in the chain.** A deviation is a magnitude, so negative, NaN and
+non-finite all mean invalid data — never a cheap collapse. Each becomes infinity, which forces LOD0.
+`std::max(0.0f, x)` is specifically wrong for this (it returns 0 for both NaN and negatives) and is
+not used anywhere in the chain. An invalid collapse prefix asserts in debug and returns infinity in
+release rather than clamping to a shorter one.
+
+**The model** (`graphics/shadow_view.hpp`):
+
+- `ShadowView` — an encapsulated value with private state and static factories, so an invalid view
+  cannot be assembled by bypassing a convention. Orthographic covers directional cascades, the
+  world-only cascades AND the self-shadow layers; perspective covers spot maps and each point face
+  separately, carrying a factory-normalised forward so depth is light-view z.
+- `nearestForwardDepth` — the minimum signed forward projection over all EIGHT bounds corners. A
+  centre distance hides a caster straddling the light; a radial distance over-states depth off-axis
+  (a caster 40 units to the side reads 9 deep, not 41).
+- `projectShadowErrorTexels` — RADIAL texel displacement, stated explicitly rather than per-axis.
+  Orthographic is `error / worldUnitsPerTexel`. Perspective is
+  `error * extent * sqrt(1 + 2*tanHalfFov^2) / (2 * tanHalfFov * (depth - error))`: the square-root
+  factor is the Jacobian's largest singular value at a frustum corner, and `depth - error` evaluates
+  it at the closest depth the displaced surface can reach. That second term is not cosmetic — a
+  frustum-corner test measured an actual displacement of 7.4256 texels against a first-order bound
+  of 7.4021.
+- `selectShadowLod` — validates the LOD chain first (LOD0 exactly zero; coarser cuts finite,
+  non-negative, monotonic), then selects. Refinement may jump multiple levels at once to restore the
+  budget; coarsening reaches the coarsest level clearing the stricter threshold. Object-space
+  deviation is bounded into world space by the conservative sigma_max shared with VDPM
+  (`math/singular_value.hpp`), so a scaled instance can never under-refine.
+- Distinct fallback reasons — `InvalidView`, `InvalidCaster`, `NearPlane`, `InvalidPreviousLevel` —
+  so SH-01's panel never reports a forced LOD0 as a deliberate `Selected`.
+- `previousLevel` is valid ONLY for the same draw and the same LOGICAL view. An out-of-range value
+  is not clamped: clamping would hide a punctual slot reassigned to another light applying one
+  caster's hysteresis to another's geometry.
+
+**Acceptance statement** (replacing the earlier "bounded silhouette displacement", which promised a
+guarantee the metric does not provide):
+
+> Select the coarsest cut whose conservatively accumulated shadow-deviation estimate projects within
+> the texel budget; validate the estimate empirically against full-detail shadow masks.
+
+**Deliberately deferred to SH-03**, because both are tuning values that must be measured rather than
+guessed: `ShadowLodHysteresis::coarsenRatio` defaults to an INVALID sentinel (the selector rejects
+it) so no caller silently inherits an unmeasured number, and `selectShadowLod` takes its texel budget
+as an argument with no default.
 
 #### SH-03: Resolve LOD per shadow iteration
 
@@ -295,6 +341,17 @@ the right seam for future cache signatures: the selected geometry identity and l
 inputs to shadow content.
 
 Likely branch: `shadow-per-view-discrete-lod`.
+
+
+**SH-03 additionally owns** (handed over by SH-02):
+
+- `kShadowLodPixelBudget` and the measured coarsening ratio, in `render/constants.hpp` — the single
+  source of truth for render tunables — threaded EXPLICITLY into the Vulkan-free selector rather than
+  defaulted inside it.
+- Retiring `kShadowLodBias`. The camera-pixel-budget heuristic it scales has no meaning once
+  selection is per shadow view in shadow-map texels.
+- Empirical calibration of both values against SH-01's captures and per-view diagnostics — the point
+  at which the shadow-deviation estimate's adequacy is actually judged.
 
 #### SH-04: Conservative deformation and proxy policy
 

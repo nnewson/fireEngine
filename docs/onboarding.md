@@ -1015,6 +1015,7 @@ the same change — most have a test or guard that will catch you, but not all.
 - Collision broadphase: `src/collision/dynamic_aabb_tree_broad_phase.cpp` (default), `src/collision/sweep_and_prune_broad_phase.cpp` (alternative), behind `collision/broad_phase.hpp`
 - Narrowphase: `src/collision/narrow_phase.cpp`
 - Mesh component: `src/scene/mesh.cpp`
+- Shadow-LOD selection model (SH-02): `include/fire_engine/graphics/shadow_view.hpp` + `src/graphics/shadow_view.cpp` — Vulkan-free view descriptors, texel projection, and `selectShadowLod`, with the per-cut shadow-deviation channel behind it in the simplifier (see [`lod.md`](lod.md) § The shadow-deviation channel). Pure and headless; SH-03 threads it into the renderer, supplies the texel budget + coarsening ratio from `render/constants.hpp`, and retires `kShadowLodBias`.
 - Draw command generation + LOD selection: `src/graphics/object.cpp`
 - Mesh LOD / simplifier: `include/fire_engine/graphics/lod.hpp`, `src/graphics/mesh_simplifier.cpp`
 - GPU resource registry: `src/render/resources.cpp`

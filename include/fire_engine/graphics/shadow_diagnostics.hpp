@@ -31,6 +31,23 @@ enum class ShadowLodReason : std::uint8_t
     // The geometry carries a single level, so there is nothing to select. Cloth / storage-vertex
     // geometry lands here: it never builds coarser levels.
     SingleLevel,
+    // SH-02 forced fallbacks. Each is a level-0 result the selector could NOT justify, kept
+    // distinct from `Selected` so the SH-01 panel reports a forced choice as such — a fallback
+    // reported as a deliberate selection would make the diagnostics lie about why detail is high.
+    //
+    // The shadow view descriptor itself is unusable (degenerate texel size, zero-length or
+    // non-finite light direction, non-positive fov/extent/near plane).
+    InvalidView,
+    // The caster's inputs are unusable: a non-finite transform, invalid world bounds, a
+    // non-finite or negative recorded deviation, or a non-finite budget.
+    InvalidCaster,
+    // A perspective view whose caster reaches the light's near plane (or sits behind it). Texel
+    // size diverges there, so no projected error is meaningful.
+    NearPlane,
+    // `previousLevel` did not name a level of this geometry — a plumbing error (hysteresis state
+    // carried across a reassigned punctual slot, or a stale per-caster record). Deliberately NOT
+    // clamped into range: clamping would hide the bug and apply one caster's history to another.
+    InvalidPreviousLevel,
     Count
     // SH-04 adds an explicit deformable-fallback reason. Today skinned and morphed geometry DO
     // build and select simplified levels, so they are `Selected` like any rigid mesh — recording
