@@ -27,14 +27,25 @@ TEST_CASE("shadow view slots are a dense, collision-free flattening", "[ShadowDi
     CHECK(seen.size() == kShadowViewCount);
 }
 
-TEST_CASE("point views flatten as lightSlot * 6 + face", "[ShadowDiagnostics]")
+TEST_CASE("a cube has six faces", "[ShadowDiagnostics]")
 {
+    // Pinned ONCE, on its own, because it is a Vulkan topology fact rather than a tunable: a cube
+    // map has six faces and always will. Every other expectation below is then expressed through
+    // the constant, so changing the constant cannot leave a test agreeing with a stale literal.
+    STATIC_REQUIRE(kCubeFaceCount == 6);
+}
+
+TEST_CASE("point views flatten as lightSlot * kCubeFaceCount + face", "[ShadowDiagnostics]")
+{
+    constexpr std::size_t lastFace = kCubeFaceCount - 1;
+
     CHECK(shadowPointViewSlot(0, 0) == 0);
-    CHECK(shadowPointViewSlot(0, 5) == 5);
-    CHECK(shadowPointViewSlot(1, 0) == 6);
-    CHECK(shadowPointViewSlot(3, 5) == 23);
+    CHECK(shadowPointViewSlot(0, lastFace) == lastFace);
+    // The first face of the next light starts exactly one full cube on.
+    CHECK(shadowPointViewSlot(1, 0) == kCubeFaceCount);
+    CHECK(shadowPointViewSlot(3, lastFace) == (std::size_t{3} * kCubeFaceCount) + lastFace);
     // The last point face must still be inside the group's capacity.
-    CHECK(shadowPointViewSlot(static_cast<std::size_t>(kMaxPointShadowCasters) - 1, 5) <
+    CHECK(shadowPointViewSlot(static_cast<std::size_t>(kMaxPointShadowCasters) - 1, lastFace) <
           shadowViewSlotCount(ShadowViewGroup::Point));
 }
 

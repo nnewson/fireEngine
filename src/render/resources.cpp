@@ -10,6 +10,7 @@
 #include <type_traits>
 
 #include <fire_engine/graphics/draw_command.hpp>
+#include <fire_engine/graphics/gpu_limits.hpp>
 #include <fire_engine/graphics/image.hpp>
 #include <fire_engine/graphics/ktx_image.hpp>
 #include <fire_engine/graphics/material_binding.hpp>
@@ -744,11 +745,11 @@ TextureHandle Resources::createUploaded2DTexture(const void* pixels, int width, 
 void Resources::createCubemapFaceViews(const Device& device, TextureEntry& entry)
 {
     entry.faceViews.clear();
-    entry.faceViews.reserve(static_cast<std::size_t>(entry.mipLevels) * 6);
+    entry.faceViews.reserve(static_cast<std::size_t>(entry.mipLevels) * kCubeFaceCount);
 
     for (uint32_t mipLevel = 0; mipLevel < entry.mipLevels; ++mipLevel)
     {
-        for (uint32_t face = 0; face < 6; ++face)
+        for (uint32_t face = 0; face < kCubeFaceCount; ++face)
         {
             vk::ImageViewCreateInfo faceViewCi = makeImageViewCreateInfo(
                 *entry.image, vk::ImageViewType::e2D, entry.format,
@@ -920,7 +921,7 @@ TextureHandle Resources::createCubemapTexture(const float* pixels, uint32_t face
 
     vk::DeviceSize imageSize = 0;
     std::vector<vk::BufferImageCopy> regions;
-    regions.reserve(static_cast<std::size_t>(mipLevels) * 6);
+    regions.reserve(static_cast<std::size_t>(mipLevels) * kCubeFaceCount);
     {
         uint32_t levelExtent = faceExtent;
         vk::DeviceSize offset = 0;
@@ -928,7 +929,7 @@ TextureHandle Resources::createCubemapTexture(const float* pixels, uint32_t face
         {
             vk::DeviceSize faceSize =
                 static_cast<vk::DeviceSize>(levelExtent) * levelExtent * 4 * sizeof(float);
-            for (uint32_t face = 0; face < 6; ++face)
+            for (uint32_t face = 0; face < kCubeFaceCount; ++face)
             {
                 regions.push_back(makeBufferImageCopy(
                     offset,
@@ -936,19 +937,19 @@ TextureHandle Resources::createCubemapTexture(const float* pixels, uint32_t face
                     vk::Extent3D{.width = levelExtent, .height = levelExtent, .depth = 1}));
                 offset += faceSize;
             }
-            imageSize += faceSize * 6;
+            imageSize += faceSize * kCubeFaceCount;
             levelExtent = std::max(1u, levelExtent / 2);
         }
     }
 
     vk::ImageCreateInfo imgCi = makeImageCreateInfo(
         vk::ImageCreateFlagBits::eCubeCompatible, vk::ImageType::e2D, entry.format,
-        vk::Extent3D{.width = faceExtent, .height = faceExtent, .depth = 1}, mipLevels, 6,
-        vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled);
+        vk::Extent3D{.width = faceExtent, .height = faceExtent, .depth = 1}, mipLevels,
+        kCubeFaceCount, vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled);
     uploadImageFromHost(entry, pixels, imageSize, imgCi, regions);
 
     createImageView(entry, vk::ImageViewType::eCube, vk::ImageAspectFlagBits::eColor, 0, mipLevels,
-                    0, 6);
+                    0, kCubeFaceCount);
     createCubemapFaceViews(*device_, entry);
 
     createSampledTextureSampler(entry, sampler, mipLevels, vk::BorderColor::eFloatOpaqueBlack);
@@ -968,13 +969,14 @@ TextureHandle Resources::createRenderTargetCubemap(uint32_t faceExtent, uint32_t
     // mip-weighted lookups). Small memory/bandwidth cost when unused.
     vk::ImageCreateInfo imgCi = makeImageCreateInfo(
         vk::ImageCreateFlagBits::eCubeCompatible, vk::ImageType::e2D, entry.format,
-        vk::Extent3D{.width = faceExtent, .height = faceExtent, .depth = 1}, mipLevels, 6,
+        vk::Extent3D{.width = faceExtent, .height = faceExtent, .depth = 1}, mipLevels,
+        kCubeFaceCount,
         vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled |
             vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst);
     allocateImage(entry, imgCi);
 
     createImageView(entry, vk::ImageViewType::eCube, vk::ImageAspectFlagBits::eColor, 0, mipLevels,
-                    0, 6);
+                    0, kCubeFaceCount);
     createCubemapFaceViews(*device_, entry);
 
     createSampledTextureSampler(entry, sampler, mipLevels, vk::BorderColor::eFloatOpaqueBlack);
@@ -1083,7 +1085,7 @@ TextureHandle Resources::createPointShadowMap(uint32_t faceExtent, uint32_t cube
     TextureHandle handle;
     TextureEntry& entry = appendTextureEntry(handle, vk::Format::eD32Sfloat);
 
-    const uint32_t totalLayers = 6u * cubeCount;
+    const uint32_t totalLayers = kCubeFaceCount * cubeCount;
     vk::ImageCreateInfo imgCi = makeImageCreateInfo(
         vk::ImageCreateFlagBits::eCubeCompatible, vk::ImageType::e2D, entry.format,
         vk::Extent3D{.width = faceExtent, .height = faceExtent, .depth = 1}, 1, totalLayers,
@@ -1096,7 +1098,7 @@ TextureHandle Resources::createPointShadowMap(uint32_t faceExtent, uint32_t cube
         makeImageSubresourceRange(vk::ImageAspectFlagBits::eDepth, 0, 1, 0, totalLayers));
     entry.view = vk::raii::ImageView(device_->device(), viewCi);
 
-    // Per-face 2D depth views — `6 * cube + face`. Used as dynamic-rendering
+    // Per-face 2D depth views — `kCubeFaceCount * cube + face`. Used as dynamic-rendering
     // depth attachments during the depth pass (one face per begin/endRendering).
     entry.faceViews.reserve(totalLayers);
     for (uint32_t layer = 0; layer < totalLayers; ++layer)
@@ -1123,7 +1125,9 @@ vk::ImageView Resources::vulkanPointShadowFaceView(TextureHandle handle, uint32_
                                                    uint32_t face) const noexcept
 {
     const auto& entry = textures_[handleIndex(handle)];
-    return *entry.faceViews[6u * cubeIndex + face];
+    // The SAME flattening the shadow recorder, the matrix indexing and the diagnostics use
+    // (shadowPointViewSlot): cubeIndex * kCubeFaceCount + face.
+    return *entry.faceViews[kCubeFaceCount * cubeIndex + face];
 }
 
 TextureHandle Resources::createOffscreenColourTarget(vk::Extent2D extent)
@@ -1344,7 +1348,7 @@ vk::ImageView Resources::vulkanCubemapFaceView(TextureHandle handle, uint32_t fa
                                                uint32_t mipLevel) const noexcept
 {
     const auto& entry = textures_[handleIndex(handle)];
-    std::size_t index = static_cast<std::size_t>(mipLevel) * 6 + face;
+    const std::size_t index = static_cast<std::size_t>(mipLevel) * kCubeFaceCount + face;
     return *entry.faceViews[index];
 }
 

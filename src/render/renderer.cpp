@@ -876,11 +876,12 @@ const Renderer::DrawBuckets& Renderer::collectDrawCommands(RenderableScene& scen
         };
         frustumScratch_.reserve(1 + static_cast<std::size_t>(kShadowCascadeCount) +
                                 static_cast<std::size_t>(activeSpotCasters_) +
-                                6 * static_cast<std::size_t>(activePointCasters_));
+                                kCubemapFaceCount * static_cast<std::size_t>(activePointCasters_));
         frustumScratch_.push_back(Frustum::fromViewProj(currentViewProj_));
         pushRange(kShadowCascadeMatrixBase, static_cast<int>(kShadowCascadeCount));
         pushRange(kShadowSpotMatrixBase, activeSpotCasters_);
-        pushRange(kShadowPointMatrixBase, 6 * activePointCasters_);
+        pushRange(kShadowPointMatrixBase,
+                  static_cast<int>(kCubemapFaceCount) * activePointCasters_);
     }
 
     const CullStats cull = scene.buildDrawCommands(frame, frustumScratch_, drawCommandScratch_);

@@ -8,6 +8,7 @@
 #include <variant>
 #include <vector>
 
+#include <fire_engine/core/node_id.hpp>
 #include <fire_engine/input/input_state.hpp>
 #include <fire_engine/math/mat4.hpp>
 #include <fire_engine/physics/physics_handle.hpp>
@@ -30,6 +31,14 @@ public:
     Node& operator=(const Node&) = delete;
     Node(Node&&) noexcept = default;
     Node& operator=(Node&&) noexcept = default;
+
+    // Process-unique and stable for this node's lifetime, including across moves — the identity
+    // anything cross-frame should key on (see node_id.hpp for why a pointer or an array index is
+    // not good enough).
+    [[nodiscard]] NodeId id() const noexcept
+    {
+        return id_.value();
+    }
 
     [[nodiscard]] const std::string& name() const noexcept
     {
@@ -201,6 +210,10 @@ private:
     // previousComposedWorld_ (motion vectors / CCD). Shared by update/resolve.
     void setComposedWorld(const Mat4& newComposedWorld) noexcept;
 
+    // Move-AWARE (see NodeIdentity): a defaulted move would copy the scalar and leave two live
+    // Nodes claiming one "unique" id. The identity follows the contents; the moved-from Node gets a
+    // fresh one.
+    NodeIdentity id_;
     std::string name_;
     Transform transform_;
     Components component_;

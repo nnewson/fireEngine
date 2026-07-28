@@ -100,7 +100,7 @@ TEST_CASE("LightGather.IdentityWorldDirectionalForwardIsNegativeZ", "[LightGathe
 {
     Light l;
     l.type(Light::Type::Directional);
-    auto inst = Light::toLighting(l, Mat4::identity());
+    auto inst = Light::toLighting(l, Mat4::identity(), static_cast<fire_engine::NodeId>(7));
     CHECK(inst.type == 0);
     CHECK(inst.worldPosition.x() == Catch::Approx(0.0f).margin(1e-5f));
     CHECK(inst.worldPosition.y() == Catch::Approx(0.0f).margin(1e-5f));
@@ -116,7 +116,7 @@ TEST_CASE("LightGather.TranslatedPointKeepsForwardSetsPosition", "[LightGather]"
     l.type(Light::Type::Point);
     l.range(8.0f);
     auto world = Mat4::translate(Vec3{3.0f, 4.0f, 5.0f});
-    auto inst = Light::toLighting(l, world);
+    auto inst = Light::toLighting(l, world, static_cast<fire_engine::NodeId>(7));
     CHECK(inst.type == 1);
     CHECK(inst.worldPosition.x() == Catch::Approx(3.0f).margin(1e-5f));
     CHECK(inst.worldPosition.y() == Catch::Approx(4.0f).margin(1e-5f));
@@ -130,7 +130,7 @@ TEST_CASE("LightGather.RotatedNodeRotatesForward", "[LightGather]")
     Light l;
     l.type(Light::Type::Spot);
     auto world = Mat4::rotateY(fire_engine::pi * 0.5f);
-    auto inst = Light::toLighting(l, world);
+    auto inst = Light::toLighting(l, world, static_cast<fire_engine::NodeId>(7));
     CHECK(inst.type == 2);
     CHECK(inst.worldDirection.x() == Catch::Approx(-1.0f).margin(1e-5f));
     CHECK(inst.worldDirection.y() == Catch::Approx(0.0f).margin(1e-5f));
@@ -143,7 +143,7 @@ TEST_CASE("LightGather.ConeAnglesPackAsCosines", "[LightGather]")
     l.type(Light::Type::Spot);
     l.outerConeRad(fire_engine::pi / 3.0f);
     l.innerConeRad(fire_engine::pi / 6.0f);
-    auto inst = Light::toLighting(l, Mat4::identity());
+    auto inst = Light::toLighting(l, Mat4::identity(), static_cast<fire_engine::NodeId>(7));
     CHECK(inst.innerConeCos == Catch::Approx(std::cos(fire_engine::pi / 6.0f)).margin(1e-6f));
     CHECK(inst.outerConeCos == Catch::Approx(std::cos(fire_engine::pi / 3.0f)).margin(1e-6f));
 }
@@ -153,7 +153,7 @@ TEST_CASE("LightGather.ColourAndIntensityRoundTrip", "[LightGather]")
     Light l;
     l.colour(Colour3(0.2f, 0.4f, 0.6f));
     l.intensity(7.5f);
-    auto inst = Light::toLighting(l, Mat4::identity());
+    auto inst = Light::toLighting(l, Mat4::identity(), static_cast<fire_engine::NodeId>(7));
     CHECK(inst.colour == Colour3(0.2f, 0.4f, 0.6f));
     CHECK(inst.intensity == Catch::Approx(7.5f).margin(1e-5f));
 }
@@ -162,7 +162,7 @@ TEST_CASE("LightGather.ScaledNodeStillEmitsUnitForward", "[LightGather]")
 {
     Light l;
     auto world = Mat4::scale(Vec3{4.0f, 4.0f, 4.0f});
-    auto inst = Light::toLighting(l, world);
+    auto inst = Light::toLighting(l, world, static_cast<fire_engine::NodeId>(7));
     CHECK(inst.worldDirection.magnitude() == Catch::Approx(1.0f).margin(1e-5f));
     CHECK(inst.worldDirection.z() == Catch::Approx(-1.0f).margin(1e-5f));
 }

@@ -178,8 +178,8 @@ Shadows::Shadows(const Device& device, Resources& resources)
     // Spot casters share a 2D-array depth image, one layer per caster.
     spotShadowMapHandle_ = resources_->createShadowMap(kSpotShadowMapExtent, kMaxSpotShadowCasters);
 
-    // Point casters: one cubemap-array depth image, six faces per caster. Layout
-    // 6 * cube + face matches Resources::vulkanPointShadowFaceView and the
+    // Point casters: one cubemap-array depth image, kCubeFaceCount faces per caster. Layout
+    // `kCubeFaceCount * cube + face` matches Resources::vulkanPointShadowFaceView and the
     // matrixIndex layout in ShadowUBO::lightViewProj.
     pointShadowMapHandle_ =
         resources_->createPointShadowMap(kPointShadowMapExtent, kMaxPointShadowCasters);
@@ -424,7 +424,7 @@ void Shadows::recordPass(vk::CommandBuffer cmd, std::span<const DrawCommand> sha
                                           p < static_cast<std::size_t>(kMaxPointShadowCasters);
                        ++p)
                   {
-                      for (uint32_t face = 0; face < 6; ++face)
+                      for (uint32_t face = 0; face < kCubeFaceCount; ++face)
                       {
                           // ONE derivation feeding the matrix slot, the attachment layer and the
                           // diagnostic row — the point family's matrix index, depth layer and view

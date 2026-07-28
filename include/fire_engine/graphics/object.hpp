@@ -11,6 +11,7 @@
 #include <fire_engine/graphics/gpu_handle.hpp>
 #include <fire_engine/graphics/gpu_limits.hpp>
 #include <fire_engine/graphics/renderable_scene.hpp>
+#include <fire_engine/graphics/shadow_identity.hpp>
 #include <fire_engine/graphics/vdpm.hpp>
 #include <fire_engine/math/mat4.hpp>
 
@@ -101,6 +102,14 @@ private:
         // Per-INSTANCE shadow eligibility (see Object::addGeometry). A shared Geometry cannot
         // carry this: two instances of one mesh may legitimately disagree.
         bool castsShadow{true};
+        // Stable identity for this BINDING, allocated once (SH-03). Object::objectId is per Object,
+        // so a multi-geometry mesh would have its bindings share one id and overwrite each other's
+        // shadow-LOD hysteresis history.
+        ShadowCasterId shadowCasterId{allocateShadowCasterId()};
+        // Bumped whenever `shadowGeometry` changes. Part of the hysteresis KEY (not a field checked
+        // at each lookup), so history built against a replaced chain simply finds nothing rather
+        // than relying on every future call site to remember a separate comparison.
+        ShadowCasterGeneration shadowGeneration{ShadowCasterGeneration::First};
         const Material* defaultMaterial{nullptr};
         const Material* activeMaterial{nullptr};
         std::vector<const Material*> variantMaterials;

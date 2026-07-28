@@ -167,8 +167,16 @@ void Object::shadowGeometry(std::size_t geometryIndex, const Geometry* geometry)
     {
         return;
     }
-    bindings_[geometryIndex].shadowGeometry =
-        geometry != nullptr ? geometry : bindings_[geometryIndex].geometry;
+    auto& binding = bindings_[geometryIndex];
+    const Geometry* replacement = geometry != nullptr ? geometry : binding.geometry;
+    if (replacement != binding.shadowGeometry)
+    {
+        // The LOD chain the hysteresis history was built against is gone. Advancing the generation
+        // changes the state KEY, so stored history is simply not found — rather than being
+        // reapplied to a different chain that merely happens to have the same number of levels.
+        binding.shadowGeneration = nextShadowCasterGeneration(binding.shadowGeneration);
+    }
+    binding.shadowGeometry = replacement;
 }
 
 void Object::addVariantMaterial(std::size_t geometryIndex, std::size_t variantIndex,

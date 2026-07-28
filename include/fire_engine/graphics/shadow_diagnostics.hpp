@@ -97,8 +97,8 @@ inline constexpr std::size_t kShadowViewGroupCount =
     case ShadowViewGroup::Spot:
         return static_cast<std::size_t>(kMaxSpotShadowCasters);
     case ShadowViewGroup::Point:
-        // Flattened: lightSlot * 6 + face.
-        return static_cast<std::size_t>(kMaxPointShadowCasters) * 6;
+        // Flattened: lightSlot * kCubeFaceCount + face.
+        return static_cast<std::size_t>(kMaxPointShadowCasters) * kCubeFaceCount;
     case ShadowViewGroup::Count:
         break;
     }
@@ -119,7 +119,7 @@ inline constexpr std::size_t kShadowViewGroupCount =
 inline constexpr std::size_t kShadowViewCount = shadowViewGroupBase(ShadowViewGroup::Count);
 
 // Flat index for (group, slot). `slot` is the physical slot within the group — cascade index,
-// self-shadow caster slot, spot light slot, or `lightSlot * 6 + face` for point.
+// self-shadow caster slot, spot light slot, or `lightSlot * kCubeFaceCount + face` for point.
 [[nodiscard]] constexpr std::size_t shadowViewIndex(ShadowViewGroup group,
                                                     std::size_t slot) noexcept
 {
@@ -129,7 +129,7 @@ inline constexpr std::size_t kShadowViewCount = shadowViewGroupBase(ShadowViewGr
 [[nodiscard]] constexpr std::size_t shadowPointViewSlot(std::size_t lightSlot,
                                                         std::size_t face) noexcept
 {
-    return lightSlot * 6 + face;
+    return lightSlot * kCubeFaceCount + face;
 }
 
 // LOD histogram bins: levels 0, 1, 2, and "3 or coarser" lumped together (the deep tail carries no

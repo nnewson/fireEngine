@@ -45,8 +45,9 @@ void shadowStatsRow(const char* label, const ShadowViewStats& stats, const char*
 
 // Row label for one physical slot of a family. Deliberately says "slot", not "light": slots are
 // assignment order into a fixed array, so the same row can describe a different light next frame —
-// a row is a MAP, not an identity. Point views are stored flat as lightSlot * 6 + face, so they
-// decode back to both numbers here (the same split the renderer used to pick the cube layer).
+// a row is a MAP, not an identity. Point views are stored flat as lightSlot * kCubeFaceCount +
+// face, so they decode back to both numbers here (the same split the renderer used to pick the
+// cube layer).
 void formatShadowSlotLabel(char* out, std::size_t size, ShadowViewGroup group, std::size_t slot)
 {
     switch (group)
@@ -56,7 +57,8 @@ void formatShadowSlotLabel(char* out, std::size_t size, ShadowViewGroup group, s
         std::snprintf(out, size, "  cascade %zu", slot);
         return;
     case ShadowViewGroup::Point:
-        std::snprintf(out, size, "  slot %zu face %zu", slot / 6, slot % 6);
+        std::snprintf(out, size, "  slot %zu face %zu", slot / kCubeFaceCount,
+                      slot % kCubeFaceCount);
         return;
     case ShadowViewGroup::Self:
     case ShadowViewGroup::Spot:
