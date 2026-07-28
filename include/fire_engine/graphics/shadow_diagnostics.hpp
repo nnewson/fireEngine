@@ -146,8 +146,16 @@ inline constexpr std::size_t kShadowLodBinCount = 4;
 //
 // `candidate*` counts what was OFFERED to this view — every shadow draw the pass walked for it.
 // `drawn*` counts what was actually recorded after the per-view filter (frustum reject, or a
-// self-shadow slot belonging to a different caster). candidate − drawn is therefore the filter's
-// yield, and `drawn` is the real GPU cost.
+// self-shadow slot belonging to a different caster) and after this view resolved its LOD.
+//
+// SH-03 changed what `candidateTriangles` MEANS, deliberately. A candidate's triangle count used to
+// be known up front, because the level had already been chosen from the camera; now a rejected
+// caster is never resolved at all, and asking for its triangles would mean selecting a level for a
+// view that will not draw it — the very thing the filter-before-select order exists to avoid. So
+// `candidateTriangles` is now the FULL-DETAIL (whole-mesh) triangle count of every draw walked: the
+// cost this view would pay with neither culling nor LOD. `candidateTriangles − drawnTriangles` is
+// therefore the combined saving of both, not the filter's yield alone. For the filter's yield in
+// isolation, use `candidateDraws − drawnDraws`, which is still exactly that.
 struct ShadowViewStats
 {
     // Times this view was actually rasterised — incremented when the pass BEGINS recording it, so a
@@ -163,14 +171,24 @@ struct ShadowViewStats
     // rasterise the same view twice and doubling a selection distribution would misreport it, so
     // the caller passes `countSelection` only on the first layer.
     std::array<std::uint64_t, kShadowLodBinCount> lodHistogram{};
+    // Why each drawn draw got the level it did, counted PER VIEW (SH-03). It used to be a single
+    // frame-wide tally taken once per command, which was true only while every view rasterised the
+    // one camera-derived choice; now each view resolves its own, so a frame-wide count would be the
+    // sum of several unrelated decisions with no way to tell which view forced what. Subject to the
+    // same `countSelection` rule as the histogram.
+    std::array<std::uint64_t, kShadowLodReasonCount> lodReasons{};
 
     void beginRasterPass() noexcept;
     // ONE operation per draw the pass walked for this view, so `drawn` can never exceed
     // `candidate`: a separate add-candidate/add-drawn pair let a caller (or a test) record an
-    // accepted draw that was never offered, which would corrupt the promised
-    // `candidate − drawn = filter yield`. `accepted` is the per-view filter's verdict.
-    void observe(std::uint64_t triangles, bool accepted, std::uint32_t lodLevel,
-                 bool countSelection) noexcept;
+    // accepted draw that was never offered, which would corrupt the counts. `accepted` is the
+    // per-view filter's verdict, evaluated BEFORE the draw was resolved.
+    //
+    // `fullDetailTriangles` is the whole-mesh count (always known); `drawnTriangles`, `lodLevel`
+    // and `reason` describe this view's resolution and are read only when `accepted`, because a
+    // rejected draw was never resolved and has no level or reason to report.
+    void observe(std::uint64_t fullDetailTriangles, bool accepted, std::uint64_t resolvedTriangles,
+                 std::uint32_t lodLevel, ShadowLodReason reason, bool countSelection) noexcept;
     // Rasterised at all this frame — independent of whether anything was drawn into it.
     [[nodiscard]] bool touched() const noexcept
     {
@@ -186,12 +204,8 @@ struct ShadowViewStats
 struct ShadowFrameStats
 {
     std::array<ShadowViewStats, kShadowViewCount> views{};
-    // Why each shadow draw got its level, counted at the decision site once per draw (not per view
-    // it is replayed into).
-    std::array<std::uint64_t, kShadowLodReasonCount> lodReasons{};
 
     void reset() noexcept;
-    void addLodReason(ShadowLodReason reason) noexcept;
     [[nodiscard]] ShadowViewStats& view(ShadowViewGroup group, std::size_t slot) noexcept;
     [[nodiscard]] const ShadowViewStats& view(ShadowViewGroup group,
                                               std::size_t slot) const noexcept;

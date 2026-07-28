@@ -15,6 +15,7 @@
 #include <fire_engine/graphics/gpu_handle.hpp>
 #include <fire_engine/graphics/lighting.hpp>
 #include <fire_engine/graphics/particle.hpp>
+#include <fire_engine/graphics/shadow_lod_resolver.hpp>
 #include <fire_engine/graphics/shadow_render_view.hpp>
 #include <fire_engine/math/mat4.hpp>
 #include <fire_engine/math/vec3.hpp>
@@ -269,11 +270,7 @@ private:
     void writeIblAndDebugParams(LightUBO& out) const;
     void assignSelfShadowSlots(std::span<DrawCommand> drawCommands);
     static void clearDrawBuckets(DrawBuckets& buckets) noexcept;
-    // `shadowStats` is mutated: the SH-01 LOD-reason tally is accumulated here, once per shadow
-    // command, because this is the only place that sees each command exactly once before the
-    // non-exclusive bucket split duplicates it.
-    void buildDrawBuckets(std::span<const DrawCommand> drawCommands, DrawBuckets& buckets,
-                          ShadowFrameStats& shadowStats) const;
+    void buildDrawBuckets(std::span<const DrawCommand> drawCommands, DrawBuckets& buckets) const;
     void recordDrawBucket(vk::CommandBuffer cmd, std::span<const DrawCommand> bucket,
                           PipelineHandle& lastBoundPipeline) const;
 
@@ -418,6 +415,10 @@ private:
     // punctual views in updateFrameLighting, self layers once the draws are known, world-only once
     // `anySkinned` is.
     ShadowRenderViewSet shadowViews_;
+    // SH-03: per-frame LOD resolution cache + the cross-frame hysteresis history. Staged during
+    // recording and committed only once the frame has been submitted, so a frame that was thrown
+    // away leaves no dead band behind.
+    ShadowLodResolver shadowLodResolver_;
     LightUBO lightData_{};
     Vec3 directionalLightDir_{1.0f, -1.0f, 1.0f};
     int activeSpotCasters_{0};

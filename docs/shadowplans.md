@@ -191,7 +191,23 @@ Each item below should be its own branch off local `main`, in keeping with the r
 
 ### Milestone 0 — evidence before policy
 
-#### SH-01: Shadow diagnostics and a purpose-built validation scene
+#### SH-01: Shadow diagnostics and a purpose-built validation scene — ✅ landed (branch `shadow-lod-diagnostics`)
+
+What landed: per-group GPU timing (directional / world-only / self / spot / point) and per-view
+candidate-vs-drawn draw and triangle counts keyed by PHYSICAL slot; per-view LOD histograms and
+selection reasons; the `ShadowLod` debug view (a mesh tinted by the level its shadow draw picked,
+neutral grey when it casts none); the Shadows overlay panel; `tools/assetgen/` extracted from the
+physics generators; the owned acceptance scenes `assets/shadow_lod/ShadowLodDemo.gltf` (static, for
+reproducible captures) and `ShadowLodMotionDemo.gltf` (animated, for the stability loop), whose
+`validate()` asserts every coverage claim the runbook makes; and `--capture` / `--capture-frame`,
+which write one frame and exit so a reference image is scriptable.
+
+Two things it deliberately did NOT do. It cannot say how WRONG a level was — that needs the
+projected shadow-texel deviation, which is SH-02's metric — only which level was chosen and what it
+cost. And its captures are the **measurement baseline**: the record of what the engine did with
+camera-derived shadow LOD, which is what SH-03's per-view selection is read against.
+
+The original plan follows, for the reasoning behind each counter.
 
 Add diagnostics before changing selection:
 
@@ -354,13 +370,32 @@ Likely branch: `shadow-per-view-discrete-lod`.
    arrays, the coarse cull frustums and the shadow pass are all derived from it. Population order is
    forced by what is known when — reset + cascades + punctual views in `updateFrameLighting`, self
    layers once the draws exist, world-only once `anySkinned` does.
-3. **Unresolved command seam + per-view resolution**: `Object` emits the LOD span, world scale,
-   caster id and generation instead of a resolved index buffer; `shadows.cpp` resolves per view,
-   through a per-frame cache keyed on `(ShadowCasterId, generation, ShadowLogicalViewId)`.
-4. **Diagnostics**: per-view reasons into `ShadowViewStats`, resolved before the view is observed.
-5. **Tunables**: `kShadowLodPixelBudget` + coarsening ratio in `render/constants.hpp`, retire
-   `kShadowLodBias`, and drive the ShadowLod tint from the selected view.
-6. **Calibration + docs**: budget sweep at ratio 1.0 first, then the dead band against chatter.
+3. **Unresolved command seam + per-view resolution.** `Object` emits a `ShadowGeometryRequest` — LOD
+   span, conservative world scale, caster id, generation — and CLEARS the shadow command's inherited
+   index buffer, count and level, so an unresolved command cannot be mistaken for a resolved one.
+   `shadows.cpp` filters first and resolves second (a caster a view rejects acquires no dead band
+   against it), through `ShadowLodResolver`: a per-frame cache keyed on the full
+   `(ShadowCasterId, generation, ShadowLogicalViewId)` — the LOGICAL view rather than the physical
+   slot, which is what makes a cascade and its world-only twin, and a self-shadow slot's two depth
+   layers, share one decision; the caster and generation are in the key because a view-only key
+   would hand one caster's answer to another — plus a hysteresis history under that SAME key,
+   STAGED during recording and committed
+   only after a successful submit. Only a genuinely `Selected` level enters the history; an invalid
+   key enters neither store. `Shadows::recordPass` takes the view set directly, so each iteration's
+   cull frustum, projection and history key come from one entry.
+   *Diagnostics moved with it* (slice 4's first half, pulled forward because leaving it would have
+   left a lying counter): reasons are now per view in `ShadowViewStats::lodReasons`, and
+   `candidateTriangles` means FULL-DETAIL triangles offered — a rejected caster is never resolved,
+   so it has no level to count. `candidateDraws − drawnDraws` remains the filter yield exactly.
+   *Tunables moved with it* (from slice 5, because the first runtime call needed them):
+   `kShadowLodPixelBudget` + `kShadowLodCoarsenRatio` in `render/constants.hpp`, threaded explicitly;
+   `kShadowLodBias` retired. The ShadowLod tint is neutral grey meanwhile — a caster holds one level
+   per view, so there is no single number to tint by until slice 5 picks a view.
+4. **Diagnostics**: the per-view rows the overlay shows — selected-view controls and the remaining
+   observation rules.
+5. **Tunables**: drive the ShadowLod tint from a selected view.
+6. **Calibration + docs**: budget sweep at ratio 1.0 first, then the dead band against chatter. The
+   committed values are an UNCALIBRATED starting point until this runs.
 
 
 **SH-03 additionally owns** (handed over by SH-02):

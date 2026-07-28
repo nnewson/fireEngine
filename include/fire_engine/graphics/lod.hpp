@@ -50,9 +50,10 @@ inline constexpr std::size_t kMinLodTriangles = 512;
 // Default screen-space error budget (pixels) a coarser LOD may introduce before it's rejected.
 inline constexpr float kLodPixelErrorBudget = 2.0f;
 
-// Shadow passes tolerate a coarser LOD than the main view (silhouette detail matters less in a
-// shadow), so their pixel budget is scaled up by this factor.
-inline constexpr float kShadowLodBias = 3.0f;
+// (SH-03 retired `kShadowLodBias`. It scaled a CAMERA-pixel budget for shadow use, and shadow
+// selection no longer happens in camera pixels at all — a caster's level is chosen per shadow view,
+// in that view's shadow-map texels. The budget and its hysteresis ratio now live in
+// render/constants.hpp as kShadowLodPixelBudget / kShadowLodCoarsenRatio.)
 
 // VDPM silhouette boost: how much tighter the pixel budget is where a split's precomputed normal
 // cone straddles the edge-on direction (0 = uniform screen-space error). Keeps contours dense.

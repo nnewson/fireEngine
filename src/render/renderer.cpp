@@ -657,8 +657,8 @@ void Renderer::clearDrawBuckets(DrawBuckets& buckets) noexcept
     buckets.anySkinned = false;
 }
 
-void Renderer::buildDrawBuckets(std::span<const DrawCommand> drawCommands, DrawBuckets& buckets,
-                                ShadowFrameStats& shadowStats) const
+void Renderer::buildDrawBuckets(std::span<const DrawCommand> drawCommands,
+                                DrawBuckets& buckets) const
 {
     clearDrawBuckets(buckets);
     buckets.shadow.reserve(drawCommands.size());
@@ -678,13 +678,10 @@ void Renderer::buildDrawBuckets(std::span<const DrawCommand> drawCommands, DrawB
         buckets.anySkinned = buckets.anySkinned || dc.hasSkin;
         if (dc.pipeline == shadows_.pipelineHandle())
         {
-            // ONCE per original command, before any bucket insertion: the split below is
-            // deliberately NOT exclusive (every caster enters `shadow`, and additionally either
-            // `worldShadow` or `selfShadow`), and each bucket is then replayed across cascades and
-            // faces. Counting the reason anywhere downstream would multiply one decision by the
-            // number of buckets and views it feeds. The per-view accounting below is the opposite:
-            // it counts every replay, because each replay is real raster work.
-            shadowStats.addLodReason(dc.shadowLodReason);
+            // SH-03: no reason is counted here any more. A command no longer arrives with a
+            // level — it carries an unresolved caster, and each shadow view resolves its own — so
+            // there is nothing to tally at bucket time. Reasons are recorded per view, at the
+            // resolution that produced them (ShadowViewStats::lodReasons).
             buckets.shadow.push_back(dc);
             if (!dc.hasSkin)
             {
@@ -989,9 +986,8 @@ const Renderer::DrawBuckets& Renderer::collectDrawCommands(RenderableScene& scen
     assignSelfShadowSlots(drawCommandScratch_);
     // Reset this frame's slot before anything writes into it: the ring slot still holds the
     // counters from `kMaxFramesInFlight` frames ago, which have already been published.
-    ShadowFrameStats& shadowStats = shadowStatsRing_[currentFrame_];
-    shadowStats.reset();
-    buildDrawBuckets(drawCommandScratch_, drawBucketsScratch_, shadowStats);
+    shadowStatsRing_[currentFrame_].reset();
+    buildDrawBuckets(drawCommandScratch_, drawBucketsScratch_);
 
     // The world-only CSM runs iff a skinned draw exists to sample it, which is only known once the
     // buckets are built — so it is enabled here, last. Enabling stores no view: the world-only slot
@@ -1074,9 +1070,6 @@ void Renderer::recordShadowPass(vk::CommandBuffer cmd, const DrawBuckets& bucket
         pointCasters_.data(), static_cast<std::size_t>(activePointCasters_)};
     // Self-shadow slots are assigned densely (assignSelfShadowSlots), so the
     // scratch map's size is the number of slots the pass must render.
-    // Derived from the view set at the point of use, not stored beside it — the pass rasterises
-    // with exactly what the set holds for each slot.
-    const auto shadowMatrices = shadowMatrixArray(shadowViews_);
     // THE SET decides whether the world-only CSM runs, not `buckets.anySkinned` — that was the
     // request, made before the views existed. Every world-only slot must be active: the pass loops
     // all cascades, so a partially enabled set would rasterise cascades the set reports as
@@ -1084,11 +1077,12 @@ void Renderer::recordShadowPass(vk::CommandBuffer cmd, const DrawBuckets& bucket
     // shorter route.)
     const bool renderWorldShadow = shadowViews_.activeCount(ShadowViewGroup::WorldOnly) ==
                                    shadowViewSlotCount(ShadowViewGroup::WorldOnly);
-    shadows_.recordPass(cmd, buckets.shadow, buckets.worldShadow, buckets.selfShadow,
-                        static_cast<int>(selfShadowSlotsScratch_.size()), activeSpotCasters_,
-                        pointCasterSpan, shadowMatrices, tunables_.cullingEnabled,
-                        renderWorldShadow, shadowStatsRing_[currentFrame_], profiler_,
-                        currentFrame_);
+    shadows_.recordPass(
+        cmd, buckets.shadow, buckets.worldShadow, buckets.selfShadow,
+        static_cast<int>(selfShadowSlotsScratch_.size()), activeSpotCasters_, pointCasterSpan,
+        shadowViews_, shadowLodResolver_, tunables_.shadowLodPixelBudget,
+        ShadowLodHysteresis{.coarsenRatio = kShadowLodCoarsenRatio}, tunables_.cullingEnabled,
+        renderWorldShadow, shadowStatsRing_[currentFrame_], profiler_, currentFrame_);
 }
 
 void Renderer::recordTransmissionPass(vk::CommandBuffer cmd, const DrawBuckets& buckets)
@@ -1195,6 +1189,9 @@ void Renderer::drawFrame(Window& display, RenderableScene& scene, float dt)
     }
     currentViewProj_ = unjitteredProj * view_;
 
+    // Drops last frame's resolution cache, and any levels staged by a frame that never reached
+    // submit. Must run before the shadow pass resolves anything.
+    shadowLodResolver_.beginFrame();
     updateFrameLighting(scene, cameraPosition, cameraTarget);
     const DrawBuckets& buckets = collectDrawCommands(scene, cameraPosition, cameraTarget);
 
@@ -1448,6 +1445,13 @@ void Renderer::drawFrame(Window& display, RenderableScene& scene, float dt)
 
     cmd.end();
     submitAndPresent(display, cmd, *imageIndex);
+    // IMMEDIATELY after the submit, and before anything that can fail. The contract is "the GPU has
+    // the work", not "the rest of the frame went well": the shadow-LOD dead band (SH-03) describes
+    // geometry that was submitted, and `writeCapture()` below throws on an I/O failure, which would
+    // otherwise discard a frame's worth of legitimately earned hysteresis. Levels are STAGED until
+    // this line, so a frame abandoned before it (a lost swapchain, an early return) leaves none
+    // behind — the next beginFrame drops them.
+    shadowLodResolver_.commitFrame();
     if (capturingThisFrame)
     {
         writeCapture();

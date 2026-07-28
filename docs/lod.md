@@ -79,10 +79,11 @@ Object::writeForwardUniforms()            [per draw, per frame]
 - **Select** — `selectLod` (`include/fire_engine/graphics/lod.hpp`, header-only, headless-testable)
   runs in `Object`'s draw-build (`src/graphics/object.cpp`) using `FrameInfo`'s camera position,
   `proj[1][1]`, and viewport height. It sets the chosen level's `indexBuffer`/`indexCount` on the
-  `DrawCommand`, plus `lodLevel` (used only by the LOD-tint debug view). A caster's *shadow* level is
-  chosen by the same call in a separate `chooseShadowLod` step, staged before either command is
-  pushed so the shadow draw binds it and the forward draw carries it (`shadowLodLevel`,
-  `kNoShadowLod` for a non-caster) for the Shadow-LOD tint.
+  `DrawCommand`, plus `lodLevel` (used only by the LOD-tint debug view). This is the FORWARD draw
+  only. Since SH-03 a caster's *shadow* level is not chosen here at all: the shadow command carries a
+  `ShadowGeometryRequest` (LOD span, conservative world scale, caster id + generation) with no index
+  buffer, and each shadow view resolves its own level in its own shadow-map texels — see
+  [`shadowplans.md`](shadowplans.md) § SH-03 and `graphics/shadow_lod_resolver.hpp`.
 - **Morph** — `selectVipm` (`include/fire_engine/graphics/vipm.hpp`) uses the same screen-space
   selection curve as `selectLod`, but returns the next exact LOD level and a 0→1 factor. The vertex
   shader morphs only vertices whose `collapseLevel` equals that target level.
@@ -198,8 +199,10 @@ Both live in `src/graphics/mesh_simplifier.cpp` (`QemRun`):
 | `kUvWeightFactor` (0.1) | UV weight as a fraction of the bbox diagonal in the R⁵ metric | More UV fidelity (seams held longer), less triangle reduction |
 | `kErrorCeilingFactor` (40) | Collapse-cost ceiling as a multiple of bbox-diag² | Allows coarser LODs; too high risks over-collapsing genuinely un-simplifiable shapes (the boundary weight, 1000, is the real cube guard) |
 
-LOD ratios and the selection budget live in `include/fire_engine/graphics/lod.hpp`:
-`kLodRatios {0.5, 0.125}`, `kMinLodTriangles 512`, `kLodPixelErrorBudget 2`, `kShadowLodBias 3`.
+LOD ratios and the camera selection budget live in `include/fire_engine/graphics/lod.hpp`:
+`kLodRatios {0.5, 0.125}`, `kMinLodTriangles 512`, `kLodPixelErrorBudget 2`. The shadow budget is
+NOT here and is not in camera pixels — `kShadowLodPixelBudget` / `kShadowLodCoarsenRatio` live in
+`render/constants.hpp` and are in shadow-map texels (SH-03).
 
 ### Why from scratch (not meshoptimizer)
 
@@ -220,11 +223,14 @@ projects to `e · projScaleY · viewportHeight / (2d)` pixels, where `projScaleY
 (= 1/tan(fovY/2)). Levels are ordered fine→coarse with non-decreasing error, so the first that
 overflows the budget ends the search; LOD0 is the fallback when nothing coarser fits.
 
-Shadow draws currently pass `kLodPixelErrorBudget × kShadowLodBias` (coarser — silhouette detail
-matters less in a shadow), selecting from the CAMERA's projection/viewport. That approximation is the
+Shadow draws no longer use this call at all. They used to pass `kLodPixelErrorBudget × kShadowLodBias`
+(coarser — silhouette detail matters less in a shadow), selecting from the CAMERA's
+projection/viewport, and the single resulting draw was replayed into every shadow view. That was the
 defect the shadow-LOD arc exists to fix: a shadow's error budget belongs to the view that rasterises
-it, in shadow-map texels. SH-02 (below) landed the replacement model; SH-03 threads it through and
-retires `kShadowLodBias`.
+it, in shadow-map texels. SH-02 landed the replacement model (below); **SH-03 threaded it through
+and retired `kShadowLodBias`** — selection now happens per shadow view, against
+`kShadowLodPixelBudget` texels with `kShadowLodCoarsenRatio` hysteresis
+(`render/constants.hpp`, both uncalibrated until SH-03's calibration step).
 
 Continuous mode deliberately keeps the same topology level that `selectLod` would choose. When level
 `L` is selected, `selectVipm` computes how far the current tolerated error has advanced toward

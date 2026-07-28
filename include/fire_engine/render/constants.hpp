@@ -86,6 +86,19 @@ inline constexpr float kPointShadowNearPlane = 0.1f;
 // the cube projection stays finite. Used only for shadow-map projection.
 inline constexpr float kPointShadowInfiniteRangeFallback = 100.0f;
 
+// Shadow-LOD selection (SH-03). The budget is in SHADOW-MAP TEXELS of the view doing the
+// rasterising — not camera pixels — so it means the same thing for a 2048-texel cascade and a
+// 512-texel point face, which the retired camera-pixel heuristic could not.
+//
+// UNCALIBRATED starting values. SH-03's calibration step sweeps the budget at ratio 1.0 first (so
+// the budget is measured without a dead band confusing the result), then widens the dead band until
+// level chatter stops on the moving-light acceptance scene. Treat these as the baseline that
+// exercise begins from, not as measured answers.
+inline constexpr float kShadowLodPixelBudget = 2.0f;
+// Coarsening must project within `budget * ratio`, while refining triggers at `budget` — the gap is
+// the dead band. 1.0 disables hysteresis, which is deliberately where calibration starts.
+inline constexpr float kShadowLodCoarsenRatio = 1.0f;
+
 // ---------------------------------------------------------------------------
 // IBL precompute extents — chosen at engine start, baked into texture sizes.
 // ---------------------------------------------------------------------------

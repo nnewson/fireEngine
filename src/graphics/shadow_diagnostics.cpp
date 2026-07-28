@@ -54,8 +54,9 @@ void ShadowViewStats::beginRasterPass() noexcept
     ++rasterPasses;
 }
 
-void ShadowViewStats::observe(std::uint64_t triangles, bool accepted, std::uint32_t lodLevel,
-                              bool countSelection) noexcept
+void ShadowViewStats::observe(std::uint64_t fullDetailTriangles, bool accepted,
+                              std::uint64_t resolvedTriangles, std::uint32_t lodLevel,
+                              ShadowLodReason reason, bool countSelection) noexcept
 {
     // A draw can only be observed for a view the pass is rasterising. Debug trips at the source;
     // release repairs the count to 1 rather than leaving a view that holds draws yet reports
@@ -66,35 +67,33 @@ void ShadowViewStats::observe(std::uint64_t triangles, bool accepted, std::uint3
         rasterPasses = 1;
     }
     ++candidateDraws;
-    candidateTriangles += triangles;
+    candidateTriangles += fullDetailTriangles;
     if (!accepted)
     {
+        // Rejected before resolution, so there is deliberately no level and no reason to record —
+        // see the `candidateTriangles` note in the header.
         return;
     }
     ++drawnDraws;
-    drawnTriangles += triangles;
-    if (countSelection)
+    drawnTriangles += resolvedTriangles;
+    if (!countSelection)
     {
-        ++lodHistogram[shadowLodBin(lodLevel)];
+        return;
+    }
+    ++lodHistogram[shadowLodBin(lodLevel)];
+    // Debug trips at the source; release drops the sample rather than writing past the array (the
+    // `writeMapped` policy — a diagnostic must never be the thing that corrupts memory).
+    const auto index = static_cast<std::size_t>(reason);
+    assert(index < kShadowLodReasonCount && "an accepted draw must carry a real reason");
+    if (index < kShadowLodReasonCount)
+    {
+        ++lodReasons[index];
     }
 }
 
 void ShadowFrameStats::reset() noexcept
 {
     *this = ShadowFrameStats{};
-}
-
-void ShadowFrameStats::addLodReason(ShadowLodReason reason) noexcept
-{
-    // Debug trips at the source; release drops the sample rather than writing past the array (the
-    // `writeMapped` policy — a diagnostic must never be the thing that corrupts memory).
-    const auto index = static_cast<std::size_t>(reason);
-    assert(index < kShadowLodReasonCount && "ShadowLodReason::Count is not a reason");
-    if (index >= kShadowLodReasonCount)
-    {
-        return;
-    }
-    ++lodReasons[index];
 }
 
 namespace
@@ -143,6 +142,10 @@ ShadowViewStats ShadowFrameStats::groupTotal(ShadowViewGroup group) const noexce
         {
             total.lodHistogram[bin] += v.lodHistogram[bin];
         }
+        for (std::size_t reason = 0; reason < kShadowLodReasonCount; ++reason)
+        {
+            total.lodReasons[reason] += v.lodReasons[reason];
+        }
     }
     return total;
 }
@@ -161,6 +164,10 @@ ShadowViewStats ShadowFrameStats::sceneTotal() const noexcept
         for (std::size_t bin = 0; bin < kShadowLodBinCount; ++bin)
         {
             total.lodHistogram[bin] += groupSum.lodHistogram[bin];
+        }
+        for (std::size_t reason = 0; reason < kShadowLodReasonCount; ++reason)
+        {
+            total.lodReasons[reason] += groupSum.lodReasons[reason];
         }
     }
     return total;

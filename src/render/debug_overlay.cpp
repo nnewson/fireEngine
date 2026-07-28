@@ -87,6 +87,11 @@ void drawShadowDiagnostics(const FrameStats& stats)
     }
 
     const auto& shadow = stats.shadow;
+    // SH-03: reasons are now recorded PER VIEW, at the resolution that produced them. This table is
+    // the scene rollup — the sum over every view — so one caster drawn into six views contributes
+    // six reasons, exactly as it contributes six draws. That is the honest total now that each view
+    // selects its own level; a single per-command count would describe a decision nothing makes.
+    const ShadowViewStats sceneReasons = shadow.sceneTotal();
     // Every reason, by iterating the enum rather than naming a subset: a hard-coded list silently
     // hides new ones (the SH-02 fallbacks were invisible here until this changed), and a forced
     // LOD0 that looks like a deliberate one defeats the point of having reasons at all.
@@ -104,7 +109,7 @@ void drawShadowDiagnostics(const FrameStats& stats)
             ImGui::TableNextColumn();
             ImGui::Text("%.*s", static_cast<int>(label.size()), label.data());
             ImGui::TableNextColumn();
-            ImGui::Text("%llu", static_cast<unsigned long long>(shadow.lodReasons[reason]));
+            ImGui::Text("%llu", static_cast<unsigned long long>(sceneReasons.lodReasons[reason]));
         }
         ImGui::EndTable();
     }
@@ -327,6 +332,11 @@ void DebugOverlay::buildUi(const FrameStats& stats, RenderTunables& tunables)
             tunables.lodMode = static_cast<LodMode>(lodMode);
         }
         ImGui::SliderFloat("Pixel error budget", &tunables.lodPixelErrorBudget, 0.25f, 16.0f,
+                           "%.2f");
+        // SH-03: a SEPARATE budget in shadow-map texels, deliberately not the camera one — the two
+        // are in different units. Live here because SH-03's calibration is a sweep of exactly this
+        // value against the acceptance scene's shadow silhouettes.
+        ImGui::SliderFloat("Shadow texel budget", &tunables.shadowLodPixelBudget, 0.25f, 16.0f,
                            "%.2f");
         ImGui::EndDisabled();
         if (stats.trianglesGpuPending)

@@ -939,6 +939,16 @@ the same change — most have a test or guard that will catch you, but not all.
   `selfShadowSlotsScratch_`) advances until the set has accepted the view, so a pass can never be
   driven by a count the set does not back. `anySkinned` is only the world-only *request*;
   `recordShadowPass` reads whether it runs back out of the set.
+- **A shadow command is UNRESOLVED, and every shadow view resolves it itself** (SH-03). `Object`
+  emits a `ShadowGeometryRequest` and leaves the command's `indexBuffer`/`indexCount` null and its
+  `lodLevel` at `kNoShadowLod`; `Shadows::recordPass` filters for the view FIRST and only then calls
+  `ShadowLodResolver::resolve`, binding the returned buffer. Two rules travel with that: a caster a
+  view rejected must never be resolved (it would acquire a dead band against a view it does not
+  appear in), and only a `Selected` reason may write history (a forced fallback would overwrite a
+  justified level). Staged history is committed in `drawFrame` after submit — if you add an early
+  return between resolution and submit, the next `beginFrame` must drop the staged levels, which is
+  what it does. Don't reintroduce a level on the command itself: with per-view selection there is no
+  single level a caster has.
 - **UBO/push-constant structs ↔ GLSL std140 layout.** `render/ubo.hpp` structs are memcpy'd into
   mapped GPU memory, so their field order, `alignas`, and padding must mirror the matching GLSL
   block exactly. `tests/render/test_ubo.cpp` asserts sizes/offsets — extend it when you add a field.
@@ -1036,7 +1046,7 @@ the same change — most have a test or guard that will catch you, but not all.
 - Collision broadphase: `src/collision/dynamic_aabb_tree_broad_phase.cpp` (default), `src/collision/sweep_and_prune_broad_phase.cpp` (alternative), behind `collision/broad_phase.hpp`
 - Narrowphase: `src/collision/narrow_phase.cpp`
 - Mesh component: `src/scene/mesh.cpp`
-- Shadow-LOD selection model (SH-02): `include/fire_engine/graphics/shadow_view.hpp` + `src/graphics/shadow_view.cpp` — Vulkan-free view descriptors, texel projection, and `selectShadowLod`, with the per-cut shadow-deviation channel behind it in the simplifier (see [`lod.md`](lod.md) § The shadow-deviation channel). Pure and headless; SH-03 threads it into the renderer, supplies the texel budget + coarsening ratio from `render/constants.hpp`, and retires `kShadowLodBias`.
+- Shadow-LOD selection model (SH-02): `include/fire_engine/graphics/shadow_view.hpp` + `src/graphics/shadow_view.cpp` — Vulkan-free view descriptors, texel projection, and `selectShadowLod`, with the per-cut shadow-deviation channel behind it in the simplifier (see [`lod.md`](lod.md) § The shadow-deviation channel). Pure and headless. SH-03 threaded it into the renderer: `graphics/shadow_lod_resolver.hpp` + `src/graphics/shadow_lod_resolver.cpp` resolve an unresolved caster per shadow view (a frame cache and a staged hysteresis history, both keyed on the full `(ShadowCasterId, generation, ShadowLogicalViewId)` — the LOGICAL view, not the physical slot, so the passes that must agree share one decision), the budget + coarsening ratio come from `render/constants.hpp`, and `kShadowLodBias` is retired.
 - Draw command generation + LOD selection: `src/graphics/object.cpp`
 - Mesh LOD / simplifier: `include/fire_engine/graphics/lod.hpp`, `src/graphics/mesh_simplifier.cpp`
 - GPU resource registry: `src/render/resources.cpp`

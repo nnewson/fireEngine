@@ -64,20 +64,24 @@ TEST_CASE("candidate and drawn are counted independently", "[ShadowDiagnostics]"
     ShadowFrameStats stats;
     ShadowViewStats& cascade0 = stats.view(ShadowViewGroup::Cascade, 0);
 
-    // Three casters offered to cascade 0; the middle one is frustum-rejected.
+    // Three casters offered to cascade 0; the middle one is frustum-rejected. SH-03 split the two
+    // triangle counts: the first is FULL DETAIL (what the view was offered, known without
+    // resolving), the second is what this view's resolution actually draws.
     cascade0.beginRasterPass();
-    cascade0.observe(100, true, 0, true);
-    cascade0.observe(50, false, 1, true); // rejected: candidate only, no histogram entry
-    cascade0.observe(20, true, 2, true);
+    cascade0.observe(100, true, 40, 0, ShadowLodReason::Selected, true);
+    // Rejected before resolution, so it has no resolved count, level or reason to contribute.
+    cascade0.observe(50, false, 0, 0, ShadowLodReason::Count, true);
+    cascade0.observe(20, true, 5, 2, ShadowLodReason::Selected, true);
 
     CHECK(cascade0.rasterPasses == 1);
     CHECK(cascade0.candidateDraws == 3);
     CHECK(cascade0.drawnDraws == 2);
-    CHECK(cascade0.candidateTriangles == 170);
-    CHECK(cascade0.drawnTriangles == 120); // the rejected 50 must NOT be billed as GPU cost
+    CHECK(cascade0.candidateTriangles == 170); // full detail, including the rejected caster
+    CHECK(cascade0.drawnTriangles == 45);      // the resolved cost, not the offered one
     CHECK(cascade0.lodHistogram[0] == 1);
     CHECK(cascade0.lodHistogram[1] == 0); // the rejected draw contributes no selection
     CHECK(cascade0.lodHistogram[2] == 1);
+    CHECK(cascade0.lodReasons[static_cast<std::size_t>(ShadowLodReason::Selected)] == 2);
     CHECK(cascade0.touched());
     CHECK_FALSE(stats.view(ShadowViewGroup::Cascade, 1).touched());
 }
@@ -92,14 +96,16 @@ TEST_CASE("a twice-rasterised self-shadow view doubles cost but not selection",
     ShadowViewStats& self = stats.view(ShadowViewGroup::Self, 2);
 
     self.beginRasterPass();
-    self.observe(64, true, 1, true); // first layer: counts selection
+    self.observe(64, true, 30, 1, ShadowLodReason::Selected, true); // first layer: counts selection
     self.beginRasterPass();
-    self.observe(64, true, 1, false); // second layer: cost only
+    self.observe(64, true, 30, 1, ShadowLodReason::Selected, false); // second layer: cost only
 
     CHECK(self.rasterPasses == 2);
     CHECK(self.drawnDraws == 2);
-    CHECK(self.drawnTriangles == 128);
+    CHECK(self.drawnTriangles == 60);
     CHECK(self.lodHistogram[1] == 1);
+    // The reason follows the histogram's rule for the same reason: one decision, rasterised twice.
+    CHECK(self.lodReasons[static_cast<std::size_t>(ShadowLodReason::Selected)] == 1);
 }
 
 TEST_CASE("a rasterised view with no candidates stays visible", "[ShadowDiagnostics]")
@@ -129,7 +135,7 @@ TEST_CASE("drawn can never exceed candidate", "[ShadowDiagnostics]")
     spot.beginRasterPass();
     for (std::uint32_t i = 0; i < 5; ++i)
     {
-        spot.observe(10, i % 2 == 0, i, true);
+        spot.observe(10, i % 2 == 0, 4, i, ShadowLodReason::Selected, true);
     }
     CHECK(spot.candidateDraws == 5);
     CHECK(spot.drawnDraws == 3);
@@ -146,9 +152,12 @@ TEST_CASE("group and scene rollups sum their slots", "[ShadowDiagnostics]")
     }
     stats.view(ShadowViewGroup::Point, shadowPointViewSlot(1, 4)).beginRasterPass();
 
-    stats.view(ShadowViewGroup::Cascade, 0).observe(10, true, 0, true);
-    stats.view(ShadowViewGroup::Cascade, 3).observe(30, true, 3, true);
-    stats.view(ShadowViewGroup::Point, shadowPointViewSlot(1, 4)).observe(7, true, 1, true);
+    stats.view(ShadowViewGroup::Cascade, 0)
+        .observe(10, true, 10, 0, ShadowLodReason::Selected, true);
+    stats.view(ShadowViewGroup::Cascade, 3)
+        .observe(30, true, 30, 3, ShadowLodReason::SingleLevel, true);
+    stats.view(ShadowViewGroup::Point, shadowPointViewSlot(1, 4))
+        .observe(7, true, 7, 1, ShadowLodReason::Selected, true);
 
     const ShadowViewStats cascades = stats.groupTotal(ShadowViewGroup::Cascade);
     CHECK(cascades.drawnDraws == 2);
@@ -160,6 +169,11 @@ TEST_CASE("group and scene rollups sum their slots", "[ShadowDiagnostics]")
     CHECK(stats.groupTotal(ShadowViewGroup::Point).drawnTriangles == 7);
     CHECK(stats.groupTotal(ShadowViewGroup::Spot).drawnDraws == 0);
     CHECK(stats.sceneTotal().drawnTriangles == 47);
+    // Reasons roll up the same way — they are per-view counters now (SH-03), so the scene total is
+    // the only place a frame-wide reason distribution exists.
+    CHECK(cascades.lodReasons[static_cast<std::size_t>(ShadowLodReason::Selected)] == 1);
+    CHECK(cascades.lodReasons[static_cast<std::size_t>(ShadowLodReason::SingleLevel)] == 1);
+    CHECK(stats.sceneTotal().lodReasons[static_cast<std::size_t>(ShadowLodReason::Selected)] == 2);
 }
 
 TEST_CASE("activeViewCount reports rasterised slots", "[ShadowDiagnostics]")
@@ -174,23 +188,35 @@ TEST_CASE("activeViewCount reports rasterised slots", "[ShadowDiagnostics]")
     // A view whose every candidate was culled is still ACTIVE — it was rasterised (cleared), and
     // hiding it would hide "this map ran and drew nothing", which is the interesting case.
     stats.view(ShadowViewGroup::Spot, 3).beginRasterPass();
-    stats.view(ShadowViewGroup::Spot, 3).observe(5, false, 0, true);
+    stats.view(ShadowViewGroup::Spot, 3).observe(5, false, 0, 0, ShadowLodReason::Count, true);
     CHECK(stats.activeViewCount(ShadowViewGroup::Spot) == 3);
     CHECK(stats.view(ShadowViewGroup::Spot, 3).drawnDraws == 0);
 }
 
-TEST_CASE("LOD reasons are recorded per decision, level 0 distinguishable from forced",
+TEST_CASE("LOD reasons are recorded per view, level 0 distinguishable from forced",
           "[ShadowDiagnostics]")
 {
+    // SH-03: a reason belongs to the VIEW that resolved it. One caster drawn into a cascade and a
+    // spot can be Selected in one and forced in the other — a single frame-wide tally could not
+    // express that, and after per-view selection it would be the sum of unrelated decisions.
     ShadowFrameStats stats;
-    stats.addLodReason(ShadowLodReason::Selected);    // chose level 0 within budget
-    stats.addLodReason(ShadowLodReason::Selected);    // chose level 2
-    stats.addLodReason(ShadowLodReason::SingleLevel); // cloth: nothing to select
-    stats.addLodReason(ShadowLodReason::LodDisabled);
+    ShadowViewStats& cascade = stats.view(ShadowViewGroup::Cascade, 0);
+    ShadowViewStats& spot = stats.view(ShadowViewGroup::Spot, 0);
+    cascade.beginRasterPass();
+    spot.beginRasterPass();
 
-    CHECK(stats.lodReasons[static_cast<std::size_t>(ShadowLodReason::Selected)] == 2);
-    CHECK(stats.lodReasons[static_cast<std::size_t>(ShadowLodReason::SingleLevel)] == 1);
-    CHECK(stats.lodReasons[static_cast<std::size_t>(ShadowLodReason::LodDisabled)] == 1);
+    cascade.observe(10, true, 10, 0, ShadowLodReason::Selected, true);    // level 0, within budget
+    cascade.observe(10, true, 2, 2, ShadowLodReason::Selected, true);     // level 2
+    cascade.observe(10, true, 10, 0, ShadowLodReason::SingleLevel, true); // cloth
+    spot.observe(10, true, 10, 0, ShadowLodReason::NearPlane, true); // forced: at the light plane
+
+    CHECK(cascade.lodReasons[static_cast<std::size_t>(ShadowLodReason::Selected)] == 2);
+    CHECK(cascade.lodReasons[static_cast<std::size_t>(ShadowLodReason::SingleLevel)] == 1);
+    CHECK(cascade.lodReasons[static_cast<std::size_t>(ShadowLodReason::NearPlane)] == 0);
+    CHECK(spot.lodReasons[static_cast<std::size_t>(ShadowLodReason::NearPlane)] == 1);
+    // Both level-0 draws land in the same histogram bin, so the reason is the ONLY thing that
+    // distinguishes a deliberate LOD0 from a forced one.
+    CHECK(cascade.lodHistogram[0] == 2);
 }
 
 TEST_CASE("every reason and group has a name", "[ShadowDiagnostics]")
@@ -209,14 +235,15 @@ TEST_CASE("reset clears every counter", "[ShadowDiagnostics]")
 {
     ShadowFrameStats stats;
     stats.view(ShadowViewGroup::Cascade, 1).beginRasterPass();
-    stats.view(ShadowViewGroup::Cascade, 1).observe(99, true, 2, true);
-    stats.addLodReason(ShadowLodReason::Selected);
+    stats.view(ShadowViewGroup::Cascade, 1)
+        .observe(99, true, 40, 2, ShadowLodReason::Selected, true);
 
     stats.reset();
 
     CHECK(stats.sceneTotal().drawnTriangles == 0);
     CHECK(stats.sceneTotal().candidateDraws == 0);
-    CHECK(stats.lodReasons[static_cast<std::size_t>(ShadowLodReason::Selected)] == 0);
+    CHECK(stats.sceneTotal().candidateTriangles == 0);
+    CHECK(stats.sceneTotal().lodReasons[static_cast<std::size_t>(ShadowLodReason::Selected)] == 0);
     CHECK(stats.sceneTotal().rasterPasses == 0);
     CHECK(stats.activeViewCount(ShadowViewGroup::Cascade) == 0);
 }

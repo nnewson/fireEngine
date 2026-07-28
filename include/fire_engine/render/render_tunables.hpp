@@ -85,6 +85,11 @@ struct RenderTunables
     // screen-space pixel error budget. The toggle doubles as the A/B regression escape hatch.
     bool lodEnabled{true};
     float lodPixelErrorBudget{kLodPixelErrorBudget};
+    // SH-03: the shadow-LOD budget, in SHADOW-MAP TEXELS of the view doing the rasterising. Kept
+    // beside the camera budget but deliberately separate — the two are in different units and are
+    // calibrated against different evidence, and sharing one number is what made every shadow view
+    // rasterise the camera's choice.
+    float shadowLodPixelBudget{kShadowLodPixelBudget};
     // Discrete = hard LOD swaps (Phase 1); Continuous = VIPM geomorph (Phase 2). Coexist —
     // selectable.
     LodMode lodMode{LodMode::Discrete};
