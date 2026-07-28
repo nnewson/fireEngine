@@ -63,6 +63,7 @@ add_library(fireengine SHARED
     src/graphics/mesh_simplifier.cpp
     src/graphics/mesh_topology.cpp
     src/graphics/shadow_identity.cpp
+    src/graphics/shadow_render_view.cpp
     src/graphics/shadow_diagnostics.cpp
     src/graphics/shadow_view.cpp
     src/graphics/vipm.cpp
@@ -374,6 +375,7 @@ add_executable(test_fire_engine
     tests/graphics/test_shadow_diagnostics.cpp
     tests/graphics/test_shadow_view.cpp
     tests/graphics/test_shadow_identity.cpp
+    tests/graphics/test_shadow_render_view.cpp
     tests/graphics/test_texture.cpp
     tests/graphics/test_sampler_settings.cpp
     tests/render/test_ubo.cpp

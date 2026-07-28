@@ -15,6 +15,7 @@
 #include <fire_engine/graphics/gpu_handle.hpp>
 #include <fire_engine/graphics/lighting.hpp>
 #include <fire_engine/graphics/particle.hpp>
+#include <fire_engine/graphics/shadow_render_view.hpp>
 #include <fire_engine/math/mat4.hpp>
 #include <fire_engine/math/vec3.hpp>
 #include <fire_engine/render/constants.hpp>
@@ -250,17 +251,18 @@ private:
 
     void updateLightData(Vec3 cameraPosition, Vec3 cameraTarget, float aspect,
                          std::span<const Lighting> lights);
-    // Resets shadowViewProjs_ and writes the per-cascade matrix slots. Fills
-    // out.cascadeViewProj / out.cascadeSplits. Reads directionalLightDir_ for
-    // the light basis, so the caller must set it before calling.
+    // RESETS shadowViews_ (so a view that stopped being active cannot linger from the previous
+    // frame) and populates the cascade slots, then derives out.cascadeViewProj from the set. Fills
+    // out.cascadeSplits. Reads directionalLightDir_ for the light basis, so the caller must set it
+    // before calling. Runs before anything else populates the set.
     void computeShadowCascades(LightUBO& out, Vec3 cameraPosition, Vec3 cameraTarget, float aspect);
     // Registers the packed light as a spot caster if there is room (advancing
-    // activeSpotCasters_) and writes the matching matrices into out and
-    // shadowViewProjs_. No-op if the spot caster cap is hit.
+    // activeSpotCasters_) and populates that spot slot in shadowViews_. No-op if the
+    // spot caster cap is hit.
     void assignSpotShadow(LightUBO& out, int packedSlot, const Lighting& light);
     // Registers the packed light as a point caster if there is room (advancing
-    // activePointCasters_ and pointCasters_) and writes its six cube-face
-    // matrices into shadowViewProjs_. No-op if the point caster cap is hit.
+    // activePointCasters_ and pointCasters_) and populates its six cube-face
+    // slots in shadowViews_. No-op if the point caster cap is hit.
     void assignPointShadow(LightUBO& out, int packedSlot, const Lighting& light);
     // Fills out.iblParams / out.shadowParams / out.environmentParams from the
     // engine-wide constants plus the debug-flag members.
@@ -409,7 +411,13 @@ private:
     // Forward pipeline globals (descriptor set 1) — one set per frame-in-flight,
     // bound once at the start of every forward pass.
     std::array<DescriptorSetHandle, kMaxFramesInFlight> globalDescSets_{};
-    std::array<Mat4, kShadowTotalMatrixCount> shadowViewProjs_{};
+    // SH-03: the single authority for every shadow view this frame — matrix, projection descriptor
+    // and stable logical identity together. Every consumer (the ShadowUBO matrix array, the
+    // LightUBO arrays, the coarse cull frustums, the shadow pass) is a PROJECTION of this set; no
+    // producer writes a shadow matrix anywhere else. Populated in view order: reset + cascades and
+    // punctual views in updateFrameLighting, self layers once the draws are known, world-only once
+    // `anySkinned` is.
+    ShadowRenderViewSet shadowViews_;
     LightUBO lightData_{};
     Vec3 directionalLightDir_{1.0f, -1.0f, 1.0f};
     int activeSpotCasters_{0};

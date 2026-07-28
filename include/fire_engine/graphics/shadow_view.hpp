@@ -95,6 +95,10 @@ public:
     }
 
 private:
+    // Private: a ShadowView is only ever produced by a factory that normalises and validates. An
+    // INVALID view is still produced that way — `perspective()` given a zero-length forward returns
+    // one that keeps its Perspective kind — so "invalid" never means "default-constructed", and
+    // nothing needs a default to represent it.
     ShadowView() = default;
 
     ShadowViewKind kind_{ShadowViewKind::Orthographic};

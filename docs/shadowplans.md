@@ -342,6 +342,26 @@ inputs to shadow content.
 
 Likely branch: `shadow-per-view-discrete-lod`.
 
+**Implementation slices** (each verifiable on its own; the first two have landed):
+
+1. **Identity foundations.** `NodeId` on the scene node and into `Lighting`; `ShadowCasterId` +
+   generation on `GeometryBindings`; `ShadowLogicalViewId` / `ShadowLodStateKey`. Hysteresis is
+   frame-to-frame state, so before anything is cached its key must name the same thing next frame as
+   it did last frame — a physical spot/point slot does not.
+2. **`ShadowRenderViewSet`.** One per-frame authority holding each view's matrix, projection
+   descriptor and logical identity together. The renderer's parallel `shadowViewProjs_` array is
+   GONE: every fit populates the set, and the ShadowUBO matrix array, the LightUBO cascade/spot/self
+   arrays, the coarse cull frustums and the shadow pass are all derived from it. Population order is
+   forced by what is known when — reset + cascades + punctual views in `updateFrameLighting`, self
+   layers once the draws exist, world-only once `anySkinned` does.
+3. **Unresolved command seam + per-view resolution**: `Object` emits the LOD span, world scale,
+   caster id and generation instead of a resolved index buffer; `shadows.cpp` resolves per view,
+   through a per-frame cache keyed on `(ShadowCasterId, generation, ShadowLogicalViewId)`.
+4. **Diagnostics**: per-view reasons into `ShadowViewStats`, resolved before the view is observed.
+5. **Tunables**: `kShadowLodPixelBudget` + coarsening ratio in `render/constants.hpp`, retire
+   `kShadowLodBias`, and drive the ShadowLod tint from the selected view.
+6. **Calibration + docs**: budget sweep at ratio 1.0 first, then the dead band against chatter.
+
 
 **SH-03 additionally owns** (handed over by SH-02):
 

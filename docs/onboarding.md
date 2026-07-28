@@ -918,6 +918,27 @@ the same change — most have a test or guard that will catch you, but not all.
   the former can service this renderer. Push descriptors are requested as the **1.4 feature**, not
   the promoted `VK_KHR_push_descriptor` extension — don't re-add the extension as a requirement, or
   a conformant 1.4 device that no longer advertises it gets rejected for nothing.
+- **`ShadowRenderViewSet` is the only STORED authority for a shadow matrix.** The fit functions
+  naturally produce matrices; what must not exist is a second place one is kept. Every shadow view
+  this frame — cascade, self, spot, point face — is written into `Renderer::shadowViews_` through
+  the family writer for its slot, together with the `ShadowView` descriptor of the SAME fit and the
+  logical identity that fit belongs to. World-only stores nothing at all: `enableWorldOnly` sets a
+  bit and its lookup ALIASES the cascade entry, so a cascade re-fitted afterwards moves both passes. Every consumer is then a projection of the set:
+  `shadowMatrixArray` for the shadow pass and `FrameInfo::shadowViewProjs`, `cascadeViewProjArray` /
+  `spotViewProjArray` / `selfShadowViewProjArray` for the LightUBO, and `find()` per active slot for
+  the coarse cull frustums. Don't reintroduce a parallel matrix array or write a matrix into the
+  LightUBO directly — the failure mode is a view culling and selecting LOD against one fit while
+  rasterising another, which reads as a shadow that is subtly wrong rather than obviously broken.
+  Population is ORDERED by what is known when: `reset()` + cascades + punctual views in
+  `updateFrameLighting`, self layers in `assignSelfShadowSlots` (needs the draws), world-only last
+  (needs `buckets.anySkinned`). Every writer returns `[[nodiscard]] bool`, and **a rejection is
+  terminal in both builds, by two different routes**: in Dev the set's own assertion fires inside
+  the writer (the shortest path to the producer that got it wrong); under NDEBUG that assertion is
+  gone, the writer returns false, and `rejectedShadowView` throws so `main()` logs a named `Fatal:`
+  and exits non-zero. Nothing degrades through it, and no counter (`activeSpotCasters_`, `activePointCasters_`,
+  `selfShadowSlotsScratch_`) advances until the set has accepted the view, so a pass can never be
+  driven by a count the set does not back. `anySkinned` is only the world-only *request*;
+  `recordShadowPass` reads whether it runs back out of the set.
 - **UBO/push-constant structs ↔ GLSL std140 layout.** `render/ubo.hpp` structs are memcpy'd into
   mapped GPU memory, so their field order, `alignas`, and padding must mirror the matching GLSL
   block exactly. `tests/render/test_ubo.cpp` asserts sizes/offsets — extend it when you add a field.
