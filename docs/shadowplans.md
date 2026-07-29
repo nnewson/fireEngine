@@ -414,7 +414,21 @@ Likely branch: `shadow-per-view-discrete-lod`.
    logical view. The four observation rules are stated on `ShadowViewStats::observe`, where the
    invariants they protect live. Column widths are explicit because the level columns — the one
    thing the table exists to show — were being ellipsised to a single character.
-5. **Tunables**: drive the ShadowLod tint from a selected view.
+5. **Tint.** The ShadowLod debug view colours each mesh by the level ONE shadow view resolved for
+   it — the panel's focused view, or cascade 0 by default, named in the overlay so the default is
+   never silent. The level is READ BACK through `ShadowLodResolver::drawnResolution(group, key)` —
+   what that FAMILY drew for this caster — never re-selected: a second selection would see a
+   different history state and the picture would contradict the geometry it claims to describe. It
+   is not `frameResolution(key)`, which returns the decision SHARED by every view with that
+   identity; a cascade and its world-only twin share one while drawing different casters, so the
+   level alone would attribute one pass's choice to another. (`frameResolution` remains for
+   inspecting the shared decision itself.) Filled between the shadow pass and the forward pass, the
+   one window where the levels exist and the forward push constants have not been written yet. Grey
+   means that view has no level for that mesh — it casts no shadow, or that view culled it — never
+   level 0, which would read as "full detail chosen". `--debug-lod` / `--debug-shadow-lod` make both
+   tints capturable without a human at the keyboard, and `--shadow-focus <group>:<slot>` picks the
+   view: resolved once at startup into that slot's logical identity, then followed across
+   compaction, failing by name if the slot is not active.
 6. **Calibration + docs**: budget sweep at ratio 1.0 first, then the dead band against chatter. The
    committed values are an UNCALIBRATED starting point until this runs.
 

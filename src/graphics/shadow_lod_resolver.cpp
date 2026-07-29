@@ -77,6 +77,8 @@ ResolvedShadowDraw resolveShadowDraw(const ShadowGeometryRequest& request,
 
 void ShadowLodResolver::beginFrame() noexcept
 {
+    // Decisions AND their provenance, in one clear: last frame's membership would otherwise let a
+    // consumer tint a caster a view has since stopped drawing.
     frameCache_.clear();
     // Staged levels from a frame that was never committed are dropped here rather than carried:
     // they describe decisions the GPU never acted on.
@@ -91,6 +93,69 @@ std::size_t ShadowLodResolver::historyLevel(const ShadowLodStateKey& key) const 
     }
     const auto it = history_.find(key);
     return it == history_.end() ? kNoPreviousShadowLod : it->second.level;
+}
+
+namespace
+{
+
+// One bit per family. Small and fixed — the group count is a compile-time constant — so the
+// membership of every family that drew a caster fits in one map entry.
+[[nodiscard]] std::uint32_t groupBit(ShadowViewGroup group) noexcept
+{
+    const auto index = static_cast<std::size_t>(group);
+    assert(index < kShadowViewGroupCount && "shadow view group is not a real group");
+    return index < kShadowViewGroupCount ? (1U << index) : 0U;
+}
+
+} // namespace
+
+void ShadowLodResolver::noteDrawn(ShadowViewGroup group, const ShadowLodStateKey& key) noexcept
+{
+    if (!key.valid())
+    {
+        // An unkeyable caster is in no store (see resolve), so it has no entry to mark — and asking
+        // about it later returns nothing, which is the honest answer.
+        return;
+    }
+    const auto it = frameCache_.find(key);
+    // A draw can only be marked on a decision that exists. Reaching here without one means a pass
+    // drew a caster it never resolved, which the pass itself treats as terminal; creating an entry
+    // would manufacture provenance for a level nobody chose.
+    assert(it != frameCache_.end() && "a drawn shadow caster must have been resolved first");
+    if (it == frameCache_.end())
+    {
+        return;
+    }
+    it->second.drawnGroups |= groupBit(group);
+}
+
+const ResolvedShadowDraw*
+ShadowLodResolver::drawnResolution(ShadowViewGroup group,
+                                   const ShadowLodStateKey& key) const noexcept
+{
+    if (!key.valid())
+    {
+        return nullptr;
+    }
+    const auto it = frameCache_.find(key);
+    if (it == frameCache_.end() || (it->second.drawnGroups & groupBit(group)) == 0U)
+    {
+        return nullptr;
+    }
+    return &it->second.resolved;
+}
+
+const ResolvedShadowDraw*
+ShadowLodResolver::frameResolution(const ShadowLodStateKey& key) const noexcept
+{
+    if (!key.valid())
+    {
+        // An unkeyable caster never entered the cache (see resolve), so there is nothing to find —
+        // and no assert: asking about one is a legitimate question with the answer "no".
+        return nullptr;
+    }
+    const auto it = frameCache_.find(key);
+    return it == frameCache_.end() ? nullptr : &it->second.resolved;
 }
 
 ResolvedShadowDraw ShadowLodResolver::resolve(const ShadowGeometryRequest& request,
@@ -114,12 +179,12 @@ ResolvedShadowDraw ShadowLodResolver::resolve(const ShadowGeometryRequest& reque
     {
         // The same logical view asking again: a cascade's world-only twin, or the second depth
         // layer of a self-shadow slot. One decision, reused — not re-derived and hoped to match.
-        return cached->second;
+        return cached->second.resolved;
     }
 
     const ResolvedShadowDraw resolved = resolveShadowDraw(
         request, view.projection(), worldBounds, budgetTexels, hysteresis, historyLevel(key));
-    frameCache_.emplace(key, resolved);
+    frameCache_.emplace(key, FrameEntry{.resolved = resolved, .drawnGroups = 0});
     if (resolved.reason == ShadowLodReason::Selected)
     {
         // ONLY a selected level is evidence about where this caster sits relative to its budget.

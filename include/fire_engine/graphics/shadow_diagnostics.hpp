@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdint>
+#include <optional>
 #include <string_view>
 
 #include <fire_engine/graphics/gpu_limits.hpp>
@@ -288,6 +289,27 @@ struct ShadowViewFocus
                view.kind() == shadowViewKindFor(group);
     }
 };
+
+// A request to focus the view currently occupying one physical slot, parsed from `--shadow-focus`.
+//
+// A slot is the only handle a person has BEFORE the engine runs — logical identities are allocated
+// at load — so the command line has to speak in slots. It is resolved ONCE, at startup, into the
+// identity that slot holds, and the identity is what gets stored; the request itself is then
+// discarded. Keeping the slot would reintroduce exactly the defect the identity-keyed focus exists
+// to prevent: the selection would silently retarget when assignments compact.
+struct ShadowViewSlotRequest
+{
+    ShadowViewGroup group{ShadowViewGroup::Cascade};
+    std::size_t slot{0};
+};
+
+// Parses `<group>:<slot>` — `cascade:2`, `world-only:0`, `self:0`, `spot:1` — plus `point:<light>`
+// `:<face>` for a cube face (`point:0:4`), since a flat point slot is an implementation detail no
+// one should have to compute. Returns nothing for an unknown group, a malformed number, or a slot
+// outside the group's capacity; the caller reports that by name rather than falling back, because a
+// silent fallback would produce a capture of the wrong view that looks perfectly fine.
+[[nodiscard]] std::optional<ShadowViewSlotRequest>
+parseShadowViewSlotRequest(std::string_view text) noexcept;
 
 // Where a focused view was found this frame: its counters and the physical slot carrying them (the
 // slot is what the row label says, and it can differ from frame to frame for one identity).

@@ -949,6 +949,16 @@ the same change — most have a test or guard that will catch you, but not all.
   return between resolution and submit, the next `beginFrame` must drop the staged levels, which is
   what it does. Don't reintroduce a level on the command itself: with per-view selection there is no
   single level a caster has.
+- **The ShadowLod tint reads back through `drawnResolution(group, key)`** (SH-03 slice 5).
+  `Renderer::applyShadowLodTint` runs between `recordShadowPass` and the forward pass — the only
+  window where the per-view levels exist and the forward push constants have not been written yet.
+  It asks ONE question of the focused view's family: what did that pass draw for this caster.
+  `frameResolution(key)` is deliberately not the tint's query — it returns the SHARED decision, and
+  a cascade and its world-only twin share one by design while drawing different casters (world-only
+  excludes skinned ones, and cascades record first), so the level alone would attribute one pass's
+  choice to another. Reserve `frameResolution` for inspecting the decision itself. Never re-select
+  for the tint; a second selection sees different history state and the picture would contradict the
+  geometry it describes. Grey means "no level from that view", never level 0.
 - **UBO/push-constant structs ↔ GLSL std140 layout.** `render/ubo.hpp` structs are memcpy'd into
   mapped GPU memory, so their field order, `alignas`, and padding must mirror the matching GLSL
   block exactly. `tests/render/test_ubo.cpp` asserts sizes/offsets — extend it when you add a field.

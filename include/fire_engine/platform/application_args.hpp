@@ -116,6 +116,20 @@ struct ApplicationArgs
             args.debug.view = DebugView::Ssao;
             continue;
         }
+        if (arg == "--debug-lod")
+        {
+            args.debug.view = DebugView::Lod;
+            continue;
+        }
+        if (arg == "--debug-shadow-lod")
+        {
+            // SH-03: tints each mesh by the level ONE shadow view chose for it — the focused view
+            // in the Shadows panel, or cascade 0 by default. A flag rather than overlay-only
+            // because a reference capture of this view is how per-view selection is checked without
+            // a human at the keyboard.
+            args.debug.view = DebugView::ShadowLod;
+            continue;
+        }
         if (arg == "--debug-joints")
         {
             // Replaces the scene meshes with the ragdoll articulation gizmo + index:name labels.
@@ -171,6 +185,29 @@ struct ApplicationArgs
                     {
                         args.debug.captureFrame = frame;
                     }
+                }
+            }
+            continue;
+        }
+        if (arg == "--shadow-focus")
+        {
+            // Which shadow view the diagnostics and the ShadowLod tint should follow, as
+            // `<group>:<slot>` (`cascade:3`, `spot:0`, `point:0:4`). The SLOT is only how the
+            // request is written — it is resolved once at startup into the identity that slot
+            // holds, and the identity is what is kept.
+            //
+            // Unlike --capture, a MISSING value is not inert. The flag records its presence
+            // (engaged optional) even when it consumes nothing, so the renderer can refuse to
+            // start: silently ignoring it would run with the default focus and produce a capture of
+            // cascade 0 that looks exactly like a correct capture of whatever was meant.
+            args.debug.shadowFocus = std::string_view{};
+            if (i + 1 < argc)
+            {
+                const std::string_view value = argv[i + 1];
+                if (!value.empty() && value.front() != '-')
+                {
+                    ++i;
+                    args.debug.shadowFocus = value;
                 }
             }
             continue;

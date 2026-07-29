@@ -787,11 +787,17 @@ std::vector<DrawCommand> Object::buildDrawCommands(const FrameInfo& frame, const
                                  binding.shadowBufs[frame.currentFrame] != NullBuffer;
         const Geometry* shadowGeometry =
             binding.shadowGeometry != nullptr ? binding.shadowGeometry : binding.geometry;
-        // SH-03: the forward command reports NO shadow level. There is no longer a single one to
-        // report — the caster holds a level per shadow view — so the ShadowLod tint stays neutral
-        // grey until SH-03 slice 5 wires it to a chosen view. The previous number came from a
-        // camera-derived choice that, after this slice, no view actually uses.
+        // SH-03: no level can be reported HERE. A caster holds one level per shadow view, and none
+        // of them exist until the shadow pass resolves — so the forward command leaves the sentinel
+        // and carries only the caster's IDENTITY, which is what lets the renderer fill in the
+        // focused view's level once that pass has run (slice 5). A non-caster carries no identity
+        // at all, and therefore stays neutral grey.
         cmd.shadowLodLevel = kNoShadowLod;
+        if (castsShadow)
+        {
+            cmd.shadowCasterId = binding.shadowCasterId;
+            cmd.shadowGeneration = binding.shadowGeneration;
+        }
         commands.push_back(cmd);
 
         if (castsShadow)

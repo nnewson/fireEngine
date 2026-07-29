@@ -1,6 +1,8 @@
 #include <fire_engine/graphics/shadow_diagnostics.hpp>
 
 #include <cassert>
+#include <charconv>
+#include <system_error>
 
 namespace fire_engine
 {
@@ -200,6 +202,106 @@ std::size_t ShadowFrameStats::activeViewCount(ShadowViewGroup group) const noexc
         active += views[base + slot].touched() ? 1 : 0;
     }
     return active;
+}
+
+namespace
+{
+
+// The spellings `--shadow-focus` accepts, matched against the same families the panel labels use.
+// `world-only` also accepts `worldonly`, because the hyphen is easy to drop from a shell.
+[[nodiscard]] std::optional<ShadowViewGroup> parseShadowViewGroup(std::string_view text) noexcept
+{
+    if (text == "cascade")
+    {
+        return ShadowViewGroup::Cascade;
+    }
+    if (text == "world-only" || text == "worldonly")
+    {
+        return ShadowViewGroup::WorldOnly;
+    }
+    if (text == "self")
+    {
+        return ShadowViewGroup::Self;
+    }
+    if (text == "spot")
+    {
+        return ShadowViewGroup::Spot;
+    }
+    if (text == "point")
+    {
+        return ShadowViewGroup::Point;
+    }
+    return std::nullopt;
+}
+
+// A whole non-negative number and nothing else. `from_chars` accepts a numeric PREFIX, so "2x"
+// would otherwise parse as 2 and the run would focus a view nobody asked for.
+[[nodiscard]] std::optional<std::size_t> parseWholeNumber(std::string_view text) noexcept
+{
+    std::size_t value = 0;
+    const char* const end = text.data() + text.size();
+    const auto result = std::from_chars(text.data(), end, value);
+    if (text.empty() || result.ec != std::errc{} || result.ptr != end)
+    {
+        return std::nullopt;
+    }
+    return value;
+}
+
+} // namespace
+
+std::optional<ShadowViewSlotRequest> parseShadowViewSlotRequest(std::string_view text) noexcept
+{
+    const std::size_t firstColon = text.find(':');
+    if (firstColon == std::string_view::npos)
+    {
+        return std::nullopt;
+    }
+    const std::optional<ShadowViewGroup> group = parseShadowViewGroup(text.substr(0, firstColon));
+    if (!group)
+    {
+        return std::nullopt;
+    }
+    const std::string_view rest = text.substr(firstColon + 1);
+
+    std::size_t slot = 0;
+    if (const std::size_t secondColon = rest.find(':'); secondColon != std::string_view::npos)
+    {
+        // `point:<light>:<face>` — the friendly spelling, since a flat point slot is an
+        // implementation detail nobody should have to compute. Only point views have a face, so the
+        // three-part form is meaningless elsewhere and is rejected rather than half-honoured.
+        if (*group != ShadowViewGroup::Point)
+        {
+            return std::nullopt;
+        }
+        const std::optional<std::size_t> light = parseWholeNumber(rest.substr(0, secondColon));
+        const std::optional<std::size_t> face = parseWholeNumber(rest.substr(secondColon + 1));
+        // BOTH validated before flattening. `light * kCubeFaceCount + face` is unsigned arithmetic,
+        // so a large enough light index wraps back into the valid range — 2^63 lands on slot 0 —
+        // and a request for a nonsense light would silently focus a real one. Same defect, and the
+        // same fix, as ShadowRenderViewSet::setPoint.
+        if (!light || !face || *face >= kCubeFaceCount ||
+            *light >= static_cast<std::size_t>(kMaxPointShadowCasters))
+        {
+            return std::nullopt;
+        }
+        slot = shadowPointViewSlot(*light, *face);
+    }
+    else
+    {
+        const std::optional<std::size_t> parsed = parseWholeNumber(rest);
+        if (!parsed)
+        {
+            return std::nullopt;
+        }
+        slot = *parsed;
+    }
+
+    if (slot >= shadowViewSlotCount(*group))
+    {
+        return std::nullopt;
+    }
+    return ShadowViewSlotRequest{.group = *group, .slot = slot};
 }
 
 FocusedShadowView ShadowFrameStats::focused(ShadowViewFocus focus) const noexcept

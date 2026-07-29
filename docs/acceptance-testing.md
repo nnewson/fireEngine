@@ -377,14 +377,22 @@ this order:
    does NOT claim whether it will come back, since a removed light and a light that simply did not
    rasterise are indistinguishable without scene liveness) versus "selection is not a valid view"
    (structurally malformed — no frame can satisfy it, so pick another row).
-3. **View → LOD tint, then View → Shadow LOD tint** — the camera level and, currently, a neutral
-   grey everywhere. Since SH-03 a caster holds a *different* level per shadow view, so there is no
-   single number to tint by; slice 5 wires the tint to the focused view, and until then grey is the
-   honest answer rather than a level no view used. The floor reads that same grey for a different
-   reason — it is authored `extras.Shadow: {"Casts": false}`, so it receives shadows without casting
-   one. If it ever tints green instead, the receive-only flag has stopped being applied, and you'll
-   see it as the whole floor darkening in the normal view, because a flat caster fails its own depth
-   comparison across its entire area.
+3. **View → LOD tint, then View → Shadow LOD tint** (`--debug-lod` / `--debug-shadow-lod`) — the
+   camera level, then the level ONE shadow view chose. The second names its view under the dropdown:
+   the row focused in step 2, or **cascade 0** by default.
+
+   Expect most of the scene to be **grey** under the default. Grey means "this view has no level for
+   this mesh", and cascade 0 is the near slice — it draws only a handful of the casters, so
+   everything it culled is legitimately grey. That is the check: the tinted meshes must be the ones
+   cascade 0's row says it drew (4 of 13 on this scene, `L0=3 L1=1`), and clicking cascade 3 — which
+   draws all 13 — must tint far more of them. If the same meshes tint identically whichever row you
+   focus, per-view selection is not reaching the tint.
+
+   The floor reads grey for a different reason — it is authored `extras.Shadow: {"Casts": false}`,
+   so it receives shadows without casting one and has no caster identity at all. If it ever tints
+   green instead, the receive-only flag has stopped being applied, and you'll see it as the whole
+   floor darkening in the normal view, because a flat caster fails its own depth comparison across
+   its entire area.
 4. **Off-camera caster** — the sun sits over the camera's shoulder (~46° elevation), so shadows fall
    away from you. This caster is ~74° off the view axis and never on screen, but its shadow lands on
    open floor near x 14, z 11 — front-right of the view. It must not vanish or change silhouette as

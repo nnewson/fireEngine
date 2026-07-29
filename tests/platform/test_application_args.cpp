@@ -218,6 +218,10 @@ TEST_CASE("ApplicationArgs.DebugFlagsSetView", "[ApplicationArgs]")
         {"--debug-shadow", DebugView::Shadow},
         {"--debug-shadow-depth", DebugView::ShadowDepth},
         {"--debug-velocity", DebugView::Velocity},
+        {"--debug-ssao", DebugView::Ssao},
+        {"--debug-lod", DebugView::Lod},
+        {"--debug-shadow-lod", DebugView::ShadowLod},
+        {"--debug-joints", DebugView::Joints},
     }));
     CAPTURE(testCase.flag);
 
@@ -374,6 +378,54 @@ TEST_CASE("ApplicationArgs.CaptureFrameDoesNotSwallowAFollowingFlag", "[Applicat
 
     CHECK(parsed.args.debug.captureFrame == 16);
     CHECK_FALSE(parsed.args.debug.lod);
+}
+
+TEST_CASE("ApplicationArgs.ShadowFocusConsumesItsValue", "[ApplicationArgs]")
+{
+    const auto parsed = parseArgs(
+        {"fireEngineApp", "--shadow-focus", "cascade:3", "DamagedHelmet/DamagedHelmet.gltf"});
+    const auto& args = parsed.args;
+
+    REQUIRE(args.debug.shadowFocus.has_value());
+    CHECK(*args.debug.shadowFocus == "cascade:3");
+    // Consumed as the flag's value, NOT left to be read as the scene.
+    CHECK(args.scenePath == "DamagedHelmet/DamagedHelmet.gltf");
+}
+
+TEST_CASE("ApplicationArgs.ShadowFocusRecordsPresenceWithoutAValue", "[ApplicationArgs]")
+{
+    // Unlike --capture, a valueless --shadow-focus must NOT read as "no request". The renderer
+    // refuses to start on an engaged-but-empty value; collapsing it to absent would run with the
+    // default focus and produce a capture of cascade 0 that looks exactly like a correct capture of
+    // whatever view was meant.
+    const auto trailing = parseArgs({"fireEngineApp", "--shadow-focus"});
+    REQUIRE(trailing.args.debug.shadowFocus.has_value());
+    CHECK(trailing.args.debug.shadowFocus->empty());
+
+    // Followed by another flag: that flag is still processed, not eaten as the value — and the
+    // request still reports itself as present-but-unusable.
+    const auto followed = parseArgs({"fireEngineApp", "--shadow-focus", "--overlay"});
+    REQUIRE(followed.args.debug.shadowFocus.has_value());
+    CHECK(followed.args.debug.shadowFocus->empty());
+    CHECK(followed.args.debug.overlayVisible);
+
+    // No flag at all is the only "no request" state.
+    CHECK_FALSE(parseArgs({"fireEngineApp"}).args.debug.shadowFocus.has_value());
+}
+
+TEST_CASE("ApplicationArgs.RepeatedShadowFocusTakesTheLastValue", "[ApplicationArgs]")
+{
+    const auto parsed =
+        parseArgs({"fireEngineApp", "--shadow-focus", "cascade:0", "--shadow-focus", "point:1:4"});
+    REQUIRE(parsed.args.debug.shadowFocus.has_value());
+    CHECK(*parsed.args.debug.shadowFocus == "point:1:4");
+
+    // A valueless repeat REPLACES a good earlier value rather than being ignored: last-one-wins,
+    // and the run then fails loudly instead of silently honouring a superseded request.
+    const auto clobbered =
+        parseArgs({"fireEngineApp", "--shadow-focus", "cascade:0", "--shadow-focus"});
+    REQUIRE(clobbered.args.debug.shadowFocus.has_value());
+    CHECK(clobbered.args.debug.shadowFocus->empty());
 }
 
 TEST_CASE("ApplicationArgs.RepeatedCaptureFlagsTakeTheLastValue", "[ApplicationArgs]")

@@ -91,6 +91,10 @@ public:
     {
         return stats_->view(group_, slot_);
     }
+    [[nodiscard]] ShadowViewGroup group() const noexcept
+    {
+        return group_;
+    }
     [[nodiscard]] std::string_view groupName() const noexcept
     {
         return toString(group_);
@@ -168,6 +172,13 @@ public:
     {
         return view_->logicalId();
     }
+    // Records that this family drew this caster for this view. Called only where the draw is
+    // actually recorded, so membership means "rasterised", not "considered".
+    void noteDrawn(ShadowViewGroup group, const ShadowGeometryRequest& request) const noexcept
+    {
+        resolver_->noteDrawn(group,
+                             ShadowLodStateKey{request.casterId, request.generation, logicalId()});
+    }
 
 private:
     const ShadowRenderView* view_; // never null: bound from a reference
@@ -243,6 +254,9 @@ void recordShadowDrawBucket(vk::CommandBuffer cmd, std::span<const DrawCommand> 
         pushShadowObjectDescriptors(cmd, resources, resources.vulkanPipelineLayout(pipelineHandle),
                                     dc);
         cmd.drawIndexed(resolved.indexCount, 1, 0, 0, 0);
+        // Recorded HERE, beside the draw itself, so "this family drew this caster" cannot become
+        // true for a caster that was only considered.
+        lod.noteDrawn(target.group(), dc.shadowRequest);
     }
 }
 

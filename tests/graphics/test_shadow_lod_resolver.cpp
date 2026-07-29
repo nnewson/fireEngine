@@ -430,6 +430,176 @@ TEST_CASE("ShadowLodResolver.AnUnsetWorldScaleForcesAFallback", "[ShadowLodResol
     CHECK(flattened.level == lods.size() - 1); // zero error: the coarsest level fits
 }
 
+TEST_CASE("ShadowLodResolver.FrameResolutionExposesTheSharedDecision", "[ShadowLodResolver]")
+{
+    // The DECISION, independent of which families acted on it — no `noteDrawn` here on purpose.
+    // This is the entry every view with that identity is handed, and the one a consumer reasoning
+    // about the decision itself wants. Attribution is a separate question with a separate query
+    // (`drawnResolution`, covered below), because the shared decision alone cannot say which pass
+    // drew what.
+    //
+    // What both share: it is the entry the pass drew from, never a fresh selection — one would see
+    // a different history state, and anything derived from it would contradict the geometry.
+    const auto lods = chain();
+    ShadowRenderViewSet views = populatedViews();
+    ShadowLodResolver resolver;
+    resolver.beginFrame();
+
+    const auto caster = static_cast<ShadowCasterId>(17);
+    const ResolvedShadowDraw drawn =
+        resolver.resolve(request(lods, caster), view(views, ShadowViewGroup::Cascade, 0),
+                         someBounds(), kBudget, kNoHysteresis);
+
+    const ShadowLodStateKey key{caster, ShadowCasterGeneration::First,
+                                ShadowLogicalViewId::cascade(0)};
+    const ResolvedShadowDraw* readBack = resolver.frameResolution(key);
+    REQUIRE(readBack != nullptr);
+    CHECK(readBack->level == drawn.level);
+    CHECK(readBack->indexBuffer == drawn.indexBuffer);
+    CHECK(readBack->reason == drawn.reason);
+
+    // A view that never resolved this caster has NO decision for it — null, not level 0. Anything
+    // that read level 0 here would claim "full detail chosen" about a view that never considered
+    // it.
+    CHECK(resolver.frameResolution(ShadowLodStateKey{caster, ShadowCasterGeneration::First,
+                                                     ShadowLogicalViewId::cascade(3)}) == nullptr);
+    // Same for a caster this frame never saw, and for an unkeyable one.
+    CHECK(resolver.frameResolution(ShadowLodStateKey{static_cast<ShadowCasterId>(18),
+                                                     ShadowCasterGeneration::First,
+                                                     ShadowLogicalViewId::cascade(0)}) == nullptr);
+    CHECK(resolver.frameResolution(ShadowLodStateKey{ShadowCasterId::Invalid,
+                                                     ShadowCasterGeneration::First,
+                                                     ShadowLogicalViewId::cascade(0)}) == nullptr);
+
+    // And it is a FRAME cache: the next frame starts with no decisions, so a stale level cannot be
+    // read back for a view that has stopped resolving that caster.
+    resolver.commitFrame();
+    resolver.beginFrame();
+    CHECK(resolver.frameResolution(key) == nullptr);
+}
+
+TEST_CASE("ShadowLodResolver.ProvenanceIsPerFamilyEvenWhenTheResolutionIsShared",
+          "[ShadowLodResolver]")
+{
+    // The gap a shared resolution opens. A cascade and its world-only twin are ONE logical view, so
+    // they share a decision by design — that is what makes them agree. But they do not draw the
+    // same casters: world-only exists to exclude skinned ones, and cascades record first. A
+    // consumer reading the level alone would therefore report one for a caster the world-only pass
+    // never offered: one view's decision presented as another's.
+    const auto lods = chain();
+    ShadowRenderViewSet views = populatedViews();
+    ShadowLodResolver resolver;
+    resolver.beginFrame();
+
+    const auto skinned = static_cast<ShadowCasterId>(20);
+    const ShadowLodStateKey key{skinned, ShadowCasterGeneration::First,
+                                ShadowLogicalViewId::cascade(0)};
+
+    // The cascade resolves and draws it; the world-only pass never does.
+    const ResolvedShadowDraw drawn =
+        resolver.resolve(request(lods, skinned), view(views, ShadowViewGroup::Cascade, 0),
+                         someBounds(), kBudget, kNoHysteresis);
+    resolver.noteDrawn(ShadowViewGroup::Cascade, key);
+
+    // The DECISION is shared — asking for it plainly still finds the level ...
+    REQUIRE(resolver.frameResolution(key) != nullptr);
+    CHECK(resolver.frameResolution(key)->level == drawn.level);
+    // ... but attributing it to a pass is a different question, and the one consumers must ask.
+    REQUIRE(resolver.drawnResolution(ShadowViewGroup::Cascade, key) != nullptr);
+    CHECK(resolver.drawnResolution(ShadowViewGroup::Cascade, key)->level == drawn.level);
+    CHECK(resolver.drawnResolution(ShadowViewGroup::WorldOnly, key) == nullptr);
+
+    // Once world-only does draw it, both attribute the same shared decision.
+    resolver.noteDrawn(ShadowViewGroup::WorldOnly, key);
+    REQUIRE(resolver.drawnResolution(ShadowViewGroup::WorldOnly, key) != nullptr);
+    CHECK(resolver.drawnResolution(ShadowViewGroup::WorldOnly, key)->level == drawn.level);
+    CHECK(resolver.drawnResolution(ShadowViewGroup::Cascade, key) != nullptr);
+
+    // A caster nobody drew has no attribution anywhere.
+    const ShadowLodStateKey unseen{static_cast<ShadowCasterId>(21), ShadowCasterGeneration::First,
+                                   ShadowLogicalViewId::cascade(0)};
+    CHECK(resolver.drawnResolution(ShadowViewGroup::Cascade, unseen) == nullptr);
+
+    // Provenance is per FRAME: a view that stops drawing a caster must stop attributing it.
+    resolver.commitFrame();
+    resolver.beginFrame();
+    CHECK(resolver.drawnResolution(ShadowViewGroup::Cascade, key) == nullptr);
+}
+
+TEST_CASE("ShadowLodResolver.MarkingAnUnresolvedCasterDrawnChangesNothing", "[ShadowLodResolver]")
+{
+    // Provenance is a FIELD of a decision, not a record of its own: marking a caster the resolver
+    // never resolved would manufacture attribution for a level nobody chose. (The shadow pass
+    // treats drawing an unresolved caster as terminal; this is the store refusing to record it.)
+#ifdef NDEBUG
+    ShadowLodResolver resolver;
+    resolver.beginFrame();
+
+    const ShadowLodStateKey neverResolved{static_cast<ShadowCasterId>(22),
+                                          ShadowCasterGeneration::First,
+                                          ShadowLogicalViewId::cascade(0)};
+    resolver.noteDrawn(ShadowViewGroup::Cascade, neverResolved);
+    CHECK(resolver.frameCacheSize() == 0);
+    CHECK(resolver.frameResolution(neverResolved) == nullptr);
+    CHECK(resolver.drawnResolution(ShadowViewGroup::Cascade, neverResolved) == nullptr);
+
+    // An unkeyable caster is in no store at all, so it likewise gains nothing.
+    const ShadowLodStateKey unkeyable{ShadowCasterId::Invalid, ShadowCasterGeneration::First,
+                                      ShadowLogicalViewId::cascade(0)};
+    resolver.noteDrawn(ShadowViewGroup::Cascade, unkeyable);
+    CHECK(resolver.frameCacheSize() == 0);
+    CHECK(resolver.drawnResolution(ShadowViewGroup::Cascade, unkeyable) == nullptr);
+#endif
+}
+
+TEST_CASE("ShadowLodResolver.OneCasterTintsDifferentlyPerFocusedView", "[ShadowLodResolver]")
+{
+    // What the tint exists to show. The same caster resolves against two views with very different
+    // texel sizes, so reading back per view gives different levels — the SH-03 fix, in the one
+    // place a person can see it.
+    const auto lods = chain();
+    ShadowRenderViewSet views;
+    // A coarse cascade (0.5 world units per texel) and a fine one (0.005): level 2's 0.20 deviation
+    // is 0.4 texels in the first and 40 in the second.
+    REQUIRE(views.setCascade(0, Mat4::identity(), ShadowView::orthographic(0.5f)));
+    REQUIRE(views.setCascade(1, Mat4::identity(), ShadowView::orthographic(0.005f)));
+
+    ShadowLodResolver resolver;
+    resolver.beginFrame();
+    const auto caster = static_cast<ShadowCasterId>(19);
+    const ResolvedShadowDraw coarse =
+        resolver.resolve(request(lods, caster), view(views, ShadowViewGroup::Cascade, 0),
+                         someBounds(), kBudget, kNoHysteresis);
+    const ResolvedShadowDraw fine =
+        resolver.resolve(request(lods, caster), view(views, ShadowViewGroup::Cascade, 1),
+                         someBounds(), kBudget, kNoHysteresis);
+
+    CHECK(coarse.reason == ShadowLodReason::Selected);
+    CHECK(fine.reason == ShadowLodReason::Selected);
+    CHECK(coarse.level > fine.level); // the coarse map tolerates far more object-space error
+
+    // Both cascades draw it, which is what makes the level attributable to each.
+    const auto keyFor = [&](std::uint32_t cascade)
+    {
+        return ShadowLodStateKey{caster, ShadowCasterGeneration::First,
+                                 ShadowLogicalViewId::cascade(cascade)};
+    };
+    resolver.noteDrawn(ShadowViewGroup::Cascade, keyFor(0));
+    resolver.noteDrawn(ShadowViewGroup::Cascade, keyFor(1));
+
+    // Read back through the TINT's query, per view: focusing one must not change what the other
+    // reports. This is the SH-03 fix in the one place a person can see it.
+    const auto tintLevelFor = [&](std::uint32_t cascade)
+    {
+        const ResolvedShadowDraw* r =
+            resolver.drawnResolution(ShadowViewGroup::Cascade, keyFor(cascade));
+        REQUIRE(r != nullptr);
+        return r->level;
+    };
+    CHECK(tintLevelFor(0) == coarse.level);
+    CHECK(tintLevelFor(1) == fine.level);
+}
+
 TEST_CASE("ShadowLodResolver.DifferentViewsOfOneCasterAreSeparateHistory", "[ShadowLodResolver]")
 {
     // The point of the whole slice: one caster, several views, several answers — and each view's

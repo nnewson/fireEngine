@@ -27,8 +27,8 @@ namespace
 // raised the question is the shortest path from "this map keeps too much" to "here is why". Group
 // rollup rows are not focusable — a group's reasons are a SUBSET of the scene total (a useful one:
 // "the point family forces LOD0 and the cascades don't"), but a group has no single logical view,
-// which is what the focus identifies and what slice 5's tint needs. Worth revisiting if reading a
-// family's mix on its own turns out to be the common question.
+// which is what the focus identifies and what the ShadowLod tint needs. Worth revisiting if reading
+// a family's mix on its own turns out to be the common question.
 bool shadowStatsRow(const char* label, const ShadowViewStats& stats, const char* timing,
                     bool focusable = false, bool focused = false)
 {
@@ -61,6 +61,41 @@ bool shadowStatsRow(const char* label, const ShadowViewStats& stats, const char*
     return clicked;
 }
 
+// Names the LOGICAL view an identity refers to — the thing a focus actually selects, as opposed to
+// the physical row it happens to occupy. The family alone is not a name: "cascade" describes four
+// different views and "point" describes every face of every point light, so a label that stops
+// there cannot tell a reader which one they are looking at (or tinting by).
+void formatShadowViewIdentity(char* out, std::size_t size, ShadowViewGroup group,
+                              const ShadowLogicalViewId& view)
+{
+    const std::string_view family = toString(group);
+    const auto familyChars = static_cast<int>(family.size());
+    switch (view.kind())
+    {
+    case ShadowLogicalViewKind::Cascade:
+        std::snprintf(out, size, "%.*s %llu", familyChars, family.data(),
+                      static_cast<unsigned long long>(view.id()));
+        return;
+    case ShadowLogicalViewKind::Self:
+        // The owning object, not a slot: the slot is reassigned per frame, the object is not.
+        std::snprintf(out, size, "%.*s object %llu", familyChars, family.data(),
+                      static_cast<unsigned long long>(view.id()));
+        return;
+    case ShadowLogicalViewKind::Spot:
+        std::snprintf(out, size, "%.*s light %llu", familyChars, family.data(),
+                      static_cast<unsigned long long>(view.id()));
+        return;
+    case ShadowLogicalViewKind::Point:
+        std::snprintf(out, size, "%.*s light %llu face %u", familyChars, family.data(),
+                      static_cast<unsigned long long>(view.id()),
+                      static_cast<unsigned>(view.face()));
+        return;
+    case ShadowLogicalViewKind::Invalid:
+        break;
+    }
+    std::snprintf(out, size, "%.*s (no view)", familyChars, family.data());
+}
+
 // Row label for one physical slot of a family. Deliberately says "slot", not "light": slots are
 // assignment order into a fixed array, so the same row can describe a different light next frame —
 // a row is a MAP, not an identity. Point views are stored flat as lightSlot * kCubeFaceCount +
@@ -90,9 +125,10 @@ void formatShadowSlotLabel(char* out, std::size_t size, ShadowViewGroup group, s
 //
 // Two different quantities share the table, and mixing them is the mistake it is laid out to
 // prevent. "Passes" and the draw/triangle columns are RASTER WORK — the same caster counts once per
-// view it appears in, which is the real GPU cost. The L0..L3+ columns are SELECTION SAMPLES: one
-// per drawn caster per logical view (the self-shadow families rasterise twice but are sampled
-// once), so they describe the level distribution, not the work.
+// view it appears in, which is the real GPU cost. The L0..L3+ columns are LOD SELECTIONS OF DRAWN
+// CASTERS: one per drawn caster per logical view (a rejected candidate is never resolved and has no
+// level; the self families rasterise twice but are sampled once), so they describe the level
+// distribution, not the work.
 void drawShadowDiagnostics(const FrameStats& stats, RenderTunables& tunables)
 {
     if (!stats.shadowValid)
@@ -132,17 +168,24 @@ void drawShadowDiagnostics(const FrameStats& stats, RenderTunables& tunables)
     }
     else if (focus.perView)
     {
-        // Labelled by the slot the identity was FOUND in this frame, which is why the search
-        // returns it: an identity can move slots between frames, and printing the slot it was
-        // selected in would label the row with an address it no longer occupies.
-        char label[48] = "  (not present in this frame)";
+        // Named by IDENTITY (which view), then located by the slot it was FOUND in this frame
+        // (which row) — an identity can move slots between frames, so the slot it was selected in
+        // would label a row it no longer occupies.
+        char view[64];
+        formatShadowViewIdentity(view, sizeof(view), focus.group, focus.view);
+        // `formatShadowSlotLabel` indents for the table, so the leading spaces are skipped here —
+        // without that the dash and the label ran together ("— cascade slot 3" became "—cascade").
+        char where[48] = "(not present in this frame)";
         if (focusRan)
         {
-            formatShadowSlotLabel(label, sizeof(label), focus.group, focusedView.slot);
+            char slotLabel[48];
+            formatShadowSlotLabel(slotLabel, sizeof(slotLabel), focus.group, focusedView.slot);
+            const std::string_view trimmed = std::string_view{slotLabel}.substr(
+                std::string_view{slotLabel}.find_first_not_of(' '));
+            std::snprintf(where, sizeof(where), "%.*s", static_cast<int>(trimmed.size()),
+                          trimmed.data());
         }
-        const std::string_view group = toString(focus.group);
-        std::snprintf(reasonScope, sizeof(reasonScope), "Reasons: %.*s%s",
-                      static_cast<int>(group.size()), group.data(), label);
+        std::snprintf(reasonScope, sizeof(reasonScope), "Reasons: %s — %s", view, where);
     }
     ImGui::TextUnformatted(reasonScope);
 
@@ -514,6 +557,27 @@ void DebugOverlay::buildUi(const FrameStats& stats, RenderTunables& tunables)
                          static_cast<int>(kDebugViewNames.size())))
         {
             tunables.debugView = static_cast<DebugView>(view);
+        }
+        // The Shadow LOD tint colours meshes by the level ONE shadow view chose (SH-03 slice 5), so
+        // it has to name that view — the same mesh legitimately tints differently under a different
+        // one, and a reader who does not know which view they are looking at cannot act on it. Said
+        // here rather than only in the Shadows panel, because the tint is usable without opening
+        // it.
+        if (tunables.debugView == DebugView::ShadowLod)
+        {
+            if (tunables.shadowViewFocus.addressable())
+            {
+                char view[64];
+                formatShadowViewIdentity(view, sizeof(view), tunables.shadowViewFocus.group,
+                                         tunables.shadowViewFocus.view);
+                ImGui::TextDisabled("Tinting by %s (focused in Shadows)", view);
+            }
+            else
+            {
+                ImGui::TextDisabled("Tinting by cascade 0 (default) — click a row in Shadows");
+            }
+            ImGui::TextDisabled(
+                "Grey = no level from THAT view (no shadow, or it culled the mesh)");
         }
         ImGui::Checkbox("No shadows", &tunables.noShadows);
     }

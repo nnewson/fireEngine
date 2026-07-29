@@ -57,9 +57,10 @@ the plan; the priority order is its § Suggested priority.
   identity, the per-frame view set, and the unresolved command seam with per-view resolution, which
   also brought forward per-view diagnostic reasons and moved the tuning into
   `render/constants.hpp` (`kShadowLodPixelBudget` + `kShadowLodCoarsenRatio`, `kShadowLodBias`
-  retired). REMAINING: the selected-view diagnostics and tint (slices 4–5), and the calibration of
-  both values against SH-01's captures and diagnostics (slice 6) — until then the committed values
-  are an uncalibrated starting point and the ShadowLod tint is neutral grey. See
+  retired), plus per-view diagnostics with a focused-view reason breakdown (slice 4) and a ShadowLod
+  tint driven by that focused view (slice 5, with `--shadow-focus` for scripted captures).
+  REMAINING: calibrating the budget and coarsening ratio against SH-01's captures and diagnostics
+  (slice 6) — until then the committed values are an uncalibrated starting point. See
   [`shadowplans.md`](shadowplans.md) § SH-03.
 - **SH-04** — deformation / proxy policy (skinned, morphed, cloth: no invalid error claims, explicit
   conservative full-detail fallback).

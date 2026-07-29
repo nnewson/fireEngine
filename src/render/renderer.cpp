@@ -214,6 +214,24 @@ Renderer::Renderer(const Window& window, std::string environmentPath, RendererDe
     tunables_.lodEnabled = debug.lod;
     capturePath_ = std::string{debug.capturePath};
     captureFrame_ = static_cast<std::uint64_t>(debug.captureFrame);
+    if (debug.shadowFocus)
+    {
+        // Parsed at STARTUP so a malformed request fails before rendering anything, rather than
+        // producing a run that quietly focuses nothing. Resolving the slot to an identity has to
+        // wait for the first frame's view set (see resolveShadowFocusRequest).
+        //
+        // An ENGAGED but empty value means the flag was given with nothing usable after it. That is
+        // terminal too: continuing would silently focus the default view, and the resulting capture
+        // would be indistinguishable from a correct one.
+        pendingShadowFocus_ = parseShadowViewSlotRequest(*debug.shadowFocus);
+        if (!pendingShadowFocus_)
+        {
+            throw std::runtime_error(
+                std::format("--shadow-focus '{}' is not <group>:<slot> — expected e.g. cascade:3, "
+                            "world-only:0, self:0, spot:1, point:0:4",
+                            *debug.shadowFocus));
+        }
+    }
     if (captureWanted())
     {
         // Fail at STARTUP on an unsupported format rather than at the capture frame — a run that
@@ -1085,6 +1103,81 @@ void Renderer::recordShadowPass(vk::CommandBuffer cmd, const DrawBuckets& bucket
         renderWorldShadow, shadowStatsRing_[currentFrame_], profiler_, currentFrame_);
 }
 
+void Renderer::resolveShadowFocusRequest()
+{
+    if (!pendingShadowFocus_)
+    {
+        return;
+    }
+    const ShadowViewSlotRequest request = *pendingShadowFocus_;
+    // Cleared FIRST, whatever happens next: honoured once is the contract, and a request that
+    // survived a failure would re-throw every frame, burying the first report.
+    pendingShadowFocus_.reset();
+
+    const ShadowRenderView* view = shadowViews_.find(request.group, request.slot);
+    if (view == nullptr)
+    {
+        // By name, not by falling back. A capture of cascade 0 when cascade 3 was requested looks
+        // entirely correct and answers the wrong question — the failure mode this whole flag exists
+        // to avoid in slice 6's calibration sweeps.
+        throw std::runtime_error(
+            std::format("--shadow-focus named {} slot {}, which is not active in this scene",
+                        toString(request.group), request.slot));
+    }
+    // The IDENTITY is what is stored; the slot was only ever how the request was written.
+    tunables_.shadowViewFocus =
+        ShadowViewFocus{.perView = true, .group = request.group, .view = view->logicalId()};
+    log::info(log::category::render, "--shadow-focus resolved {} slot {} to its logical view",
+              toString(request.group), request.slot);
+}
+
+void Renderer::applyShadowLodTint(DrawBuckets& buckets) const
+{
+    if (tunables_.debugView != DebugView::ShadowLod)
+    {
+        return;
+    }
+    // The tint needs ONE view, and the panel's focus is it. With nothing focused it falls back to
+    // the first cascade rather than tinting everything grey: the primary CSM is the view a reader
+    // means by default, and an unexplained grey screen teaches nothing. Which view is being tinted
+    // is named in the overlay beside the debug-view selector, so the fallback is never silent.
+    const ShadowViewFocus& focus = tunables_.shadowViewFocus;
+    const ShadowLogicalViewId tintView =
+        focus.addressable() ? focus.view : ShadowLogicalViewId::cascade(0);
+    // The GROUP matters as much as the identity here. A cascade and its world-only twin share one
+    // logical view and therefore one cached resolution, but they draw different casters —
+    // world-only exists to exclude the skinned ones — and cascades record first. Tinting from the
+    // shared entry alone would colour a skinned caster under a focused world-only row using the
+    // full cascade's decision, for a pass that never offered it.
+    const ShadowViewGroup tintGroup = focus.addressable() ? focus.group : ShadowViewGroup::Cascade;
+
+    for (std::vector<DrawCommand>* bucket :
+         {&buckets.opaque, &buckets.blend, &buckets.transmissive})
+    {
+        for (DrawCommand& dc : *bucket)
+        {
+            // A mesh that casts no shadow carries no caster identity, so it keeps the sentinel and
+            // tints grey — level 0 would read as "full detail chosen" in the very view built to
+            // find over-detailed casters.
+            const ShadowLodStateKey key{dc.shadowCasterId, dc.shadowGeneration, tintView};
+            // ONE question, asked of the family being tinted: what did THIS pass draw for this
+            // caster. Not "what level exists" — a cascade and its world-only twin share a decision
+            // but not their caster sets, so the level alone would attribute one pass's choice to
+            // another. And it is the resolution the pass actually drew from, never a fresh
+            // selection: a second selection sees different history state, and the picture would
+            // contradict the geometry it claims to describe.
+            if (const ResolvedShadowDraw* resolved =
+                    shadowLodResolver_.drawnResolution(tintGroup, key))
+            {
+                dc.shadowLodLevel = static_cast<std::uint32_t>(resolved->level);
+            }
+            // No else: a caster the focused view culled (or a view that did not run) has no level
+            // FROM THAT VIEW, and grey says exactly that. Showing another view's level would be the
+            // camera-derived defect in a new costume.
+        }
+    }
+}
+
 void Renderer::recordTransmissionPass(vk::CommandBuffer cmd, const DrawBuckets& buckets)
 {
     if (buckets.transmissive.empty())
@@ -1363,6 +1456,13 @@ void Renderer::drawFrame(Window& display, RenderableScene& scene, float dt)
     // boundaries inside recordPass, and an enclosing top-to-bottom timer would overlap them (and
     // would then have to be excluded from the frame total to avoid double-counting).
     recordShadowPass(cmd, buckets);
+
+    // The levels the shadow views just chose are the tint's subject matter, and the forward draws
+    // that carry them into the shader have not been recorded yet — this is the one window where
+    // both are true. The pending --shadow-focus is honoured first, against the fully populated view
+    // set, so the tint below already follows the requested view on the very first frame.
+    resolveShadowFocusRequest();
+    applyShadowLodTint(drawBucketsScratch_);
 
     // GPU-driven VDPM (Stage B5b-2): the VDPM compute (recorded above, after collection) wrote each
     // visible front's emitted index stream (scatter) + indirect command (finalize). The depth

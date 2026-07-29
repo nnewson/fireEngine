@@ -5,6 +5,7 @@
 #include <array>
 #include <cstddef>
 #include <set>
+#include <string>
 
 using namespace fire_engine;
 
@@ -417,6 +418,58 @@ TEST_CASE("a cascade and its world-only twin share an identity but not a row",
     CHECK(full.stats->drawnTriangles == 50);
     CHECK(worldOnly.stats->drawnTriangles == 20);
     CHECK(full.stats != worldOnly.stats);
+}
+
+TEST_CASE("--shadow-focus parses a group and slot, or nothing", "[ShadowDiagnostics]")
+{
+    // A slot is the only handle a person has before the engine runs, so the command line speaks in
+    // slots — but every rejection here matters more than the acceptances: a request that silently
+    // became something else would produce a capture of the wrong view that looks perfectly correct.
+    const auto request = parseShadowViewSlotRequest("cascade:2");
+    REQUIRE(request.has_value());
+    CHECK(request->group == ShadowViewGroup::Cascade);
+    CHECK(request->slot == 2);
+
+    CHECK(parseShadowViewSlotRequest("world-only:1")->group == ShadowViewGroup::WorldOnly);
+    CHECK(parseShadowViewSlotRequest("worldonly:1")->group == ShadowViewGroup::WorldOnly);
+    CHECK(parseShadowViewSlotRequest("self:0")->group == ShadowViewGroup::Self);
+    CHECK(parseShadowViewSlotRequest("spot:1")->slot == 1);
+
+    // Point takes light + face, because a flat point slot is an implementation detail no one should
+    // have to compute — and it must flatten to exactly the slot the renderer rasterises.
+    const auto face = parseShadowViewSlotRequest("point:1:4");
+    REQUIRE(face.has_value());
+    CHECK(face->group == ShadowViewGroup::Point);
+    CHECK(face->slot == shadowPointViewSlot(1, 4));
+
+    // Rejections, each with a different way of being wrong.
+    CHECK_FALSE(parseShadowViewSlotRequest("cascade").has_value());    // no slot
+    CHECK_FALSE(parseShadowViewSlotRequest("bogus:0").has_value());    // unknown family
+    CHECK_FALSE(parseShadowViewSlotRequest("cascade:").has_value());   // empty slot
+    CHECK_FALSE(parseShadowViewSlotRequest("cascade:-1").has_value()); // not a whole number
+    CHECK_FALSE(parseShadowViewSlotRequest("cascade:2x").has_value()); // a numeric PREFIX only
+    CHECK_FALSE(parseShadowViewSlotRequest("spot:0:1").has_value());   // only point has faces
+    CHECK_FALSE(parseShadowViewSlotRequest("point:0:6").has_value());  // face out of range
+    CHECK_FALSE(parseShadowViewSlotRequest("").has_value());
+    // Beyond the group's capacity: rejected here rather than at lookup, so the failure names the
+    // request rather than reporting an inactive view.
+    CHECK_FALSE(
+        parseShadowViewSlotRequest("cascade:" + std::to_string(kShadowCascadeCount)).has_value());
+
+    // The adversarial one: `light * kCubeFaceCount + face` is unsigned, so a large enough light
+    // index WRAPS back into range — with an even face count, the top bit times 6 is 0 modulo the
+    // word — and a nonsense light would silently focus a real view. Same defect and same fix as
+    // ShadowRenderViewSet::setPoint: the light is validated BEFORE it is flattened.
+    constexpr std::size_t wrapping = std::size_t{1}
+                                     << (std::numeric_limits<std::size_t>::digits - 1);
+    STATIC_REQUIRE(kCubeFaceCount % 2 == 0);
+    REQUIRE(shadowPointViewSlot(wrapping, 1) == 1); // it really does land on light 0, face 1
+    CHECK_FALSE(parseShadowViewSlotRequest("point:" + std::to_string(wrapping) + ":1").has_value());
+    // An ordinary over-capacity light is rejected the same way.
+    CHECK_FALSE(
+        parseShadowViewSlotRequest(
+            "point:" + std::to_string(static_cast<std::size_t>(kMaxPointShadowCasters)) + ":0")
+            .has_value());
 }
 
 TEST_CASE("every reason and group has a name", "[ShadowDiagnostics]")

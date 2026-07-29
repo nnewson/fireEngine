@@ -97,6 +97,37 @@ public:
     // are not visible here, because they are not yet true.
     [[nodiscard]] std::size_t historyLevel(const ShadowLodStateKey& key) const noexcept;
 
+    // Records that `group`'s pass actually DREW this caster for this view. Called once per recorded
+    // draw, after the filter accepted it and the resolution produced geometry.
+    //
+    // Membership is stamped onto the caster's EXISTING frame entry — a draw the resolver never
+    // resolved cannot be marked, and is rejected rather than inventing an entry with no decision in
+    // it. Provenance and resolution are two fields of one record for exactly that reason.
+    //
+    // Why it is needed at all: a cascade and its world-only twin share one logical view and
+    // therefore one resolution — that is the point, it makes them agree — but they do NOT draw the
+    // same casters, since world-only exists to exclude skinned ones. Cascades record first, so a
+    // consumer reading the level alone would report one for a caster the world-only pass never
+    // offered: the same "one view's answer presented as another's" failure this arc exists to
+    // remove.
+    void noteDrawn(ShadowViewGroup group, const ShadowLodStateKey& key) noexcept;
+
+    // THE consumer's question: what `group`'s pass drew for this caster, or null if it drew nothing
+    // for it — culled, never offered, or drawn only by another family sharing this identity.
+    //
+    // Combined on purpose. Asking "which level" and "did this pass draw it" separately is asking a
+    // caller to remember the second, and forgetting it is invisible: the level is present and
+    // plausible, just from another pass. This returns a level ONLY when this family drew it.
+    [[nodiscard]] const ResolvedShadowDraw*
+    drawnResolution(ShadowViewGroup group, const ShadowLodStateKey& key) const noexcept;
+
+    // The shared DECISION for `key`, regardless of which families drew it — the entry the cache
+    // hands back to every view with this identity. Use `drawnResolution` to attribute it to a pass;
+    // this exists for callers reasoning about the decision itself (and for the tests that pin the
+    // sharing). Null means "never resolved this frame", never "level 0".
+    [[nodiscard]] const ResolvedShadowDraw*
+    frameResolution(const ShadowLodStateKey& key) const noexcept;
+
 private:
     struct HistoryEntry
     {
@@ -108,7 +139,20 @@ private:
     // and re-deriving it costs a single frame of dead band on a caster that came back.
     static constexpr std::uint64_t kUnseenHistoryFrames = 120;
 
-    std::unordered_map<ShadowLodStateKey, ResolvedShadowDraw> frameCache_{};
+    // ONE record per (caster, view) this frame: the decision, and which families acted on it.
+    //
+    // A second keyed container would let the two drift — provenance could exist for a caster with
+    // no decision, or outlive one — and every consumer would have to remember to consult both. As
+    // one entry, "drawn by this family" is a field of the decision, and marking a draw that was
+    // never resolved is impossible rather than merely wrong.
+    struct FrameEntry
+    {
+        ResolvedShadowDraw resolved{};
+        // A bit per ShadowViewGroup. Small and fixed — the group count is a compile-time constant.
+        std::uint32_t drawnGroups{0};
+    };
+
+    std::unordered_map<ShadowLodStateKey, FrameEntry> frameCache_{};
     std::unordered_map<ShadowLodStateKey, HistoryEntry> history_{};
     std::unordered_map<ShadowLodStateKey, std::size_t> staged_{};
     std::uint64_t commits_{0};
