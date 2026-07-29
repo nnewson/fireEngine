@@ -354,20 +354,42 @@ Everything is static, so the authored camera pose makes this reproducible run to
 this order:
 
 1. **Shadows (SH-01) panel** — every family that should be rasterising is: cascades (4 slots), spot,
-   point (6 faces of slot 0), self (the skinned limb). Note drawn/candidate and the L0..L3+ columns;
-   they are the numbers a shadow-LOD change has to move in the right direction.
-2. **View → LOD tint, then View → Shadow LOD tint** — the camera level and the shadow level for the
-   same mesh, in the same palette. Back the camera off: today the two tints move together, because
-   the shadow level is chosen from the camera view (SH-03 fixes that; SH-01 exists to show it).
-   The floor reads the neutral "no shadow level" grey: it is authored `extras.Shadow: {"Casts":
-   false}`, so it receives shadows without casting one. If it ever tints green instead, the
-   receive-only flag has stopped being applied — and you'll see it as the whole floor darkening in
-   the normal view, because a flat caster fails its own depth comparison across its entire area.
-3. **Off-camera caster** — the sun sits over the camera's shoulder (~46° elevation), so shadows fall
+   point (6 faces of slot 0), self (the skinned limb). Read the columns knowing what each pair
+   means: `Draws d/c` is drawn over offered, and the difference is that view's cull yield;
+   `Tris d/c` is drawn over **full detail**, so its difference is culling *and* LOD together;
+   `L0..L3+` are the LOD selections of the DRAWN casters — a rejected candidate is never resolved,
+   so it contributes no level — counted once per logical view (a self slot rasterises twice and is
+   sampled once).
+
+   Since SH-03, **the level columns should differ between views** — that is the fix, visible. On
+   this scene the near cascade keeps a handful of casters at L0/L1 while the far cascade keeps more
+   of them coarser, and the skinned limb's own tight self-shadow map picks a coarser level than the
+   cascades do. Identical distributions across every cascade would mean per-view selection has
+   stopped working.
+2. **Click a slot row** — the reason table above retargets to that view alone. `selected` means the
+   budget was met deliberately; anything in the fallback rows is a forced LOD0 and worth chasing.
+   "Scene total" returns to the rollup.
+
+   The selection follows the **view**, not the row: it is stored as that view's logical identity, so
+   if a light leaves and the punctual slots compact, the focus moves to wherever that view now sits
+   rather than silently reporting its replacement. Two header messages mean different things —
+   "not present in this frame" (a well-formed selection that was not found; the panel deliberately
+   does NOT claim whether it will come back, since a removed light and a light that simply did not
+   rasterise are indistinguishable without scene liveness) versus "selection is not a valid view"
+   (structurally malformed — no frame can satisfy it, so pick another row).
+3. **View → LOD tint, then View → Shadow LOD tint** — the camera level and, currently, a neutral
+   grey everywhere. Since SH-03 a caster holds a *different* level per shadow view, so there is no
+   single number to tint by; slice 5 wires the tint to the focused view, and until then grey is the
+   honest answer rather than a level no view used. The floor reads that same grey for a different
+   reason — it is authored `extras.Shadow: {"Casts": false}`, so it receives shadows without casting
+   one. If it ever tints green instead, the receive-only flag has stopped being applied, and you'll
+   see it as the whole floor darkening in the normal view, because a flat caster fails its own depth
+   comparison across its entire area.
+4. **Off-camera caster** — the sun sits over the camera's shoulder (~46° elevation), so shadows fall
    away from you. This caster is ~74° off the view axis and never on screen, but its shadow lands on
    open floor near x 14, z 11 — front-right of the view. It must not vanish or change silhouette as
    the camera turns.
-4. **Cutout and sheet** — out at z ≈ −8 and z ≈ −12, deliberately beyond every punctual light's
+5. **Cutout and sheet** — out at z ≈ −8 and z ≈ −12, deliberately beyond every punctual light's
    reach so the **sun is the only light that can cast from them** (the generator asserts it). Both
    are **known** SH-05 exposures: record what you see, don't "fix" them here.
    - The cutout casts a **solid rectangle** on the floor around x [−4.1, −0.3], z [−10.8, −6.9],

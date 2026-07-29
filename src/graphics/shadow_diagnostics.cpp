@@ -49,9 +49,27 @@ std::string_view toString(ShadowViewGroup group) noexcept
     return "unknown";
 }
 
-void ShadowViewStats::beginRasterPass() noexcept
+bool ShadowViewStats::beginRasterPass(ShadowLogicalViewId view) noexcept
 {
+    // VALIDATE FIRST, mutate second. Counting the pass before checking would leave a row that
+    // rejected the identity still claiming to have rasterised it.
+    assert(view.valid() && "a rasterised shadow view must say which logical view it is");
+    if (!view.valid())
+    {
+        return false;
+    }
+    // An engaged row belongs to ONE logical view. The self-shadow families legitimately begin twice
+    // with the same identity (two depth layers, one view); a DIFFERENT identity arriving at the
+    // same physical slot would merge two views' counters under one name.
+    assert((!touched() || logicalId == view) &&
+           "two logical views cannot share one diagnostic row in a frame");
+    if (touched() && !(logicalId == view))
+    {
+        return false;
+    }
+    logicalId = view;
     ++rasterPasses;
+    return true;
 }
 
 void ShadowViewStats::observe(std::uint64_t fullDetailTriangles, bool accepted,
@@ -182,6 +200,28 @@ std::size_t ShadowFrameStats::activeViewCount(ShadowViewGroup group) const noexc
         active += views[base + slot].touched() ? 1 : 0;
     }
     return active;
+}
+
+FocusedShadowView ShadowFrameStats::focused(ShadowViewFocus focus) const noexcept
+{
+    // No assert on an unaddressable focus: it is user state (a panel selection that outlived the
+    // light it named), not a producer bug. It simply finds nothing, which is true.
+    if (!focus.addressable())
+    {
+        return FocusedShadowView{};
+    }
+    const std::size_t base = shadowViewGroupBase(focus.group);
+    for (std::size_t slot = 0; slot < shadowViewSlotCount(focus.group); ++slot)
+    {
+        const ShadowViewStats& stats = views[base + slot];
+        // `touched()` first: an untouched row's identity is stale by definition — it is whatever
+        // the slot last described, possibly frames ago.
+        if (stats.touched() && stats.logicalId == focus.view)
+        {
+            return FocusedShadowView{.stats = &stats, .slot = slot};
+        }
+    }
+    return FocusedShadowView{};
 }
 
 } // namespace fire_engine

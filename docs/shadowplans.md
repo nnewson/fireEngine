@@ -391,8 +391,29 @@ Likely branch: `shadow-per-view-discrete-lod`.
    `kShadowLodPixelBudget` + `kShadowLodCoarsenRatio` in `render/constants.hpp`, threaded explicitly;
    `kShadowLodBias` retired. The ShadowLod tint is neutral grey meanwhile — a caster holds one level
    per view, so there is no single number to tint by until slice 5 picks a view.
-4. **Diagnostics**: the per-view rows the overlay shows — selected-view controls and the remaining
-   observation rules.
+4. **Diagnostics.** The panel names the view it is reporting: clicking a slot row sets
+   `RenderTunables::shadowViewFocus` to that row's LOGICAL identity plus its group, and the reason
+   table retargets to that view alone. Identity, never slot: punctual and self slots compact in
+   scene-gather order, so a slot-keyed focus silently retargets to whichever light replaced the one
+   selected — and that gets worse in slice 5, where the tint reads the same focus from the CURRENT
+   frame while the panel shows a COMPLETED ring frame. `ShadowViewStats` therefore records the
+   identity it was rasterised with (`beginRasterPass` requires it), and `focused()` searches the
+   group for it, returning the slot it was found in. The group stays part of the key because a
+   cascade and its world-only twin deliberately share one identity.
+   Three outcomes read differently: the rollup; "selection is not a valid view" (structurally
+   unaddressable — an invalid identity, or one whose kind cannot occur in that group, so no frame
+   can satisfy it); and "not present in this frame" (well-formed but not found, which deliberately
+   does NOT claim whether it will return — a deleted light and a view that simply did not rasterise
+   are the same thing here, and separating them needs scene liveness the diagnostics do not have).
+   A row also refuses a second, different identity within a frame (`beginRasterPass` returns false,
+   changing nothing) and the shadow pass makes that terminal, because merging two views' counters
+   under one name produces a row that reads like a measurement of something that never existed.
+   The three labels SH-03 falsified are corrected: draws d/c is the cull yield, tris d/c is culling
+   AND LOD (its candidate is full detail), and the level columns are LOD selections of DRAWN casters
+   (a rejected candidate is never resolved, so it has no level to contribute), counted once per
+   logical view. The four observation rules are stated on `ShadowViewStats::observe`, where the
+   invariants they protect live. Column widths are explicit because the level columns — the one
+   thing the table exists to show — were being ellipsised to a single character.
 5. **Tunables**: drive the ShadowLod tint from a selected view.
 6. **Calibration + docs**: budget sweep at ratio 1.0 first, then the dead band against chatter. The
    committed values are an UNCALIBRATED starting point until this runs.

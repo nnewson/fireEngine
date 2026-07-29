@@ -4,6 +4,7 @@
 #include <format>
 #include <optional>
 #include <stdexcept>
+#include <string_view>
 
 #include <fire_engine/graphics/frustum.hpp>
 #include <fire_engine/render/device.hpp>
@@ -90,6 +91,14 @@ public:
     {
         return stats_->view(group_, slot_);
     }
+    [[nodiscard]] std::string_view groupName() const noexcept
+    {
+        return toString(group_);
+    }
+    [[nodiscard]] std::size_t slot() const noexcept
+    {
+        return slot_;
+    }
     // False only for the self-shadow SECOND depth layer: it re-rasterises the same logical view, so
     // its cost counts but its LOD selection must not be counted twice.
     [[nodiscard]] bool countSelection() const noexcept
@@ -103,6 +112,17 @@ private:
     std::size_t slot_;
     bool countSelection_;
 };
+
+// A diagnostic row that two logical views tried to claim in one frame, or a view rasterising with
+// no identity at all. Terminal because the alternative is a row whose counters are the sum of two
+// unrelated views under one of their names — worse than no measurement, because it reads like one.
+[[noreturn]] void contradictoryShadowViewRow(std::string_view group, std::size_t slot)
+{
+    throw std::runtime_error(
+        std::format("shadow view row {} slot {} was claimed by two different logical views in one "
+                    "frame (or by a view with no identity)",
+                    group, slot));
+}
 
 // A shadow command that could not be resolved into geometry (SH-03). TERMINAL, on the same
 // reasoning as the view set's rejections: the request is corrupt render input, and both ways of
@@ -142,6 +162,12 @@ public:
         return resolver_->resolve(dc.shadowRequest, *view_, dc.shadowBounds, budgetTexels_,
                                   hysteresis_);
     }
+    // The identity this iteration is rasterising — the same one its resolutions are keyed on, so a
+    // diagnostic row and a hysteresis entry can never name different views.
+    [[nodiscard]] const ShadowLogicalViewId& logicalId() const noexcept
+    {
+        return view_->logicalId();
+    }
 
 private:
     const ShadowRenderView* view_; // never null: bound from a reference
@@ -158,7 +184,15 @@ void recordShadowDrawBucket(vk::CommandBuffer cmd, std::span<const DrawCommand> 
     // Before walking the span, so a view that renders and clears with nothing to draw still
     // reports as rasterised — that empty-but-rendered view is itself a finding.
     ShadowViewStats& viewStats = target.view();
-    viewStats.beginRasterPass();
+    if (!viewStats.beginRasterPass(lod.logicalId()))
+    {
+        // The row already belongs to a different logical view this frame, or the view arrived with
+        // no identity. Continuing would blend two views' counters into one row and label it with
+        // one of their names — evidence that looks like a measurement and is not. Terminal, like
+        // every other contradiction between what the renderer thinks it is drawing and what the
+        // shadow state says.
+        contradictoryShadowViewRow(target.groupName(), target.slot());
+    }
 
     bool pipelineBound = false;
     for (const auto& dc : shadowDraws)
