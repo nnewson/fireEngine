@@ -891,6 +891,21 @@ the same change — most have a test or guard that will catch you, but not all.
   shader must match the corresponding `ForwardBinding` / `ForwardGlobalBinding` / `ShadowBinding` /
   `SkyboxBinding` / `PostProcessBinding` enumerator. `tests/render/test_pipeline_config.cpp` checks
   the C++ side; the GLSL side is on you.
+- **A uniform block bound by more than one shader is DECLARED once**, in a shared `shaders/*.glsl`
+  include — never hand-copied into each shader. `LightUBO` lives in
+  [`shaders/light_ubo.glsl`](../shaders/light_ubo.glsl); `shader.frag` and `skybox.frag` `#include`
+  it, each defining `LIGHT_UBO_SET` / `LIGHT_UBO_BINDING` first, because the buffer sits at a
+  different descriptor address in each. The reason is that a block's field offsets depend on every
+  field declared *before* them, so a copy that misses an inserted field reads every later field at
+  the wrong offset — and nothing reports it. That is not hypothetical: `selfShadowViewProj` was added
+  to the C++ struct and to `shader.frag` but not to `skybox.frag`, which then read
+  `environmentParams` 256 bytes early, landing inside `selfShadowViewProj[1]`, and multiplied the sky
+  by a shadow matrix element. It stayed invisible for months because unused self-shadow slots are
+  *identity*, so the misread value was exactly 1.0 until a scene supplied a second skinned
+  self-shadow caster (`RecursiveSkeletons`, still the only such asset). The `shader_block_guards`
+  CTest case fails if any shader re-declares a guarded block, and also if the shared include stops
+  declaring it (which would make the guard pass vacuously). The C++ side is pinned independently by
+  `offsetof` static_asserts on `LightUBO` in [`render/ubo.hpp`](../include/fire_engine/render/ubo.hpp).
 - **Forward push-set command order.** On a transition to a forward pipeline, establish pushed set 0
   before binding allocated sets 1/2 through that same pipeline layout. Vulkan layout compatibility
   preserves the lower set when the higher sets are bound. Keep `Renderer::recordDrawBucket` and

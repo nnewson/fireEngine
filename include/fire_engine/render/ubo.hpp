@@ -209,6 +209,28 @@ struct LightUBO
     LightData lights[kMaxLights]{};
 };
 
+// Every offset in this block is load-bearing: a uniform block's field offsets depend on every field
+// declared BEFORE it, so inserting a matrix array silently moves everything after it. That is not
+// hypothetical — `selfShadowViewProj` was added here and to shader.frag but not to skybox.frag,
+// which then read `environmentParams` 256 bytes early (landing inside selfShadowViewProj[1]) and
+// multiplied the sky by a shadow matrix element. These asserts pin the C++ side; shaders share one
+// declaration (shaders/light_ubo.glsl) so they cannot drift from it independently.
+static_assert(sizeof(Mat4) == 64, "LightUBO offsets below assume a 4x4 float matrix");
+static_assert(offsetof(LightUBO, cascadeViewProj) == 0, "LightUBO std140 layout");
+static_assert(offsetof(LightUBO, spotViewProj) == 256, "LightUBO std140 layout");
+static_assert(offsetof(LightUBO, selfShadowViewProj) == 512, "LightUBO std140 layout");
+static_assert(offsetof(LightUBO, cascadeSplits) == 768, "LightUBO std140 layout");
+static_assert(offsetof(LightUBO, iblParams) == 784, "LightUBO std140 layout");
+static_assert(offsetof(LightUBO, shadowParams) == 800, "LightUBO std140 layout");
+static_assert(offsetof(LightUBO, pointSpotShadowParams) == 816, "LightUBO std140 layout");
+static_assert(offsetof(LightUBO, environmentParams) == 832, "LightUBO std140 layout");
+static_assert(offsetof(LightUBO, lightCount) == 848, "LightUBO std140 layout");
+static_assert(offsetof(LightUBO, lights) == 864, "LightUBO std140 layout");
+static_assert(sizeof(LightData) == 64, "LightData std140 size (4x vec4)");
+static_assert(sizeof(LightUBO) == 864 + 64 * kMaxLights, "LightUBO std140 size");
+static_assert(std::is_standard_layout_v<LightUBO>);
+static_assert(std::is_trivially_copyable_v<LightUBO>);
+
 struct EnvironmentPrefilterPushConstants
 {
     alignas(4) int faceIndex{0};

@@ -9,16 +9,12 @@ layout(binding = 0) uniform SkyboxUBO {
 
 layout(binding = 1) uniform samplerCube skyboxMap;
 
-// Layout must match C++ LightUBO in include/fire_engine/render/ubo.hpp.
-layout(binding = 2) uniform LightUBO {
-    mat4 cascadeViewProj[4];
-    mat4 spotViewProj[4];
-    vec4 cascadeSplits;
-    vec4 iblParams;
-    vec4 shadowParams;
-    vec4 pointSpotShadowParams;
-    vec4 environmentParams;
-} light;
+// The skybox needs exactly one field of this buffer — environmentParams.x, the sky intensity — but it
+// must declare the WHOLE block, because a uniform block's field offsets depend on every field before
+// them. Hence the shared include rather than a hand-written subset.
+#define LIGHT_UBO_SET 0
+#define LIGHT_UBO_BINDING 2
+#include "light_ubo.glsl"
 
 layout(location = 0) in vec2 fragUv;
 

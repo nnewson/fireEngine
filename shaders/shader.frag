@@ -141,39 +141,14 @@ layout(set = 1, binding = 9) uniform samplerCube irradianceMap;
 layout(set = 1, binding = 10) uniform samplerCube prefilteredMap;
 layout(set = 1, binding = 11) uniform sampler2D brdfLut;
 
-struct LightData {
-    // .xyz = world position (point/spot), .w = type (0=dir, 1=point, 2=spot)
-    vec4 position;
-    // .xyz = world forward, .w = range (point/spot; 0 = infinite). For point
-    // shadow casters, .w is the effective range used by the shadow pass.
-    vec4 direction;
-    // .rgb = colour, .a = intensity
-    vec4 colour;
-    // .x = cos(innerCone), .y = cos(outerCone), .z = shadow index (-1 = none)
-    vec4 cone;
-};
+// LightData, the limit constants and the LightUBO block itself all come from the shared include —
+// the single declaration of a buffer this shader and skybox.frag both bind.
+#define LIGHT_UBO_SET 1
+#define LIGHT_UBO_BINDING 0
+#include "light_ubo.glsl"
 
-const int MAX_LIGHTS = 8;
-const int MAX_SPOT_SHADOW_CASTERS = 4;
-
-// Forward globals — descriptor set 1 holds bindings shared by every draw
-// (light UBO, shadow maps, IBL textures, sceneColor). Bound once per frame
-// in Renderer; reused across all forward pipelines.
-layout(set = 1, binding = 0) uniform LightUBO {
-    mat4 cascadeViewProj[4];
-    mat4 spotViewProj[MAX_SPOT_SHADOW_CASTERS];
-    mat4 selfShadowViewProj[4];
-    vec4 cascadeSplits;
-    vec4 iblParams;
-    vec4 shadowParams;
-    vec4 pointSpotShadowParams;
-    vec4 environmentParams;
-    int  lightCount;
-    int  _pad0;
-    int  _pad1;
-    int  _pad2;
-    LightData lights[MAX_LIGHTS];
-} light;
+// Descriptor set 1 holds the bindings shared by every draw (the light UBO above, shadow maps, IBL
+// textures, sceneColor). Bound once per frame in Renderer; reused across all forward pipelines.
 
 layout(location = 0) in vec3 fragColor;
 layout(location = 1) in vec3 fragNormal;

@@ -285,6 +285,7 @@ endif()
 set(SHADER_INCLUDES
     ${PROJECT_SOURCE_DIR}/shaders/vdpm_repair_classify.glsl
     ${PROJECT_SOURCE_DIR}/shaders/vdpm_apply_classify.glsl
+    ${PROJECT_SOURCE_DIR}/shaders/light_ubo.glsl
 )
 
 foreach(shader IN LISTS SHADER_SOURCES)
@@ -478,7 +479,9 @@ add_test(NAME test_fire_engine COMMAND test_fire_engine "~[slow]")
 
 add_custom_target(tests-full
   COMMAND $<TARGET_FILE:test_fire_engine>
+  # One COMMAND per guard: a regex alternation here would reach /bin/sh as a pipe.
   COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure -R layering_guards
+  COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure -R shader_block_guards
   DEPENDS test_fire_engine
   COMMENT "Running the full test suite, including [slow] tests"
 )
@@ -491,6 +494,16 @@ add_test(
   COMMAND ${CMAKE_COMMAND}
     -DINCLUDE_DIR=${PROJECT_SOURCE_DIR}/include/fire_engine
     -P ${PROJECT_SOURCE_DIR}/cmake/check_layering.cmake
+)
+
+# A uniform block bound by more than one shader must have exactly one declaration (a shared include),
+# because a hand-copied block silently shifts every field after an inserted one. Runs as a CTest case
+# so `ctest` catches a reintroduced copy without a GPU.
+add_test(
+  NAME shader_block_guards
+  COMMAND ${CMAKE_COMMAND}
+    -DSHADER_DIR=${PROJECT_SOURCE_DIR}/shaders
+    -P ${PROJECT_SOURCE_DIR}/cmake/check_shader_blocks.cmake
 )
 
 find_program(CLANG_TIDY_EXE NAMES clang-tidy)
