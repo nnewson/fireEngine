@@ -4,12 +4,15 @@
 #include <algorithm>
 #include <array>
 #include <cassert>
+#include <charconv>
 #include <chrono>
 #include <cmath>
 #include <cstring>
 #include <format>
+#include <limits>
 #include <span>
 #include <stdexcept>
+#include <system_error>
 #include <utility>
 
 #include <fire_engine/core/log.hpp>
@@ -154,6 +157,28 @@ int packLight(LightUBO& lightData, int& slot, const Lighting& light) noexcept
         std::format("shadow view rejected by the view set ({}) — corrupt render input", view));
 }
 
+// One SH-03 calibration override, validated and reported. The NUMERIC rule lives in
+// `graphics/shadow_diagnostics.hpp` where it is headless-testable; this adds the policy: absent
+// means "use the constant", and anything else unusable is terminal rather than a silent fallback,
+// because a calibration input that quietly became the default yields a sweep row indistinguishable
+// from a real measurement of the value that was asked for.
+[[nodiscard]]
+float calibrationOverride(const std::optional<std::string_view>& text, std::string_view flag,
+                          float fallback, float maximum)
+{
+    if (!text)
+    {
+        return fallback;
+    }
+    if (const std::optional<float> value = parseShadowCalibrationValue(*text, maximum))
+    {
+        return *value;
+    }
+    throw std::runtime_error(std::format(
+        "{} '{}' is not a usable value — expected a finite number in (0, {}]", flag, *text,
+        std::isfinite(maximum) ? std::format("{}", maximum) : std::string{"inf"}));
+}
+
 // A self-shadow layer's fit: the matrix it rasterises with, and the texel size that fit implies.
 // Both come out of the same `radius`, so the descriptor SH-02 projects error through can never
 // describe a different ortho box than the one being rendered.
@@ -212,6 +237,17 @@ Renderer::Renderer(const Window& window, std::string environmentPath, RendererDe
     tunables_.debugView = debug.view;
     tunables_.lodMode = debug.lodMode;
     tunables_.lodEnabled = debug.lod;
+    tunables_.shadowLodEnabled = debug.shadowLod;
+    // A calibration override is validated HERE and refused loudly. `parseCalibrationValue` rejects
+    // a missing, malformed, non-finite or non-positive number; the ratio additionally must not
+    // exceed 1, because the selector treats anything outside (0, 1] as an invalid caster and would
+    // force LOD0 for the entire run — a sweep step that measured nothing while looking like a
+    // measurement.
+    tunables_.shadowLodPixelBudget =
+        calibrationOverride(debug.shadowLodBudget, "--shadow-budget", kShadowLodPixelBudget,
+                            std::numeric_limits<float>::infinity());
+    tunables_.shadowLodCoarsenRatio = calibrationOverride(
+        debug.shadowLodCoarsenRatio, "--shadow-ratio", kShadowLodCoarsenRatio, 1.0f);
     capturePath_ = std::string{debug.capturePath};
     captureFrame_ = static_cast<std::uint64_t>(debug.captureFrame);
     if (debug.shadowFocus)
@@ -948,6 +984,7 @@ const Renderer::DrawBuckets& Renderer::collectDrawCommands(RenderableScene& scen
                           .pipelines = pipelines,
                           .lodEnabled = tunables_.lodEnabled,
                           .lodPixelErrorBudget = tunables_.lodPixelErrorBudget,
+                          .shadowLodEnabled = tunables_.shadowLodEnabled,
                           .lodMode = tunables_.lodMode,
                           .vdpmGpuBackend = vdpmGpuActive,
                           .vdpmRequestSink = vdpmGpuActive ? &vdpmRequestScratch_ : nullptr,
@@ -1095,12 +1132,13 @@ void Renderer::recordShadowPass(vk::CommandBuffer cmd, const DrawBuckets& bucket
     // shorter route.)
     const bool renderWorldShadow = shadowViews_.activeCount(ShadowViewGroup::WorldOnly) ==
                                    shadowViewSlotCount(ShadowViewGroup::WorldOnly);
-    shadows_.recordPass(
-        cmd, buckets.shadow, buckets.worldShadow, buckets.selfShadow,
-        static_cast<int>(selfShadowSlotsScratch_.size()), activeSpotCasters_, pointCasterSpan,
-        shadowViews_, shadowLodResolver_, tunables_.shadowLodPixelBudget,
-        ShadowLodHysteresis{.coarsenRatio = kShadowLodCoarsenRatio}, tunables_.cullingEnabled,
-        renderWorldShadow, shadowStatsRing_[currentFrame_], profiler_, currentFrame_);
+    shadows_.recordPass(cmd, buckets.shadow, buckets.worldShadow, buckets.selfShadow,
+                        static_cast<int>(selfShadowSlotsScratch_.size()), activeSpotCasters_,
+                        pointCasterSpan, shadowViews_, shadowLodResolver_,
+                        tunables_.shadowLodPixelBudget,
+                        ShadowLodHysteresis{.coarsenRatio = tunables_.shadowLodCoarsenRatio},
+                        tunables_.cullingEnabled, renderWorldShadow,
+                        shadowStatsRing_[currentFrame_], profiler_, currentFrame_);
 }
 
 void Renderer::resolveShadowFocusRequest()
@@ -1552,6 +1590,16 @@ void Renderer::drawFrame(Window& display, RenderableScene& scene, float dt)
     // this line, so a frame abandoned before it (a lost swapchain, an early return) leaves none
     // behind — the next beginFrame drops them.
     shadowLodResolver_.commitFrame();
+    // Published with THIS frame's counters, in the same ring slot, so the churn a reader sees sits
+    // beside the draws and levels it describes rather than beside a completed frame's.
+    const ShadowLodTransitions movement = shadowLodResolver_.lastCommitMovement();
+    shadowStatsRing_[currentFrame_].lodMovement = movement;
+    // Per-frame, at DEBUG: the panel shows one frame, but calibrating the dead band means counting
+    // level changes over a whole animated loop — a still frame cannot distinguish "settled" from
+    // "caught between flickers". `FE_LOG=render:debug` turns the loop into a series to aggregate.
+    log::debug(log::category::render,
+               "shadow-lod movement transitions={} reversed={} held={} first={}",
+               movement.transitions, movement.reversed, movement.held, movement.firstSeen);
     if (capturingThisFrame)
     {
         writeCapture();

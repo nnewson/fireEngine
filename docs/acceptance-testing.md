@@ -20,6 +20,14 @@ runbook surfaced, since fixed).
 - **Shadow work uses `nightbox.hdr`.** `skybox.hdr`'s ambient IBL washes receivers out until shadows
   are barely readable; the night environment is dim enough to judge shadow shape and contrast. The
   shadow-LOD scenes and their reference captures are all night-lit.
+- **Shadow-LOD calibration flags**: `--shadow-budget <texels>` and `--shadow-ratio <r>` override the
+  committed values for one run, so a sweep is a shell loop; `--shadow-focus <group>:<slot>` (e.g.
+  `cascade:3`, `point:0:4`) picks the view the Shadows panel and the Shadow-LOD tint follow.
+  **`--no-shadow-lod` is the "shadow LOD off" control.** Not `--no-lod`, which also disables FORWARD
+  LOD and so changes the visible geometry you are comparing; and not a tiny budget, which still runs
+  selection and leaves any zero-deviation cut eligible. `tools/shadow_lod_sweep.sh` runs the whole
+  calibration (budget quality/cost on the static scene, dead band on the animated one) and writes
+  its captures, difference images and logs to one directory.
 - **`--capture <path.png>`** writes a frame and exits, for reproducible references:
   `--capture-frame N` picks the frame by NUMBER (not elapsed time), and `--no-lod` forces full detail
   for an A/B. Add `--no-taa` so the image is one rasterised frame rather than accumulated history,

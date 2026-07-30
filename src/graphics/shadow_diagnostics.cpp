@@ -2,6 +2,7 @@
 
 #include <cassert>
 #include <charconv>
+#include <cmath>
 #include <system_error>
 
 namespace fire_engine
@@ -249,6 +250,26 @@ namespace
 }
 
 } // namespace
+
+std::optional<float> parseShadowCalibrationValue(std::string_view text, float maximum) noexcept
+{
+    float value = 0.0f;
+    const char* const begin = text.data();
+    const char* const end = begin + text.size();
+    if (text.empty())
+    {
+        return std::nullopt;
+    }
+    const auto result = std::from_chars(begin, end, value);
+    // `result.ptr != end` rejects a numeric PREFIX ("4x"), which from_chars would otherwise accept
+    // as 4 — a sweep step that measured a different budget than the one written down.
+    if (result.ec != std::errc{} || result.ptr != end || !std::isfinite(value) || value <= 0.0f ||
+        value > maximum)
+    {
+        return std::nullopt;
+    }
+    return value;
+}
 
 std::optional<ShadowViewSlotRequest> parseShadowViewSlotRequest(std::string_view text) noexcept
 {

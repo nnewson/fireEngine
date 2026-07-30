@@ -57,17 +57,20 @@ the plan; the priority order is its § Suggested priority.
   identity, the per-frame view set, and the unresolved command seam with per-view resolution, which
   also brought forward per-view diagnostic reasons and moved the tuning into
   `render/constants.hpp` (`kShadowLodPixelBudget` + `kShadowLodCoarsenRatio`, `kShadowLodBias`
-  retired), plus per-view diagnostics with a focused-view reason breakdown (slice 4) and a ShadowLod
-  tint driven by that focused view (slice 5, with `--shadow-focus` for scripted captures).
-  REMAINING: calibrating the budget and coarsening ratio against SH-01's captures and diagnostics
-  (slice 6) — until then the committed values are an uncalibrated starting point. See
-  [`shadowplans.md`](shadowplans.md) § SH-03.
+  retired), plus per-view diagnostics with a focused-view reason breakdown (slice 4), a ShadowLod
+  tint driven by that focused view (slice 5, with `--shadow-focus` for scripted captures), and the
+  calibration (slice 6: budget 1 texel, no dead band, both measured against a stated threshold,
+  CSM-only — see
+  [`shadowplans.md`](shadowplans.md) § SH-03).
 - **SH-04** — deformation / proxy policy (skinned, morphed, cloth: no invalid error claims, explicit
   conservative full-detail fallback).
 
 **Milestone 2 — shadow silhouette correctness**
 - **SH-05** — material-aware casters (alpha-mask cutout, double-sided sheets).
-- **SH-06** — cascade caster fit (remove fixed-depth clipping, align candidate sets).
+- **SH-06** — cascade caster fit (remove fixed-depth clipping, align candidate sets). **Has a
+  reproduction**: on `ShadowLodMotionDemo` the moving sphere loses the top third of its cast shadow
+  as it passes the detail cluster, with shadow LOD off — see [`shadowplans.md`](shadowplans.md)
+  § SH-06 for the capture command.
 - **SH-07** — scale-derived bias & filtering tied to each map's actual texel footprint.
 
 **Milestone 3 — only if measured**

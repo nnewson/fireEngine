@@ -198,10 +198,42 @@ ResolvedShadowDraw ShadowLodResolver::resolve(const ShadowGeometryRequest& reque
 void ShadowLodResolver::commitFrame() noexcept
 {
     ++commits_;
+    // Measured HERE, against the level being replaced, because this is the only place both are in
+    // hand. Doing it at resolve time would count decisions the frame never submitted.
+    lastCommitMovement_ = ShadowLodTransitions{};
     for (const auto& [key, level] : staged_)
     {
         assert(key.valid() && "an invalid key must never reach the history");
-        history_[key] = HistoryEntry{.level = level, .lastSeenCommit = commits_};
+        const auto existing = history_.find(key);
+        if (existing == history_.end())
+        {
+            ++lastCommitMovement_.firstSeen;
+            history_[key] = HistoryEntry{
+                .level = level, .previousLevel = kNoPreviousShadowLod, .lastSeenCommit = commits_};
+            continue;
+        }
+        HistoryEntry& entry = existing->second;
+        if (entry.level == level)
+        {
+            ++lastCommitMovement_.held;
+            entry.lastSeenCommit = commits_;
+            continue;
+        }
+        ++lastCommitMovement_.transitions;
+        // CHATTER is a reversal that undoes a RECENT transition — the caster is sitting on a
+        // threshold, flipping across it. A reversal after a long hold is ordinary motion: a
+        // periodic animation walks a caster L1 -> L2 and back every few seconds, and counting that
+        // would report the animation as instability and invite widening a dead band that cannot fix
+        // it.
+        const bool recent = commits_ - entry.levelAdoptedCommit <= kReversalWindowCommits;
+        if (entry.previousLevel == level && recent)
+        {
+            ++lastCommitMovement_.reversed;
+        }
+        entry = HistoryEntry{.level = level,
+                             .previousLevel = entry.level,
+                             .levelAdoptedCommit = commits_,
+                             .lastSeenCommit = commits_};
     }
     staged_.clear();
 

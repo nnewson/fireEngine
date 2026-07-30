@@ -600,6 +600,161 @@ TEST_CASE("ShadowLodResolver.OneCasterTintsDifferentlyPerFocusedView", "[ShadowL
     CHECK(tintLevelFor(1) == fine.level);
 }
 
+TEST_CASE("ShadowLodResolver.MovementSeparatesFirstSeenHeldTransitionedAndReversed",
+          "[ShadowLodResolver]")
+{
+    // The dead band's calibration instrument, and the distinction it exists to make: a caster
+    // receding legitimately steps L0 -> L1 -> L2 (transitions no hysteresis can or should remove),
+    // while CHATTER is a reversal — L1 -> L2 -> L1 — a caster oscillating across a threshold.
+    // Judging a dead band by transitions alone would blame it for ordinary motion.
+    const auto lods = chain();
+    ShadowLodResolver resolver;
+    const auto caster = static_cast<ShadowCasterId>(30);
+    const ShadowLodStateKey key{caster, ShadowCasterGeneration::First,
+                                ShadowLogicalViewId::cascade(0)};
+
+    // Drives one caster to a chosen level by picking a view whose texel size forces it.
+    const auto commitLevelUsing = [&](float worldUnitsPerTexel)
+    {
+        ShadowRenderViewSet frameViews;
+        REQUIRE(frameViews.setCascade(0, Mat4::identity(),
+                                      ShadowView::orthographic(worldUnitsPerTexel)));
+        resolver.beginFrame();
+        const ResolvedShadowDraw drawn =
+            resolver.resolve(request(lods, caster), view(frameViews, ShadowViewGroup::Cascade, 0),
+                             someBounds(), kBudget, kNoHysteresis);
+        resolver.commitFrame();
+        return drawn.level;
+    };
+
+    // Frame 1: first sight of this caster in this view.
+    const std::size_t fine = commitLevelUsing(0.005f);
+    CHECK(resolver.lastCommitMovement().firstSeen == 1);
+    CHECK(resolver.lastCommitMovement().transitions == 0);
+    CHECK(resolver.lastCommitMovement().reversed == 0);
+
+    // Frame 2: same view, same answer — held.
+    CHECK(commitLevelUsing(0.005f) == fine);
+    CHECK(resolver.lastCommitMovement().held == 1);
+    CHECK(resolver.lastCommitMovement().transitions == 0);
+
+    // Frame 3: a much coarser map, so the caster moves to a coarser level. Movement, not chatter.
+    const std::size_t coarse = commitLevelUsing(0.5f);
+    REQUIRE(coarse != fine);
+    CHECK(resolver.lastCommitMovement().transitions == 1);
+    CHECK(resolver.lastCommitMovement().reversed == 0);
+
+    // Frame 4: back to the fine map — the caster returns to the level it held two commits ago.
+    // THIS is chatter, and it is what a dead band could suppress.
+    CHECK(commitLevelUsing(0.005f) == fine);
+    CHECK(resolver.lastCommitMovement().transitions == 1);
+    CHECK(resolver.lastCommitMovement().reversed == 1);
+    CHECK(resolver.historyLevel(key) == fine);
+}
+
+TEST_CASE("ShadowLodResolver.AReversalAfterALongHoldIsNotChatter", "[ShadowLodResolver]")
+{
+    // The distinction that decides whether a dead band is justified. A periodic animation walks a
+    // caster L1 -> L2 and back every few seconds; counting that return as chatter would report the
+    // ANIMATION as instability and invite widening a band that cannot fix it. Chatter is a reversal
+    // that undoes a RECENT transition — a caster sitting on a threshold, flipping.
+    const auto lods = chain();
+    ShadowLodResolver resolver;
+    const auto caster = static_cast<ShadowCasterId>(33);
+
+    const auto commitAt = [&](float worldUnitsPerTexel)
+    {
+        ShadowRenderViewSet frameViews;
+        REQUIRE(frameViews.setCascade(0, Mat4::identity(),
+                                      ShadowView::orthographic(worldUnitsPerTexel)));
+        resolver.beginFrame();
+        (void)resolver.resolve(request(lods, caster), view(frameViews, ShadowViewGroup::Cascade, 0),
+                               someBounds(), kBudget, kNoHysteresis);
+        resolver.commitFrame();
+    };
+
+    commitAt(0.005f); // first sight: fine level
+    commitAt(0.5f);   // transition to coarse
+    REQUIRE(resolver.lastCommitMovement().transitions == 1);
+
+    // Hold the coarse level well beyond the window, as a slow animation would.
+    for (std::uint64_t i = 0; i < 40; ++i)
+    {
+        commitAt(0.5f);
+    }
+    REQUIRE(resolver.lastCommitMovement().held == 1);
+
+    // Now return. It IS a transition — the level really did change — but it is not chatter, and
+    // must not be counted as evidence for a dead band.
+    commitAt(0.005f);
+    CHECK(resolver.lastCommitMovement().transitions == 1);
+    CHECK(resolver.lastCommitMovement().reversed == 0);
+
+    // Whereas an immediate flip back is chatter.
+    commitAt(0.5f);
+    CHECK(resolver.lastCommitMovement().reversed == 1);
+}
+
+TEST_CASE("ShadowLodResolver.MovementIsPerCommitAndIgnoresAbandonedFrames", "[ShadowLodResolver]")
+{
+    // Two properties the aggregate depends on. It describes ONE commit — otherwise a per-frame log
+    // would report a running total and every sweep row would be meaningless — and a frame that was
+    // never submitted contributes nothing, because its levels were never true.
+    const auto lods = chain();
+    ShadowRenderViewSet views = populatedViews();
+    ShadowLodResolver resolver;
+    const auto caster = static_cast<ShadowCasterId>(31);
+
+    resolver.beginFrame();
+    (void)resolver.resolve(request(lods, caster), view(views, ShadowViewGroup::Cascade, 0),
+                           someBounds(), kBudget, kNoHysteresis);
+    resolver.commitFrame();
+    CHECK(resolver.lastCommitMovement().firstSeen == 1);
+
+    // An abandoned frame: resolved, then discarded. The next commit must not report its decision,
+    // and the history must not have moved.
+    resolver.beginFrame();
+    (void)resolver.resolve(request(lods, caster), view(views, ShadowViewGroup::Cascade, 0),
+                           someBounds(), kBudget, kNoHysteresis);
+    resolver.discardFrame();
+    resolver.beginFrame();
+    resolver.commitFrame();
+    const ShadowLodTransitions afterEmpty = resolver.lastCommitMovement();
+    CHECK(afterEmpty.firstSeen == 0);
+    CHECK(afterEmpty.held == 0);
+    CHECK(afterEmpty.transitions == 0);
+    CHECK(afterEmpty.reversed == 0);
+}
+
+TEST_CASE("ShadowLodResolver.ForcedDecisionsDoNotCountAsMovement", "[ShadowLodResolver]")
+{
+    // Only a genuinely Selected level is staged, so a forced fallback cannot register as a
+    // transition. Otherwise a frame where the budget went invalid would read as a burst of chatter
+    // and send someone tuning the dead band to fix a plumbing error.
+    const auto lods = chain();
+    ShadowRenderViewSet views = populatedViews();
+    ShadowLodResolver resolver;
+    const auto caster = static_cast<ShadowCasterId>(32);
+
+    resolver.beginFrame();
+    (void)resolver.resolve(request(lods, caster), view(views, ShadowViewGroup::Cascade, 0),
+                           someBounds(), kBudget, kNoHysteresis);
+    resolver.commitFrame();
+    REQUIRE(resolver.lastCommitMovement().firstSeen == 1);
+
+    resolver.beginFrame();
+    const ResolvedShadowDraw forced =
+        resolver.resolve(request(lods, caster), view(views, ShadowViewGroup::Cascade, 0),
+                         someBounds(), -1.0f, kNoHysteresis);
+    resolver.commitFrame();
+    REQUIRE(forced.reason == ShadowLodReason::InvalidCaster);
+    const ShadowLodTransitions movement = resolver.lastCommitMovement();
+    CHECK(movement.transitions == 0);
+    CHECK(movement.reversed == 0);
+    CHECK(movement.held == 0);
+    CHECK(movement.firstSeen == 0);
+}
+
 TEST_CASE("ShadowLodResolver.DifferentViewsOfOneCasterAreSeparateHistory", "[ShadowLodResolver]")
 {
     // The point of the whole slice: one caster, several views, several answers — and each view's

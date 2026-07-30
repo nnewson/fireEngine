@@ -90,7 +90,16 @@ struct RenderTunables
     // beside the camera budget but deliberately separate — the two are in different units and are
     // calibrated against different evidence, and sharing one number is what made every shadow view
     // rasterise the camera's choice.
+    // Shadow LOD, separate from the forward toggle above (SH-03 slice 6). Off forces every caster
+    // to LOD0 in every shadow view while the visible geometry keeps selecting normally — the only
+    // honest reference for an A/B of shadow LOD, since `lodEnabled = false` also changes what the
+    // camera sees.
+    bool shadowLodEnabled{true};
     float shadowLodPixelBudget{kShadowLodPixelBudget};
+    // The hysteresis dead band: coarsening must project within `budget * ratio` while refining
+    // triggers at `budget`. Live for the same reason the budget is — SH-03's calibration sweeps
+    // both, and the two interact (a wider band hides a budget that is slightly too tight).
+    float shadowLodCoarsenRatio{kShadowLodCoarsenRatio};
     // Which shadow view the diagnostics panel is interrogating (SH-03 slice 4), keyed by LOGICAL
     // identity rather than physical slot. Defaults to the scene rollup.
     //

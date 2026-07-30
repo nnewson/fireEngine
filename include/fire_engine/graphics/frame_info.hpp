@@ -52,6 +52,13 @@ struct FrameInfo
     // budget.
     bool lodEnabled{false};
     float lodPixelErrorBudget{2.0f};
+    // Shadow LOD, SEPARATELY (SH-03 slice 6). `--no-shadow-lod` forces every shadow caster to LOD0
+    // while leaving the forward selection alone, which is the control an A/B needs: measuring
+    // shadow LOD against `--no-lod` also changes the visible geometry, so the comparison contains
+    // differences that have nothing to do with shadows. A tiny budget is NOT a substitute — the
+    // selector still runs, and any cut whose estimated deviation is 0 (or below the budget) is
+    // still eligible, so "budget 0.001" means "almost always LOD0", not "LOD0".
+    bool shadowLodEnabled{true};
     // LOD strategy (from RenderTunables). Continuous enables the VIPM geomorph on the forward pass.
     LodMode lodMode{LodMode::Discrete};
     // GPU-driven VDPM (rendering-spine #3, Stage B5b): the global CPU/GPU backend selector and the

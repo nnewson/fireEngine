@@ -949,6 +949,13 @@ the same change — most have a test or guard that will catch you, but not all.
   return between resolution and submit, the next `beginFrame` must drop the staged levels, which is
   what it does. Don't reintroduce a level on the command itself: with per-view selection there is no
   single level a caster has.
+- **Shadow LOD has its own on/off switch, and calibration inputs are terminal** (SH-03 slice 6).
+  `FrameInfo::shadowLodEnabled` is separate from `lodEnabled` so `--no-shadow-lod` can force shadow
+  LOD0 while the visible geometry keeps selecting — that separation is what makes an A/B of shadow
+  LOD measure shadows and nothing else. `--shadow-budget` / `--shadow-ratio` are validated in the
+  Renderer and REFUSE to start on anything unusable rather than falling back to the constant: a
+  calibration input that silently becomes the default produces a sweep row that reads like a
+  measurement of the value you asked for. Re-derive both values with `tools/shadow_lod_sweep.sh`.
 - **The ShadowLod tint reads back through `drawnResolution(group, key)`** (SH-03 slice 5).
   `Renderer::applyShadowLodTint` runs between `recordShadowPass` and the forward pass — the only
   window where the per-view levels exist and the forward push constants have not been written yet.

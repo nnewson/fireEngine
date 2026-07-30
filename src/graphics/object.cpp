@@ -815,7 +815,7 @@ std::vector<DrawCommand> Object::buildDrawCommands(const FrameInfo& frame, const
             shadowCmd.lodLevel = kNoShadowLod;
             shadowCmd.shadowRequest =
                 makeShadowRequest(*shadowGeometry, binding.shadowCasterId, binding.shadowGeneration,
-                                  world, frame.lodEnabled);
+                                  world, frame.shadowLodEnabled);
             // Shadows keep discrete LOD and draw directly — clear the VDPM indirect handle the copy
             // inherited from the forward command, or the "non-null selects indirect" invariant
             // would point the shadow draw at the forward index count. Clear the GPU-front handle

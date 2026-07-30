@@ -77,6 +77,13 @@ public:
                                              const Bounds3& worldBounds, float budgetTexels,
                                              ShadowLodHysteresis hysteresis) noexcept;
 
+    // How the LAST commit moved the levels — held / transitioned / reversed / first-seen. Zeroed
+    // and refilled by each commitFrame, so it describes one frame rather than accumulating.
+    [[nodiscard]] ShadowLodTransitions lastCommitMovement() const noexcept
+    {
+        return lastCommitMovement_;
+    }
+
     // Promote this frame's staged levels into the history. Call ONLY after the frame has been
     // submitted; entries not seen for `kUnseenHistoryFrames` commits are dropped, so a caster that
     // leaves the scene stops paying rent.
@@ -132,8 +139,26 @@ private:
     struct HistoryEntry
     {
         std::size_t level{0};
+        // The level held BEFORE `level`. Kept solely to detect reversal (L1 -> L2 -> L1), which is
+        // the difference between a caster travelling through levels and one oscillating across a
+        // threshold — the only one of the two a dead band can fix.
+        std::size_t previousLevel{kNoPreviousShadowLod};
+        // When `level` was adopted. A reversal only counts as CHATTER if it happens soon after the
+        // transition it undoes — see kReversalWindowCommits.
+        std::uint64_t levelAdoptedCommit{0};
         std::uint64_t lastSeenCommit{0};
     };
+
+    // How recent a transition must be for its undo to count as chatter, in commits (~frames).
+    //
+    // Reversal alone is not chatter. A periodic animation legitimately walks a caster L1 -> L2 and
+    // back every few seconds, and counting that would report ordinary motion as instability — which
+    // is what a dead band cannot fix and would be wrongly widened to chase. Chatter is a reversal
+    // that undoes a RECENT transition: the caster is sitting on a threshold, not travelling across
+    // it. 30 commits is half a second at 60 Hz, comfortably longer than the one- or two-frame
+    // oscillation a dead band exists to suppress and far shorter than any animation period in the
+    // acceptance scenes.
+    static constexpr std::uint64_t kReversalWindowCommits = 30;
 
     // Commits a caster may go unseen before its history is dropped. Small: the state is one level,
     // and re-deriving it costs a single frame of dead band on a caster that came back.
@@ -156,6 +181,7 @@ private:
     std::unordered_map<ShadowLodStateKey, HistoryEntry> history_{};
     std::unordered_map<ShadowLodStateKey, std::size_t> staged_{};
     std::uint64_t commits_{0};
+    ShadowLodTransitions lastCommitMovement_{};
 };
 
 } // namespace fire_engine

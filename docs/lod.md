@@ -230,7 +230,12 @@ defect the shadow-LOD arc exists to fix: a shadow's error budget belongs to the 
 it, in shadow-map texels. SH-02 landed the replacement model (below); **SH-03 threaded it through
 and retired `kShadowLodBias`** — selection now happens per shadow view, against
 `kShadowLodPixelBudget` texels with `kShadowLodCoarsenRatio` hysteresis
-(`render/constants.hpp`, both uncalibrated until SH-03's calibration step).
+(`render/constants.hpp`). Both are CALIBRATED against a stated acceptance threshold: **1 texel**,
+the only budget where under 0.1% of shadowed pixels differ from full detail (it keeps 59.9% of the
+cascade triangles); and **no dead band** (ratio 1.0), because time-boxed reversals — the actual
+chatter signal — measured zero at every ratio. The measurements, the instruments and the CSM-only
+scope caveat are in [`shadowplans.md`](shadowplans.md) § SH-03; re-derive with
+`tools/shadow_lod_sweep.sh`.
 
 Continuous mode deliberately keeps the same topology level that `selectLod` would choose. When level
 `L` is selected, `selectVipm` computes how far the current tolerated error has advanced toward

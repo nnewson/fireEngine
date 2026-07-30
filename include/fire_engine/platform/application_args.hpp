@@ -143,9 +143,15 @@ struct ApplicationArgs
         }
         if (arg == "--no-lod")
         {
-            // Full detail everywhere — the "before" half of an LOD acceptance A/B. Affects the
-            // shadow selection too, since both read RenderTunables::lodEnabled.
+            // FULL DETAIL EVERYWHERE — the "before" half of an LOD acceptance A/B, and the contract
+            // the runbook's existing commands rely on. It disables the shadow selection explicitly
+            // now that the two have separate switches: before SH-03 slice 6 both read one flag, and
+            // leaving this forward-only would have silently narrowed a documented promise.
+            //
+            // `--no-shadow-lod` is the shadow-ONLY control (forward geometry keeps selecting),
+            // which is what an A/B of shadow LOD needs.
             args.debug.lod = false;
+            args.debug.shadowLod = false;
             continue;
         }
         if (arg == "--capture")
@@ -186,6 +192,40 @@ struct ApplicationArgs
                         args.debug.captureFrame = frame;
                     }
                 }
+            }
+            continue;
+        }
+        if (arg == "--no-shadow-lod")
+        {
+            // Forces every shadow caster to LOD0 while the FORWARD selection is untouched — the
+            // reference an A/B of shadow LOD needs. `--no-lod` is not that reference: it also
+            // disables forward LOD, so the comparison picks up visible-geometry differences. Nor is
+            // a tiny budget: the selector still runs, and a cut whose estimated deviation is 0 is
+            // still eligible.
+            args.debug.shadowLod = false;
+            continue;
+        }
+        if (arg == "--shadow-budget" || arg == "--shadow-ratio")
+        {
+            // SH-03 slice 6's calibration handles, so a sweep is a shell loop rather than a person
+            // dragging a slider and remembering where it was.
+            //
+            // The VALUE is recorded verbatim and validated in the renderer, where a bad one is
+            // TERMINAL. Keeping the default on a malformed value — the discipline --capture-frame
+            // uses — is wrong for a calibration input: a mistyped sweep step would silently
+            // re-measure the default budget and produce a plausible table with one duplicated row.
+            // Presence is recorded even when nothing is consumed, so a valueless flag fails too.
+            const std::string_view value =
+                (i + 1 < argc && argv[i + 1][0] != '\0' && argv[i + 1][0] != '-')
+                    ? std::string_view{argv[++i]}
+                    : std::string_view{};
+            if (arg == "--shadow-budget")
+            {
+                args.debug.shadowLodBudget = value;
+            }
+            else
+            {
+                args.debug.shadowLodCoarsenRatio = value;
             }
             continue;
         }

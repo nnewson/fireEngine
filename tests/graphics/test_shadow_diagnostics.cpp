@@ -472,6 +472,32 @@ TEST_CASE("--shadow-focus parses a group and slot, or nothing", "[ShadowDiagnost
             .has_value());
 }
 
+TEST_CASE("a calibration override is validated, not coerced", "[ShadowDiagnostics]")
+{
+    // The numeric half of --shadow-budget / --shadow-ratio. Every rejection matters more than the
+    // acceptances: the renderer turns "nothing" into a refusal to start, and the alternative —
+    // falling back to the constant — would produce a sweep row that reads exactly like a
+    // measurement of the value that was asked for.
+    constexpr float kNoMax = std::numeric_limits<float>::infinity();
+    REQUIRE(parseShadowCalibrationValue("4", kNoMax).value() == 4.0f);
+    REQUIRE(parseShadowCalibrationValue("0.5", 1.0f).value() == 0.5f);
+    REQUIRE(parseShadowCalibrationValue("1", 1.0f).value() == 1.0f); // inclusive maximum
+
+    CHECK_FALSE(parseShadowCalibrationValue("", kNoMax).has_value());
+    CHECK_FALSE(parseShadowCalibrationValue("0", kNoMax).has_value());   // non-positive
+    CHECK_FALSE(parseShadowCalibrationValue("-2", kNoMax).has_value());  // negative
+    CHECK_FALSE(parseShadowCalibrationValue("abc", kNoMax).has_value()); // not a number
+    CHECK_FALSE(parseShadowCalibrationValue("4x", kNoMax).has_value());  // a numeric PREFIX only
+    CHECK_FALSE(parseShadowCalibrationValue(" 4", kNoMax).has_value());  // leading space
+    CHECK_FALSE(parseShadowCalibrationValue("nan", kNoMax).has_value()); // non-finite
+    CHECK_FALSE(parseShadowCalibrationValue("inf", kNoMax).has_value()); // non-finite
+    // Above the maximum: a ratio outside (0, 1] makes the selector report InvalidCaster for every
+    // caster, so a whole sweep would silently measure forced LOD0 while still drawing a picture.
+    CHECK_FALSE(parseShadowCalibrationValue("1.5", 1.0f).has_value());
+    // ... but the same text is fine where there is no ceiling.
+    CHECK(parseShadowCalibrationValue("1.5", kNoMax).has_value());
+}
+
 TEST_CASE("every reason and group has a name", "[ShadowDiagnostics]")
 {
     for (std::size_t r = 0; r < kShadowLodReasonCount; ++r)

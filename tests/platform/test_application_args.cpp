@@ -428,6 +428,73 @@ TEST_CASE("ApplicationArgs.RepeatedShadowFocusTakesTheLastValue", "[ApplicationA
     CHECK(clobbered.args.debug.shadowFocus->empty());
 }
 
+TEST_CASE("ApplicationArgs.CalibrationFlagsRecordTheirValueVerbatim", "[ApplicationArgs]")
+{
+    // The parser's job is only to CAPTURE the text; the renderer validates it and refuses to start
+    // on anything unusable. That split is deliberate: a calibration input that quietly fell back to
+    // the default would produce a sweep row indistinguishable from a real measurement of the value
+    // that was asked for, so "keep the default" — the discipline --capture-frame uses — is exactly
+    // wrong here.
+    const auto parsed = parseArgs({"fireEngineApp", "--shadow-budget", "8", "--shadow-ratio", "0.5",
+                                   "DamagedHelmet/DamagedHelmet.gltf"});
+    const auto& args = parsed.args;
+    REQUIRE(args.debug.shadowLodBudget.has_value());
+    REQUIRE(args.debug.shadowLodCoarsenRatio.has_value());
+    CHECK(*args.debug.shadowLodBudget == "8");
+    CHECK(*args.debug.shadowLodCoarsenRatio == "0.5");
+    CHECK(args.scenePath == "DamagedHelmet/DamagedHelmet.gltf"); // values consumed, not positional
+
+    // Malformed text is PRESERVED rather than dropped, so the renderer can name it in the failure.
+    for (std::string_view bad : {"0", "abc", "4x", "nan", "inf"})
+    {
+        CAPTURE(bad);
+        const auto rejected = parseArgs({"fireEngineApp", "--shadow-budget", bad});
+        REQUIRE(rejected.args.debug.shadowLodBudget.has_value());
+        CHECK(*rejected.args.debug.shadowLodBudget == bad);
+    }
+
+    // A leading '-' is read as the NEXT FLAG, not a value — the rule that stops any value-taking
+    // flag from swallowing the flag after it. Safe here because no valid value is negative, and the
+    // outcome is still terminal: the flag is present with an empty value.
+    const auto negative = parseArgs({"fireEngineApp", "--shadow-budget", "-1"});
+    REQUIRE(negative.args.debug.shadowLodBudget.has_value());
+    CHECK(negative.args.debug.shadowLodBudget->empty());
+
+    // A valueless flag records its PRESENCE with an empty value — also terminal downstream, never
+    // "no request".
+    const auto trailing = parseArgs({"fireEngineApp", "--shadow-budget"});
+    REQUIRE(trailing.args.debug.shadowLodBudget.has_value());
+    CHECK(trailing.args.debug.shadowLodBudget->empty());
+
+    const auto followed = parseArgs({"fireEngineApp", "--shadow-ratio", "--overlay"});
+    REQUIRE(followed.args.debug.shadowLodCoarsenRatio.has_value());
+    CHECK(followed.args.debug.shadowLodCoarsenRatio->empty());
+    CHECK(followed.args.debug.overlayVisible); // the following flag is still processed
+
+    // Absent is the only "use the constant" state.
+    const auto none = parseArgs({"fireEngineApp"});
+    CHECK_FALSE(none.args.debug.shadowLodBudget.has_value());
+    CHECK_FALSE(none.args.debug.shadowLodCoarsenRatio.has_value());
+    CHECK(none.args.debug.shadowLod); // shadow LOD on unless --no-shadow-lod says otherwise
+}
+
+TEST_CASE("ApplicationArgs.NoShadowLodLeavesForwardLodAlone", "[ApplicationArgs]")
+{
+    // The reference control for a shadow-LOD A/B. It must NOT touch forward LOD: measuring against
+    // --no-lod changes the visible geometry too, so the comparison contains differences that have
+    // nothing to do with shadows.
+    const auto parsed = parseArgs({"fireEngineApp", "--no-shadow-lod"});
+    CHECK_FALSE(parsed.args.debug.shadowLod);
+    CHECK(parsed.args.debug.lod);
+
+    // --no-lod keeps its documented contract: full detail EVERYWHERE, shadows included. The two
+    // switches are separate internally, which is exactly why this needs pinning — forgetting the
+    // second assignment would silently narrow a promise the runbook's commands depend on.
+    const auto everything = parseArgs({"fireEngineApp", "--no-lod"});
+    CHECK_FALSE(everything.args.debug.lod);
+    CHECK_FALSE(everything.args.debug.shadowLod);
+}
+
 TEST_CASE("ApplicationArgs.RepeatedCaptureFlagsTakeTheLastValue", "[ApplicationArgs]")
 {
     const auto parsed = parseArgs({"fireEngineApp", "--capture", "first.png", "--capture-frame",

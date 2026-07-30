@@ -188,6 +188,16 @@ void drawShadowDiagnostics(const FrameStats& stats, RenderTunables& tunables)
         std::snprintf(reasonScope, sizeof(reasonScope), "Reasons: %s — %s", view, where);
     }
     ImGui::TextUnformatted(reasonScope);
+    // SH-03 slice 6: the dead band's calibration instrument, and a headline rather than a footnote
+    // — it describes the frame as a whole. TRANSITIONS are movement (a caster receding legitimately
+    // steps L0 -> L1 -> L2); REVERSED is chatter (L1 -> L2 -> L1), a caster oscillating across a
+    // threshold, and the only one of the two a dead band can fix. `first` is separated so a caster
+    // entering a view cannot be mistaken for either.
+    ImGui::Text("LOD movement: %llu transitions (%llu reversed), %llu held, %llu first",
+                static_cast<unsigned long long>(shadow.lodMovement.transitions),
+                static_cast<unsigned long long>(shadow.lodMovement.reversed),
+                static_cast<unsigned long long>(shadow.lodMovement.held),
+                static_cast<unsigned long long>(shadow.lodMovement.firstSeen));
 
     // Every reason, by iterating the enum rather than naming a subset: a hard-coded list silently
     // hides new ones (the SH-02 fallbacks were invisible here until this changed), and a forced
@@ -383,7 +393,7 @@ void DebugOverlay::buildUi(const FrameStats& stats, RenderTunables& tunables)
     // narrow enough that the shadow table's drawn/candidate pairs clipped mid-number, which is the
     // one place a diagnostic must not be approximate — the whole panel exists to compare those two
     // numbers per view.
-    ImGui::SetNextWindowSize(ImVec2{520.0f, 640.0f}, ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2{520.0f, 900.0f}, ImGuiCond_FirstUseEver);
     ImGui::Begin("Fire Engine - Debug");
 
     const float fps = stats.cpuFrameMs > 0.0f ? 1000.0f / stats.cpuFrameMs : 0.0f;
@@ -459,10 +469,22 @@ void DebugOverlay::buildUi(const FrameStats& stats, RenderTunables& tunables)
         }
         ImGui::SliderFloat("Pixel error budget", &tunables.lodPixelErrorBudget, 0.25f, 16.0f,
                            "%.2f");
-        // SH-03: a SEPARATE budget in shadow-map texels, deliberately not the camera one — the two
-        // are in different units. Live here because SH-03's calibration is a sweep of exactly this
-        // value against the acceptance scene's shadow silhouettes.
+        ImGui::EndDisabled();
+
+        // SHADOW LOD is its own switch, not a rider on the forward one (SH-03 slice 6). Turning it
+        // off leaves the visible geometry selecting normally, which is what an A/B of shadow LOD
+        // needs; gating these sliders on `lodEnabled` would also grey them out for a run that only
+        // meant to hold the camera geometry still.
+        ImGui::Checkbox("Shadow LOD##shadowlod", &tunables.shadowLodEnabled);
+        ImGui::BeginDisabled(!tunables.shadowLodEnabled);
+        // A SEPARATE budget in shadow-map texels, deliberately not the camera one — different
+        // units, different evidence (see tools/shadow_lod_sweep.sh).
         ImGui::SliderFloat("Shadow texel budget", &tunables.shadowLodPixelBudget, 0.25f, 16.0f,
+                           "%.2f");
+        // The dead band. 1.0 disables hysteresis; SMALLER widens the band, holding finer geometry
+        // longer. Calibration sweeps the budget at 1.0 first, so a wide band cannot hide a budget
+        // that is slightly too tight.
+        ImGui::SliderFloat("Shadow coarsen ratio", &tunables.shadowLodCoarsenRatio, 0.25f, 1.0f,
                            "%.2f");
         ImGui::EndDisabled();
         if (stats.trianglesGpuPending)

@@ -89,6 +89,16 @@ struct RendererDebug
     // Which frame to capture (1-based). Enough frames must pass for the swapchain, IBL and any
     // temporal accumulation to settle; 16 is comfortably past that at any frame rate.
     int captureFrame{16};
+    // --no-shadow-lod: force every shadow caster to LOD0, leaving the FORWARD selection alone. The
+    // reference for any A/B of shadow LOD (see RenderTunables::shadowLodEnabled).
+    bool shadowLod{true};
+    // --shadow-budget <texels> / --shadow-ratio <r>: SH-03's two calibration values, as the raw
+    // argument text. Empty optional = flag absent (use the constant); engaged = validated in the
+    // Renderer, where anything unusable is TERMINAL — missing, malformed, non-finite, non-positive,
+    // or a ratio above 1. A calibration input that silently falls back to the default produces a
+    // sweep row that looks like a measurement of the value you asked for and is not.
+    std::optional<std::string_view> shadowLodBudget{};
+    std::optional<std::string_view> shadowLodCoarsenRatio{};
     // --shadow-focus <group>:<slot>: focus one shadow view for the diagnostics panel and the
     // ShadowLod tint, so a capture can name its view instead of needing a click.
     //

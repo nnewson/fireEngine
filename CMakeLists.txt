@@ -19,6 +19,42 @@ option(FIRE_ENGINE_WARNINGS_AS_ERRORS "Treat first-party compiler warnings as er
 
 # --- Dependencies -------------------------------------------------------
 
+# The vcpkg include tree must beat /usr/local/include, and `-isystem` cannot do it.
+#
+# Clang places /usr/local/include AHEAD of every -isystem path, which is where CMake puts an
+# imported target's includes. Install a Vulkan SDK and that directory holds a second, newer
+# vulkan-hpp: our own translation units then compile against the SDK's headers while anything
+# resolved RELATIVE to a vcpkg header (vulkan_raii.hpp including its sibling vulkan.hpp) still gets
+# vcpkg's. Two vulkan-hpp versions in one binary, and the first RAII call aborts on
+# `m_dispatcher->getVkHeaderVersion() == VK_HEADER_VERSION` — a mismatch with no bad line of C++
+# behind it. (Observed for real when SDK 1.4.357 landed beside our pinned 1.4.335.)
+#
+# A plain -I comes before ALL system directories, so this pins every dependency to the version the
+# manifest names. Deliberately not SYSTEM: that would emit -isystem again and lose the race.
+#
+# Both spellings are checked because vcpkg has used both, and the shaderc lookup below already
+# hedges the same way — a silent miss here would restore the mixed-header build with no signal.
+set(_fireengine_vcpkg_root "")
+if(DEFINED VCPKG_INSTALLED_DIR)
+    set(_fireengine_vcpkg_root "${VCPKG_INSTALLED_DIR}")
+elseif(DEFINED _VCPKG_INSTALLED_DIR)
+    set(_fireengine_vcpkg_root "${_VCPKG_INSTALLED_DIR}")
+endif()
+if(_fireengine_vcpkg_root AND DEFINED VCPKG_TARGET_TRIPLET)
+    set(_fireengine_vcpkg_include "${_fireengine_vcpkg_root}/${VCPKG_TARGET_TRIPLET}/include")
+    if(NOT EXISTS "${_fireengine_vcpkg_include}")
+        message(FATAL_ERROR
+            "vcpkg include dir not found at ${_fireengine_vcpkg_include}. It must precede "
+            "/usr/local/include or a system Vulkan SDK silently supplies a second vulkan-hpp.")
+    endif()
+    # include_directories(BEFORE) alone is not enough: CMake de-duplicates the path against the
+    # imported targets' interface includes and keeps the -isystem classification, which loses the
+    # race again. NO_SYSTEM_FROM_IMPORTED is the switch that actually demotes them to -I.
+    set(CMAKE_NO_SYSTEM_FROM_IMPORTED ON)
+    include_directories(BEFORE "${_fireengine_vcpkg_include}")
+    message(STATUS "Pinned dependency headers first: ${_fireengine_vcpkg_include}")
+endif()
+
 find_package(Vulkan REQUIRED)
 find_package(VulkanMemoryAllocator CONFIG REQUIRED)
 find_package(glfw3 3.3 REQUIRED)

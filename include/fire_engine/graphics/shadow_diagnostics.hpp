@@ -303,6 +303,20 @@ struct ShadowViewSlotRequest
     std::size_t slot{0};
 };
 
+// Validates one SH-03 calibration override (`--shadow-budget` / `--shadow-ratio`) — the numeric
+// half of the flags, kept here so it is headless-testable rather than buried in the renderer.
+//
+// Returns nothing for anything unusable: empty, malformed, a numeric PREFIX only ("4x"), non-finite
+// ("nan"/"inf"), non-positive, or above `maximum`. The caller reports that by name and refuses to
+// start — a calibration input that silently became the default would produce a sweep row that reads
+// like a measurement of the value that was asked for.
+//
+// `maximum` is inclusive; the budget has none (pass infinity), the coarsening ratio must be <= 1
+// because the selector treats anything outside (0, 1] as an invalid caster and would force LOD0 for
+// the whole run while still producing an image and a table.
+[[nodiscard]] std::optional<float> parseShadowCalibrationValue(std::string_view text,
+                                                               float maximum) noexcept;
+
 // Parses `<group>:<slot>` — `cascade:2`, `world-only:0`, `self:0`, `spot:1` — plus `point:<light>`
 // `:<face>` for a cube face (`point:0:4`), since a flat point slot is an implementation detail no
 // one should have to compute. Returns nothing for an unknown group, a malformed number, or a slot
@@ -324,6 +338,33 @@ struct FocusedShadowView
     }
 };
 
+// How the per-view LOD decisions MOVED when this frame's levels were committed (SH-03 slice 6).
+//
+// Counted per (caster, logical view) at COMMIT, so a decision only lands here once the frame it
+// belongs to was actually submitted.
+//
+// TRANSITIONS ARE NOT CHATTER, and conflating them is the mistake this type is shaped to prevent. A
+// caster moving away from a light legitimately steps L0 → L1 → L2 and stays there: three
+// transitions, no instability. Chatter is a caster REVERSING — L1 → L2 → L1 — which is what a
+// viewer sees as a silhouette flickering in place, and what the hysteresis dead band exists to
+// stop. A dead band cannot remove legitimate transitions and should not be judged by them.
+struct ShadowLodTransitions
+{
+    // Held the level it already had. The quiet, expected case.
+    std::uint64_t held{0};
+    // Moved to a different level than the one committed previously. Includes both legitimate
+    // motion and chatter; `reversed` below is the part that indicates instability.
+    std::uint64_t transitions{0};
+    // Moved BACK to the level held before the last one — L1 → L2 → L1. This is the chatter signal:
+    // a caster oscillating across a threshold rather than travelling through it. Sustained non-zero
+    // counts are what justify widening the dead band (a SMALLER coarsen ratio).
+    std::uint64_t reversed{0};
+    // Seen for the first time (no previous level for that view). Neither good nor bad: a caster
+    // entering a view, or the first frame after a reset. Kept separate so it cannot be mistaken for
+    // movement, which is what a plain "decisions" count would do.
+    std::uint64_t firstSeen{0};
+};
+
 // A whole frame's shadow diagnostics. Held in a frame-indexed ring by the renderer and published
 // only when the matching GPU timestamp slot resolves — the overlay is built BEFORE the current
 // frame records its shadow pass, so writing live counters next to completed-frame timings would
@@ -332,6 +373,10 @@ struct FocusedShadowView
 struct ShadowFrameStats
 {
     std::array<ShadowViewStats, kShadowViewCount> views{};
+    // How this frame's committed levels moved (SH-03 slice 6). Filled by the renderer from the
+    // resolver after the frame is submitted, so it rides the same publish discipline as the
+    // counters above rather than mixing a live number into a completed frame's report.
+    ShadowLodTransitions lodMovement{};
 
     void reset() noexcept;
     [[nodiscard]] ShadowViewStats& view(ShadowViewGroup group, std::size_t slot) noexcept;
