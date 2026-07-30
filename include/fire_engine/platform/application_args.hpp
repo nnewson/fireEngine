@@ -116,6 +116,20 @@ struct ApplicationArgs
             args.debug.view = DebugView::Ssao;
             continue;
         }
+        if (arg == "--debug-lod")
+        {
+            args.debug.view = DebugView::Lod;
+            continue;
+        }
+        if (arg == "--debug-shadow-lod")
+        {
+            // SH-03: tints each mesh by the level ONE shadow view chose for it — the focused view
+            // in the Shadows panel, or cascade 0 by default. A flag rather than overlay-only
+            // because a reference capture of this view is how per-view selection is checked without
+            // a human at the keyboard.
+            args.debug.view = DebugView::ShadowLod;
+            continue;
+        }
         if (arg == "--debug-joints")
         {
             // Replaces the scene meshes with the ragdoll articulation gizmo + index:name labels.
@@ -129,9 +143,15 @@ struct ApplicationArgs
         }
         if (arg == "--no-lod")
         {
-            // Full detail everywhere — the "before" half of an LOD acceptance A/B. Affects the
-            // shadow selection too, since both read RenderTunables::lodEnabled.
+            // FULL DETAIL EVERYWHERE — the "before" half of an LOD acceptance A/B, and the contract
+            // the runbook's existing commands rely on. It disables the shadow selection explicitly
+            // now that the two have separate switches: before SH-03 slice 6 both read one flag, and
+            // leaving this forward-only would have silently narrowed a documented promise.
+            //
+            // `--no-shadow-lod` is the shadow-ONLY control (forward geometry keeps selecting),
+            // which is what an A/B of shadow LOD needs.
             args.debug.lod = false;
+            args.debug.shadowLod = false;
             continue;
         }
         if (arg == "--capture")
@@ -171,6 +191,63 @@ struct ApplicationArgs
                     {
                         args.debug.captureFrame = frame;
                     }
+                }
+            }
+            continue;
+        }
+        if (arg == "--no-shadow-lod")
+        {
+            // Forces every shadow caster to LOD0 while the FORWARD selection is untouched — the
+            // reference an A/B of shadow LOD needs. `--no-lod` is not that reference: it also
+            // disables forward LOD, so the comparison picks up visible-geometry differences. Nor is
+            // a tiny budget: the selector still runs, and a cut whose estimated deviation is 0 is
+            // still eligible.
+            args.debug.shadowLod = false;
+            continue;
+        }
+        if (arg == "--shadow-budget" || arg == "--shadow-ratio")
+        {
+            // SH-03 slice 6's calibration handles, so a sweep is a shell loop rather than a person
+            // dragging a slider and remembering where it was.
+            //
+            // The VALUE is recorded verbatim and validated in the renderer, where a bad one is
+            // TERMINAL. Keeping the default on a malformed value — the discipline --capture-frame
+            // uses — is wrong for a calibration input: a mistyped sweep step would silently
+            // re-measure the default budget and produce a plausible table with one duplicated row.
+            // Presence is recorded even when nothing is consumed, so a valueless flag fails too.
+            const std::string_view value =
+                (i + 1 < argc && argv[i + 1][0] != '\0' && argv[i + 1][0] != '-')
+                    ? std::string_view{argv[++i]}
+                    : std::string_view{};
+            if (arg == "--shadow-budget")
+            {
+                args.debug.shadowLodBudget = value;
+            }
+            else
+            {
+                args.debug.shadowLodCoarsenRatio = value;
+            }
+            continue;
+        }
+        if (arg == "--shadow-focus")
+        {
+            // Which shadow view the diagnostics and the ShadowLod tint should follow, as
+            // `<group>:<slot>` (`cascade:3`, `spot:0`, `point:0:4`). The SLOT is only how the
+            // request is written — it is resolved once at startup into the identity that slot
+            // holds, and the identity is what is kept.
+            //
+            // Unlike --capture, a MISSING value is not inert. The flag records its presence
+            // (engaged optional) even when it consumes nothing, so the renderer can refuse to
+            // start: silently ignoring it would run with the default focus and produce a capture of
+            // cascade 0 that looks exactly like a correct capture of whatever was meant.
+            args.debug.shadowFocus = std::string_view{};
+            if (i + 1 < argc)
+            {
+                const std::string_view value = argv[i + 1];
+                if (!value.empty() && value.front() != '-')
+                {
+                    ++i;
+                    args.debug.shadowFocus = value;
                 }
             }
             continue;

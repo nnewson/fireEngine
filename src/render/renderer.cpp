@@ -3,10 +3,16 @@
 
 #include <algorithm>
 #include <array>
+#include <cassert>
+#include <charconv>
 #include <chrono>
 #include <cmath>
 #include <cstring>
+#include <format>
+#include <limits>
 #include <span>
+#include <stdexcept>
+#include <system_error>
 #include <utility>
 
 #include <fire_engine/core/log.hpp>
@@ -133,13 +139,62 @@ int packLight(LightUBO& lightData, int& slot, const Lighting& light) noexcept
     return packedSlot;
 }
 
-[[nodiscard]]
-Mat4 fitSelfShadowMatrix(const Bounds3& bounds, Vec3 lightDir) noexcept
+// A requested shadow view the set refused. TERMINAL, deliberately: everything the set rejects — a
+// non-finite matrix, an unkeyable identity, a descriptor of the wrong kind — is corrupt render
+// input. Continuing would leave the frame with two answers about whether that view runs (the
+// renderer's counters say yes, the set says the slot is inactive), and whichever one a pass
+// consults decides whether a shadow map is rasterised from an identity matrix.
+//
+// WHICH failure a developer sees is build-dependent, by design. In Dev the set's own assertion
+// fires first, inside the writer, with the offending slot still on the stack — the shortest route
+// to the producer that got it wrong, and this helper is never reached. Only under NDEBUG, where
+// that assertion is compiled out, does the writer return false and this throw run, propagating to
+// main() for the named `Fatal:` message and a non-zero exit. Two reports of one refusal; neither
+// continues.
+[[noreturn]] void rejectedShadowView(std::string_view view)
 {
-    if (!bounds.valid)
+    throw std::runtime_error(
+        std::format("shadow view rejected by the view set ({}) — corrupt render input", view));
+}
+
+// One SH-03 calibration override, validated and reported. The NUMERIC rule lives in
+// `graphics/shadow_diagnostics.hpp` where it is headless-testable; this adds the policy: absent
+// means "use the constant", and anything else unusable is terminal rather than a silent fallback,
+// because a calibration input that quietly became the default yields a sweep row indistinguishable
+// from a real measurement of the value that was asked for.
+[[nodiscard]]
+float calibrationOverride(const std::optional<std::string_view>& text, std::string_view flag,
+                          float fallback, float maximum)
+{
+    if (!text)
     {
-        return Mat4::identity();
+        return fallback;
     }
+    if (const std::optional<float> value = parseShadowCalibrationValue(*text, maximum))
+    {
+        return *value;
+    }
+    throw std::runtime_error(std::format(
+        "{} '{}' is not a usable value — expected a finite number in (0, {}]", flag, *text,
+        std::isfinite(maximum) ? std::format("{}", maximum) : std::string{"inf"}));
+}
+
+// A self-shadow layer's fit: the matrix it rasterises with, and the texel size that fit implies.
+// Both come out of the same `radius`, so the descriptor SH-02 projects error through can never
+// describe a different ortho box than the one being rendered.
+struct SelfShadowFit
+{
+    Mat4 viewProj;
+    float worldPerTexel;
+};
+
+// PRECONDITION: `bounds.valid`. A caster without bounds gets no self-shadow slot at all
+// (assignSelfShadowSlots skips it) — an identity fit over nothing is not a meaningful layer, so
+// there is deliberately no fallback branch here to be quietly relied on.
+[[nodiscard]]
+SelfShadowFit fitSelfShadowMatrix(const Bounds3& bounds, Vec3 lightDir) noexcept
+{
+    assert(bounds.valid && "a self-shadow layer needs real bounds to fit");
 
     const Vec3 center = bounds.center();
     const float halfDiagonal = bounds.extent().magnitude() * 0.5f;
@@ -149,7 +204,8 @@ Mat4 fitSelfShadowMatrix(const Bounds3& bounds, Vec3 lightDir) noexcept
     const Vec3 lightPos = center - lightDir * radius;
     const Mat4 view = Mat4::lookAt(lightPos, center, up);
     const Mat4 proj = Mat4::ortho(-radius, radius, -radius, radius, 0.0f, radius * 2.0f);
-    return proj * view;
+    return SelfShadowFit{proj * view,
+                         (2.0f * radius) / static_cast<float>(kSkinnedSelfShadowMapExtent)};
 }
 
 } // namespace
@@ -181,8 +237,37 @@ Renderer::Renderer(const Window& window, std::string environmentPath, RendererDe
     tunables_.debugView = debug.view;
     tunables_.lodMode = debug.lodMode;
     tunables_.lodEnabled = debug.lod;
+    tunables_.shadowLodEnabled = debug.shadowLod;
+    // A calibration override is validated HERE and refused loudly. `parseCalibrationValue` rejects
+    // a missing, malformed, non-finite or non-positive number; the ratio additionally must not
+    // exceed 1, because the selector treats anything outside (0, 1] as an invalid caster and would
+    // force LOD0 for the entire run — a sweep step that measured nothing while looking like a
+    // measurement.
+    tunables_.shadowLodPixelBudget =
+        calibrationOverride(debug.shadowLodBudget, "--shadow-budget", kShadowLodPixelBudget,
+                            std::numeric_limits<float>::infinity());
+    tunables_.shadowLodCoarsenRatio = calibrationOverride(
+        debug.shadowLodCoarsenRatio, "--shadow-ratio", kShadowLodCoarsenRatio, 1.0f);
     capturePath_ = std::string{debug.capturePath};
     captureFrame_ = static_cast<std::uint64_t>(debug.captureFrame);
+    if (debug.shadowFocus)
+    {
+        // Parsed at STARTUP so a malformed request fails before rendering anything, rather than
+        // producing a run that quietly focuses nothing. Resolving the slot to an identity has to
+        // wait for the first frame's view set (see resolveShadowFocusRequest).
+        //
+        // An ENGAGED but empty value means the flag was given with nothing usable after it. That is
+        // terminal too: continuing would silently focus the default view, and the resulting capture
+        // would be indistinguishable from a correct one.
+        pendingShadowFocus_ = parseShadowViewSlotRequest(*debug.shadowFocus);
+        if (!pendingShadowFocus_)
+        {
+            throw std::runtime_error(
+                std::format("--shadow-focus '{}' is not <group>:<slot> — expected e.g. cascade:3, "
+                            "world-only:0, self:0, spot:1, point:0:4",
+                            *debug.shadowFocus));
+        }
+    }
     if (captureWanted())
     {
         // Fail at STARTUP on an unsupported format rather than at the capture frame — a run that
@@ -306,10 +391,8 @@ void Renderer::updateLightData(Vec3 cameraPosition, Vec3 cameraTarget, float asp
 
     LightUBO lightData{};
     computeShadowCascades(lightData, cameraPosition, cameraTarget, aspect);
-    for (Mat4& m : lightData.selfShadowViewProj)
-    {
-        m = Mat4::identity();
-    }
+    // selfShadowViewProj is NOT cleared here: assignSelfShadowSlots fills every slot from the view
+    // set later this frame (inactive slots come back identity), and that is the only producer.
 
     // Pack lights into the UBO array. The primary directional (CSM source)
     // goes first so the shader can branch on i==0 for the shadow lookup.
@@ -352,6 +435,11 @@ void Renderer::updateLightData(Vec3 cameraPosition, Vec3 cameraTarget, float asp
     }
     lightData.lightCount = slot;
 
+    // Every spot slot is assigned by now, so read the forward shader's lookup back out of the set.
+    // Unassigned slots come back identity — no light indexes them (cone[2] stays -1).
+    const auto spots = spotViewProjArray(shadowViews_);
+    std::ranges::copy(spots, std::begin(lightData.spotViewProj));
+
     writeIblAndDebugParams(lightData);
     lightData_ = lightData;
     // No upload here: assignSelfShadowSlots — which runs later this frame in collectDrawCommands,
@@ -374,7 +462,16 @@ void Renderer::computeShadowCascades(LightUBO& out, Vec3 cameraPosition, Vec3 ca
 
     // Bounding-sphere fit for a single sub-frustum slice. Captures the light
     // basis above, called once per cascade.
-    auto fitCascade = [&](float sliceNear, float sliceFar) -> Mat4
+    //
+    // Returns the matrix AND the descriptor SH-02 selection reasons about, because both fall out of
+    // the same fit: the texel size the cascade snaps to IS `worldPerTexel` below. Recomputing it
+    // anywhere else would make the two drift the moment this fit changes.
+    struct CascadeFit
+    {
+        Mat4 viewProj;
+        float worldPerTexel;
+    };
+    auto fitCascade = [&](float sliceNear, float sliceFar) -> CascadeFit
     {
         const float nearH = tanHalfFov * sliceNear;
         const float nearW = nearH * aspect;
@@ -420,7 +517,7 @@ void Renderer::computeShadowCascades(LightUBO& out, Vec3 cameraPosition, Vec3 ca
         const Mat4 lightView = Mat4::lookAt(lightPos, snappedCentre, lightUpOrtho);
         const Mat4 lightProj = Mat4::ortho(-radius, radius, -radius, radius, 0.0f,
                                            2.0f * radius + 2.0f * kShadowDepthBackExtend);
-        return lightProj * lightView;
+        return CascadeFit{lightProj * lightView, worldPerTexel};
     };
 
     // Log-uniform cascade splits — Practical Split Scheme. Keeps close cascades
@@ -435,22 +532,26 @@ void Renderer::computeShadowCascades(LightUBO& out, Vec3 cameraPosition, Vec3 ca
             kShadowCascadeSplitLambda * logSplit + (1.0f - kShadowCascadeSplitLambda) * linear;
     }
 
-    Mat4 cascadeViewProj[kShadowCascadeCount];
+    // Disengage every view before the first producer writes: an inactive slot must not be readable
+    // as this frame's. This is the ONE reset, and it must stay ahead of every populate below.
+    shadowViews_.reset();
+
     float sliceNear = kCameraNearPlane;
     for (uint32_t i = 0; i < kShadowCascadeCount; ++i)
     {
-        cascadeViewProj[i] = fitCascade(sliceNear, splits[i]);
+        const CascadeFit fit = fitCascade(sliceNear, splits[i]);
+        if (!shadowViews_.setCascade(i, fit.viewProj, ShadowView::orthographic(fit.worldPerTexel)))
+        {
+            rejectedShadowView(std::format("cascade {}", i));
+        }
+        out.cascadeSplits[i] = splits[i];
         sliceNear = splits[i];
     }
 
-    // Reset the shadow matrix array each frame, then write cascade slots.
-    shadowViewProjs_.fill(Mat4::identity());
-    for (uint32_t i = 0; i < kShadowCascadeCount; ++i)
-    {
-        shadowViewProjs_[kShadowCascadeMatrixBase + i] = cascadeViewProj[i];
-        out.cascadeViewProj[i] = cascadeViewProj[i];
-        out.cascadeSplits[i] = splits[i];
-    }
+    // Derived, not copied alongside: the forward shader's cascade lookup reads back out of the set,
+    // so it cannot disagree with what the shadow pass rasterises.
+    const auto cascades = cascadeViewProjArray(shadowViews_);
+    std::ranges::copy(cascades, std::begin(out.cascadeViewProj));
 }
 
 void Renderer::assignSpotShadow(LightUBO& out, int packedSlot, const Lighting& light)
@@ -459,7 +560,7 @@ void Renderer::assignSpotShadow(LightUBO& out, int packedSlot, const Lighting& l
     {
         return;
     }
-    const int shadowIndex = activeSpotCasters_++;
+    const int shadowIndex = activeSpotCasters_;
     const float fov =
         std::max(2.0f * std::acos(std::clamp(light.outerConeCos, -1.0f, 1.0f)), 0.01f);
     const float far = light.range > 0.0f ? light.range : kPointShadowInfiniteRangeFallback;
@@ -468,8 +569,19 @@ void Renderer::assignSpotShadow(LightUBO& out, int packedSlot, const Lighting& l
     const Vec3 up = stableUpForForward(dir);
     const Mat4 view = Mat4::lookAt(light.worldPosition, light.worldPosition + dir, up);
     const Mat4 viewProj = proj * view;
-    shadowViewProjs_[kShadowSpotMatrixBase + shadowIndex] = viewProj;
-    out.spotViewProj[shadowIndex] = viewProj;
+    // Matrix and descriptor from the SAME intermediates — the fov, direction, extent and near plane
+    // the projection above was built from. The view is stored BEFORE the caster is counted: a
+    // rejected view that had already advanced activeSpotCasters_ would leave the pass driven by a
+    // count the set does not back.
+    if (!shadowViews_.setSpot(static_cast<std::size_t>(shadowIndex), light.nodeId, viewProj,
+                              ShadowView::perspective(light.worldPosition, dir, fov,
+                                                      kSpotShadowMapExtent, kPointShadowNearPlane)))
+    {
+        rejectedShadowView(std::format("spot slot {}", shadowIndex));
+    }
+    ++activeSpotCasters_;
+    // out.spotViewProj is filled from the set once every light is packed (updateLightData), not
+    // here: one producer, one place it is read back out.
     out.lights[packedSlot].cone[2] = static_cast<float>(shadowIndex);
 }
 
@@ -479,17 +591,27 @@ void Renderer::assignPointShadow(LightUBO& out, int packedSlot, const Lighting& 
     {
         return;
     }
-    const int shadowIndex = activePointCasters_++;
+    const int shadowIndex = activePointCasters_;
     const float far = light.range > 0.0f ? light.range : kPointShadowInfiniteRangeFallback;
     const Mat4 proj = Mat4::perspective(0.5f * pi, 1.0f, kPointShadowNearPlane, far);
-    for (std::size_t face = 0; face < kCubemapFaceCount; ++face)
+    // ALL SIX faces, before any of the bookkeeping below: a point light with five accepted faces is
+    // not a usable caster, so the light is only counted once the whole cube is in the set.
+    for (std::uint8_t face = 0; face < kCubeFaceCount; ++face)
     {
+        // Each face is its OWN view — same light, same fov, different forward — so each gets its
+        // own descriptor built from the very direction its matrix looks down.
         const Mat4 view =
             Mat4::lookAt(light.worldPosition, light.worldPosition + kCubemapFaceForward[face],
                          kCubemapFaceUp[face]);
-        shadowViewProjs_[kShadowPointMatrixBase + kCubemapFaceCount * shadowIndex + face] =
-            proj * view;
+        if (!shadowViews_.setPoint(
+                static_cast<std::size_t>(shadowIndex), face, light.nodeId, proj * view,
+                ShadowView::perspective(light.worldPosition, kCubemapFaceForward[face], 0.5f * pi,
+                                        kPointShadowMapExtent, kPointShadowNearPlane)))
+        {
+            rejectedShadowView(std::format("point slot {} face {}", shadowIndex, face));
+        }
     }
+    ++activePointCasters_;
     out.lights[packedSlot].cone[2] = static_cast<float>(shadowIndex);
     // Stash the effective range used for shadow projection so the shadow-pass
     // push-constant and the main-shader compare value agree.
@@ -541,11 +663,23 @@ void Renderer::assignSelfShadowSlots(std::span<DrawCommand> drawCommands)
         {
             break;
         }
+        // The set first, the slot record second: the scratch map's size is what tells the pass how
+        // many self-shadow slots to render, so recording a slot the set rejected would rasterise a
+        // layer with no view behind it.
+        const SelfShadowFit fit = fitSelfShadowMatrix(dc.shadowBounds, directionalLightDir_);
+        if (!shadowViews_.setSelf(static_cast<std::size_t>(nextSlot), dc.objectId, fit.viewProj,
+                                  ShadowView::orthographic(fit.worldPerTexel)))
+        {
+            rejectedShadowView(std::format("self-shadow slot {}", nextSlot));
+        }
         selfShadowSlotsScratch_.emplace(dc.objectId, nextSlot);
-        lightData_.selfShadowViewProj[nextSlot] =
-            fitSelfShadowMatrix(dc.shadowBounds, directionalLightDir_);
         ++nextSlot;
     }
+
+    // Derived from the set, so the matrix the forward shader samples with, the one the layer
+    // rasterises with, and the one stamped on the draw are one value.
+    const auto selfMatrices = selfShadowViewProjArray(shadowViews_);
+    std::ranges::copy(selfMatrices, std::begin(lightData_.selfShadowViewProj));
 
     for (auto& dc : drawCommands)
     {
@@ -557,7 +691,7 @@ void Renderer::assignSelfShadowSlots(std::span<DrawCommand> drawCommands)
             continue;
         }
         dc.selfShadowSlot = it->second;
-        dc.selfShadowViewProj = lightData_.selfShadowViewProj[it->second];
+        dc.selfShadowViewProj = selfMatrices[static_cast<std::size_t>(it->second)];
     }
 
     // The single authoritative per-frame LightUBO upload (updateLightData deliberately does not
@@ -577,8 +711,8 @@ void Renderer::clearDrawBuckets(DrawBuckets& buckets) noexcept
     buckets.anySkinned = false;
 }
 
-void Renderer::buildDrawBuckets(std::span<const DrawCommand> drawCommands, DrawBuckets& buckets,
-                                ShadowFrameStats& shadowStats) const
+void Renderer::buildDrawBuckets(std::span<const DrawCommand> drawCommands,
+                                DrawBuckets& buckets) const
 {
     clearDrawBuckets(buckets);
     buckets.shadow.reserve(drawCommands.size());
@@ -598,13 +732,10 @@ void Renderer::buildDrawBuckets(std::span<const DrawCommand> drawCommands, DrawB
         buckets.anySkinned = buckets.anySkinned || dc.hasSkin;
         if (dc.pipeline == shadows_.pipelineHandle())
         {
-            // ONCE per original command, before any bucket insertion: the split below is
-            // deliberately NOT exclusive (every caster enters `shadow`, and additionally either
-            // `worldShadow` or `selfShadow`), and each bucket is then replayed across cascades and
-            // faces. Counting the reason anywhere downstream would multiply one decision by the
-            // number of buckets and views it feeds. The per-view accounting below is the opposite:
-            // it counts every replay, because each replay is real raster work.
-            shadowStats.addLodReason(dc.shadowLodReason);
+            // SH-03: no reason is counted here any more. A command no longer arrives with a
+            // level — it carries an unresolved caster, and each shadow view resolves its own — so
+            // there is nothing to tally at bucket time. Reasons are recorded per view, at the
+            // resolution that produced them (ShadowViewStats::lodReasons).
             buckets.shadow.push_back(dc);
             if (!dc.hasSkin)
             {
@@ -836,6 +967,10 @@ const Renderer::DrawBuckets& Renderer::collectDrawCommands(RenderableScene& scen
 
     const auto extent = swapchain_.extent();
     const AlphaPipelines pipelines{forwardOpaqueHandle_, forwardBlendHandle_};
+    // The shader-facing matrix array, derived from the view set rather than kept beside it.
+    // `FrameInfo` holds its own copy (the field is an array, not a span), and the shadow pass
+    // derives another from the same set when it records — the set stays the only stored authority.
+    const auto shadowMatrices = shadowMatrixArray(shadowViews_);
     const FrameInfo frame{.currentFrame = currentFrame_,
                           .viewportWidth = extent.width,
                           .viewportHeight = extent.height,
@@ -849,38 +984,44 @@ const Renderer::DrawBuckets& Renderer::collectDrawCommands(RenderableScene& scen
                           .pipelines = pipelines,
                           .lodEnabled = tunables_.lodEnabled,
                           .lodPixelErrorBudget = tunables_.lodPixelErrorBudget,
+                          .shadowLodEnabled = tunables_.shadowLodEnabled,
                           .lodMode = tunables_.lodMode,
                           .vdpmGpuBackend = vdpmGpuActive,
                           .vdpmRequestSink = vdpmGpuActive ? &vdpmRequestScratch_ : nullptr,
                           .shadowPipeline = shadows_.pipelineHandle(),
-                          .shadowViewProjs = shadowViewProjs_};
+                          .shadowViewProjs = shadowMatrices};
 
-    // Coarse pre-cull frustums: the camera plus every ACTIVE shadow caster. The union is a superset
+    // Coarse pre-cull frustums: the camera plus every ACTIVE shadow view. The union is a superset
     // of what buildDrawBuckets / shadows_ keep per pass, so a node dropped by all of them is never
-    // wanted downstream. Only the active slots are pushed — the cascades (always all present) plus
-    // the assigned spot / point-face slots (their counts were fixed in updateLightData, above).
-    // Inactive slots hold identity matrices, whose frustum is a small NDC-cube box near the origin
-    // that no pass renders into; skipping them keeps the union a superset AND tightens the cull
-    // (they only ever spuriously added visibility). When culling is disabled we pass an empty span
-    // and the scene draws everything.
+    // wanted downstream. Asking the view set which slots are active is what keeps that true —
+    // an inactive slot's identity matrix would contribute a small NDC-cube box near the origin that
+    // no pass renders into, only ever spuriously adding visibility. Every physical slot is walked
+    // and the inactive ones skipped, because active slots are NOT a dense prefix.
+    //
+    // World-only is omitted deliberately: it rasterises with its cascade's matrix, already pushed.
+    // Self layers are not populated yet (assignSelfShadowSlots needs the draws) and are per-caster
+    // boxes around geometry that survives the cascade frustums regardless. When culling is disabled
+    // we pass an empty span and the scene draws everything.
     frustumScratch_.clear();
     if (tunables_.cullingEnabled)
     {
-        const auto pushRange = [&](int base, int count)
+        const auto pushGroup = [&](ShadowViewGroup group)
         {
-            for (int i = 0; i < count; ++i)
+            for (std::size_t slot = 0; slot < shadowViewSlotCount(group); ++slot)
             {
-                const auto slot = static_cast<std::size_t>(base) + static_cast<std::size_t>(i);
-                frustumScratch_.push_back(Frustum::fromViewProj(shadowViewProjs_[slot]));
+                if (const ShadowRenderView* view = shadowViews_.find(group, slot))
+                {
+                    frustumScratch_.push_back(Frustum::fromViewProj(view->viewProj()));
+                }
             }
         };
-        frustumScratch_.reserve(1 + static_cast<std::size_t>(kShadowCascadeCount) +
-                                static_cast<std::size_t>(activeSpotCasters_) +
-                                6 * static_cast<std::size_t>(activePointCasters_));
+        frustumScratch_.reserve(1 + shadowViews_.activeCount(ShadowViewGroup::Cascade) +
+                                shadowViews_.activeCount(ShadowViewGroup::Spot) +
+                                shadowViews_.activeCount(ShadowViewGroup::Point));
         frustumScratch_.push_back(Frustum::fromViewProj(currentViewProj_));
-        pushRange(kShadowCascadeMatrixBase, static_cast<int>(kShadowCascadeCount));
-        pushRange(kShadowSpotMatrixBase, activeSpotCasters_);
-        pushRange(kShadowPointMatrixBase, 6 * activePointCasters_);
+        pushGroup(ShadowViewGroup::Cascade);
+        pushGroup(ShadowViewGroup::Spot);
+        pushGroup(ShadowViewGroup::Point);
     }
 
     const CullStats cull = scene.buildDrawCommands(frame, frustumScratch_, drawCommandScratch_);
@@ -900,9 +1041,28 @@ const Renderer::DrawBuckets& Renderer::collectDrawCommands(RenderableScene& scen
     assignSelfShadowSlots(drawCommandScratch_);
     // Reset this frame's slot before anything writes into it: the ring slot still holds the
     // counters from `kMaxFramesInFlight` frames ago, which have already been published.
-    ShadowFrameStats& shadowStats = shadowStatsRing_[currentFrame_];
-    shadowStats.reset();
-    buildDrawBuckets(drawCommandScratch_, drawBucketsScratch_, shadowStats);
+    shadowStatsRing_[currentFrame_].reset();
+    buildDrawBuckets(drawCommandScratch_, drawBucketsScratch_);
+
+    // The world-only CSM runs iff a skinned draw exists to sample it, which is only known once the
+    // buckets are built — so it is enabled here, last. Enabling stores no view: the world-only slot
+    // ALIASES its cascade, so the two passes must make the same choice for a rigid caster whatever
+    // order the fits happen in.
+    //
+    // `anySkinned` is only the REQUEST. Whether the pass runs is the set's answer, read back in
+    // recordShadowPass. A refused activation means the cascade it aliases is absent — a mandatory
+    // view missing, which the cascade writer above would already have failed on, so reaching here
+    // is a contradiction rather than a degraded frame.
+    if (drawBucketsScratch_.anySkinned)
+    {
+        for (std::uint32_t cascade = 0; cascade < kShadowCascadeCount; ++cascade)
+        {
+            if (!shadowViews_.enableWorldOnly(cascade))
+            {
+                rejectedShadowView(std::format("world-only cascade {}", cascade));
+            }
+        }
+    }
 
     // GPU-driven VDPM (Stage B5b): distil the request sink down to the fronts that are actually
     // camera-visible this frame, and (B5b-2) resolve each visible forward draw's buffers to the GPU
@@ -964,13 +1124,96 @@ void Renderer::recordShadowPass(vk::CommandBuffer cmd, const DrawBuckets& bucket
     std::span<const PointShadowCaster> pointCasterSpan{
         pointCasters_.data(), static_cast<std::size_t>(activePointCasters_)};
     // Self-shadow slots are assigned densely (assignSelfShadowSlots), so the
-    // scratch map's size is the number of slots the pass must render; the world
-    // CSM is wanted only when a skinned draw exists to sample it.
+    // scratch map's size is the number of slots the pass must render.
+    // THE SET decides whether the world-only CSM runs, not `buckets.anySkinned` — that was the
+    // request, made before the views existed. Every world-only slot must be active: the pass loops
+    // all cascades, so a partially enabled set would rasterise cascades the set reports as
+    // inactive. (`anySkinned` false leaves them all inactive, which is the same answer by a
+    // shorter route.)
+    const bool renderWorldShadow = shadowViews_.activeCount(ShadowViewGroup::WorldOnly) ==
+                                   shadowViewSlotCount(ShadowViewGroup::WorldOnly);
     shadows_.recordPass(cmd, buckets.shadow, buckets.worldShadow, buckets.selfShadow,
                         static_cast<int>(selfShadowSlotsScratch_.size()), activeSpotCasters_,
-                        pointCasterSpan, shadowViewProjs_, tunables_.cullingEnabled,
-                        buckets.anySkinned, shadowStatsRing_[currentFrame_], profiler_,
-                        currentFrame_);
+                        pointCasterSpan, shadowViews_, shadowLodResolver_,
+                        tunables_.shadowLodPixelBudget,
+                        ShadowLodHysteresis{.coarsenRatio = tunables_.shadowLodCoarsenRatio},
+                        tunables_.cullingEnabled, renderWorldShadow,
+                        shadowStatsRing_[currentFrame_], profiler_, currentFrame_);
+}
+
+void Renderer::resolveShadowFocusRequest()
+{
+    if (!pendingShadowFocus_)
+    {
+        return;
+    }
+    const ShadowViewSlotRequest request = *pendingShadowFocus_;
+    // Cleared FIRST, whatever happens next: honoured once is the contract, and a request that
+    // survived a failure would re-throw every frame, burying the first report.
+    pendingShadowFocus_.reset();
+
+    const ShadowRenderView* view = shadowViews_.find(request.group, request.slot);
+    if (view == nullptr)
+    {
+        // By name, not by falling back. A capture of cascade 0 when cascade 3 was requested looks
+        // entirely correct and answers the wrong question — the failure mode this whole flag exists
+        // to avoid in slice 6's calibration sweeps.
+        throw std::runtime_error(
+            std::format("--shadow-focus named {} slot {}, which is not active in this scene",
+                        toString(request.group), request.slot));
+    }
+    // The IDENTITY is what is stored; the slot was only ever how the request was written.
+    tunables_.shadowViewFocus =
+        ShadowViewFocus{.perView = true, .group = request.group, .view = view->logicalId()};
+    log::info(log::category::render, "--shadow-focus resolved {} slot {} to its logical view",
+              toString(request.group), request.slot);
+}
+
+void Renderer::applyShadowLodTint(DrawBuckets& buckets) const
+{
+    if (tunables_.debugView != DebugView::ShadowLod)
+    {
+        return;
+    }
+    // The tint needs ONE view, and the panel's focus is it. With nothing focused it falls back to
+    // the first cascade rather than tinting everything grey: the primary CSM is the view a reader
+    // means by default, and an unexplained grey screen teaches nothing. Which view is being tinted
+    // is named in the overlay beside the debug-view selector, so the fallback is never silent.
+    const ShadowViewFocus& focus = tunables_.shadowViewFocus;
+    const ShadowLogicalViewId tintView =
+        focus.addressable() ? focus.view : ShadowLogicalViewId::cascade(0);
+    // The GROUP matters as much as the identity here. A cascade and its world-only twin share one
+    // logical view and therefore one cached resolution, but they draw different casters —
+    // world-only exists to exclude the skinned ones — and cascades record first. Tinting from the
+    // shared entry alone would colour a skinned caster under a focused world-only row using the
+    // full cascade's decision, for a pass that never offered it.
+    const ShadowViewGroup tintGroup = focus.addressable() ? focus.group : ShadowViewGroup::Cascade;
+
+    for (std::vector<DrawCommand>* bucket :
+         {&buckets.opaque, &buckets.blend, &buckets.transmissive})
+    {
+        for (DrawCommand& dc : *bucket)
+        {
+            // A mesh that casts no shadow carries no caster identity, so it keeps the sentinel and
+            // tints grey — level 0 would read as "full detail chosen" in the very view built to
+            // find over-detailed casters.
+            const ShadowLodStateKey key{dc.shadowCasterId, dc.shadowGeneration, tintView};
+            // ONE question, asked of the family being tinted: what did THIS pass draw for this
+            // caster. Not "what level exists" — a cascade and its world-only twin share a decision
+            // but not their caster sets, so the level alone would attribute one pass's choice to
+            // another. And it is the resolution the pass actually drew from, never a fresh
+            // selection: a second selection sees different history state, and the picture would
+            // contradict the geometry it claims to describe.
+            if (const ResolvedShadowDraw* resolved =
+                    shadowLodResolver_.drawnResolution(tintGroup, key))
+            {
+                dc.shadowLodLevel = static_cast<std::uint32_t>(resolved->level);
+            }
+            // No else: a caster the focused view culled (or a view that did not run) has no level
+            // FROM THAT VIEW, and grey says exactly that. Showing another view's level would be the
+            // camera-derived defect in a new costume.
+        }
+    }
 }
 
 void Renderer::recordTransmissionPass(vk::CommandBuffer cmd, const DrawBuckets& buckets)
@@ -1077,6 +1320,9 @@ void Renderer::drawFrame(Window& display, RenderableScene& scene, float dt)
     }
     currentViewProj_ = unjitteredProj * view_;
 
+    // Drops last frame's resolution cache, and any levels staged by a frame that never reached
+    // submit. Must run before the shadow pass resolves anything.
+    shadowLodResolver_.beginFrame();
     updateFrameLighting(scene, cameraPosition, cameraTarget);
     const DrawBuckets& buckets = collectDrawCommands(scene, cameraPosition, cameraTarget);
 
@@ -1249,6 +1495,13 @@ void Renderer::drawFrame(Window& display, RenderableScene& scene, float dt)
     // would then have to be excluded from the frame total to avoid double-counting).
     recordShadowPass(cmd, buckets);
 
+    // The levels the shadow views just chose are the tint's subject matter, and the forward draws
+    // that carry them into the shader have not been recorded yet — this is the one window where
+    // both are true. The pending --shadow-focus is honoured first, against the fully populated view
+    // set, so the tint below already follows the requested view on the very first frame.
+    resolveShadowFocusRequest();
+    applyShadowLodTint(drawBucketsScratch_);
+
     // GPU-driven VDPM (Stage B5b-2): the VDPM compute (recorded above, after collection) wrote each
     // visible front's emitted index stream (scatter) + indirect command (finalize). The depth
     // prepass is the FIRST consumer (index assembly + drawIndexedIndirect), so order the compute
@@ -1330,6 +1583,23 @@ void Renderer::drawFrame(Window& display, RenderableScene& scene, float dt)
 
     cmd.end();
     submitAndPresent(display, cmd, *imageIndex);
+    // IMMEDIATELY after the submit, and before anything that can fail. The contract is "the GPU has
+    // the work", not "the rest of the frame went well": the shadow-LOD dead band (SH-03) describes
+    // geometry that was submitted, and `writeCapture()` below throws on an I/O failure, which would
+    // otherwise discard a frame's worth of legitimately earned hysteresis. Levels are STAGED until
+    // this line, so a frame abandoned before it (a lost swapchain, an early return) leaves none
+    // behind — the next beginFrame drops them.
+    shadowLodResolver_.commitFrame();
+    // Published with THIS frame's counters, in the same ring slot, so the churn a reader sees sits
+    // beside the draws and levels it describes rather than beside a completed frame's.
+    const ShadowLodTransitions movement = shadowLodResolver_.lastCommitMovement();
+    shadowStatsRing_[currentFrame_].lodMovement = movement;
+    // Per-frame, at DEBUG: the panel shows one frame, but calibrating the dead band means counting
+    // level changes over a whole animated loop — a still frame cannot distinguish "settled" from
+    // "caught between flickers". `FE_LOG=render:debug` turns the loop into a series to aggregate.
+    log::debug(log::category::render,
+               "shadow-lod movement transitions={} reversed={} held={} first={}",
+               movement.transitions, movement.reversed, movement.held, movement.firstSeen);
     if (capturingThisFrame)
     {
         writeCapture();

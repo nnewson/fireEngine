@@ -95,6 +95,10 @@ public:
     }
 
 private:
+    // Private: a ShadowView is only ever produced by a factory that normalises and validates. An
+    // INVALID view is still produced that way — `perspective()` given a zero-length forward returns
+    // one that keeps its Perspective kind — so "invalid" never means "default-constructed", and
+    // nothing needs a default to represent it.
     ShadowView() = default;
 
     ShadowViewKind kind_{ShadowViewKind::Orthographic};
@@ -190,6 +194,17 @@ struct ShadowLodSelection
 // exactly that plumbing bug.
 [[nodiscard]] ShadowLodSelection selectShadowLod(std::span<const GeometryLod> lods,
                                                  const ShadowView& view, const Mat4& model,
+                                                 const Bounds3& worldBounds, float budgetTexels,
+                                                 ShadowLodHysteresis hysteresis,
+                                                 std::size_t previousLevel) noexcept;
+
+// The same selection with the world scale supplied directly, for a caller that already reduced the
+// transform to its conservative sigma_max — SH-03's unresolved shadow command carries the scalar
+// rather than the matrix, because the resolution happens once per (caster, view) while the model
+// matrix is a property of the caster alone. The overload above computes the same scalar and
+// delegates here, so the two cannot select differently.
+[[nodiscard]] ShadowLodSelection selectShadowLod(std::span<const GeometryLod> lods,
+                                                 const ShadowView& view, float worldScale,
                                                  const Bounds3& worldBounds, float budgetTexels,
                                                  ShadowLodHysteresis hysteresis,
                                                  std::size_t previousLevel) noexcept;

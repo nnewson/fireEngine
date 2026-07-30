@@ -24,7 +24,7 @@ the open items so they can't fork:
 |---|---|---|
 | [`codereview.md`](codereview.md) | Rolling **tiered static review**, following the [`review-order.md`](review-order.md) tiers (Tier 0 math, 18 Jul 2026; Tier 1 handles/limits/tunables, 19 Jul 2026). Further tiers expected. | **All open** — arc 3 below |
 | [`architecturalreview.md`](architecturalreview.md) | One-shot **architectural review** (25 Jul 2026) of rendering, shadows/AA, physics, simplifier/VDPM. Audited 26 Jul so every finding now maps to a §6 row or an explicit "informational" tag. **Retire it once reviewed** — arc 2 below is self-contained. | 8 of 19 landed; the rest is arc 2 |
-| [`shadowplans.md`](shadowplans.md) | The **shadow-LOD improvement plan** (SH-01…SH-09) spun out of the architectural review's §2. | All open — arc 1 |
+| [`shadowplans.md`](shadowplans.md) | The **shadow-LOD improvement plan** (SH-01…SH-09) spun out of the architectural review's §2. | SH-01 + SH-02 landed, SH-03 in progress; SH-04…SH-09 open — arc 1 |
 
 Suggested order below — not binding. One branch per item, off local `main`.
 
@@ -38,11 +38,11 @@ correctness work; milestone 3 is evidence-gated. Detail, contracts, and verifica
 the plan; the priority order is its § Suggested priority.
 
 **Milestone 0 — evidence before policy**
-- **SH-01** — shadow diagnostics (per-group GPU time, draw/triangle counts, per-view LOD histograms,
-  LOD-selection reasons, a shadow-LOD debug view) + a purpose-built owned glTF acceptance scene,
-  recorded in [`acceptance-testing.md`](acceptance-testing.md). The **projected shadow-texel
-  deviation** moved to SH-02, which defines the metric: SH-01 can only report the level that was
-  chosen and what it cost, not how wrong it was.
+- ~~**SH-01** — shadow diagnostics + a purpose-built owned acceptance scene~~ ✅ **landed**
+  (`shadow-lod-diagnostics`): per-group GPU time, per-view candidate/drawn counts, LOD histograms
+  and selection reasons, the `ShadowLod` debug view, the Shadows panel, `assets/shadow_lod/`, and
+  scriptable `--capture`. Runbook in [`acceptance-testing.md`](acceptance-testing.md); its captures
+  are the measurement baseline SH-03 is read against.
 
 **Milestone 1 — correct discrete shadow LOD**
 - ~~**SH-02** — the pure, Vulkan-free shadow-view projection model~~ ✅ **landed**
@@ -53,16 +53,24 @@ the plan; the priority order is its § Suggested priority.
   bound** — see [`shadowplans.md`](shadowplans.md) § SH-02 for why, and for the one-sided limitation
   it carries. No runtime behaviour changed; SH-03 threads it through.
 - **SH-03** — thread per-shadow-view discrete LOD through the renderer (the requested architectural
-  fix: one caster may select different levels for different shadow views). Also owns the tuning
-  SH-02 deliberately refused to guess: `kShadowLodPixelBudget` + the coarsening ratio in
-  `render/constants.hpp`, threaded explicitly into the pure selector; retiring `kShadowLodBias`; and
-  calibrating both against SH-01's captures and diagnostics.
+  fix: one caster may select different levels for different shadow views). Slices 1–3 have landed —
+  identity, the per-frame view set, and the unresolved command seam with per-view resolution, which
+  also brought forward per-view diagnostic reasons and moved the tuning into
+  `render/constants.hpp` (`kShadowLodPixelBudget` + `kShadowLodCoarsenRatio`, `kShadowLodBias`
+  retired), plus per-view diagnostics with a focused-view reason breakdown (slice 4), a ShadowLod
+  tint driven by that focused view (slice 5, with `--shadow-focus` for scripted captures), and the
+  calibration (slice 6: budget 1 texel, no dead band, both measured against a stated threshold,
+  CSM-only — see
+  [`shadowplans.md`](shadowplans.md) § SH-03).
 - **SH-04** — deformation / proxy policy (skinned, morphed, cloth: no invalid error claims, explicit
   conservative full-detail fallback).
 
 **Milestone 2 — shadow silhouette correctness**
 - **SH-05** — material-aware casters (alpha-mask cutout, double-sided sheets).
-- **SH-06** — cascade caster fit (remove fixed-depth clipping, align candidate sets).
+- **SH-06** — cascade caster fit (remove fixed-depth clipping, align candidate sets). **Has a
+  reproduction**: on `ShadowLodMotionDemo` the moving sphere loses the top third of its cast shadow
+  as it passes the detail cluster, with shadow LOD off — see [`shadowplans.md`](shadowplans.md)
+  § SH-06 for the capture command.
 - **SH-07** — scale-derived bias & filtering tied to each map's actual texel footprint.
 
 **Milestone 3 — only if measured**

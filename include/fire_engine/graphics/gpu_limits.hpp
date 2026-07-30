@@ -41,6 +41,12 @@ inline constexpr uint32_t kShadowCascadeCount = 4;
 inline constexpr int kMaxSpotShadowCasters = 4;
 inline constexpr int kMaxPointShadowCasters = 4;
 
+// Faces of a cube map — ONE authority, because this value participates in four separate things:
+// logical-view key validation, shadow matrix indexing, image layer indexing, and the flat
+// point-view slot arithmetic. Two definitions drifting apart would corrupt all of them at once,
+// and quietly: every index would still be in range, just pointing at the wrong face.
+inline constexpr std::uint32_t kCubeFaceCount = 6;
+
 // Shadow vertex shader projects each vertex into light-space using one of the
 // ShadowUBO::lightViewProj matrices, picked via ShadowPushConstants::matrixIndex.
 //   [0..3]   directional cascades 0..3
@@ -50,7 +56,8 @@ inline constexpr int kMaxPointShadowCasters = 4;
 inline constexpr int kShadowCascadeMatrixBase = 0;
 inline constexpr int kShadowSpotMatrixBase = 4;
 inline constexpr int kShadowPointMatrixBase = kShadowSpotMatrixBase + kMaxSpotShadowCasters;
-inline constexpr int kShadowTotalMatrixCount = kShadowPointMatrixBase + 6 * kMaxPointShadowCasters;
+inline constexpr int kShadowTotalMatrixCount =
+    kShadowPointMatrixBase + static_cast<int>(kCubeFaceCount) * kMaxPointShadowCasters;
 
 // Bindless material textures: capacity of the global combined-image-sampler
 // array (forward set 2). Indexed directly by TextureHandle value, so it caps the

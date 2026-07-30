@@ -1,7 +1,22 @@
 #include <fire_engine/graphics/frame_capture.hpp>
 
+// stb is compiled INTO this translation unit, and since the vcpkg include tree is now a `-I` path
+// (it has to precede /usr/local/include — see the note in CMakeLists.txt) its warnings are no
+// longer suppressed by -isystem. stb's `= { 0 }` aggregate initialisers are idiomatic C and not
+// ours to fix, so the one warning they raise is silenced here, at the include, rather than by
+// weakening the flag for our own code.
 #define STB_IMAGE_WRITE_IMPLEMENTATION
+#if defined(__clang__) || defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmissing-field-initializers"
+// stb's HDR writer uses sprintf into a fixed buffer. We never call it (only PNG), but the
+// implementation still compiles, and macOS marks sprintf deprecated.
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#endif
 #include <stb_image_write.h>
+#if defined(__clang__) || defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
 
 namespace fire_engine
 {

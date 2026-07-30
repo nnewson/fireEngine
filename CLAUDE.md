@@ -75,6 +75,26 @@ Assets copied via `cmake/copy_assets.cmake`.
 
 vcpkg manifest (`vcpkg.json`; versions from the default-registry baseline in `vcpkg-configuration.json`): `vulkan-headers`, `vulkan-memory-allocator`, `shaderc` (provides the `glslc` tool under `<vcpkg-installed>/<triplet>/tools/shaderc`), `catch2`, `stb`, `fastgltf`, `ktx`, `imgui[glfw-binding,vulkan-binding]`. The Vulkan **loader** and `glfw3` arrive transitively, so Vulkan + GLFW + the shader compiler all build from vcpkg — **no system Vulkan SDK / GLFW / glslang-tools**. System requirement is just a C++23 toolchain + Ninja; a Vulkan ICD (MoltenVK on macOS) is needed only at *runtime* to render, not to build or run the headless tests. `fireengine` links Vulkan/GLFW directly; `cmake/fireengine_imgui.cmake` wraps vcpkg's ImGui archive without its transitive Vulkan/GLFW link interface to avoid duplicate static-library warnings.
 
+**Pinned headers must beat `/usr/local/include`, and `-isystem` cannot do it.** Clang searches
+`/usr/local/include` ahead of every `-isystem` path, which is where CMake puts an imported target's
+includes. Install a Vulkan SDK there and our own translation units compile against *its* vulkan-hpp
+while anything resolved relative to a vcpkg header (`vulkan_raii.hpp` including its sibling
+`vulkan.hpp`) still gets vcpkg's — two vulkan-hpp versions in one binary, and the first RAII call
+aborts on `m_dispatcher->getVkHeaderVersion() == VK_HEADER_VERSION` with no bad line of C++ behind
+it. This actually happened when SDK 1.4.357 landed beside the pinned 1.4.335. The top-level
+`CMakeLists.txt` therefore sets `CMAKE_NO_SYSTEM_FROM_IMPORTED` and adds the vcpkg include dir with
+`include_directories(BEFORE)`, so dependency headers arrive as `-I` and the manifest's versions win.
+The cost is that third-party headers are no longer warning-suppressed: silence a finding **at the
+include site** with a narrow `#pragma GCC diagnostic ignored` and a reason (see
+`src/graphics/frame_capture.cpp`), never by weakening a flag for our own code.
+
+**Upgrade the vcpkg baseline after each major item lands**, not mid-arc. The baseline in
+`vcpkg-configuration.json` pins every dependency version, so it only moves when someone moves it —
+and a stale pin quietly drifts from the SDK on the machine (it sat on a Feb 2026 commit carrying
+`vulkan-headers 1.4.335.0` while the installed SDK reached 1.4.357). Bumping it is its own branch
+with its own verification: full rebuild, `tests-full` on both platforms, and the render smoke, since
+a loader/ICD change can alter device capabilities.
+
 **Toolchain: Apple Clang** (`/usr/bin/clang++`, set in `CMakePresets.json`). The vcpkg toolchain inherits this compiler, so all ports build from the manifest. (The project previously used Homebrew g++-15, which can't parse the Apple SDK framework headers — that broke the vcpkg builds of gtest/glfw3/imgui and forced classic-mode global installs + a vendored imgui backend; switching to Clang removed all of that.) Note `clang++` on `PATH` may be Homebrew clang — the preset pins `/usr/bin/clang++` for Apple's.
 
 ## Layout

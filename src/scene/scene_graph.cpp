@@ -16,7 +16,7 @@ void gatherLightsRecursive(const Node& node, std::vector<Lighting>& out)
 {
     if (const auto* light = node.componentAs<Light>())
     {
-        out.push_back(Light::toLighting(*light, node.composedWorld()));
+        out.push_back(Light::toLighting(*light, node.composedWorld(), node.id()));
     }
     for (const auto& child : node.children())
     {

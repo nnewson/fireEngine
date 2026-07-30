@@ -5,6 +5,7 @@
 #include <fire_engine/graphics/bounds.hpp>
 #include <fire_engine/graphics/gpu_handle.hpp>
 #include <fire_engine/graphics/shadow_diagnostics.hpp>
+#include <fire_engine/graphics/shadow_geometry_request.hpp>
 #include <fire_engine/math/mat4.hpp>
 
 namespace fire_engine
@@ -90,25 +91,33 @@ struct DrawCommand
     int selfShadowSlot{-1};
     // Index into the global bindless materials[] SSBO for this draw's material.
     uint32_t materialIndex{0};
-    // Selected discrete LOD level for this draw (0 = full mesh). Used by the LOD debug tint and, on
-    // a shadow command, by the SH-01 per-view LOD histogram. A shadow command is COPIED from its
-    // forward command, so it must OVERWRITE this from its own selection — inheriting the forward
-    // level would report the wrong mesh entirely (and in VDPM mode a spurious 0).
-    uint32_t lodLevel{0};
-    // Why `lodLevel` is what it is — recorded at the decision, never reconstructed from the level
-    // (level 0 deliberately selected and level 0 forced are different facts). Shadow commands only;
-    // accumulated ONCE per command where the bucket is built, not per view it is replayed into.
+    // Selected discrete LOD level for this FORWARD draw (0 = full mesh), for the LOD debug tint.
     //
-    // Defaults to the `Count` SENTINEL, not a real reason: on a forward command (the common case)
-    // any reason would be fiction, and a future shadow-construction path that forgets to assign one
-    // trips `addLodReason`'s assert instead of quietly manufacturing valid-looking evidence. The
-    // shadow branch's three cases are exhaustive, so a real shadow command always overwrites it.
-    ShadowLodReason shadowLodReason{ShadowLodReason::Count};
-    // The level this mesh's SHADOW draw selected, mirrored onto the FORWARD command so the
-    // ShadowLod debug view can tint a shaded surface by the geometry its shadow used — shadow draws
-    // are depth-only and never reach a fragment shader that could tint anything. `kNoShadowLod`
-    // when the mesh casts no shadow this frame. Meaningless on a shadow command itself (there,
-    // `lodLevel` is the real answer); the two are set from one decision, so they cannot disagree.
+    // MEANINGLESS on a shadow command (SH-03): a shadow caster's level is not decided until a
+    // particular shadow view resolves it, and one command is resolved once per view it survives
+    // into. It stays at the `kNoShadowLod` sentinel there, so a consumer that reads it instead of
+    // the resolution gets an obviously wrong answer rather than a plausible one.
+    uint32_t lodLevel{0};
+    // SH-03: the shadow caster, described but NOT resolved. Present only on a shadow command; a
+    // forward command leaves it default (and therefore invalid). Each shadow view turns this into
+    // its own draw — see ShadowLodResolver.
+    ShadowGeometryRequest shadowRequest{};
+    // WHICH caster this draw's mesh is, carried on the FORWARD command too (SH-03 slice 5).
+    //
+    // The shadow command's request holds the same pair, but the tint needs it on the forward draw:
+    // the level to colour by is the one a shadow view resolved, and finding it means asking the
+    // resolver for (this caster, this generation, the focused view). Invalid on a mesh that casts
+    // no shadow this frame — which is what makes it tint neutral grey rather than level 0.
+    ShadowCasterId shadowCasterId{ShadowCasterId::Invalid};
+    ShadowCasterGeneration shadowGeneration{ShadowCasterGeneration::First};
+    // The level a chosen shadow view selected for this mesh, mirrored onto the FORWARD command so
+    // the ShadowLod debug view can tint a shaded surface by the geometry its shadow actually used —
+    // shadow draws are depth-only and never reach a fragment shader that could tint anything.
+    //
+    // Filled by the renderer AFTER the shadow pass has resolved (see Renderer::applyShadowLodTint),
+    // because until then no level exists: a caster holds one per view. `kNoShadowLod` (neutral
+    // grey) whenever there is no single answer to report — a mesh that casts no shadow, no view
+    // focused, or a focused view that did not resolve this caster.
     uint32_t shadowLodLevel{kNoShadowLod};
     Bounds3 shadowBounds{};
     Mat4 selfShadowViewProj{Mat4::identity()};

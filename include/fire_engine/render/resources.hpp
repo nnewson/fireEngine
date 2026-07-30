@@ -160,9 +160,9 @@ public:
                                                          uint32_t layer) const noexcept;
 
     // D32_SFLOAT cubemap-array depth image for point-light shadows. Total
-    // layers = 6 * cubeCount. Main view is eCubeArray (sampled via
+    // layers = kCubeFaceCount * cubeCount. Main view is eCubeArray (sampled via
     // samplerCubeArrayShadow); per-face 2D views are created for framebuffer
-    // attachment, indexed as `6 * cube + face`.
+    // attachment, indexed as `kCubeFaceCount * cube + face`.
     [[nodiscard]] TextureHandle createPointShadowMap(uint32_t faceExtent, uint32_t cubeCount);
 
     // Per-face 2D depth view on a point shadow cubemap array. cubeIndex picks

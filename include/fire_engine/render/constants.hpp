@@ -86,6 +86,80 @@ inline constexpr float kPointShadowNearPlane = 0.1f;
 // the cube projection stays finite. Used only for shadow-map projection.
 inline constexpr float kPointShadowInfiniteRangeFallback = 100.0f;
 
+// Shadow-LOD selection (SH-03). The budget is in SHADOW-MAP TEXELS of the view doing the
+// rasterising — not camera pixels — so it means the same thing for a 2048-texel cascade and a
+// 512-texel point face, which the retired camera-pixel heuristic could not.
+//
+// CALIBRATED (SH-03 slice 6) on `shadow_lod/ShadowLodDemo.gltf` — reproduce with
+// `tools/shadow_lod_sweep.sh`, which is the procedure, not a remembered one.
+//
+// The reference is `--no-shadow-lod`: forward LOD untouched, every caster at shadow LOD0. NOT
+// `--no-lod` (it also changes the visible geometry, so the comparison stops being about shadows)
+// and NOT a tiny budget (selection still runs, and a cut with zero estimated deviation stays
+// eligible). The metric compares the SHADOW VISIBILITY image (`--debug-shadow`) and counts pixels
+// whose shadow state differs by >8/255, because shadow error is localised to silhouette edges and
+// an image-wide average dilutes it away.
+//
+// The shadowed area is MEASURED, not assumed: the pixels that differ between the reference and the
+// same view with `--no-shadows`. It came out at 10.4% of the frame. (A first pass called "darker
+// than half" shadowed, which counted the night skybox and every dark material — 39.8% — and
+// flattered every percentage by ~3.8x.) The reference captured twice gives a noise floor of exactly
+// zero, so every number below is signal.
+//
+//   budget   differing shadow px   worst px   cascade tris (of 43472 at full detail)
+//   0.5      0.000%                 0/255     identical to the reference — nothing gained
+//   1        0.003%                66/255     26046  (59.9%)
+//   2        0.243%               121/255     24894  (57.3%)
+//   4        0.356%               121/255     23166  (53.3%)
+//   8        1.551%               139/255     18974  (43.6%)
+//   16       5.837%               166/255     15550  (35.8%)
+//
+// ACCEPTANCE THRESHOLD, registered before the numbers were corrected: at most 0.1% of the shadowed
+// pixels may differ from full detail, AND the differences must sit on silhouette edges rather than
+// in filled regions. Under it only 1 passes (0.003%); 2 and 4 now fail. An earlier table with the
+// inflated denominator put 4 at 0.093% and selected it — the threshold is deliberately NOT being
+// widened to preserve that answer, because moving a stated criterion after seeing the data is how a
+// calibration becomes a rationalisation. The cost of holding the line is 6.6 percentage points of
+// geometry (59.9% of full detail rather than 53.3%); the gain is a hundredfold smaller error.
+//
+// There is no knee in the savings curve to appeal to — each doubling keeps buying triangles — so a
+// threshold is the only honest basis for the choice.
+//
+// SCOPE: this calibrates the CSM. `--debug-shadow` visualises the primary directional visibility
+// and the triangle column is the cascade row, so cascade and world-only are measured; spot, point
+// and self share the constant but their QUALITY is not measured here (their savings are visible in
+// the panel's other rows — at budget 1, self 184/1248 and spot 768/10868 triangles). Extending the
+// evidence to the punctual families needs a per-family visibility view, and is worth doing before
+// this constant is treated as globally validated.
+inline constexpr float kShadowLodPixelBudget = 1.0f;
+// Coarsening must project within `budget * ratio`, while refining triggers at `budget` — the gap is
+// the dead band, and 1.0 disables it.
+//
+// Kept at 1.0 ON EVIDENCE. A smaller ratio WIDENS the dead band (coarsening must clear a stricter
+// threshold), which costs triangles — a caster holds finer geometry longer — to buy stability.
+//
+// Measured AT THIS BUDGET (chatter depends on which thresholds casters sit near, so a ratio swept
+// at a different budget would not reproduce this decision), over ~1100-frame runs of the animated
+// scene, per 100 frames:
+//
+//   ratio 1.0   0.27 transitions   0.00 REVERSALS
+//   ratio 0.75  0.09 transitions   0.00 REVERSALS
+//   ratio 0.5   0.09 transitions   0.00 REVERSALS
+//
+// Chatter is a reversal that undoes a RECENT transition (within kReversalWindowCommits) — a caster
+// oscillating across a threshold. Counting every return would have scored the scene's periodic
+// animation as instability: an earlier, time-blind reversal count reported 0.31 per 100 frames,
+// which was a caster legitimately walking L1 → L2 and back as the sun swung. With the window
+// applied there is no chatter at all, at any ratio.
+//
+// Plain transitions likewise include ordinary motion that no dead band can or should remove, so
+// only the reversal column can justify a ratio — and it is zero.
+//
+// Revisit when the caster mix changes — SH-04's deformable fallback and SH-05's material-aware
+// casters both alter what is selected. Instruments: the overlay's "LOD movement" line, the
+// per-frame `FE_LOG=render:debug` record, and `tools/shadow_lod_sweep.sh`.
+inline constexpr float kShadowLodCoarsenRatio = 1.0f;
+
 // ---------------------------------------------------------------------------
 // IBL precompute extents — chosen at engine start, baked into texture sizes.
 // ---------------------------------------------------------------------------

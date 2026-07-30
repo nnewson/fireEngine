@@ -1,5 +1,6 @@
 #pragma once
 
+#include <fire_engine/core/node_id.hpp>
 #include <fire_engine/graphics/colour3.hpp>
 #include <fire_engine/graphics/lighting.hpp>
 #include <fire_engine/input/input_state.hpp>
@@ -24,7 +25,10 @@ public:
     // renderer actually wants. Position is the translation column; direction
     // is the node's local -Z transformed and renormalised (matches the
     // KHR_lights_punctual convention).
-    [[nodiscard]] static Lighting toLighting(const Light& light, const Mat4& world) noexcept;
+    // `nodeId` is the OWNING NODE's identity: a Light is copyable parameter data and cannot supply
+    // it, so the caller (SceneGraph::gatherLights, which has the node in hand) passes it in.
+    [[nodiscard]] static Lighting toLighting(const Light& light, const Mat4& world,
+                                             NodeId nodeId) noexcept;
 
     Light() = default;
     ~Light() = default;

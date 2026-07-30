@@ -191,7 +191,23 @@ Each item below should be its own branch off local `main`, in keeping with the r
 
 ### Milestone 0 — evidence before policy
 
-#### SH-01: Shadow diagnostics and a purpose-built validation scene
+#### SH-01: Shadow diagnostics and a purpose-built validation scene — ✅ landed (branch `shadow-lod-diagnostics`)
+
+What landed: per-group GPU timing (directional / world-only / self / spot / point) and per-view
+candidate-vs-drawn draw and triangle counts keyed by PHYSICAL slot; per-view LOD histograms and
+selection reasons; the `ShadowLod` debug view (a mesh tinted by the level its shadow draw picked,
+neutral grey when it casts none); the Shadows overlay panel; `tools/assetgen/` extracted from the
+physics generators; the owned acceptance scenes `assets/shadow_lod/ShadowLodDemo.gltf` (static, for
+reproducible captures) and `ShadowLodMotionDemo.gltf` (animated, for the stability loop), whose
+`validate()` asserts every coverage claim the runbook makes; and `--capture` / `--capture-frame`,
+which write one frame and exit so a reference image is scriptable.
+
+Two things it deliberately did NOT do. It cannot say how WRONG a level was — that needs the
+projected shadow-texel deviation, which is SH-02's metric — only which level was chosen and what it
+cost. And its captures are the **measurement baseline**: the record of what the engine did with
+camera-derived shadow LOD, which is what SH-03's per-view selection is read against.
+
+The original plan follows, for the reasoning behind each counter.
 
 Add diagnostics before changing selection:
 
@@ -342,16 +358,129 @@ inputs to shadow content.
 
 Likely branch: `shadow-per-view-discrete-lod`.
 
+**Implementation slices** (each verifiable on its own; the first two have landed):
 
-**SH-03 additionally owns** (handed over by SH-02):
+1. **Identity foundations.** `NodeId` on the scene node and into `Lighting`; `ShadowCasterId` +
+   generation on `GeometryBindings`; `ShadowLogicalViewId` / `ShadowLodStateKey`. Hysteresis is
+   frame-to-frame state, so before anything is cached its key must name the same thing next frame as
+   it did last frame — a physical spot/point slot does not.
+2. **`ShadowRenderViewSet`.** One per-frame authority holding each view's matrix, projection
+   descriptor and logical identity together. The renderer's parallel `shadowViewProjs_` array is
+   GONE: every fit populates the set, and the ShadowUBO matrix array, the LightUBO cascade/spot/self
+   arrays, the coarse cull frustums and the shadow pass are all derived from it. Population order is
+   forced by what is known when — reset + cascades + punctual views in `updateFrameLighting`, self
+   layers once the draws exist, world-only once `anySkinned` does.
+3. **Unresolved command seam + per-view resolution.** `Object` emits a `ShadowGeometryRequest` — LOD
+   span, conservative world scale, caster id, generation — and CLEARS the shadow command's inherited
+   index buffer, count and level, so an unresolved command cannot be mistaken for a resolved one.
+   `shadows.cpp` filters first and resolves second (a caster a view rejects acquires no dead band
+   against it), through `ShadowLodResolver`: a per-frame cache keyed on the full
+   `(ShadowCasterId, generation, ShadowLogicalViewId)` — the LOGICAL view rather than the physical
+   slot, which is what makes a cascade and its world-only twin, and a self-shadow slot's two depth
+   layers, share one decision; the caster and generation are in the key because a view-only key
+   would hand one caster's answer to another — plus a hysteresis history under that SAME key,
+   STAGED during recording and committed
+   only after a successful submit. Only a genuinely `Selected` level enters the history; an invalid
+   key enters neither store. `Shadows::recordPass` takes the view set directly, so each iteration's
+   cull frustum, projection and history key come from one entry.
+   *Diagnostics moved with it* (slice 4's first half, pulled forward because leaving it would have
+   left a lying counter): reasons are now per view in `ShadowViewStats::lodReasons`, and
+   `candidateTriangles` means FULL-DETAIL triangles offered — a rejected caster is never resolved,
+   so it has no level to count. `candidateDraws − drawnDraws` remains the filter yield exactly.
+   *Tunables moved with it* (from slice 5, because the first runtime call needed them):
+   `kShadowLodPixelBudget` + `kShadowLodCoarsenRatio` in `render/constants.hpp`, threaded explicitly;
+   `kShadowLodBias` retired. The ShadowLod tint is neutral grey meanwhile — a caster holds one level
+   per view, so there is no single number to tint by until slice 5 picks a view.
+4. **Diagnostics.** The panel names the view it is reporting: clicking a slot row sets
+   `RenderTunables::shadowViewFocus` to that row's LOGICAL identity plus its group, and the reason
+   table retargets to that view alone. Identity, never slot: punctual and self slots compact in
+   scene-gather order, so a slot-keyed focus silently retargets to whichever light replaced the one
+   selected — and that gets worse in slice 5, where the tint reads the same focus from the CURRENT
+   frame while the panel shows a COMPLETED ring frame. `ShadowViewStats` therefore records the
+   identity it was rasterised with (`beginRasterPass` requires it), and `focused()` searches the
+   group for it, returning the slot it was found in. The group stays part of the key because a
+   cascade and its world-only twin deliberately share one identity.
+   Three outcomes read differently: the rollup; "selection is not a valid view" (structurally
+   unaddressable — an invalid identity, or one whose kind cannot occur in that group, so no frame
+   can satisfy it); and "not present in this frame" (well-formed but not found, which deliberately
+   does NOT claim whether it will return — a deleted light and a view that simply did not rasterise
+   are the same thing here, and separating them needs scene liveness the diagnostics do not have).
+   A row also refuses a second, different identity within a frame (`beginRasterPass` returns false,
+   changing nothing) and the shadow pass makes that terminal, because merging two views' counters
+   under one name produces a row that reads like a measurement of something that never existed.
+   The three labels SH-03 falsified are corrected: draws d/c is the cull yield, tris d/c is culling
+   AND LOD (its candidate is full detail), and the level columns are LOD selections of DRAWN casters
+   (a rejected candidate is never resolved, so it has no level to contribute), counted once per
+   logical view. The four observation rules are stated on `ShadowViewStats::observe`, where the
+   invariants they protect live. Column widths are explicit because the level columns — the one
+   thing the table exists to show — were being ellipsised to a single character.
+5. **Tint.** The ShadowLod debug view colours each mesh by the level ONE shadow view resolved for
+   it — the panel's focused view, or cascade 0 by default, named in the overlay so the default is
+   never silent. The level is READ BACK through `ShadowLodResolver::drawnResolution(group, key)` —
+   what that FAMILY drew for this caster — never re-selected: a second selection would see a
+   different history state and the picture would contradict the geometry it claims to describe. It
+   is not `frameResolution(key)`, which returns the decision SHARED by every view with that
+   identity; a cascade and its world-only twin share one while drawing different casters, so the
+   level alone would attribute one pass's choice to another. (`frameResolution` remains for
+   inspecting the shared decision itself.) Filled between the shadow pass and the forward pass, the
+   one window where the levels exist and the forward push constants have not been written yet. Grey
+   means that view has no level for that mesh — it casts no shadow, or that view culled it — never
+   level 0, which would read as "full detail chosen". `--debug-lod` / `--debug-shadow-lod` make both
+   tints capturable without a human at the keyboard, and `--shadow-focus <group>:<slot>` picks the
+   view: resolved once at startup into that slot's logical identity, then followed across
+   compaction, failing by name if the slot is not active.
+6. **Calibration + docs.** Measured, not guessed — reproduce with `tools/shadow_lod_sweep.sh`; the
+   numbers and the reasoning live on `kShadowLodPixelBudget` / `kShadowLodCoarsenRatio` in
+   `render/constants.hpp`. Summary:
 
-- `kShadowLodPixelBudget` and the measured coarsening ratio, in `render/constants.hpp` — the single
-  source of truth for render tunables — threaded EXPLICITLY into the Vulkan-free selector rather than
-  defaulted inside it.
-- Retiring `kShadowLodBias`. The camera-pixel-budget heuristic it scales has no meaning once
-  selection is per shadow view in shadow-map texels.
-- Empirical calibration of both values against SH-01's captures and per-view diagnostics — the point
-  at which the shadow-deviation estimate's adequacy is actually judged.
+   *The reference is `--no-shadow-lod`* — forward LOD untouched, every caster at shadow LOD0. Two
+   near-misses were rejected on the way: `--no-lod` (also disables FORWARD LOD, so the comparison
+   contains visible-geometry differences — the first table was measured this way and discarded) and
+   a tiny budget (selection still runs, and a zero-deviation cut stays eligible, so it means "almost
+   always LOD0", not "LOD0").
+
+   *The metric is the shadow MASK, not the frame, and its denominator is measured.* Whole-image PSNR
+   dilutes a localised silhouette error into invisibility, so the sweep compares the `--debug-shadow`
+   visibility image and counts pixels whose shadow state differs by more than 8/255. The shadowed
+   area is the pixels that differ between the reference and the same view with `--no-shadows`
+   (10.4% of the frame) — an earlier pass called "darker than half" shadowed, which counted the night
+   skybox and flattered every percentage by ~3.8x. The reference captured twice gives a noise floor
+   of exactly zero, so every reported number is signal.
+
+   *Budget → 1 texel*, against a threshold registered before the numbers were corrected: at most
+   0.1% of shadowed pixels may differ, and the differences must sit on silhouette edges rather than
+   in filled regions. Only budget 1 passes (0.003%, 59.9% of the full-detail triangles); 2 (0.243%)
+   and 4 (0.356%) fail. With the inflated denominator the same table put 4 at 0.093% and selected
+   it — the threshold was deliberately NOT widened to preserve that answer, since moving a stated
+   criterion after seeing the data turns a calibration into a rationalisation. Holding the line costs
+   6.6 percentage points of geometry and buys a hundredfold smaller error. There is no knee in the
+   savings curve to appeal to — each doubling keeps buying triangles — so a threshold is the only
+   honest basis.
+
+   *Ratio → 1.0 (no dead band).* Note the direction: a SMALLER ratio WIDENS the band, costing
+   triangles to buy stability. Chatter is a reversal that undoes a RECENT transition, within a stated
+   window; counting every return scored the scene's periodic animation as instability (a time-blind
+   count reported 0.31 reversals per 100 frames, which was a caster walking L1 → L2 and back as the
+   sun swung). Swept at the SELECTED budget of 1 — a ratio measured at a different budget would not
+   reproduce this decision — reversals are 0.00 per 100 frames at ratios 1.0, 0.75 and 0.5, against
+   0.27 / 0.09 / 0.09 plain transitions. There is no chatter to buy off.
+
+   *SCOPE — this calibrates the CSM, not every family.* `--debug-shadow` visualises the primary
+   directional visibility and the triangle column is the cascade row, so cascade and world-only are
+   measured; spot, point and self share the constant but their quality is not measured here. Their
+   savings are visible in the panel's other rows. Extending the evidence to the punctual families
+   needs a per-family visibility view and should happen before the constant is treated as globally
+   validated.
+
+   *Instruments added for it*, because "chatter" had no number: `ShadowLodTransitions`
+   (held / transitions / reversed / first-seen, counted at commit, with reversal time-boxed so
+   movement and oscillation are different measurements), shown in the panel and logged per frame at
+   `FE_LOG=render:debug`; `--shadow-budget` / `--shadow-ratio`, both TERMINAL on unusable input so a
+   mistyped sweep step cannot quietly re-measure the default; and `--no-shadow-lod` for the
+   reference, which leaves forward LOD alone (`--no-lod` still means full detail everywhere). The
+   sweep script asserts the repository's liveness contract on each animated run — alive before the
+   SIGTERM, exit 143 after, a minimum record count — so a crashed run fails instead of reporting a
+   reassuring zero. Re-run the sweep when SH-04 and SH-05 change which casters are selected.
 
 #### SH-04: Conservative deformation and proxy policy
 
@@ -400,6 +529,26 @@ Likely branch: `shadow-material-casters`.
 The cascade XY fit is stable, but its light-space depth currently relies on the fixed
 `kShadowDepthBackExtend`. A caster farther behind the receiver slice than that constant can be
 clipped even though its shadow reaches the slice.
+
+**Observed, 2026-07-29** (reported from a live run during SH-03 slice 6, then reproduced). On
+`ShadowLodMotionDemo`, as the moving sphere passes the detail cluster, the top third of its cast
+shadow disappears: the shadow renders as a half-ellipse with a straight upper edge while the sphere
+itself is fully lit and its neighbour a metre away casts a complete ellipse. It returns once the
+sphere moves clear. Reproduce with:
+
+```bash
+./fireEngineApp shadow_lod/ShadowLodMotionDemo.gltf nightbox.hdr --no-taa \
+  --no-shadow-lod --capture-frame 300 --capture /tmp/sh06.png
+```
+
+`--no-shadow-lod` forces every caster to shadow LOD0 while the visible geometry keeps selecting
+normally, which is what makes this evidence rather than an anecdote: **shadow LOD is not
+involved**. (The original reproduction used `--shadow-budget 0.001`, which is nearly but not
+exactly the same thing — selection still runs there.) The straight cut and the dependence on the
+caster's position relative to the cluster are what a depth/candidate-set clip looks like — the
+caster is behind the receiver slice it casts into. Note the frame number is only approximate: the
+demo advances on wall-clock time, so the moment drifts between runs. Fix this and the same capture
+must show a complete ellipse.
 
 Keep the stable receiver XY fit, then determine the Z range from candidate caster bounds:
 

@@ -178,6 +178,21 @@ ShadowLodSelection selectShadowLod(std::span<const GeometryLod> lods, const Shad
                                    float budgetTexels, ShadowLodHysteresis hysteresis,
                                    std::size_t previousLevel) noexcept
 {
+    if (!finite(model))
+    {
+        return forced(ShadowLodReason::InvalidCaster);
+    }
+    // The object-space deviation is bounded into world space by the conservative sigma_max of the
+    // transform's linear part — shared with VDPM, so a scaled instance can never under-refine.
+    return selectShadowLod(lods, view, largestSingularValue(linearPart(model)), worldBounds,
+                           budgetTexels, hysteresis, previousLevel);
+}
+
+ShadowLodSelection selectShadowLod(std::span<const GeometryLod> lods, const ShadowView& view,
+                                   float worldScale, const Bounds3& worldBounds, float budgetTexels,
+                                   ShadowLodHysteresis hysteresis,
+                                   std::size_t previousLevel) noexcept
+{
     if (lods.empty())
     {
         return forced(ShadowLodReason::InvalidCaster);
@@ -192,8 +207,7 @@ ShadowLodSelection selectShadowLod(std::span<const GeometryLod> lods, const Shad
     {
         return forced(ShadowLodReason::InvalidView);
     }
-    if (!finite(model) || !worldBounds.valid || !std::isfinite(budgetTexels) ||
-        budgetTexels <= 0.0f)
+    if (!worldBounds.valid || !std::isfinite(budgetTexels) || budgetTexels <= 0.0f)
     {
         return forced(ShadowLodReason::InvalidCaster);
     }
@@ -223,10 +237,9 @@ ShadowLodSelection selectShadowLod(std::span<const GeometryLod> lods, const Shad
         }
     }
 
-    // The object-space deviation is bounded into world space by the conservative σ_max of the
-    // transform's linear part — shared with VDPM, so a scaled instance can never under-refine.
-    const float worldScale = largestSingularValue(linearPart(model));
-    if (!std::isfinite(worldScale))
+    // A non-finite or negative scale is an unusable caster, not a small error: it comes either from
+    // a broken transform or from a producer that never filled the field in.
+    if (!std::isfinite(worldScale) || worldScale < 0.0f)
     {
         return forced(ShadowLodReason::InvalidCaster);
     }

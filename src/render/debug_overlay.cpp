@@ -21,11 +21,28 @@ namespace
 
 // One row of the SH-01 shadow table. `timing` is pre-formatted by the caller: milliseconds for a
 // family row, an explicit non-number for rows that have no measurement of their own.
-void shadowStatsRow(const char* label, const ShadowViewStats& stats, const char* timing)
+//
+// A `focusable` row is CLICKABLE and returns whether it was clicked this frame (SH-03 slice 4): the
+// per-view reason breakdown needs a view chosen, and choosing it by clicking the row whose numbers
+// raised the question is the shortest path from "this map keeps too much" to "here is why". Group
+// rollup rows are not focusable — a group's reasons are a SUBSET of the scene total (a useful one:
+// "the point family forces LOD0 and the cascades don't"), but a group has no single logical view,
+// which is what the focus identifies and what the ShadowLod tint needs. Worth revisiting if reading
+// a family's mix on its own turns out to be the common question.
+bool shadowStatsRow(const char* label, const ShadowViewStats& stats, const char* timing,
+                    bool focusable = false, bool focused = false)
 {
     ImGui::TableNextRow();
     ImGui::TableNextColumn();
-    ImGui::TextUnformatted(label);
+    bool clicked = false;
+    if (focusable)
+    {
+        clicked = ImGui::Selectable(label, focused, ImGuiSelectableFlags_SpanAllColumns);
+    }
+    else
+    {
+        ImGui::TextUnformatted(label);
+    }
     ImGui::TableNextColumn();
     ImGui::Text("%llu", static_cast<unsigned long long>(stats.rasterPasses));
     ImGui::TableNextColumn();
@@ -41,12 +58,49 @@ void shadowStatsRow(const char* label, const ShadowViewStats& stats, const char*
     }
     ImGui::TableNextColumn();
     ImGui::TextUnformatted(timing);
+    return clicked;
+}
+
+// Names the LOGICAL view an identity refers to — the thing a focus actually selects, as opposed to
+// the physical row it happens to occupy. The family alone is not a name: "cascade" describes four
+// different views and "point" describes every face of every point light, so a label that stops
+// there cannot tell a reader which one they are looking at (or tinting by).
+void formatShadowViewIdentity(char* out, std::size_t size, ShadowViewGroup group,
+                              const ShadowLogicalViewId& view)
+{
+    const std::string_view family = toString(group);
+    const auto familyChars = static_cast<int>(family.size());
+    switch (view.kind())
+    {
+    case ShadowLogicalViewKind::Cascade:
+        std::snprintf(out, size, "%.*s %llu", familyChars, family.data(),
+                      static_cast<unsigned long long>(view.id()));
+        return;
+    case ShadowLogicalViewKind::Self:
+        // The owning object, not a slot: the slot is reassigned per frame, the object is not.
+        std::snprintf(out, size, "%.*s object %llu", familyChars, family.data(),
+                      static_cast<unsigned long long>(view.id()));
+        return;
+    case ShadowLogicalViewKind::Spot:
+        std::snprintf(out, size, "%.*s light %llu", familyChars, family.data(),
+                      static_cast<unsigned long long>(view.id()));
+        return;
+    case ShadowLogicalViewKind::Point:
+        std::snprintf(out, size, "%.*s light %llu face %u", familyChars, family.data(),
+                      static_cast<unsigned long long>(view.id()),
+                      static_cast<unsigned>(view.face()));
+        return;
+    case ShadowLogicalViewKind::Invalid:
+        break;
+    }
+    std::snprintf(out, size, "%.*s (no view)", familyChars, family.data());
 }
 
 // Row label for one physical slot of a family. Deliberately says "slot", not "light": slots are
 // assignment order into a fixed array, so the same row can describe a different light next frame —
-// a row is a MAP, not an identity. Point views are stored flat as lightSlot * 6 + face, so they
-// decode back to both numbers here (the same split the renderer used to pick the cube layer).
+// a row is a MAP, not an identity. Point views are stored flat as lightSlot * kCubeFaceCount +
+// face, so they decode back to both numbers here (the same split the renderer used to pick the
+// cube layer).
 void formatShadowSlotLabel(char* out, std::size_t size, ShadowViewGroup group, std::size_t slot)
 {
     switch (group)
@@ -56,7 +110,8 @@ void formatShadowSlotLabel(char* out, std::size_t size, ShadowViewGroup group, s
         std::snprintf(out, size, "  cascade %zu", slot);
         return;
     case ShadowViewGroup::Point:
-        std::snprintf(out, size, "  slot %zu face %zu", slot / 6, slot % 6);
+        std::snprintf(out, size, "  slot %zu face %zu", slot / kCubeFaceCount,
+                      slot % kCubeFaceCount);
         return;
     case ShadowViewGroup::Self:
     case ShadowViewGroup::Spot:
@@ -70,10 +125,11 @@ void formatShadowSlotLabel(char* out, std::size_t size, ShadowViewGroup group, s
 //
 // Two different quantities share the table, and mixing them is the mistake it is laid out to
 // prevent. "Passes" and the draw/triangle columns are RASTER WORK — the same caster counts once per
-// view it appears in, which is the real GPU cost. The L0..L3+ columns are SELECTION SAMPLES: one
-// per drawn caster per logical view (the self-shadow families rasterise twice but are sampled
-// once), so they describe the level distribution, not the work.
-void drawShadowDiagnostics(const FrameStats& stats)
+// view it appears in, which is the real GPU cost. The L0..L3+ columns are LOD SELECTIONS OF DRAWN
+// CASTERS: one per drawn caster per logical view (a rejected candidate is never resolved and has no
+// level; the self families rasterise twice but are sampled once), so they describe the level
+// distribution, not the work.
+void drawShadowDiagnostics(const FrameStats& stats, RenderTunables& tunables)
 {
     if (!stats.shadowValid)
     {
@@ -85,6 +141,64 @@ void drawShadowDiagnostics(const FrameStats& stats)
     }
 
     const auto& shadow = stats.shadow;
+    // SH-03 slice 4: reasons are recorded PER VIEW, at the resolution that produced them, so the
+    // panel has to say WHICH view it is reporting. The scene rollup still answers "how much shadow
+    // work happened", but the question this arc raises — why did this map keep that much geometry —
+    // is per view, and summing it across views mixes unrelated decisions.
+    const ShadowViewFocus& focus = tunables.shadowViewFocus;
+    const FocusedShadowView focusedView = shadow.focused(focus);
+    const ShadowViewStats sceneTotal = shadow.sceneTotal();
+    // FOUR states, said differently because a reader acts on them differently:
+    //  * the scene rollup (nothing selected);
+    //  * a selected view that rasterised — its numbers follow;
+    //  * a selection that is STRUCTURALLY malformed (no identity, or an identity that cannot occur
+    //    in this group) — no frame will ever satisfy it, so the message says to re-select;
+    //  * a well-formed selection not found in this frame.
+    //
+    // That last message deliberately does NOT say whether the view will come back. A light removed
+    // from the scene and a light that simply did not rasterise this frame are the same thing here —
+    // both are valid identities that were not found — and telling them apart needs scene liveness
+    // the diagnostics do not have. Claiming either way would be a guess presented as a measurement.
+    char reasonScope[128] = "Reasons: scene total (every view)";
+    const bool focusRan = focusedView.found();
+    if (focus.perView && !focus.addressable())
+    {
+        std::snprintf(reasonScope, sizeof(reasonScope),
+                      "Reasons: selection is not a valid view — pick a row");
+    }
+    else if (focus.perView)
+    {
+        // Named by IDENTITY (which view), then located by the slot it was FOUND in this frame
+        // (which row) — an identity can move slots between frames, so the slot it was selected in
+        // would label a row it no longer occupies.
+        char view[64];
+        formatShadowViewIdentity(view, sizeof(view), focus.group, focus.view);
+        // `formatShadowSlotLabel` indents for the table, so the leading spaces are skipped here —
+        // without that the dash and the label ran together ("— cascade slot 3" became "—cascade").
+        char where[48] = "(not present in this frame)";
+        if (focusRan)
+        {
+            char slotLabel[48];
+            formatShadowSlotLabel(slotLabel, sizeof(slotLabel), focus.group, focusedView.slot);
+            const std::string_view trimmed = std::string_view{slotLabel}.substr(
+                std::string_view{slotLabel}.find_first_not_of(' '));
+            std::snprintf(where, sizeof(where), "%.*s", static_cast<int>(trimmed.size()),
+                          trimmed.data());
+        }
+        std::snprintf(reasonScope, sizeof(reasonScope), "Reasons: %s — %s", view, where);
+    }
+    ImGui::TextUnformatted(reasonScope);
+    // SH-03 slice 6: the dead band's calibration instrument, and a headline rather than a footnote
+    // — it describes the frame as a whole. TRANSITIONS are movement (a caster receding legitimately
+    // steps L0 -> L1 -> L2); REVERSED is chatter (L1 -> L2 -> L1), a caster oscillating across a
+    // threshold, and the only one of the two a dead band can fix. `first` is separated so a caster
+    // entering a view cannot be mistaken for either.
+    ImGui::Text("LOD movement: %llu transitions (%llu reversed), %llu held, %llu first",
+                static_cast<unsigned long long>(shadow.lodMovement.transitions),
+                static_cast<unsigned long long>(shadow.lodMovement.reversed),
+                static_cast<unsigned long long>(shadow.lodMovement.held),
+                static_cast<unsigned long long>(shadow.lodMovement.firstSeen));
+
     // Every reason, by iterating the enum rather than naming a subset: a hard-coded list silently
     // hides new ones (the SH-02 fallbacks were invisible here until this changed), and a forced
     // LOD0 that looks like a deliberate one defeats the point of having reasons at all.
@@ -92,9 +206,12 @@ void drawShadowDiagnostics(const FrameStats& stats)
     // A two-column table rather than one line: the fallback names are long ("near-plane
     // intersection", "invalid previous level") and would clip off the panel edge, which would make
     // "visible" true only in the source.
-    if (ImGui::BeginTable("shadowreasons", 2,
+    const bool reportReasons = !focus.perView || focusRan;
+    if (reportReasons &&
+        ImGui::BeginTable("shadowreasons", 2,
                           ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_RowBg))
     {
+        const ShadowViewStats& reported = focusRan ? *focusedView.stats : sceneTotal;
         for (std::size_t reason = 0; reason < kShadowLodReasonCount; ++reason)
         {
             const auto label = toString(static_cast<ShadowLodReason>(reason));
@@ -102,7 +219,7 @@ void drawShadowDiagnostics(const FrameStats& stats)
             ImGui::TableNextColumn();
             ImGui::Text("%.*s", static_cast<int>(label.size()), label.data());
             ImGui::TableNextColumn();
-            ImGui::Text("%llu", static_cast<unsigned long long>(shadow.lodReasons[reason]));
+            ImGui::Text("%llu", static_cast<unsigned long long>(reported.lodReasons[reason]));
         }
         ImGui::EndTable();
     }
@@ -112,15 +229,18 @@ void drawShadowDiagnostics(const FrameStats& stats)
                           ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_RowBg |
                               ImGuiTableFlags_BordersInnerV))
     {
-        ImGui::TableSetupColumn("View");
-        ImGui::TableSetupColumn("Passes");
-        ImGui::TableSetupColumn("Draws d/c");
-        ImGui::TableSetupColumn("Tris d/c");
-        ImGui::TableSetupColumn("L0");
-        ImGui::TableSetupColumn("L1");
-        ImGui::TableSetupColumn("L2");
-        ImGui::TableSetupColumn("L3+");
-        ImGui::TableSetupColumn("GPU ms");
+        // Explicit weights, because proportional-by-default gave the wide "Tris d/c" column enough
+        // room to squeeze the level columns down to a single ellipsised character — the LOD
+        // distribution, which is the one thing this table exists to show, was unreadable.
+        ImGui::TableSetupColumn("View", ImGuiTableColumnFlags_WidthStretch, 2.8f);
+        ImGui::TableSetupColumn("Pass", ImGuiTableColumnFlags_WidthStretch, 0.55f);
+        ImGui::TableSetupColumn("Draws d/c", ImGuiTableColumnFlags_WidthStretch, 1.35f);
+        ImGui::TableSetupColumn("Tris d/c", ImGuiTableColumnFlags_WidthStretch, 2.3f);
+        ImGui::TableSetupColumn("L0", ImGuiTableColumnFlags_WidthStretch, 0.5f);
+        ImGui::TableSetupColumn("L1", ImGuiTableColumnFlags_WidthStretch, 0.5f);
+        ImGui::TableSetupColumn("L2", ImGuiTableColumnFlags_WidthStretch, 0.5f);
+        ImGui::TableSetupColumn("L3+", ImGuiTableColumnFlags_WidthStretch, 0.6f);
+        ImGui::TableSetupColumn("ms", ImGuiTableColumnFlags_WidthStretch, 1.0f);
         ImGui::TableHeadersRow();
 
         for (std::size_t g = 0; g < kShadowViewGroupCount; ++g)
@@ -128,7 +248,9 @@ void drawShadowDiagnostics(const FrameStats& stats)
             const auto group = static_cast<ShadowViewGroup>(g);
             const ShadowViewStats total = shadow.groupTotal(group);
 
-            char timing[32] = "unavailable";
+            // "n/a", not the word: the column is narrow enough that "unavailable" clipped, and a
+            // clipped diagnostic is one nobody reads. The banner above already says why.
+            char timing[32] = "n/a";
             if (stats.gpuValid)
             {
                 // A family that never rasterised has no bracketed span this frame — its resolved
@@ -153,15 +275,26 @@ void drawShadowDiagnostics(const FrameStats& stats)
                 }
                 char slotLabel[48];
                 formatShadowSlotLabel(slotLabel, sizeof(slotLabel), group, slot);
+                // Highlighted by IDENTITY, not by slot: if the selected view moved slots this
+                // frame, the highlight moves with it rather than staying on whatever now occupies
+                // the old row.
+                const bool isFocused =
+                    focus.perView && focus.group == group && focus.view == view.logicalId;
                 // Timestamps bracket a whole family, not one map, so a slot row has no time of its
                 // own — an em dash, never a share of the family's number.
-                shadowStatsRow(slotLabel, view, "—");
+                if (shadowStatsRow(slotLabel, view, "—", /*focusable=*/true, isFocused))
+                {
+                    // The row's IDENTITY is what gets remembered. Remembering the slot would
+                    // silently retarget to a different light the moment assignments compact.
+                    tunables.shadowViewFocus =
+                        ShadowViewFocus{.perView = true, .group = group, .view = view.logicalId};
+                }
             }
         }
 
         // The five families are disjoint spans (there is no outer shadow timer), so their sum IS
         // the frame's shadow time.
-        char totalTiming[32] = "unavailable";
+        char totalTiming[32] = "n/a";
         if (stats.gpuValid)
         {
             float shadowMs = 0.0f;
@@ -172,14 +305,19 @@ void drawShadowDiagnostics(const FrameStats& stats)
             }
             std::snprintf(totalTiming, sizeof(totalTiming), "%.3f", static_cast<double>(shadowMs));
         }
-        shadowStatsRow("Scene total", shadow.sceneTotal(), totalTiming);
+        if (shadowStatsRow("Scene total", sceneTotal, totalTiming, /*focusable=*/true,
+                           !tunables.shadowViewFocus.perView))
+        {
+            tunables.shadowViewFocus = ShadowViewFocus{}; // back to the rollup
+        }
         ImGui::EndTable();
     }
 
-    ImGui::TextDisabled("d/c = drawn / candidate (candidate - drawn = per-view cull yield)");
-    ImGui::TextDisabled("L0..L3+ = selection samples per logical view, not raster work");
     ImGui::TextDisabled(
-        "Levels are CAMERA-derived and replayed into every view (SH-03 fixes this)");
+        "Click a slot row to read its reasons; 'Scene total' returns to the rollup");
+    ImGui::TextDisabled("Draws d/c: drawn / offered — the difference is this view's cull yield");
+    ImGui::TextDisabled("Tris d/c: drawn / FULL DETAIL — the difference is culling AND LOD");
+    ImGui::TextDisabled("L0..L3+ = LOD selections of DRAWN casters, once per logical view");
 }
 
 } // namespace
@@ -251,6 +389,11 @@ void DebugOverlay::buildUi(const FrameStats& stats, RenderTunables& tunables)
         return;
     }
 
+    // A FIRST-USE size only (ImGui remembers whatever the user drags it to). The default was
+    // narrow enough that the shadow table's drawn/candidate pairs clipped mid-number, which is the
+    // one place a diagnostic must not be approximate — the whole panel exists to compare those two
+    // numbers per view.
+    ImGui::SetNextWindowSize(ImVec2{520.0f, 900.0f}, ImGuiCond_FirstUseEver);
     ImGui::Begin("Fire Engine - Debug");
 
     const float fps = stats.cpuFrameMs > 0.0f ? 1000.0f / stats.cpuFrameMs : 0.0f;
@@ -288,7 +431,7 @@ void DebugOverlay::buildUi(const FrameStats& stats, RenderTunables& tunables)
     ImGui::Separator();
     if (ImGui::CollapsingHeader("Shadows (SH-01)", ImGuiTreeNodeFlags_DefaultOpen))
     {
-        drawShadowDiagnostics(stats);
+        drawShadowDiagnostics(stats, tunables);
     }
 
     ImGui::Separator();
@@ -325,6 +468,23 @@ void DebugOverlay::buildUi(const FrameStats& stats, RenderTunables& tunables)
             tunables.lodMode = static_cast<LodMode>(lodMode);
         }
         ImGui::SliderFloat("Pixel error budget", &tunables.lodPixelErrorBudget, 0.25f, 16.0f,
+                           "%.2f");
+        ImGui::EndDisabled();
+
+        // SHADOW LOD is its own switch, not a rider on the forward one (SH-03 slice 6). Turning it
+        // off leaves the visible geometry selecting normally, which is what an A/B of shadow LOD
+        // needs; gating these sliders on `lodEnabled` would also grey them out for a run that only
+        // meant to hold the camera geometry still.
+        ImGui::Checkbox("Shadow LOD##shadowlod", &tunables.shadowLodEnabled);
+        ImGui::BeginDisabled(!tunables.shadowLodEnabled);
+        // A SEPARATE budget in shadow-map texels, deliberately not the camera one — different
+        // units, different evidence (see tools/shadow_lod_sweep.sh).
+        ImGui::SliderFloat("Shadow texel budget", &tunables.shadowLodPixelBudget, 0.25f, 16.0f,
+                           "%.2f");
+        // The dead band. 1.0 disables hysteresis; SMALLER widens the band, holding finer geometry
+        // longer. Calibration sweeps the budget at 1.0 first, so a wide band cannot hide a budget
+        // that is slightly too tight.
+        ImGui::SliderFloat("Shadow coarsen ratio", &tunables.shadowLodCoarsenRatio, 0.25f, 1.0f,
                            "%.2f");
         ImGui::EndDisabled();
         if (stats.trianglesGpuPending)
@@ -419,6 +579,27 @@ void DebugOverlay::buildUi(const FrameStats& stats, RenderTunables& tunables)
                          static_cast<int>(kDebugViewNames.size())))
         {
             tunables.debugView = static_cast<DebugView>(view);
+        }
+        // The Shadow LOD tint colours meshes by the level ONE shadow view chose (SH-03 slice 5), so
+        // it has to name that view — the same mesh legitimately tints differently under a different
+        // one, and a reader who does not know which view they are looking at cannot act on it. Said
+        // here rather than only in the Shadows panel, because the tint is usable without opening
+        // it.
+        if (tunables.debugView == DebugView::ShadowLod)
+        {
+            if (tunables.shadowViewFocus.addressable())
+            {
+                char view[64];
+                formatShadowViewIdentity(view, sizeof(view), tunables.shadowViewFocus.group,
+                                         tunables.shadowViewFocus.view);
+                ImGui::TextDisabled("Tinting by %s (focused in Shadows)", view);
+            }
+            else
+            {
+                ImGui::TextDisabled("Tinting by cascade 0 (default) — click a row in Shadows");
+            }
+            ImGui::TextDisabled(
+                "Grey = no level from THAT view (no shadow, or it culled the mesh)");
         }
         ImGui::Checkbox("No shadows", &tunables.noShadows);
     }

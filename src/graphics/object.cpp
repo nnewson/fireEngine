@@ -13,6 +13,7 @@
 #include <fire_engine/graphics/vdpm_material.hpp>
 #include <fire_engine/graphics/vipm.hpp>
 #include <fire_engine/math/constants.hpp>
+#include <fire_engine/math/singular_value.hpp>
 #include <fire_engine/math/vec4.hpp>
 #include <fire_engine/math/view_basis.hpp>
 #include <fire_engine/render/resources.hpp>
@@ -83,65 +84,29 @@ Vec3 skinnedPosition(const Vertex& vertex, Vec3 position, std::span<const Mat4> 
     return result;
 }
 
-// One caster's shadow-LOD decision, made BEFORE either draw command is built so both can be written
-// from it: the shadow command binds the geometry, and the forward command mirrors `level` for the
-// ShadowLod debug view. Staging it this way is what keeps the two consistent by construction —
-// there is no reaching back into an already-pushed command to patch it.
-struct ShadowLodChoice
-{
-    // The geometry the shadow draw must bind. Full detail whenever the selector didn't run, so the
-    // caller can assign these unconditionally.
-    BufferHandle indexBuffer{NullBuffer};
-    uint32_t indexCount{0};
-    uint32_t level{0};
-    ShadowLodReason reason{ShadowLodReason::Count};
-};
-
-// Shadows tolerate a coarser LOD than the main view (silhouette detail matters less), hence the
-// relaxed budget.
+// SH-03: the unresolved caster description a shadow command carries.
 //
-// KNOWN DEFECT, measured by SH-01 and fixed by SH-03: this selects from the CAMERA's position,
-// projection and viewport, and the one resulting command is then replayed into every shadow view. A
-// caster's level should come from the shadow view that rasterises it, in shadow-map texels.
+// This is the seam. Nothing here picks a level — the level belongs to the shadow VIEW that
+// rasterises the caster, in that view's shadow-map texels, and one command is resolved once per
+// view it survives into. What is decided here is only what cannot vary per view: which geometry the
+// caster is, how its transform scales object-space error into world space, and who it is for
+// hysteresis purposes.
 //
-// What the per-view histograms can and cannot show: every surviving command carries the SAME
-// camera-derived level into every view, but each view accepts a different SUBSET of commands, so
-// aggregate drawn histograms legitimately differ — normally they measure a view's surviving
-// composition, not the selection rule. The clean identical-distribution control is culling disabled
-// with identical candidate spans; that is where the defect reads directly as "every view rasterises
-// the level the camera picked".
-//
-// Reason precedence is fixed and mutually exclusive: LOD off beats everything, then a single-level
-// geometry has nothing to select, and only then does the selector run.
+// `worldScale` is the conservative sigma_max of the model's linear part — the same bound VDPM uses,
+// computed once per caster rather than once per view because it is a property of the transform
+// alone.
 [[nodiscard]]
-ShadowLodChoice chooseShadowLod(const Geometry& geometry, const FrameInfo& frame,
-                                const Vec3& centroid)
+ShadowGeometryRequest makeShadowRequest(const Geometry& geometry, ShadowCasterId casterId,
+                                        ShadowCasterGeneration generation, const Mat4& model,
+                                        bool lodEnabled)
 {
-    ShadowLodChoice choice{.indexBuffer = geometry.indexBuffer(),
-                           .indexCount = geometry.indexCount()};
-    if (!frame.lodEnabled)
-    {
-        choice.reason = ShadowLodReason::LodDisabled;
-        return choice;
-    }
-    if (geometry.lods().size() <= 1)
-    {
-        // Includes cloth / storage-vertex geometry, which never builds coarser levels.
-        choice.reason = ShadowLodReason::SingleLevel;
-        return choice;
-    }
-
-    const float distance = (centroid - frame.cameraPosition).magnitude();
-    const std::size_t level = selectLod(geometry.lods(), distance, std::abs(frame.proj[1, 1]),
-                                        static_cast<float>(frame.viewportHeight),
-                                        frame.lodPixelErrorBudget * kShadowLodBias);
-    // The level and the buffers are assigned together, so the reported level and the bound geometry
-    // cannot disagree. Level 0 here was CHOSEN within budget — not a fallback.
-    choice.indexBuffer = geometry.lods()[level].indexBuffer;
-    choice.indexCount = geometry.lods()[level].indexCount;
-    choice.level = static_cast<uint32_t>(level);
-    choice.reason = ShadowLodReason::Selected;
-    return choice;
+    return ShadowGeometryRequest{.lods = geometry.lods(),
+                                 .baseIndexBuffer = geometry.indexBuffer(),
+                                 .baseIndexCount = geometry.indexCount(),
+                                 .worldScale = largestSingularValue(linearPart(model)),
+                                 .casterId = casterId,
+                                 .generation = generation,
+                                 .lodEnabled = lodEnabled};
 }
 
 } // namespace
@@ -167,8 +132,16 @@ void Object::shadowGeometry(std::size_t geometryIndex, const Geometry* geometry)
     {
         return;
     }
-    bindings_[geometryIndex].shadowGeometry =
-        geometry != nullptr ? geometry : bindings_[geometryIndex].geometry;
+    auto& binding = bindings_[geometryIndex];
+    const Geometry* replacement = geometry != nullptr ? geometry : binding.geometry;
+    if (replacement != binding.shadowGeometry)
+    {
+        // The LOD chain the hysteresis history was built against is gone. Advancing the generation
+        // changes the state KEY, so stored history is simply not found — rather than being
+        // reapplied to a different chain that merely happens to have the same number of levels.
+        binding.shadowGeneration = nextShadowCasterGeneration(binding.shadowGeneration);
+    }
+    binding.shadowGeometry = replacement;
 }
 
 void Object::addVariantMaterial(std::size_t geometryIndex, std::size_t variantIndex,
@@ -814,13 +787,17 @@ std::vector<DrawCommand> Object::buildDrawCommands(const FrameInfo& frame, const
                                  binding.shadowBufs[frame.currentFrame] != NullBuffer;
         const Geometry* shadowGeometry =
             binding.shadowGeometry != nullptr ? binding.shadowGeometry : binding.geometry;
-        // Decided before EITHER command is pushed, because both consume it: the shadow draw binds
-        // the chosen geometry, and the forward draw carries the level through to the ShadowLod
-        // debug tint (a shadow draw is depth-only, so it can never tint anything itself).
-        const ShadowLodChoice shadowLod =
-            castsShadow ? chooseShadowLod(*shadowGeometry, frame, centroid) : ShadowLodChoice{};
-        // A non-caster reports the sentinel, never level 0 — see kNoShadowLod.
-        cmd.shadowLodLevel = castsShadow ? shadowLod.level : kNoShadowLod;
+        // SH-03: no level can be reported HERE. A caster holds one level per shadow view, and none
+        // of them exist until the shadow pass resolves — so the forward command leaves the sentinel
+        // and carries only the caster's IDENTITY, which is what lets the renderer fill in the
+        // focused view's level once that pass has run (slice 5). A non-caster carries no identity
+        // at all, and therefore stays neutral grey.
+        cmd.shadowLodLevel = kNoShadowLod;
+        if (castsShadow)
+        {
+            cmd.shadowCasterId = binding.shadowCasterId;
+            cmd.shadowGeneration = binding.shadowGeneration;
+        }
         commands.push_back(cmd);
 
         if (castsShadow)
@@ -828,14 +805,17 @@ std::vector<DrawCommand> Object::buildDrawCommands(const FrameInfo& frame, const
             DrawCommand shadowCmd = cmd;
             shadowCmd.vertexBuffer = shadowGeometry->vertexBuffer();
             shadowCmd.indexType = shadowGeometry->indexType();
-            // The copy inherits the FORWARD selection, so both fields are overwritten from the
-            // staged decision: `lodLevel` must describe the shadow geometry bound right here (with
-            // discrete LOD the copy would report the forward level, and in VDPM mode a meaningless
-            // 0 — either way the SH-01 histogram would measure the wrong pass).
-            shadowCmd.indexBuffer = shadowLod.indexBuffer;
-            shadowCmd.indexCount = shadowLod.indexCount;
-            shadowCmd.lodLevel = shadowLod.level;
-            shadowCmd.shadowLodReason = shadowLod.reason;
+            // UNRESOLVED, and unmistakably so. The copy inherits the forward draw's index buffer
+            // and count, which describe a level chosen for the camera — they are cleared, so a
+            // view that failed to resolve draws nothing rather than silently rasterising the
+            // forward mesh. `lodLevel` goes to the sentinel for the same reason: on a shadow
+            // command the real answer belongs to each view's resolution.
+            shadowCmd.indexBuffer = NullBuffer;
+            shadowCmd.indexCount = 0;
+            shadowCmd.lodLevel = kNoShadowLod;
+            shadowCmd.shadowRequest =
+                makeShadowRequest(*shadowGeometry, binding.shadowCasterId, binding.shadowGeneration,
+                                  world, frame.shadowLodEnabled);
             // Shadows keep discrete LOD and draw directly — clear the VDPM indirect handle the copy
             // inherited from the forward command, or the "non-null selects indirect" invariant
             // would point the shadow draw at the forward index count. Clear the GPU-front handle

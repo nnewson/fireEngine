@@ -15,6 +15,8 @@
 #include <fire_engine/graphics/gpu_handle.hpp>
 #include <fire_engine/graphics/lighting.hpp>
 #include <fire_engine/graphics/particle.hpp>
+#include <fire_engine/graphics/shadow_lod_resolver.hpp>
+#include <fire_engine/graphics/shadow_render_view.hpp>
 #include <fire_engine/math/mat4.hpp>
 #include <fire_engine/math/vec3.hpp>
 #include <fire_engine/render/constants.hpp>
@@ -87,6 +89,30 @@ struct RendererDebug
     // Which frame to capture (1-based). Enough frames must pass for the swapchain, IBL and any
     // temporal accumulation to settle; 16 is comfortably past that at any frame rate.
     int captureFrame{16};
+    // --no-shadow-lod: force every shadow caster to LOD0, leaving the FORWARD selection alone. The
+    // reference for any A/B of shadow LOD (see RenderTunables::shadowLodEnabled).
+    bool shadowLod{true};
+    // --shadow-budget <texels> / --shadow-ratio <r>: SH-03's two calibration values, as the raw
+    // argument text. Empty optional = flag absent (use the constant); engaged = validated in the
+    // Renderer, where anything unusable is TERMINAL — missing, malformed, non-finite, non-positive,
+    // or a ratio above 1. A calibration input that silently falls back to the default produces a
+    // sweep row that looks like a measurement of the value you asked for and is not.
+    std::optional<std::string_view> shadowLodBudget{};
+    std::optional<std::string_view> shadowLodCoarsenRatio{};
+    // --shadow-focus <group>:<slot>: focus one shadow view for the diagnostics panel and the
+    // ShadowLod tint, so a capture can name its view instead of needing a click.
+    //
+    // TRI-STATE, deliberately: `nullopt` is "flag absent", an ENGAGED-but-empty value is "flag
+    // given with no usable value" (which is terminal), and an engaged non-empty value is the
+    // request. Two states would collapse `--shadow-focus` with a missing or flag-shaped value into
+    // "no request", and the run would then capture the default view while looking exactly like a
+    // correct capture of whatever was intended.
+    //
+    // A slot is the only handle available before the engine runs (identities are allocated at
+    // load), so it is resolved ONCE at startup into the identity occupying that slot, and only the
+    // identity is stored. An absent slot fails by name rather than falling back. It points at argv,
+    // which outlives the parse.
+    std::optional<std::string_view> shadowFocus{};
     // --require-validation: refuse to start unless the Vulkan validation layer is actually active.
     // For the render smoke and any automated run where "zero VUIDs" must mean "checked and clean"
     // rather than "nothing was checking". Off by default so a machine without the SDK still runs.
@@ -250,28 +276,25 @@ private:
 
     void updateLightData(Vec3 cameraPosition, Vec3 cameraTarget, float aspect,
                          std::span<const Lighting> lights);
-    // Resets shadowViewProjs_ and writes the per-cascade matrix slots. Fills
-    // out.cascadeViewProj / out.cascadeSplits. Reads directionalLightDir_ for
-    // the light basis, so the caller must set it before calling.
+    // RESETS shadowViews_ (so a view that stopped being active cannot linger from the previous
+    // frame) and populates the cascade slots, then derives out.cascadeViewProj from the set. Fills
+    // out.cascadeSplits. Reads directionalLightDir_ for the light basis, so the caller must set it
+    // before calling. Runs before anything else populates the set.
     void computeShadowCascades(LightUBO& out, Vec3 cameraPosition, Vec3 cameraTarget, float aspect);
     // Registers the packed light as a spot caster if there is room (advancing
-    // activeSpotCasters_) and writes the matching matrices into out and
-    // shadowViewProjs_. No-op if the spot caster cap is hit.
+    // activeSpotCasters_) and populates that spot slot in shadowViews_. No-op if the
+    // spot caster cap is hit.
     void assignSpotShadow(LightUBO& out, int packedSlot, const Lighting& light);
     // Registers the packed light as a point caster if there is room (advancing
-    // activePointCasters_ and pointCasters_) and writes its six cube-face
-    // matrices into shadowViewProjs_. No-op if the point caster cap is hit.
+    // activePointCasters_ and pointCasters_) and populates its six cube-face
+    // slots in shadowViews_. No-op if the point caster cap is hit.
     void assignPointShadow(LightUBO& out, int packedSlot, const Lighting& light);
     // Fills out.iblParams / out.shadowParams / out.environmentParams from the
     // engine-wide constants plus the debug-flag members.
     void writeIblAndDebugParams(LightUBO& out) const;
     void assignSelfShadowSlots(std::span<DrawCommand> drawCommands);
     static void clearDrawBuckets(DrawBuckets& buckets) noexcept;
-    // `shadowStats` is mutated: the SH-01 LOD-reason tally is accumulated here, once per shadow
-    // command, because this is the only place that sees each command exactly once before the
-    // non-exclusive bucket split duplicates it.
-    void buildDrawBuckets(std::span<const DrawCommand> drawCommands, DrawBuckets& buckets,
-                          ShadowFrameStats& shadowStats) const;
+    void buildDrawBuckets(std::span<const DrawCommand> drawCommands, DrawBuckets& buckets) const;
     void recordDrawBucket(vk::CommandBuffer cmd, std::span<const DrawCommand> bucket,
                           PipelineHandle& lastBoundPipeline) const;
 
@@ -281,6 +304,21 @@ private:
     [[nodiscard]] const DrawBuckets& collectDrawCommands(RenderableScene& scene,
                                                          Vec3 cameraPosition, Vec3 cameraTarget);
     void recordShadowPass(vk::CommandBuffer cmd, const DrawBuckets& buckets);
+    // SH-03 slice 5: colour the ShadowLod debug view by the level the FOCUSED shadow view chose.
+    //
+    // Runs BETWEEN the shadow pass and the forward pass, which is the only window in which the
+    // answer exists: the levels are decided per view during shadow recording, and the forward
+    // draws' push constants are written afterwards. It patches this frame's forward buckets, so it
+    // must be called after recordShadowPass and before recordForwardPass / recordDepthPrepass.
+    //
+    // A no-op unless the ShadowLod view is active — the tint is the only consumer, and walking the
+    // buckets to compute a value nothing reads would be pure cost.
+    void applyShadowLodTint(DrawBuckets& buckets) const;
+    // Honours a pending --shadow-focus once, translating its slot into the identity that slot holds
+    // in THIS frame's view set. Called after the set is fully populated; throws (naming the
+    // request) if the slot is inactive, because continuing would capture a different view than was
+    // asked for while looking perfectly correct.
+    void resolveShadowFocusRequest();
     // Depth-only prepass over the opaque bucket, before the forward pass, so the
     // shared depth buffer is filled for SSAO and the forward pass gets early-Z.
     void recordDepthPrepass(vk::CommandBuffer cmd, const DrawBuckets& buckets);
@@ -409,7 +447,21 @@ private:
     // Forward pipeline globals (descriptor set 1) — one set per frame-in-flight,
     // bound once at the start of every forward pass.
     std::array<DescriptorSetHandle, kMaxFramesInFlight> globalDescSets_{};
-    std::array<Mat4, kShadowTotalMatrixCount> shadowViewProjs_{};
+    // SH-03: the single authority for every shadow view this frame — matrix, projection descriptor
+    // and stable logical identity together. Every consumer (the ShadowUBO matrix array, the
+    // LightUBO arrays, the coarse cull frustums, the shadow pass) is a PROJECTION of this set; no
+    // producer writes a shadow matrix anywhere else. Populated in view order: reset + cascades and
+    // punctual views in updateFrameLighting, self layers once the draws are known, world-only once
+    // `anySkinned` is.
+    ShadowRenderViewSet shadowViews_;
+    // SH-03: per-frame LOD resolution cache + the cross-frame hysteresis history. Staged during
+    // recording and committed only once the frame has been submitted, so a frame that was thrown
+    // away leaves no dead band behind.
+    ShadowLodResolver shadowLodResolver_;
+    // The pending --shadow-focus request, held only until the first frame that can resolve it into
+    // a logical identity (see resolveShadowFocusRequest). Cleared once honoured, so it can never
+    // re-apply and re-anchor the focus to a slot after the user has clicked elsewhere.
+    std::optional<ShadowViewSlotRequest> pendingShadowFocus_{};
     LightUBO lightData_{};
     Vec3 directionalLightDir_{1.0f, -1.0f, 1.0f};
     int activeSpotCasters_{0};

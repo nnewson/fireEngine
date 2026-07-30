@@ -4,6 +4,7 @@
 #include <cstddef>
 
 #include <fire_engine/graphics/lod.hpp>
+#include <fire_engine/graphics/shadow_diagnostics.hpp>
 #include <fire_engine/render/constants.hpp>
 
 namespace fire_engine
@@ -85,6 +86,31 @@ struct RenderTunables
     // screen-space pixel error budget. The toggle doubles as the A/B regression escape hatch.
     bool lodEnabled{true};
     float lodPixelErrorBudget{kLodPixelErrorBudget};
+    // SH-03: the shadow-LOD budget, in SHADOW-MAP TEXELS of the view doing the rasterising. Kept
+    // beside the camera budget but deliberately separate — the two are in different units and are
+    // calibrated against different evidence, and sharing one number is what made every shadow view
+    // rasterise the camera's choice.
+    // Shadow LOD, separate from the forward toggle above (SH-03 slice 6). Off forces every caster
+    // to LOD0 in every shadow view while the visible geometry keeps selecting normally — the only
+    // honest reference for an A/B of shadow LOD, since `lodEnabled = false` also changes what the
+    // camera sees.
+    bool shadowLodEnabled{true};
+    float shadowLodPixelBudget{kShadowLodPixelBudget};
+    // The hysteresis dead band: coarsening must project within `budget * ratio` while refining
+    // triggers at `budget`. Live for the same reason the budget is — SH-03's calibration sweeps
+    // both, and the two interact (a wider band hides a budget that is slightly too tight).
+    float shadowLodCoarsenRatio{kShadowLodCoarsenRatio};
+    // Which shadow view the diagnostics panel is interrogating (SH-03 slice 4), keyed by LOGICAL
+    // identity rather than physical slot. Defaults to the scene rollup.
+    //
+    // A selection can outlive the view it names — a light leaves the scene, and the slots after it
+    // compact. Identity keying is what makes that safe: the view is searched for by id each frame,
+    // so the panel either finds it (possibly in a different slot) or reports that it did not
+    // rasterise, and never silently retargets to whichever light now occupies the old slot. That
+    // matters more once slice 5 tints by this: the panel reads a COMPLETED ring frame while the
+    // tint samples the CURRENT one, so a slot-keyed focus could have the two describing different
+    // views in the same instant.
+    ShadowViewFocus shadowViewFocus{};
     // Discrete = hard LOD swaps (Phase 1); Continuous = VIPM geomorph (Phase 2). Coexist —
     // selectable.
     LodMode lodMode{LodMode::Discrete};

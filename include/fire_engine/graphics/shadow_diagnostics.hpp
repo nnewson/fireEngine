@@ -2,9 +2,11 @@
 
 #include <array>
 #include <cstdint>
+#include <optional>
 #include <string_view>
 
 #include <fire_engine/graphics/gpu_limits.hpp>
+#include <fire_engine/graphics/shadow_identity.hpp>
 
 namespace fire_engine
 {
@@ -97,8 +99,8 @@ inline constexpr std::size_t kShadowViewGroupCount =
     case ShadowViewGroup::Spot:
         return static_cast<std::size_t>(kMaxSpotShadowCasters);
     case ShadowViewGroup::Point:
-        // Flattened: lightSlot * 6 + face.
-        return static_cast<std::size_t>(kMaxPointShadowCasters) * 6;
+        // Flattened: lightSlot * kCubeFaceCount + face.
+        return static_cast<std::size_t>(kMaxPointShadowCasters) * kCubeFaceCount;
     case ShadowViewGroup::Count:
         break;
     }
@@ -119,7 +121,7 @@ inline constexpr std::size_t kShadowViewGroupCount =
 inline constexpr std::size_t kShadowViewCount = shadowViewGroupBase(ShadowViewGroup::Count);
 
 // Flat index for (group, slot). `slot` is the physical slot within the group — cascade index,
-// self-shadow caster slot, spot light slot, or `lightSlot * 6 + face` for point.
+// self-shadow caster slot, spot light slot, or `lightSlot * kCubeFaceCount + face` for point.
 [[nodiscard]] constexpr std::size_t shadowViewIndex(ShadowViewGroup group,
                                                     std::size_t slot) noexcept
 {
@@ -129,7 +131,30 @@ inline constexpr std::size_t kShadowViewCount = shadowViewGroupBase(ShadowViewGr
 [[nodiscard]] constexpr std::size_t shadowPointViewSlot(std::size_t lightSlot,
                                                         std::size_t face) noexcept
 {
-    return lightSlot * 6 + face;
+    return lightSlot * kCubeFaceCount + face;
+}
+
+// Which kind of logical identity a group's views carry. The families are not interchangeable: a
+// cascade identity can only name a cascade view, so a focus pairing one with the Spot group names
+// nothing and must be rejected as malformed rather than searched for forever. WorldOnly maps to
+// Cascade because `worldOnly(i)` IS `cascade(i)` — the two passes deliberately share one identity.
+[[nodiscard]] constexpr ShadowLogicalViewKind shadowViewKindFor(ShadowViewGroup group) noexcept
+{
+    switch (group)
+    {
+    case ShadowViewGroup::Cascade:
+    case ShadowViewGroup::WorldOnly:
+        return ShadowLogicalViewKind::Cascade;
+    case ShadowViewGroup::Self:
+        return ShadowLogicalViewKind::Self;
+    case ShadowViewGroup::Spot:
+        return ShadowLogicalViewKind::Spot;
+    case ShadowViewGroup::Point:
+        return ShadowLogicalViewKind::Point;
+    case ShadowViewGroup::Count:
+        break;
+    }
+    return ShadowLogicalViewKind::Invalid;
 }
 
 // LOD histogram bins: levels 0, 1, 2, and "3 or coarser" lumped together (the deep tail carries no
@@ -146,8 +171,16 @@ inline constexpr std::size_t kShadowLodBinCount = 4;
 //
 // `candidate*` counts what was OFFERED to this view — every shadow draw the pass walked for it.
 // `drawn*` counts what was actually recorded after the per-view filter (frustum reject, or a
-// self-shadow slot belonging to a different caster). candidate − drawn is therefore the filter's
-// yield, and `drawn` is the real GPU cost.
+// self-shadow slot belonging to a different caster) and after this view resolved its LOD.
+//
+// SH-03 changed what `candidateTriangles` MEANS, deliberately. A candidate's triangle count used to
+// be known up front, because the level had already been chosen from the camera; now a rejected
+// caster is never resolved at all, and asking for its triangles would mean selecting a level for a
+// view that will not draw it — the very thing the filter-before-select order exists to avoid. So
+// `candidateTriangles` is now the FULL-DETAIL (whole-mesh) triangle count of every draw walked: the
+// cost this view would pay with neither culling nor LOD. `candidateTriangles − drawnTriangles` is
+// therefore the combined saving of both, not the filter's yield alone. For the filter's yield in
+// isolation, use `candidateDraws − drawnDraws`, which is still exactly that.
 struct ShadowViewStats
 {
     // Times this view was actually rasterised — incremented when the pass BEGINS recording it, so a
@@ -163,19 +196,173 @@ struct ShadowViewStats
     // rasterise the same view twice and doubling a selection distribution would misreport it, so
     // the caller passes `countSelection` only on the first layer.
     std::array<std::uint64_t, kShadowLodBinCount> lodHistogram{};
+    // Why each drawn draw got the level it did, counted PER VIEW (SH-03). It used to be a single
+    // frame-wide tally taken once per command, which was true only while every view rasterised the
+    // one camera-derived choice; now each view resolves its own, so a frame-wide count would be the
+    // sum of several unrelated decisions with no way to tell which view forced what. Subject to the
+    // same `countSelection` rule as the histogram.
+    std::array<std::uint64_t, kShadowLodReasonCount> lodReasons{};
+    // WHICH logical view these counters describe, recorded when the view is marked rasterised.
+    //
+    // A physical slot is not an identity: spot, point and self assignments are compacted in
+    // scene-gather order every frame, so slot 1 can be a different light next frame. Rows are still
+    // addressed by slot (that is what the renderer rasterises), but anything that must refer to the
+    // SAME view across frames — a panel selection, and from slice 5 the tint — has to key on this.
+    // Invalid only on a view that never rasterised.
+    ShadowLogicalViewId logicalId{};
 
-    void beginRasterPass() noexcept;
-    // ONE operation per draw the pass walked for this view, so `drawn` can never exceed
-    // `candidate`: a separate add-candidate/add-drawn pair let a caller (or a test) record an
-    // accepted draw that was never offered, which would corrupt the promised
-    // `candidate − drawn = filter yield`. `accepted` is the per-view filter's verdict.
-    void observe(std::uint64_t triangles, bool accepted, std::uint32_t lodLevel,
-                 bool countSelection) noexcept;
+    // Marks this view rasterised, and states WHICH view it is. The identity is required rather than
+    // optional: it is the only chance to record it, and a row that cannot say what it describes
+    // cannot be selected reliably later.
+    //
+    // Returns false and changes NOTHING when the identity is invalid, or when this row already
+    // holds a different one. A row is one logical view's counters: two identities rasterising into
+    // the same physical slot in one frame would merge their draws, triangles and level
+    // distributions and then label the total as whichever came second — a plausible row describing
+    // no real view. Repeating the SAME identity is the normal case (a self-shadow slot's two depth
+    // layers). The caller must treat a false return as terminal; the counters are unusable evidence
+    // either way, and the renderer knows which view it was trying to record.
+    [[nodiscard]] bool beginRasterPass(ShadowLogicalViewId view) noexcept;
+    // THE FOUR OBSERVATION RULES. Every per-view number in the panel is only readable because these
+    // hold together; each one exists because breaking it produced a plausible-looking wrong answer:
+    //
+    //  1. A view that was RASTERISED reports, even with nothing to draw. `beginRasterPass` runs
+    //     before the span is walked, so an empty-but-rendered map — a real cost, and evidence a map
+    //     is being rendered for no reason — is visible instead of vanishing.
+    //  2. ONE observation per walked draw, carrying the filter's verdict. A separate
+    //     add-candidate/add-drawn pair would let a caller record an accepted draw that was never
+    //     offered, and `drawn <= candidate` would stop being structural.
+    //  3. `accepted` is the FILTER's verdict alone, evaluated before resolution. Nothing else may
+    //  be
+    //     folded into it, or `candidateDraws - drawnDraws` stops being exactly the cull yield (a
+    //     caster that failed to resolve is terminal in the pass, not quietly counted as culled).
+    //  4. Selection is counted ONCE per logical view. A self-shadow slot rasterises the same view
+    //     twice, so the second layer passes `countSelection = false`: its cost is real, its level
+    //     is the same decision, and counting it again would double a distribution.
+    //
+    // `fullDetailTriangles` is the whole-mesh count (always known); `resolvedTriangles`, `lodLevel`
+    // and `reason` describe this view's resolution and are read only when `accepted`, because a
+    // rejected draw was never resolved and has no level or reason to report.
+    void observe(std::uint64_t fullDetailTriangles, bool accepted, std::uint64_t resolvedTriangles,
+                 std::uint32_t lodLevel, ShadowLodReason reason, bool countSelection) noexcept;
     // Rasterised at all this frame — independent of whether anything was drawn into it.
     [[nodiscard]] bool touched() const noexcept
     {
         return rasterPasses != 0;
     }
+};
+
+// WHICH view the diagnostics are being read for: one LOGICAL view, or the whole scene.
+//
+// Per-view selection made the scene rollup insufficient on its own. A rollup answers "how much
+// shadow work happened", but the question SH-03 raises is "why did THIS map keep that much
+// geometry" — and one caster now holds a different level in every view it appears in, so the sum
+// over views is a distribution of unrelated decisions. This names the view being interrogated.
+// (SH-03 slice 5 reuses it: the ShadowLod tint needs one view to tint by, for the same reason.)
+//
+// Keyed by IDENTITY, not by physical slot. Slots are compacted in scene-gather order each frame, so
+// a slot-keyed focus silently retargets to whichever light replaced the one you selected — and the
+// tint makes that worse than a mislabelled row, because the panel reports a COMPLETED ring frame
+// while the tint would sample the CURRENT one, so the two could disagree about which view they
+// mean. `group` is still needed: a cascade and its world-only twin deliberately share one logical
+// id, and they are different maps with different counters.
+struct ShadowViewFocus
+{
+    // False means the scene rollup. Kept as a flag rather than a sentinel so "no view chosen"
+    // cannot be confused with a real group whose views happen to be inactive.
+    bool perView{false};
+    ShadowViewGroup group{ShadowViewGroup::Cascade};
+    ShadowLogicalViewId view{};
+
+    // Names a view that COULD exist. False for the scene rollup (it names no view at all), for an
+    // unusable group or identity, and — the case independent checks miss — for a well-formed pair
+    // that cannot go together, like a cascade identity in the Spot group. That combination would
+    // otherwise look addressable and then never be found, which reads as "this view keeps not
+    // rendering" instead of "this selection is malformed".
+    //
+    // Says nothing about whether the view ran this frame; that is a separate question with a
+    // separate answer, because the diagnostics cannot tell a view that is absent this frame from
+    // one that is gone for good — that would need scene liveness they do not have.
+    [[nodiscard]] bool addressable() const noexcept
+    {
+        return perView && static_cast<std::size_t>(group) < kShadowViewGroupCount && view.valid() &&
+               view.kind() == shadowViewKindFor(group);
+    }
+};
+
+// A request to focus the view currently occupying one physical slot, parsed from `--shadow-focus`.
+//
+// A slot is the only handle a person has BEFORE the engine runs — logical identities are allocated
+// at load — so the command line has to speak in slots. It is resolved ONCE, at startup, into the
+// identity that slot holds, and the identity is what gets stored; the request itself is then
+// discarded. Keeping the slot would reintroduce exactly the defect the identity-keyed focus exists
+// to prevent: the selection would silently retarget when assignments compact.
+struct ShadowViewSlotRequest
+{
+    ShadowViewGroup group{ShadowViewGroup::Cascade};
+    std::size_t slot{0};
+};
+
+// Validates one SH-03 calibration override (`--shadow-budget` / `--shadow-ratio`) — the numeric
+// half of the flags, kept here so it is headless-testable rather than buried in the renderer.
+//
+// Returns nothing for anything unusable: empty, malformed, a numeric PREFIX only ("4x"), non-finite
+// ("nan"/"inf"), non-positive, or above `maximum`. The caller reports that by name and refuses to
+// start — a calibration input that silently became the default would produce a sweep row that reads
+// like a measurement of the value that was asked for.
+//
+// `maximum` is inclusive; the budget has none (pass infinity), the coarsening ratio must be <= 1
+// because the selector treats anything outside (0, 1] as an invalid caster and would force LOD0 for
+// the whole run while still producing an image and a table.
+[[nodiscard]] std::optional<float> parseShadowCalibrationValue(std::string_view text,
+                                                               float maximum) noexcept;
+
+// Parses `<group>:<slot>` — `cascade:2`, `world-only:0`, `self:0`, `spot:1` — plus `point:<light>`
+// `:<face>` for a cube face (`point:0:4`), since a flat point slot is an implementation detail no
+// one should have to compute. Returns nothing for an unknown group, a malformed number, or a slot
+// outside the group's capacity; the caller reports that by name rather than falling back, because a
+// silent fallback would produce a capture of the wrong view that looks perfectly fine.
+[[nodiscard]] std::optional<ShadowViewSlotRequest>
+parseShadowViewSlotRequest(std::string_view text) noexcept;
+
+// Where a focused view was found this frame: its counters and the physical slot carrying them (the
+// slot is what the row label says, and it can differ from frame to frame for one identity).
+struct FocusedShadowView
+{
+    const ShadowViewStats* stats{nullptr};
+    std::size_t slot{0};
+
+    [[nodiscard]] bool found() const noexcept
+    {
+        return stats != nullptr;
+    }
+};
+
+// How the per-view LOD decisions MOVED when this frame's levels were committed (SH-03 slice 6).
+//
+// Counted per (caster, logical view) at COMMIT, so a decision only lands here once the frame it
+// belongs to was actually submitted.
+//
+// TRANSITIONS ARE NOT CHATTER, and conflating them is the mistake this type is shaped to prevent. A
+// caster moving away from a light legitimately steps L0 → L1 → L2 and stays there: three
+// transitions, no instability. Chatter is a caster REVERSING — L1 → L2 → L1 — which is what a
+// viewer sees as a silhouette flickering in place, and what the hysteresis dead band exists to
+// stop. A dead band cannot remove legitimate transitions and should not be judged by them.
+struct ShadowLodTransitions
+{
+    // Held the level it already had. The quiet, expected case.
+    std::uint64_t held{0};
+    // Moved to a different level than the one committed previously. Includes both legitimate
+    // motion and chatter; `reversed` below is the part that indicates instability.
+    std::uint64_t transitions{0};
+    // Moved BACK to the level held before the last one — L1 → L2 → L1. This is the chatter signal:
+    // a caster oscillating across a threshold rather than travelling through it. Sustained non-zero
+    // counts are what justify widening the dead band (a SMALLER coarsen ratio).
+    std::uint64_t reversed{0};
+    // Seen for the first time (no previous level for that view). Neither good nor bad: a caster
+    // entering a view, or the first frame after a reset. Kept separate so it cannot be mistaken for
+    // movement, which is what a plain "decisions" count would do.
+    std::uint64_t firstSeen{0};
 };
 
 // A whole frame's shadow diagnostics. Held in a frame-indexed ring by the renderer and published
@@ -186,12 +373,12 @@ struct ShadowViewStats
 struct ShadowFrameStats
 {
     std::array<ShadowViewStats, kShadowViewCount> views{};
-    // Why each shadow draw got its level, counted at the decision site once per draw (not per view
-    // it is replayed into).
-    std::array<std::uint64_t, kShadowLodReasonCount> lodReasons{};
+    // How this frame's committed levels moved (SH-03 slice 6). Filled by the renderer from the
+    // resolver after the frame is submitted, so it rides the same publish discipline as the
+    // counters above rather than mixing a live number into a completed frame's report.
+    ShadowLodTransitions lodMovement{};
 
     void reset() noexcept;
-    void addLodReason(ShadowLodReason reason) noexcept;
     [[nodiscard]] ShadowViewStats& view(ShadowViewGroup group, std::size_t slot) noexcept;
     [[nodiscard]] const ShadowViewStats& view(ShadowViewGroup group,
                                               std::size_t slot) const noexcept;
@@ -201,6 +388,21 @@ struct ShadowFrameStats
     // Slots this frame actually rasterised — the rows worth printing. A map that rendered and
     // cleared with nothing to draw counts; it cost a pass and its emptiness is a finding.
     [[nodiscard]] std::size_t activeViewCount(ShadowViewGroup group) const noexcept;
+    // Searches `focus.group` for the view carrying `focus.view`, and reports where it was found.
+    //
+    // A SEARCH, not an index: the identity may sit in a different physical slot than it did last
+    // frame, which is the whole reason the focus is keyed by identity rather than by slot.
+    //
+    // For a well-formed focus, not found means simply "not present in this frame" — and that is all
+    // it means. A view whose light was removed and a view that merely did not rasterise are
+    // indistinguishable here (both are valid identities that were not found); separating them would
+    // need scene liveness the diagnostics do not have, so neither this function nor its callers may
+    // claim whether the view will return. Not found is also deliberately distinct from a zeroed
+    // ShadowViewStats, which describes a view that DID run and drew nothing — a finding in its own
+    // right. An unaddressable focus, including the scene rollup, is likewise not found; the caller
+    // separates that case by asking `focus.addressable()`, because "this selection can never name a
+    // view" and "that view is not in this frame" are different things to tell a reader.
+    [[nodiscard]] FocusedShadowView focused(ShadowViewFocus focus) const noexcept;
 };
 
 } // namespace fire_engine

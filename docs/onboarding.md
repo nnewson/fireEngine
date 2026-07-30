@@ -918,6 +918,54 @@ the same change — most have a test or guard that will catch you, but not all.
   the former can service this renderer. Push descriptors are requested as the **1.4 feature**, not
   the promoted `VK_KHR_push_descriptor` extension — don't re-add the extension as a requirement, or
   a conformant 1.4 device that no longer advertises it gets rejected for nothing.
+- **`ShadowRenderViewSet` is the only STORED authority for a shadow matrix.** The fit functions
+  naturally produce matrices; what must not exist is a second place one is kept. Every shadow view
+  this frame — cascade, self, spot, point face — is written into `Renderer::shadowViews_` through
+  the family writer for its slot, together with the `ShadowView` descriptor of the SAME fit and the
+  logical identity that fit belongs to. World-only stores nothing at all: `enableWorldOnly` sets a
+  bit and its lookup ALIASES the cascade entry, so a cascade re-fitted afterwards moves both passes. Every consumer is then a projection of the set:
+  `shadowMatrixArray` for the shadow pass and `FrameInfo::shadowViewProjs`, `cascadeViewProjArray` /
+  `spotViewProjArray` / `selfShadowViewProjArray` for the LightUBO, and `find()` per active slot for
+  the coarse cull frustums. Don't reintroduce a parallel matrix array or write a matrix into the
+  LightUBO directly — the failure mode is a view culling and selecting LOD against one fit while
+  rasterising another, which reads as a shadow that is subtly wrong rather than obviously broken.
+  Population is ORDERED by what is known when: `reset()` + cascades + punctual views in
+  `updateFrameLighting`, self layers in `assignSelfShadowSlots` (needs the draws), world-only last
+  (needs `buckets.anySkinned`). Every writer returns `[[nodiscard]] bool`, and **a rejection is
+  terminal in both builds, by two different routes**: in Dev the set's own assertion fires inside
+  the writer (the shortest path to the producer that got it wrong); under NDEBUG that assertion is
+  gone, the writer returns false, and `rejectedShadowView` throws so `main()` logs a named `Fatal:`
+  and exits non-zero. Nothing degrades through it, and no counter (`activeSpotCasters_`, `activePointCasters_`,
+  `selfShadowSlotsScratch_`) advances until the set has accepted the view, so a pass can never be
+  driven by a count the set does not back. `anySkinned` is only the world-only *request*;
+  `recordShadowPass` reads whether it runs back out of the set.
+- **A shadow command is UNRESOLVED, and every shadow view resolves it itself** (SH-03). `Object`
+  emits a `ShadowGeometryRequest` and leaves the command's `indexBuffer`/`indexCount` null and its
+  `lodLevel` at `kNoShadowLod`; `Shadows::recordPass` filters for the view FIRST and only then calls
+  `ShadowLodResolver::resolve`, binding the returned buffer. Two rules travel with that: a caster a
+  view rejected must never be resolved (it would acquire a dead band against a view it does not
+  appear in), and only a `Selected` reason may write history (a forced fallback would overwrite a
+  justified level). Staged history is committed in `drawFrame` after submit — if you add an early
+  return between resolution and submit, the next `beginFrame` must drop the staged levels, which is
+  what it does. Don't reintroduce a level on the command itself: with per-view selection there is no
+  single level a caster has.
+- **Shadow LOD has its own on/off switch, and calibration inputs are terminal** (SH-03 slice 6).
+  `FrameInfo::shadowLodEnabled` is separate from `lodEnabled` so `--no-shadow-lod` can force shadow
+  LOD0 while the visible geometry keeps selecting — that separation is what makes an A/B of shadow
+  LOD measure shadows and nothing else. `--shadow-budget` / `--shadow-ratio` are validated in the
+  Renderer and REFUSE to start on anything unusable rather than falling back to the constant: a
+  calibration input that silently becomes the default produces a sweep row that reads like a
+  measurement of the value you asked for. Re-derive both values with `tools/shadow_lod_sweep.sh`.
+- **The ShadowLod tint reads back through `drawnResolution(group, key)`** (SH-03 slice 5).
+  `Renderer::applyShadowLodTint` runs between `recordShadowPass` and the forward pass — the only
+  window where the per-view levels exist and the forward push constants have not been written yet.
+  It asks ONE question of the focused view's family: what did that pass draw for this caster.
+  `frameResolution(key)` is deliberately not the tint's query — it returns the SHARED decision, and
+  a cascade and its world-only twin share one by design while drawing different casters (world-only
+  excludes skinned ones, and cascades record first), so the level alone would attribute one pass's
+  choice to another. Reserve `frameResolution` for inspecting the decision itself. Never re-select
+  for the tint; a second selection sees different history state and the picture would contradict the
+  geometry it describes. Grey means "no level from that view", never level 0.
 - **UBO/push-constant structs ↔ GLSL std140 layout.** `render/ubo.hpp` structs are memcpy'd into
   mapped GPU memory, so their field order, `alignas`, and padding must mirror the matching GLSL
   block exactly. `tests/render/test_ubo.cpp` asserts sizes/offsets — extend it when you add a field.
@@ -1015,7 +1063,7 @@ the same change — most have a test or guard that will catch you, but not all.
 - Collision broadphase: `src/collision/dynamic_aabb_tree_broad_phase.cpp` (default), `src/collision/sweep_and_prune_broad_phase.cpp` (alternative), behind `collision/broad_phase.hpp`
 - Narrowphase: `src/collision/narrow_phase.cpp`
 - Mesh component: `src/scene/mesh.cpp`
-- Shadow-LOD selection model (SH-02): `include/fire_engine/graphics/shadow_view.hpp` + `src/graphics/shadow_view.cpp` — Vulkan-free view descriptors, texel projection, and `selectShadowLod`, with the per-cut shadow-deviation channel behind it in the simplifier (see [`lod.md`](lod.md) § The shadow-deviation channel). Pure and headless; SH-03 threads it into the renderer, supplies the texel budget + coarsening ratio from `render/constants.hpp`, and retires `kShadowLodBias`.
+- Shadow-LOD selection model (SH-02): `include/fire_engine/graphics/shadow_view.hpp` + `src/graphics/shadow_view.cpp` — Vulkan-free view descriptors, texel projection, and `selectShadowLod`, with the per-cut shadow-deviation channel behind it in the simplifier (see [`lod.md`](lod.md) § The shadow-deviation channel). Pure and headless. SH-03 threaded it into the renderer: `graphics/shadow_lod_resolver.hpp` + `src/graphics/shadow_lod_resolver.cpp` resolve an unresolved caster per shadow view (a frame cache and a staged hysteresis history, both keyed on the full `(ShadowCasterId, generation, ShadowLogicalViewId)` — the LOGICAL view, not the physical slot, so the passes that must agree share one decision), the budget + coarsening ratio come from `render/constants.hpp`, and `kShadowLodBias` is retired.
 - Draw command generation + LOD selection: `src/graphics/object.cpp`
 - Mesh LOD / simplifier: `include/fire_engine/graphics/lod.hpp`, `src/graphics/mesh_simplifier.cpp`
 - GPU resource registry: `src/render/resources.cpp`

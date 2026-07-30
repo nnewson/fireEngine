@@ -8,9 +8,10 @@
 namespace fire_engine
 {
 
-Lighting Light::toLighting(const Light& light, const Mat4& world) noexcept
+Lighting Light::toLighting(const Light& light, const Mat4& world, NodeId nodeId) noexcept
 {
     Lighting inst;
+    inst.nodeId = nodeId;
     inst.type = std::to_underlying(light.type_);
     inst.worldPosition = Vec3{world[0, 3], world[1, 3], world[2, 3]};
 

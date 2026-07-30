@@ -218,6 +218,10 @@ TEST_CASE("ApplicationArgs.DebugFlagsSetView", "[ApplicationArgs]")
         {"--debug-shadow", DebugView::Shadow},
         {"--debug-shadow-depth", DebugView::ShadowDepth},
         {"--debug-velocity", DebugView::Velocity},
+        {"--debug-ssao", DebugView::Ssao},
+        {"--debug-lod", DebugView::Lod},
+        {"--debug-shadow-lod", DebugView::ShadowLod},
+        {"--debug-joints", DebugView::Joints},
     }));
     CAPTURE(testCase.flag);
 
@@ -374,6 +378,121 @@ TEST_CASE("ApplicationArgs.CaptureFrameDoesNotSwallowAFollowingFlag", "[Applicat
 
     CHECK(parsed.args.debug.captureFrame == 16);
     CHECK_FALSE(parsed.args.debug.lod);
+}
+
+TEST_CASE("ApplicationArgs.ShadowFocusConsumesItsValue", "[ApplicationArgs]")
+{
+    const auto parsed = parseArgs(
+        {"fireEngineApp", "--shadow-focus", "cascade:3", "DamagedHelmet/DamagedHelmet.gltf"});
+    const auto& args = parsed.args;
+
+    REQUIRE(args.debug.shadowFocus.has_value());
+    CHECK(*args.debug.shadowFocus == "cascade:3");
+    // Consumed as the flag's value, NOT left to be read as the scene.
+    CHECK(args.scenePath == "DamagedHelmet/DamagedHelmet.gltf");
+}
+
+TEST_CASE("ApplicationArgs.ShadowFocusRecordsPresenceWithoutAValue", "[ApplicationArgs]")
+{
+    // Unlike --capture, a valueless --shadow-focus must NOT read as "no request". The renderer
+    // refuses to start on an engaged-but-empty value; collapsing it to absent would run with the
+    // default focus and produce a capture of cascade 0 that looks exactly like a correct capture of
+    // whatever view was meant.
+    const auto trailing = parseArgs({"fireEngineApp", "--shadow-focus"});
+    REQUIRE(trailing.args.debug.shadowFocus.has_value());
+    CHECK(trailing.args.debug.shadowFocus->empty());
+
+    // Followed by another flag: that flag is still processed, not eaten as the value — and the
+    // request still reports itself as present-but-unusable.
+    const auto followed = parseArgs({"fireEngineApp", "--shadow-focus", "--overlay"});
+    REQUIRE(followed.args.debug.shadowFocus.has_value());
+    CHECK(followed.args.debug.shadowFocus->empty());
+    CHECK(followed.args.debug.overlayVisible);
+
+    // No flag at all is the only "no request" state.
+    CHECK_FALSE(parseArgs({"fireEngineApp"}).args.debug.shadowFocus.has_value());
+}
+
+TEST_CASE("ApplicationArgs.RepeatedShadowFocusTakesTheLastValue", "[ApplicationArgs]")
+{
+    const auto parsed =
+        parseArgs({"fireEngineApp", "--shadow-focus", "cascade:0", "--shadow-focus", "point:1:4"});
+    REQUIRE(parsed.args.debug.shadowFocus.has_value());
+    CHECK(*parsed.args.debug.shadowFocus == "point:1:4");
+
+    // A valueless repeat REPLACES a good earlier value rather than being ignored: last-one-wins,
+    // and the run then fails loudly instead of silently honouring a superseded request.
+    const auto clobbered =
+        parseArgs({"fireEngineApp", "--shadow-focus", "cascade:0", "--shadow-focus"});
+    REQUIRE(clobbered.args.debug.shadowFocus.has_value());
+    CHECK(clobbered.args.debug.shadowFocus->empty());
+}
+
+TEST_CASE("ApplicationArgs.CalibrationFlagsRecordTheirValueVerbatim", "[ApplicationArgs]")
+{
+    // The parser's job is only to CAPTURE the text; the renderer validates it and refuses to start
+    // on anything unusable. That split is deliberate: a calibration input that quietly fell back to
+    // the default would produce a sweep row indistinguishable from a real measurement of the value
+    // that was asked for, so "keep the default" — the discipline --capture-frame uses — is exactly
+    // wrong here.
+    const auto parsed = parseArgs({"fireEngineApp", "--shadow-budget", "8", "--shadow-ratio", "0.5",
+                                   "DamagedHelmet/DamagedHelmet.gltf"});
+    const auto& args = parsed.args;
+    REQUIRE(args.debug.shadowLodBudget.has_value());
+    REQUIRE(args.debug.shadowLodCoarsenRatio.has_value());
+    CHECK(*args.debug.shadowLodBudget == "8");
+    CHECK(*args.debug.shadowLodCoarsenRatio == "0.5");
+    CHECK(args.scenePath == "DamagedHelmet/DamagedHelmet.gltf"); // values consumed, not positional
+
+    // Malformed text is PRESERVED rather than dropped, so the renderer can name it in the failure.
+    for (std::string_view bad : {"0", "abc", "4x", "nan", "inf"})
+    {
+        CAPTURE(bad);
+        const auto rejected = parseArgs({"fireEngineApp", "--shadow-budget", bad});
+        REQUIRE(rejected.args.debug.shadowLodBudget.has_value());
+        CHECK(*rejected.args.debug.shadowLodBudget == bad);
+    }
+
+    // A leading '-' is read as the NEXT FLAG, not a value — the rule that stops any value-taking
+    // flag from swallowing the flag after it. Safe here because no valid value is negative, and the
+    // outcome is still terminal: the flag is present with an empty value.
+    const auto negative = parseArgs({"fireEngineApp", "--shadow-budget", "-1"});
+    REQUIRE(negative.args.debug.shadowLodBudget.has_value());
+    CHECK(negative.args.debug.shadowLodBudget->empty());
+
+    // A valueless flag records its PRESENCE with an empty value — also terminal downstream, never
+    // "no request".
+    const auto trailing = parseArgs({"fireEngineApp", "--shadow-budget"});
+    REQUIRE(trailing.args.debug.shadowLodBudget.has_value());
+    CHECK(trailing.args.debug.shadowLodBudget->empty());
+
+    const auto followed = parseArgs({"fireEngineApp", "--shadow-ratio", "--overlay"});
+    REQUIRE(followed.args.debug.shadowLodCoarsenRatio.has_value());
+    CHECK(followed.args.debug.shadowLodCoarsenRatio->empty());
+    CHECK(followed.args.debug.overlayVisible); // the following flag is still processed
+
+    // Absent is the only "use the constant" state.
+    const auto none = parseArgs({"fireEngineApp"});
+    CHECK_FALSE(none.args.debug.shadowLodBudget.has_value());
+    CHECK_FALSE(none.args.debug.shadowLodCoarsenRatio.has_value());
+    CHECK(none.args.debug.shadowLod); // shadow LOD on unless --no-shadow-lod says otherwise
+}
+
+TEST_CASE("ApplicationArgs.NoShadowLodLeavesForwardLodAlone", "[ApplicationArgs]")
+{
+    // The reference control for a shadow-LOD A/B. It must NOT touch forward LOD: measuring against
+    // --no-lod changes the visible geometry too, so the comparison contains differences that have
+    // nothing to do with shadows.
+    const auto parsed = parseArgs({"fireEngineApp", "--no-shadow-lod"});
+    CHECK_FALSE(parsed.args.debug.shadowLod);
+    CHECK(parsed.args.debug.lod);
+
+    // --no-lod keeps its documented contract: full detail EVERYWHERE, shadows included. The two
+    // switches are separate internally, which is exactly why this needs pinning — forgetting the
+    // second assignment would silently narrow a promise the runbook's commands depend on.
+    const auto everything = parseArgs({"fireEngineApp", "--no-lod"});
+    CHECK_FALSE(everything.args.debug.lod);
+    CHECK_FALSE(everything.args.debug.shadowLod);
 }
 
 TEST_CASE("ApplicationArgs.RepeatedCaptureFlagsTakeTheLastValue", "[ApplicationArgs]")

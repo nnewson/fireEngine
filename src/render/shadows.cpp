@@ -1,6 +1,10 @@
 #include <fire_engine/render/shadows.hpp>
 
+#include <cassert>
+#include <format>
 #include <optional>
+#include <stdexcept>
+#include <string_view>
 
 #include <fire_engine/graphics/frustum.hpp>
 #include <fire_engine/render/device.hpp>
@@ -87,6 +91,18 @@ public:
     {
         return stats_->view(group_, slot_);
     }
+    [[nodiscard]] ShadowViewGroup group() const noexcept
+    {
+        return group_;
+    }
+    [[nodiscard]] std::string_view groupName() const noexcept
+    {
+        return toString(group_);
+    }
+    [[nodiscard]] std::size_t slot() const noexcept
+    {
+        return slot_;
+    }
     // False only for the self-shadow SECOND depth layer: it re-rasterises the same logical view, so
     // its cost counts but its LOD selection must not be counted twice.
     [[nodiscard]] bool countSelection() const noexcept
@@ -101,23 +117,118 @@ private:
     bool countSelection_;
 };
 
+// A diagnostic row that two logical views tried to claim in one frame, or a view rasterising with
+// no identity at all. Terminal because the alternative is a row whose counters are the sum of two
+// unrelated views under one of their names — worse than no measurement, because it reads like one.
+[[noreturn]] void contradictoryShadowViewRow(std::string_view group, std::size_t slot)
+{
+    throw std::runtime_error(
+        std::format("shadow view row {} slot {} was claimed by two different logical views in one "
+                    "frame (or by a view with no identity)",
+                    group, slot));
+}
+
+// A shadow command that could not be resolved into geometry (SH-03). TERMINAL, on the same
+// reasoning as the view set's rejections: the request is corrupt render input, and both ways of
+// continuing are worse than stopping — dropping the draw leaves a caster missing from one shadow
+// map with nothing to say so, and counting it as filtered corrupts the one metric the per-view
+// diagnostics promise. In a Dev build the resolver's own assertion fires first, at the request that
+// was malformed; under NDEBUG this throw carries the same refusal to main().
+[[noreturn]] void unresolvableShadowCaster(std::uint32_t objectId)
+{
+    throw std::runtime_error(
+        std::format("shadow caster (objectId {}) resolved to no geometry — its unresolved command "
+                    "carries no drawable base mesh",
+                    objectId));
+}
+
+// Everything one iteration needs to turn unresolved casters into its own draws (SH-03).
+//
+// REFERENCE-BOUND with no default: `{}` would otherwise compile into a context with no view and no
+// resolver, which in release resolves every caster to an empty draw — a shadow map that renders
+// nothing, reported as if it had. Making the two mandatory at construction is the same argument
+// ShadowViewTarget above makes for its stats sink.
+class ShadowLodContext
+{
+public:
+    ShadowLodContext(const ShadowRenderView& view, ShadowLodResolver& resolver, float budgetTexels,
+                     ShadowLodHysteresis hysteresis) noexcept
+        : view_{&view},
+          resolver_{&resolver},
+          budgetTexels_{budgetTexels},
+          hysteresis_{hysteresis}
+    {
+    }
+    ShadowLodContext() = delete;
+
+    [[nodiscard]] ResolvedShadowDraw resolve(const DrawCommand& dc) const noexcept
+    {
+        return resolver_->resolve(dc.shadowRequest, *view_, dc.shadowBounds, budgetTexels_,
+                                  hysteresis_);
+    }
+    // The identity this iteration is rasterising — the same one its resolutions are keyed on, so a
+    // diagnostic row and a hysteresis entry can never name different views.
+    [[nodiscard]] const ShadowLogicalViewId& logicalId() const noexcept
+    {
+        return view_->logicalId();
+    }
+    // Records that this family drew this caster for this view. Called only where the draw is
+    // actually recorded, so membership means "rasterised", not "considered".
+    void noteDrawn(ShadowViewGroup group, const ShadowGeometryRequest& request) const noexcept
+    {
+        resolver_->noteDrawn(group,
+                             ShadowLodStateKey{request.casterId, request.generation, logicalId()});
+    }
+
+private:
+    const ShadowRenderView* view_; // never null: bound from a reference
+    ShadowLodResolver* resolver_;  // never null: bound from a reference
+    float budgetTexels_;
+    ShadowLodHysteresis hysteresis_;
+};
+
 void recordShadowDrawBucket(vk::CommandBuffer cmd, std::span<const DrawCommand> shadowDraws,
                             const Resources& resources, PipelineHandle pipelineHandle,
-                            ShadowDrawFilter filter, const ShadowViewTarget& target)
+                            ShadowDrawFilter filter, const ShadowLodContext& lod,
+                            const ShadowViewTarget& target)
 {
     // Before walking the span, so a view that renders and clears with nothing to draw still
     // reports as rasterised — that empty-but-rendered view is itself a finding.
     ShadowViewStats& viewStats = target.view();
-    viewStats.beginRasterPass();
+    if (!viewStats.beginRasterPass(lod.logicalId()))
+    {
+        // The row already belongs to a different logical view this frame, or the view arrived with
+        // no identity. Continuing would blend two views' counters into one row and label it with
+        // one of their names — evidence that looks like a measurement and is not. Terminal, like
+        // every other contradiction between what the renderer thinks it is drawing and what the
+        // shadow state says.
+        contradictoryShadowViewRow(target.groupName(), target.slot());
+    }
 
     bool pipelineBound = false;
     for (const auto& dc : shadowDraws)
     {
-        // One observation per walked command, carrying the filter verdict that is about to decide
-        // the draw — so `candidate - drawn` is exactly this view's filter yield and can never be
-        // reconstructed differently from what was recorded.
+        // FILTER FIRST, resolve second. Selecting for a caster this view is about to drop would
+        // give it a dead band against a view it never appears in — a skinned caster would
+        // accumulate hysteresis against every other object's self-shadow map — and would evaluate
+        // wholly-rejected perspective casters outside the domain the projection model is good for.
         const bool accepted = filter.accepts(dc);
-        viewStats.observe(dc.indexCount / 3, accepted, dc.lodLevel, target.countSelection());
+        const ResolvedShadowDraw resolved = accepted ? lod.resolve(dc) : ResolvedShadowDraw{};
+        // TERMINAL, before anything is counted. The resolver returns drawable geometry for any
+        // request that carries base geometry — including every recoverable fallback — so a
+        // non-drawable result means the producer emitted a caster it could not describe. Skipping
+        // it would drop the caster from this shadow map silently, and folding it into the observed
+        // verdict would make it indistinguishable from a cull rejection, breaking the promise that
+        // `candidateDraws - drawnDraws` is exactly the filter's yield.
+        if (accepted && !resolved.drawable())
+        {
+            unresolvableShadowCaster(dc.objectId);
+        }
+        // One observation per walked command, carrying the FILTER's verdict — nothing else. The
+        // full-detail count is what this view was OFFERED; the resolved count is what it will pay.
+        viewStats.observe(dc.shadowRequest.baseIndexCount / 3, accepted, resolved.indexCount / 3,
+                          static_cast<std::uint32_t>(resolved.level), resolved.reason,
+                          target.countSelection());
         if (!accepted)
         {
             continue;
@@ -135,13 +246,17 @@ void recordShadowDrawBucket(vk::CommandBuffer cmd, std::span<const DrawCommand> 
 
         vk::IndexType indexType =
             dc.indexType == DrawIndexType::UInt32 ? vk::IndexType::eUint32 : vk::IndexType::eUint16;
-        cmd.bindIndexBuffer(resources.vulkanBuffer(dc.indexBuffer), 0, indexType);
+        // The RESOLVED buffer, never the command's: a shadow command carries none.
+        cmd.bindIndexBuffer(resources.vulkanBuffer(resolved.indexBuffer), 0, indexType);
 
         // Shadow set 0 is pushed inline (core 1.4 push descriptors) — no allocated
         // per-object descriptor set, mirroring the forward pass.
         pushShadowObjectDescriptors(cmd, resources, resources.vulkanPipelineLayout(pipelineHandle),
                                     dc);
-        cmd.drawIndexed(dc.indexCount, 1, 0, 0, 0);
+        cmd.drawIndexed(resolved.indexCount, 1, 0, 0, 0);
+        // Recorded HERE, beside the draw itself, so "this family drew this caster" cannot become
+        // true for a caster that was only considered.
+        lod.noteDrawn(target.group(), dc.shadowRequest);
     }
 }
 
@@ -178,8 +293,8 @@ Shadows::Shadows(const Device& device, Resources& resources)
     // Spot casters share a 2D-array depth image, one layer per caster.
     spotShadowMapHandle_ = resources_->createShadowMap(kSpotShadowMapExtent, kMaxSpotShadowCasters);
 
-    // Point casters: one cubemap-array depth image, six faces per caster. Layout
-    // 6 * cube + face matches Resources::vulkanPointShadowFaceView and the
+    // Point casters: one cubemap-array depth image, kCubeFaceCount faces per caster. Layout
+    // `kCubeFaceCount * cube + face` matches Resources::vulkanPointShadowFaceView and the
     // matrixIndex layout in ShadowUBO::lightViewProj.
     pointShadowMapHandle_ =
         resources_->createPointShadowMap(kPointShadowMapExtent, kMaxPointShadowCasters);
@@ -200,7 +315,8 @@ void Shadows::recordPass(vk::CommandBuffer cmd, std::span<const DrawCommand> sha
                          std::span<const DrawCommand> worldOnlyShadowDraws,
                          std::span<const DrawCommand> selfShadowDraws, int activeSelfShadowCasters,
                          int activeSpotCasters, std::span<const PointShadowCaster> pointCasters,
-                         std::span<const Mat4> shadowViewProjs, bool cullingEnabled,
+                         const ShadowRenderViewSet& views, ShadowLodResolver& resolver,
+                         float lodBudgetTexels, ShadowLodHysteresis hysteresis, bool cullingEnabled,
                          bool renderWorldShadow, ShadowFrameStats& stats,
                          const GpuProfiler& profiler, uint32_t frameIndex) const
 {
@@ -227,30 +343,27 @@ void Shadows::recordPass(vk::CommandBuffer cmd, std::span<const DrawCommand> sha
     const vk::ClearValue depthClear{.depthStencil =
                                         vk::ClearDepthStencilValue{.depth = 1.0f, .stencil = 0}};
 
-    // Drop casters whose world bounds fall outside the light/cascade frustum at
-    // `matrixIndex`. A self-shadow slot (matrixIndex < 0), disabled culling, or
-    // invalid matrix index passes everything through.
-    const auto shadowFrustumFor = [&](int matrixIndex) -> std::optional<Frustum>
+    // ONE lookup per iteration, from the frame's view set: the matrix that culls, the descriptor
+    // that selects, and the identity that keys hysteresis all come from the same entry, so they
+    // cannot describe different fits. A null return means the set says this physical view is not
+    // active — the iteration is skipped rather than rasterised from a matrix nobody vouched for.
+    const auto viewFor = [&](ShadowViewGroup group, std::size_t slot) -> const ShadowRenderView*
+    { return views.find(group, slot); };
+
+    // Culling frustum from the view's OWN matrix. Self-shadow layers pass everything through: they
+    // are already restricted to one caster by the slot filter, so a frustum test would only repeat
+    // it. Disabled culling passes everything through too.
+    const auto frustumFor = [&](const ShadowRenderView& view, bool cull) -> std::optional<Frustum>
     {
-        if (!cullingEnabled || matrixIndex < 0 ||
-            matrixIndex >= static_cast<int>(shadowViewProjs.size()))
+        if (!cull)
         {
             return std::nullopt;
         }
-        return Frustum::fromViewProj(shadowViewProjs[static_cast<std::size_t>(matrixIndex)]);
+        return Frustum::fromViewProj(view.viewProj());
     };
 
-    const auto findSelfShadowViewProj = [](std::span<const DrawCommand> draws, int slot) -> Mat4
-    {
-        for (const DrawCommand& dc : draws)
-        {
-            if (dc.selfShadowSlot == slot)
-            {
-                return dc.selfShadowViewProj;
-            }
-        }
-        return Mat4::identity();
-    };
+    const auto lodContextFor = [&](const ShadowRenderView& view)
+    { return ShadowLodContext{view, resolver, lodBudgetTexels, hysteresis}; };
 
     // Renders one shadow layer with depth-only dynamic rendering. depthLayer is
     // the array-layer subresource the barriers target; depthView is the matching
@@ -261,8 +374,8 @@ void Shadows::recordPass(vk::CommandBuffer cmd, std::span<const DrawCommand> sha
     auto recordShadowIteration =
         [&](vk::Image depthImage, uint32_t depthLayer, vk::ImageView depthView, uint32_t extent,
             const ShadowPushConstants& pc, std::span<const DrawCommand> draws,
-            ShadowDrawFilter filter, PipelineHandle pipelineHandle, float depthBiasConstant,
-            float depthBiasSlope, const ShadowViewTarget& target)
+            ShadowDrawFilter filter, const ShadowLodContext& lod, PipelineHandle pipelineHandle,
+            float depthBiasConstant, float depthBiasSlope, const ShadowViewTarget& target)
     {
         vk::Viewport vp = makeFullViewport(static_cast<float>(extent), static_cast<float>(extent));
         vk::Rect2D scissor{
@@ -294,7 +407,7 @@ void Shadows::recordPass(vk::CommandBuffer cmd, std::span<const DrawCommand> sha
         cmd.pushConstants<ShadowPushConstants>(
             shadowPipelineLayout,
             vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment, 0, pc);
-        recordShadowDrawBucket(cmd, draws, *resources_, pipelineHandle, filter, target);
+        recordShadowDrawBucket(cmd, draws, *resources_, pipelineHandle, filter, lod, target);
         cmd.endRendering();
 
         imageLayerBarrier(cmd, depthImage, vk::ImageAspectFlagBits::eDepth, depthLayer,
@@ -309,13 +422,13 @@ void Shadows::recordPass(vk::CommandBuffer cmd, std::span<const DrawCommand> sha
     // Layered maps (CSM/world/self): per-layer depth attachment view.
     auto layeredIteration = [&](TextureHandle depthHandle, uint32_t layer, uint32_t extent,
                                 const ShadowPushConstants& pc, std::span<const DrawCommand> draws,
-                                ShadowDrawFilter filter, PipelineHandle pipelineHandle,
-                                float depthBiasConstant, float depthBiasSlope,
-                                const ShadowViewTarget& target)
+                                ShadowDrawFilter filter, const ShadowLodContext& lod,
+                                PipelineHandle pipelineHandle, float depthBiasConstant,
+                                float depthBiasSlope, const ShadowViewTarget& target)
     {
         recordShadowIteration(resources_->vulkanImage(depthHandle), layer,
                               resources_->vulkanShadowMapLayerView(depthHandle, layer), extent, pc,
-                              draws, filter, pipelineHandle, depthBiasConstant, depthBiasSlope,
+                              draws, filter, lod, pipelineHandle, depthBiasConstant, depthBiasSlope,
                               target);
     };
 
@@ -328,14 +441,19 @@ void Shadows::recordPass(vk::CommandBuffer cmd, std::span<const DrawCommand> sha
               {
                   for (uint32_t cascade = 0; cascade < kShadowCascadeCount; ++cascade)
                   {
+                      const ShadowRenderView* view = viewFor(ShadowViewGroup::Cascade, cascade);
+                      if (view == nullptr)
+                      {
+                          continue;
+                      }
                       ShadowPushConstants pc{};
                       pc.matrixIndex = kShadowCascadeMatrixBase + static_cast<int>(cascade);
-                      const std::optional<Frustum> frustum = shadowFrustumFor(pc.matrixIndex);
+                      const std::optional<Frustum> frustum = frustumFor(*view, cullingEnabled);
                       const ShadowDrawFilter filter{.frustum = frustum ? &*frustum : nullptr};
                       layeredIteration(
                           shadowMapHandle_, cascade, kShadowMapExtent, pc, shadowDraws, filter,
-                          shadowPipelineHandle_, kDirectionalShadowRasterBiasConstant,
-                          kDirectionalShadowRasterBiasSlope,
+                          lodContextFor(*view), shadowPipelineHandle_,
+                          kDirectionalShadowRasterBiasConstant, kDirectionalShadowRasterBiasSlope,
                           ShadowViewTarget{stats, ShadowViewGroup::Cascade, cascade, true});
                   }
               });
@@ -345,26 +463,35 @@ void Shadows::recordPass(vk::CommandBuffer cmd, std::span<const DrawCommand> sha
     // 4-cascade render entirely (stale content is unreachable — see the recordPass contract in
     // shadows.hpp). Skipping leaves its diagnostic rows untouched, which is the honest report: the
     // views were not rasterised.
-    timeGroup(ProfilePass::ShadowWorldOnly, renderWorldShadow,
-              [&]
-              {
-                  if (renderWorldShadow)
-                  {
-                      for (uint32_t cascade = 0; cascade < kShadowCascadeCount; ++cascade)
-                      {
-                          ShadowPushConstants pc{};
-                          pc.matrixIndex = kShadowCascadeMatrixBase + static_cast<int>(cascade);
-                          const std::optional<Frustum> frustum = shadowFrustumFor(pc.matrixIndex);
-                          const ShadowDrawFilter filter{.frustum = frustum ? &*frustum : nullptr};
-                          layeredIteration(
-                              worldShadowMapHandle_, cascade, kShadowMapExtent, pc,
-                              worldOnlyShadowDraws, filter, shadowPipelineHandle_,
-                              kDirectionalShadowRasterBiasConstant,
-                              kDirectionalShadowRasterBiasSlope,
-                              ShadowViewTarget{stats, ShadowViewGroup::WorldOnly, cascade, true});
-                      }
-                  }
-              });
+    timeGroup(
+        ProfilePass::ShadowWorldOnly, renderWorldShadow,
+        [&]
+        {
+            if (renderWorldShadow)
+            {
+                for (uint32_t cascade = 0; cascade < kShadowCascadeCount; ++cascade)
+                {
+                    // The set's world-only entry ALIASES the cascade's, so this iteration
+                    // resolves against the same logical view — the resolver returns the
+                    // cascade's cached answer, which is what makes the two CSMs agree for a
+                    // rigid caster rather than agreeing by coincidence.
+                    const ShadowRenderView* view = viewFor(ShadowViewGroup::WorldOnly, cascade);
+                    if (view == nullptr)
+                    {
+                        continue;
+                    }
+                    ShadowPushConstants pc{};
+                    pc.matrixIndex = kShadowCascadeMatrixBase + static_cast<int>(cascade);
+                    const std::optional<Frustum> frustum = frustumFor(*view, cullingEnabled);
+                    const ShadowDrawFilter filter{.frustum = frustum ? &*frustum : nullptr};
+                    layeredIteration(
+                        worldShadowMapHandle_, cascade, kShadowMapExtent, pc, worldOnlyShadowDraws,
+                        filter, lodContextFor(*view), shadowPipelineHandle_,
+                        kDirectionalShadowRasterBiasConstant, kDirectionalShadowRasterBiasSlope,
+                        ShadowViewTarget{stats, ShadowViewGroup::WorldOnly, cascade, true});
+                }
+            }
+        });
 
     // Only the densely-assigned slots render; an unassigned slot's layers are
     // never sampled (no fragment carries its index), so they need no clear. An
@@ -377,20 +504,31 @@ void Shadows::recordPass(vk::CommandBuffer cmd, std::span<const DrawCommand> sha
             for (int slot = 0;
                  slot < activeSelfShadowCasters && slot < kMaxSkinnedSelfShadowCasters; ++slot)
             {
+                const auto viewSlot = static_cast<std::size_t>(slot);
+                const ShadowRenderView* view = viewFor(ShadowViewGroup::Self, viewSlot);
+                if (view == nullptr)
+                {
+                    continue;
+                }
                 ShadowPushConstants pc{};
                 pc.matrixIndex = -1;
                 pc.selfShadowSlot = slot;
-                pc.lightViewProj = findSelfShadowViewProj(selfShadowDraws, slot);
+                // From the SET, not scanned out of the draw span: the slot's matrix is a property
+                // of the view, and searching the commands for it was a second place the same value
+                // lived.
+                pc.lightViewProj = view->viewProj();
                 const ShadowDrawFilter filter{.selfShadowSlot = slot};
-                const auto viewSlot = static_cast<std::size_t>(slot);
+                // No frustum: the slot filter already restricts this layer to its one caster.
+                const ShadowLodContext lod = lodContextFor(*view);
                 layeredIteration(selfShadowFirstMapHandle_, static_cast<uint32_t>(slot),
-                                 kSkinnedSelfShadowMapExtent, pc, selfShadowDraws, filter,
+                                 kSkinnedSelfShadowMapExtent, pc, selfShadowDraws, filter, lod,
                                  selfShadowFirstPipelineHandle_, 0.0f, 0.0f,
                                  ShadowViewTarget{stats, ShadowViewGroup::Self, viewSlot, true});
-                // Second depth layer: same logical view re-rasterised, so cost counts but selection
-                // does not (it would double the histogram for one decision).
+                // Second depth layer: same logical view re-rasterised, so it hits the resolver's
+                // frame cache — one decision, two layers — and its cost counts while its selection
+                // does not (that would double the histogram for one decision).
                 layeredIteration(selfShadowMapHandle_, static_cast<uint32_t>(slot),
-                                 kSkinnedSelfShadowMapExtent, pc, selfShadowDraws, filter,
+                                 kSkinnedSelfShadowMapExtent, pc, selfShadowDraws, filter, lod,
                                  selfShadowSecondPipelineHandle_, 0.0f, 0.0f,
                                  ShadowViewTarget{stats, ShadowViewGroup::Self, viewSlot, false});
             }
@@ -401,19 +539,24 @@ void Shadows::recordPass(vk::CommandBuffer cmd, std::span<const DrawCommand> sha
               {
                   for (int s = 0; s < activeSpotCasters && s < kMaxSpotShadowCasters; ++s)
                   {
+                      const auto viewSlot = static_cast<std::size_t>(s);
+                      const ShadowRenderView* view = viewFor(ShadowViewGroup::Spot, viewSlot);
+                      if (view == nullptr)
+                      {
+                          continue;
+                      }
                       ShadowPushConstants pc{};
                       pc.matrixIndex = kShadowSpotMatrixBase + s;
-                      const std::optional<Frustum> frustum = shadowFrustumFor(pc.matrixIndex);
+                      const std::optional<Frustum> frustum = frustumFor(*view, cullingEnabled);
                       recordShadowIteration(
                           resources_->vulkanImage(spotShadowMapHandle_), static_cast<uint32_t>(s),
                           resources_->vulkanShadowMapLayerView(spotShadowMapHandle_,
                                                                static_cast<uint32_t>(s)),
                           kSpotShadowMapExtent, pc, shadowDraws,
                           ShadowDrawFilter{.frustum = frustum ? &*frustum : nullptr},
-                          shadowPipelineHandle_, kPunctualShadowRasterBiasConstant,
-                          kPunctualShadowRasterBiasSlope,
-                          ShadowViewTarget{stats, ShadowViewGroup::Spot,
-                                           static_cast<std::size_t>(s), true});
+                          lodContextFor(*view), shadowPipelineHandle_,
+                          kPunctualShadowRasterBiasConstant, kPunctualShadowRasterBiasSlope,
+                          ShadowViewTarget{stats, ShadowViewGroup::Spot, viewSlot, true});
                   }
               });
 
@@ -424,19 +567,24 @@ void Shadows::recordPass(vk::CommandBuffer cmd, std::span<const DrawCommand> sha
                                           p < static_cast<std::size_t>(kMaxPointShadowCasters);
                        ++p)
                   {
-                      for (uint32_t face = 0; face < 6; ++face)
+                      for (uint32_t face = 0; face < kCubeFaceCount; ++face)
                       {
                           // ONE derivation feeding the matrix slot, the attachment layer and the
                           // diagnostic row — the point family's matrix index, depth layer and view
                           // slot are all 6*p + face.
                           const std::size_t viewSlot = shadowPointViewSlot(p, face);
+                          const ShadowRenderView* view = viewFor(ShadowViewGroup::Point, viewSlot);
+                          if (view == nullptr)
+                          {
+                              continue;
+                          }
                           ShadowPushConstants pc{};
                           pc.matrixIndex = kShadowPointMatrixBase + static_cast<int>(viewSlot);
                           pc.lightPosRange[0] = pointCasters[p].worldPosition.x();
                           pc.lightPosRange[1] = pointCasters[p].worldPosition.y();
                           pc.lightPosRange[2] = pointCasters[p].worldPosition.z();
                           pc.lightPosRange[3] = pointCasters[p].range;
-                          const std::optional<Frustum> frustum = shadowFrustumFor(pc.matrixIndex);
+                          const std::optional<Frustum> frustum = frustumFor(*view, cullingEnabled);
                           recordShadowIteration(
                               resources_->vulkanImage(pointShadowMapHandle_),
                               static_cast<uint32_t>(viewSlot),
@@ -444,8 +592,8 @@ void Shadows::recordPass(vk::CommandBuffer cmd, std::span<const DrawCommand> sha
                                                                     static_cast<uint32_t>(p), face),
                               kPointShadowMapExtent, pc, shadowDraws,
                               ShadowDrawFilter{.frustum = frustum ? &*frustum : nullptr},
-                              shadowPipelineHandle_, kPunctualShadowRasterBiasConstant,
-                              kPunctualShadowRasterBiasSlope,
+                              lodContextFor(*view), shadowPipelineHandle_,
+                              kPunctualShadowRasterBiasConstant, kPunctualShadowRasterBiasSlope,
                               ShadowViewTarget{stats, ShadowViewGroup::Point, viewSlot, true});
                       }
                   }
