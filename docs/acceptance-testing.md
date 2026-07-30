@@ -130,7 +130,7 @@ Source repo: <https://github.com/KhronosGroup/glTF-Sample-Models/tree/main/2.0>
 
 ### DragonAttenuation — transmission + volume
 ```bash
-./fireEngineApp DragonAttenuation/DragonAttenuation.gltf.gltf skybox.hdr
+./fireEngineApp DragonAttenuation/DragonAttenuation.gltf skybox.hdr
 ```
 [Source](https://github.com/KhronosGroup/glTF-Sample-Models/tree/main/2.0/DragonAttenuation)
 
@@ -196,6 +196,15 @@ Source repo: <https://github.com/KhronosGroup/glTF-Sample-Models/tree/main/2.0>
 ```bash
 ./fireEngineApp RecursiveSkeletons/RecursiveSkeletons.gltf skybox.hdr
 ```
+**Also the only asset with more than one skinned mesh (84 of them), so it is the only one that fills
+a *second* skinned self-shadow slot — check the sky here specifically.** A stale copy of the
+`LightUBO` block in `skybox.frag` made this scene read `environmentParams.x` out of
+`selfShadowViewProj[1]`, multiplying the sky by a shadow-matrix element (~0.11) and darkening both
+skyboxes ~9×, while the geometry stayed correctly lit and so looked like it was glowing. Unused
+self-shadow slots are identity, so every other asset read 1.0 and looked right. The sky must match
+any other scene's under the same skybox; if it darkens, suspect a shader block declaration, not the
+asset.
+
 [Source](https://github.com/KhronosGroup/glTF-Sample-Models/tree/main/2.0/RecursiveSkeletons)
 
 ![RecursiveSkeletons](https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Models/refs/heads/main/2.0/RecursiveSkeletons/screenshot/screenshot.jpg)
