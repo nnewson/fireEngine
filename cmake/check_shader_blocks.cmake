@@ -51,7 +51,11 @@ foreach(entry IN LISTS guarded_blocks)
     endif()
   endforeach()
 
-  if(NOT "${owner}" IN_LIST declaring)
+  # list(FIND), not IN_LIST: this runs as `cmake -P`, where no project()/cmake_minimum_required has
+  # set CMP0057, so IN_LIST is not an operator on older CMake and the script hard-errors there. It
+  # passed locally and failed in the Ubuntu container on exactly that difference.
+  list(FIND declaring "${owner}" owner_index)
+  if(owner_index EQUAL -1)
     list(APPEND offenders "${owner} no longer declares '${block}' — the guard would pass vacuously")
   endif()
 endforeach()
