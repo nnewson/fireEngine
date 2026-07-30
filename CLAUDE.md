@@ -90,10 +90,22 @@ include site** with a narrow `#pragma GCC diagnostic ignored` and a reason (see
 
 **Upgrade the vcpkg baseline after each major item lands**, not mid-arc. The baseline in
 `vcpkg-configuration.json` pins every dependency version, so it only moves when someone moves it —
-and a stale pin quietly drifts from the SDK on the machine (it sat on a Feb 2026 commit carrying
+and a stale pin quietly drifts from the SDK on the machine (it had sat on a Feb 2026 commit carrying
 `vulkan-headers 1.4.335.0` while the installed SDK reached 1.4.357). Bumping it is its own branch
 with its own verification: full rebuild, `tests-full` on both platforms, and the render smoke, since
 a loader/ICD change can alter device capabilities.
+
+**"Full rebuild" there means `--clean-first`, and that is not pedantry.** vcpkg preserves each
+port's *upstream* file timestamps, so an upgraded header can land with an mtime OLDER than the object
+files that include it, and ninja will not rebuild them. The result links a stale object against a new
+library and fails at runtime, not build time: after the imgui 1.91.9 → 1.92.8 bump every scene
+aborted on `IMGUI_CHECKVERSION`'s "Mismatched version string" because `debug_overlay.cpp.o` still had
+1.91.9 compiled into it while `libimgui.a` was 1.92.8. An incremental build reported success. Treat
+any post-upgrade runtime assert about versions as a stale-object symptom first.
+
+Expect *source* breakage from the upgrade too, and fix it at the call site rather than pinning back:
+imgui 1.92 (2025/09/26) moved `RenderPass` / `Subpass` / `MSAASamples` / `PipelineRenderingCreateInfo`
+out of `ImGui_ImplVulkan_InitInfo` into the nested `PipelineInfoMain`.
 
 **Toolchain: Apple Clang** (`/usr/bin/clang++`, set in `CMakePresets.json`). The vcpkg toolchain inherits this compiler, so all ports build from the manifest. (The project previously used Homebrew g++-15, which can't parse the Apple SDK framework headers — that broke the vcpkg builds of gtest/glfw3/imgui and forced classic-mode global installs + a vendored imgui backend; switching to Clang removed all of that.) Note `clang++` on `PATH` may be Homebrew clang — the preset pins `/usr/bin/clang++` for Apple's.
 

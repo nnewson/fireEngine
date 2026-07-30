@@ -357,7 +357,10 @@ DebugOverlay::DebugOverlay(const Device& device, const Swapchain& swapchain, con
     init.MinImageCount = imageCount;
     init.ImageCount = imageCount;
     init.UseDynamicRendering = true;
-    init.PipelineRenderingCreateInfo = renderingInfo;
+    // ImGui 1.92 (2025/09/26) moved the per-viewport pipeline settings — RenderPass, Subpass,
+    // MSAASamples and this struct — out of InitInfo into the nested PipelineInfoMain. Same value,
+    // new home; the backend still reads it only when UseDynamicRendering is set.
+    init.PipelineInfoMain.PipelineRenderingCreateInfo = renderingInfo;
 
     ImGui_ImplVulkan_Init(&init);
 }
