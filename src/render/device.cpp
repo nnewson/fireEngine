@@ -475,6 +475,18 @@ void Device::pickPhysicalDevice()
     {
         if (isDeviceSuitable(d))
         {
+            // Name the winner. A Mac can carry more than one ICD at once (MoltenVK and KosmicKrisp
+            // both install into /usr/local/share/vulkan/icd.d), and which one served a run changes
+            // how everything else in the log should be read — a rendering difference or a VUID
+            // means something different per driver. Rejections are already named; the acceptance
+            // was not, so the answer was only obtainable by re-running under VK_DRIVER_FILES.
+            const auto chain = d.getProperties2<vk::PhysicalDeviceProperties2,
+                                                vk::PhysicalDeviceDriverProperties>();
+            const auto& props = chain.get<vk::PhysicalDeviceProperties2>().properties;
+            const auto& driver = chain.get<vk::PhysicalDeviceDriverProperties>();
+            log::info(log::category::render, "GPU '{}' via {} ({}) — Vulkan {}",
+                      props.deviceName.data(), driver.driverName.data(), driver.driverInfo.data(),
+                      versionString(props.apiVersion));
             physDevice_ = std::move(d);
             return;
         }
