@@ -100,6 +100,7 @@ add_library(fireengine SHARED
     src/graphics/mesh_topology.cpp
     src/graphics/shadow_identity.cpp
     src/graphics/shadow_lod_resolver.cpp
+    src/graphics/shadow_caster_deformation.cpp
     src/graphics/shadow_render_view.cpp
     src/graphics/shadow_diagnostics.cpp
     src/graphics/shadow_view.cpp
@@ -414,6 +415,7 @@ add_executable(test_fire_engine
     tests/graphics/test_shadow_view.cpp
     tests/graphics/test_shadow_identity.cpp
     tests/graphics/test_shadow_lod_resolver.cpp
+    tests/graphics/test_shadow_caster_deformation.cpp
     tests/graphics/test_shadow_render_view.cpp
     tests/graphics/test_texture.cpp
     tests/graphics/test_sampler_settings.cpp

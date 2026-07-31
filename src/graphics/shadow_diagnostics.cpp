@@ -26,6 +26,8 @@ std::string_view toString(ShadowLodReason reason) noexcept
         return "near-plane intersection";
     case ShadowLodReason::InvalidPreviousLevel:
         return "invalid previous level";
+    case ShadowLodReason::DeformableFallback:
+        return "deformable caster";
     case ShadowLodReason::Count:
         break;
     }

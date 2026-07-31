@@ -616,12 +616,18 @@ and resolve pass:
 - `--debug-shadow-depth`: show directional receiver/stored depth and cascade index.
 - `--debug-velocity`: visualise the TAA motion-vector buffer (|x|, |y| scaled). Zero for a still
   camera on rigid/skinned geometry; grows with camera or node-transform motion.
-- (overlay only, no CLI flag) **LOD tint** and **Shadow LOD tint**: the first colours a mesh by the
-  level the *camera* draw selected, the second by the level its *shadow* draw selected (neutral grey
-  when the mesh casts no shadow). Reading them together is how SH-01's known defect — the shadow
-  level is chosen from the camera and replayed into every shadow view — shows up on screen.
-- `--no-lod`: start with mesh LOD off (full detail everywhere). Seeds `RenderTunables::lodEnabled`, so
-  it governs the shadow selection too, not just the forward pass — the "before" half of an LOD A/B.
+- `--debug-lod` / `--debug-shadow-lod` (also in the overlay): **LOD tint** and **Shadow LOD tint** —
+  the first colours a mesh by the level the *camera* draw selected, the second by the level its
+  *shadow* draw selected (neutral grey when the mesh casts no shadow). The shadow tint reads the
+  level of the FOCUSED shadow view (`--shadow-focus`), because since SH-03 a caster no longer has
+  "a" level: it selects per view. Reading the two together is how a caster carrying more shadow
+  detail than its view can resolve shows up on screen — the camera-derived defect these tints were
+  built to expose is fixed, so what they now show is the per-view selection itself.
+- `--no-lod`: start with mesh LOD off (full detail everywhere). Seeds BOTH
+  `RenderTunables::lodEnabled` and `::shadowLodEnabled` — separate switches since SH-03 — so it is
+  the "full detail everywhere" half of an A/B. Use `--no-shadow-lod` when you need the shadow half
+  isolated with forward LOD still selecting; that separation is what makes the shadow-only
+  comparison in `tools/shadow_lod_sweep.sh` valid.
 - `--capture <path.png>` / `--capture-frame N`: write the numbered frame's final swapchain content
   (post-process + overlay, immediately before present) to a PNG and exit. Frame-numbered rather than
   timed, so any machine captures the same render ordinal — though animation and physics still
@@ -891,6 +897,18 @@ the same change — most have a test or guard that will catch you, but not all.
   shader must match the corresponding `ForwardBinding` / `ForwardGlobalBinding` / `ShadowBinding` /
   `SkyboxBinding` / `PostProcessBinding` enumerator. `tests/render/test_pipeline_config.cpp` checks
   the C++ side; the GLSL side is on you.
+- **A shadow caster that deforms after the simplifier measured it may not select a level** (SH-04).
+  The deviation channel is measured on the mesh as authored — bind pose, base weights, the vertex
+  buffer at build time — so for skinned, morph-capable or storage-vertex geometry it describes a mesh
+  that is never drawn, and skinning can amplify the displacement without bound. Classification lives
+  in `graphics/shadow_caster_deformation.hpp` and rides on `ShadowGeometryRequest::deformation`,
+  which defaults to `Deformable` (the safe answer, like `worldScale`'s NaN — a producer that forgets
+  the field must not get the optimistic one). The resolver answers with
+  `ShadowLodReason::DeformableFallback`, full detail, and an INFINITE projected error, and stages no
+  hysteresis history. Do not express this by passing `lodEnabled = false`: that reports
+  `LodDisabled`, which is a user's toggle, and the panel would then explain a safety fallback with
+  somebody else's reason. There is deliberately **no shadow-proxy setter** — see `Object`'s header
+  for what a validated one must enforce before it comes back.
 - **A uniform block bound by more than one shader is DECLARED once**, in a shared `shaders/*.glsl`
   include — never hand-copied into each shader. `LightUBO` lives in
   [`shaders/light_ubo.glsl`](../shaders/light_ubo.glsl); `shader.frag` and `skybox.frag` `#include`

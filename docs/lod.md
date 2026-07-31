@@ -256,6 +256,15 @@ error — an average, which a locally bad region hides inside. Measured on a UV 
 **0.0085 against a true surface movement of 0.0170**: half the real deviation. Selecting a shadow
 level against it would silently exceed any budget it was given.
 
+**It measures the mesh as authored, and that bounds what it can be used for.** The deviation is
+taken on the vertex data the simplifier was handed: bind pose, base weights, the buffer contents at
+build time. For geometry deformed afterwards — skinned, morph-capable, or storage-vertex geometry a
+compute pass rewrites — the number describes a mesh that is never rasterised, and skinning can carry
+a vertex arbitrarily far from where its rest-pose deviation was taken, so it is not a loose estimate
+there but an unfounded one. SH-04 therefore refuses to select for those casters at all
+(`ShadowCasterDeformation`, classified in `graphics/shadow_caster_deformation.hpp`); a
+deformation-aware error model is what would be needed to lift that restriction, and none exists yet.
+
 So the LOD system records a second, separate per-cut number for shadows:
 
 | Stage | Value | Where |

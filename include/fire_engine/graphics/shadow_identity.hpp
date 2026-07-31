@@ -44,6 +44,12 @@ enum class ShadowCasterGeneration : std::uint64_t
 // where a caster could then find ANCIENT history keyed against a long-replaced chain — the exact
 // failure the generation exists to prevent. Same policy as the id allocators: stop rather than
 // silently reuse.
+//
+// NO production caller since SH-04 removed the shadow-proxy setter: a binding's geometry no longer
+// changes after construction, so nothing needs to invalidate a caster's dead band yet. Kept, and
+// kept tested, because the validated proxy API that replaces that setter is exactly the caller it
+// was written for — and a wrap-checked advancer is the wrong thing to delete now and reconstruct
+// from memory later.
 [[nodiscard]] ShadowCasterGeneration
 nextShadowCasterGeneration(ShadowCasterGeneration current) noexcept;
 

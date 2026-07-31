@@ -62,8 +62,17 @@ the plan; the priority order is its § Suggested priority.
   calibration (slice 6: budget 1 texel, no dead band, both measured against a stated threshold,
   CSM-only — see
   [`shadowplans.md`](shadowplans.md) § SH-03).
-- **SH-04** — deformation / proxy policy (skinned, morphed, cloth: no invalid error claims, explicit
-  conservative full-detail fallback).
+- **SH-04** — deformation / proxy policy. **Deformation half landed** (`shadow-deformation-policy`):
+  skinned, morph-capable and storage-vertex casters are classified `Deformable` and resolve to full
+  detail with their own `DeformableFallback` reason, infinite projected error and no hysteresis
+  history — closing a hole SH-03 left open, where deformable casters selected levels from a
+  BIND-POSE deviation (live, not theoretical: BrainStem transitioned a skinned caster's shadow level
+  within seconds). Calibration re-run: the error column did not move (the demo's deformable casters
+  are not in the measured directional view), but self-shadow cost went 184/1248 → 1248/1248 and the
+  cascade group 59.9% → 68.2% of full detail; the 0.1% threshold still selects budget 1.
+  **Proxy half still open** — `Object::shadowGeometry` was REMOVED rather than documented as unsafe,
+  so there is currently no way to author a proxy; reinstating a validated setter (deformation
+  compatibility, morph contract, proxy-derived bounds, enforced at load time) is what closes it.
 
 **Milestone 2 — shadow silhouette correctness**
 - **SH-05** — material-aware casters (alpha-mask cutout, double-sided sheets).

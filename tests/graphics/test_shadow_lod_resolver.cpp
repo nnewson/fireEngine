@@ -1,6 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <vector>
 
@@ -50,13 +51,19 @@ Bounds3 someBounds()
 ShadowGeometryRequest request(const std::vector<GeometryLod>& lods, ShadowCasterId caster,
                               ShadowCasterGeneration generation = ShadowCasterGeneration::First)
 {
-    return ShadowGeometryRequest{.lods = lods,
-                                 .baseIndexBuffer = buffer(10),
-                                 .baseIndexCount = 900,
-                                 .worldScale = 1.0f,
-                                 .casterId = caster,
-                                 .generation = generation,
-                                 .lodEnabled = true};
+    return ShadowGeometryRequest{
+        .lods = lods,
+        .baseIndexBuffer = buffer(10),
+        .baseIndexCount = 900,
+        .worldScale = 1.0f,
+        .casterId = caster,
+        .generation = generation,
+        .lodEnabled = true,
+        // Explicit: these fixtures are rigid casters. The field defaults to
+        // Deformable (the safe answer), so stating it here is what keeps
+        // every selection case below testing SELECTION rather than SH-04's
+        // fallback. A deformable request is built by deformableRequest().
+        .deformation = ShadowCasterDeformation::Rigid};
 }
 
 // A set with every cascade populated (and world-only enabled), one spot and one point light, so a
@@ -775,4 +782,144 @@ TEST_CASE("ShadowLodResolver.DifferentViewsOfOneCasterAreSeparateHistory", "[Sha
 
     CHECK(resolver.frameCacheSize() == 3);
     CHECK(resolver.historySize() == 3);
+}
+
+// ---------------------------------------------------------------------------
+// SH-04: a caster that deforms after its error was measured may not select.
+//
+// The defect being closed: shadow LOD selected levels for skinned and morphed casters using a
+// deviation the simplifier measured on the BIND POSE. Skinning can carry a vertex arbitrarily far
+// from where that number was taken, so the estimate is not loose there — it describes a mesh that
+// is never drawn. These cases pin the classification's consequences: full detail, a reason that
+// says why, an error that claims nothing, and no entry in a history built from justified decisions.
+// ---------------------------------------------------------------------------
+
+namespace
+{
+
+ShadowGeometryRequest deformableRequest(const std::vector<GeometryLod>& lods, ShadowCasterId caster)
+{
+    ShadowGeometryRequest req = request(lods, caster);
+    req.deformation = ShadowCasterDeformation::Deformable;
+    return req;
+}
+
+} // namespace
+
+TEST_CASE("ShadowLodResolver.ADeformableCasterCannotSelectBelowFullDetail", "[ShadowLodResolver]")
+{
+    const auto lods = chain();
+    ShadowRenderViewSet views = populatedViews();
+
+    // The control matters more than the assertion: at this texel size a RIGID caster with the same
+    // chain and the same view does select a coarser level. Without it, "level 0" would be evidence
+    // of nothing — it is only meaningful against a case that would have chosen otherwise.
+    const ResolvedShadowDraw rigid =
+        resolveShadowDraw(request(lods, static_cast<ShadowCasterId>(1)),
+                          view(views, ShadowViewGroup::Cascade, 0).projection(), someBounds(),
+                          kBudget, kNoHysteresis, kNoPreviousShadowLod);
+    REQUIRE(rigid.reason == ShadowLodReason::Selected);
+    REQUIRE(rigid.level > 0);
+
+    const ResolvedShadowDraw deformable =
+        resolveShadowDraw(deformableRequest(lods, static_cast<ShadowCasterId>(2)),
+                          view(views, ShadowViewGroup::Cascade, 0).projection(), someBounds(),
+                          kBudget, kNoHysteresis, kNoPreviousShadowLod);
+    CHECK(deformable.reason == ShadowLodReason::DeformableFallback);
+    CHECK(deformable.level == 0);
+    // The WHOLE mesh, not lods[0] — the two coincide here, but the fallback must bind the base
+    // buffers so a chain whose level 0 is itself simplified cannot smuggle in a reduced mesh.
+    CHECK(deformable.indexBuffer == buffer(10));
+    CHECK(deformable.indexCount == 900);
+    // Infinity, not zero: the error is unbounded, and 0 would rank this caster as the most accurate
+    // in the frame — the exact inversion of what is known about it.
+    CHECK(std::isinf(deformable.projectedTexels));
+}
+
+TEST_CASE("ShadowLodResolver.DeformationOutranksTheChainButNotTheUserOrAProducerBug",
+          "[ShadowLodResolver]")
+{
+    const auto lods = chain();
+    ShadowRenderViewSet views = populatedViews();
+    const ShadowView projection = view(views, ShadowViewGroup::Cascade, 0).projection();
+
+    SECTION("a malformed request is a producer bug and outranks deformation")
+    {
+        // Dev asserts on an unfilled request, so this pins the RELEASE precedence — same convention
+        // as the unkeyable-caster case earlier in this file.
+#ifdef NDEBUG
+        ShadowGeometryRequest req = deformableRequest(lods, static_cast<ShadowCasterId>(3));
+        req.baseIndexCount = 0;
+        const ResolvedShadowDraw resolved = resolveShadowDraw(
+            req, projection, someBounds(), kBudget, kNoHysteresis, kNoPreviousShadowLod);
+        CHECK(resolved.reason == ShadowLodReason::InvalidCaster);
+#endif
+    }
+
+    SECTION("the user's toggle is the operative fact when shadow LOD is off")
+    {
+        ShadowGeometryRequest req = deformableRequest(lods, static_cast<ShadowCasterId>(4));
+        req.lodEnabled = false;
+        const ResolvedShadowDraw resolved = resolveShadowDraw(
+            req, projection, someBounds(), kBudget, kNoHysteresis, kNoPreviousShadowLod);
+        // A deformable caster is not MORE disabled than the rest of the frame; reporting the
+        // fallback here would attribute a global switch to a property of this one caster.
+        CHECK(resolved.reason == ShadowLodReason::LodDisabled);
+    }
+
+    SECTION("a single-level deformable caster still reports why it may not select")
+    {
+        // Cloth today: storage-vertex geometry with one level. It would draw the whole mesh either
+        // way, so the LEVEL proves nothing — the reason is the whole point. SingleLevel would read
+        // as "safe because there was nothing to choose", and that accident stops being true the day
+        // storage-vertex geometry gains a chain.
+        const std::vector<GeometryLod> single{
+            GeometryLod{.indexBuffer = buffer(10), .indexCount = 900, .shadowDeviation = 0.0f}};
+        const ResolvedShadowDraw resolved =
+            resolveShadowDraw(deformableRequest(single, static_cast<ShadowCasterId>(5)), projection,
+                              someBounds(), kBudget, kNoHysteresis, kNoPreviousShadowLod);
+        CHECK(resolved.reason == ShadowLodReason::DeformableFallback);
+    }
+}
+
+TEST_CASE("ShadowLodResolver.ADeformableCasterLeavesNoHysteresisHistory", "[ShadowLodResolver]")
+{
+    const auto lods = chain();
+    ShadowRenderViewSet views = populatedViews();
+    ShadowLodResolver resolver;
+
+    resolver.beginFrame();
+    (void)resolver.resolve(deformableRequest(lods, static_cast<ShadowCasterId>(6)),
+                           view(views, ShadowViewGroup::Cascade, 0), someBounds(), kBudget,
+                           kNoHysteresis);
+    resolver.commitFrame();
+
+    // It IS in the frame cache — a consumer still has to be able to ask what this caster drew — but
+    // never in the history, which exists to carry justified levels across frames. A dead band
+    // derived from a forced fallback would be a dead band around nothing.
+    CHECK(resolver.frameCacheSize() == 1);
+    CHECK(resolver.historySize() == 0);
+    CHECK(resolver.lastCommitMovement().firstSeen == 0);
+    CHECK(resolver.lastCommitMovement().transitions == 0);
+}
+
+TEST_CASE("ShadowLodResolver.ARequestThatOmitsDeformationDoesNotSelect", "[ShadowLodResolver]")
+{
+    // The default is the SAFE answer, on the same principle as worldScale's NaN. A producer that
+    // forgets this field loses triangles and says so loudly in the panel; the opposite default
+    // would select levels on an error claim nobody established, silently.
+    const auto lods = chain();
+    ShadowRenderViewSet views = populatedViews();
+
+    ShadowGeometryRequest req{};
+    req.lods = lods;
+    req.baseIndexBuffer = buffer(10);
+    req.baseIndexCount = 900;
+    req.worldScale = 1.0f;
+    req.casterId = static_cast<ShadowCasterId>(7);
+
+    const ResolvedShadowDraw resolved =
+        resolveShadowDraw(req, view(views, ShadowViewGroup::Cascade, 0).projection(), someBounds(),
+                          kBudget, kNoHysteresis, kNoPreviousShadowLod);
+    CHECK(resolved.reason == ShadowLodReason::DeformableFallback);
 }
