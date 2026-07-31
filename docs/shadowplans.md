@@ -337,7 +337,7 @@ guessed: `ShadowLodHysteresis::coarsenRatio` defaults to an INVALID sentinel (th
 it) so no caller silently inherits an unmeasured number, and `selectShadowLod` takes its texel budget
 as an argument with no default.
 
-#### SH-03: Resolve LOD per shadow iteration
+#### SH-03: Resolve LOD per shadow iteration — ✅ landed (branch `shadow-per-view-discrete-lod`)
 
 Change the command seam so `Object` emits an unresolved shadow geometry description. Resolve its
 index buffer/count inside each directional cascade, world-only cascade, self-shadow slot, spot map,
@@ -350,7 +350,10 @@ Important invariants:
 - both passes of one self-shadow slot use one choice;
 - point-face selection uses the face actually being rendered;
 - forward `lodLevel`, indirect buffers, and `vdpmGpuFront` are irrelevant to shadow recording; and
-- the shadow LOD chain belongs to `shadowGeometry`, not necessarily the visible geometry.
+- ~~the shadow LOD chain belongs to `shadowGeometry`, not necessarily the visible geometry~~ —
+  **superseded by SH-04**, which removed the unvalidated shadow-proxy setter. The caster IS the
+  visible geometry until a validated proxy API reintroduces the distinction with the compatibility
+  rules that make it safe.
 
 The draw loop should resolve a buffer view without copying the whole command per pass. This is also
 the right seam for future cache signatures: the selected geometry identity and level become explicit
@@ -358,7 +361,7 @@ inputs to shadow content.
 
 Likely branch: `shadow-per-view-discrete-lod`.
 
-**Implementation slices** (each verifiable on its own; the first two have landed):
+**Implementation slices** (each verifiable on its own; **all six landed**, merged as PR #126):
 
 1. **Identity foundations.** `NodeId` on the scene node and into `Lighting`; `ShadowCasterId` +
    generation on `GeometryBindings`; `ShadowLogicalViewId` / `ShadowLodStateKey`. Hysteresis is
@@ -742,10 +745,10 @@ The key success criteria for Milestone 1 are:
 
 | Order | Item | Why |
 |---:|---|---|
-| 1 | SH-01 diagnostics/scene | Establishes evidence and prevents quality-by-anecdote. |
-| 2 | SH-02 pure projection model | Makes the central policy testable before renderer plumbing. |
-| 3 | SH-03 per-view discrete LOD | Fixes the requested architectural mismatch. |
-| 4 | SH-04 deformation/proxy policy | Removes invalid error claims and defines safe extension points. |
+| 1 | ~~SH-01 diagnostics/scene~~ ✅ | Establishes evidence and prevents quality-by-anecdote. |
+| 2 | ~~SH-02 pure projection model~~ ✅ | Makes the central policy testable before renderer plumbing. |
+| 3 | ~~SH-03 per-view discrete LOD~~ ✅ | Fixes the requested architectural mismatch. |
+| 4 | SH-04 deformation/proxy policy — **deformation half ✅**, proxy half open | Removes invalid error claims and defines safe extension points. |
 | 5 | SH-05 material-aware casters | Fixes visibly wrong cutout and two-sided silhouettes. |
 | 6 | SH-06 cascade caster fit | Removes fixed-depth clipping and aligns candidate sets. |
 | 7 | SH-07 scale-derived bias/filtering | Makes quality controls physically tied to each map. |
