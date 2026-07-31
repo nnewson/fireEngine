@@ -27,11 +27,14 @@ enum class ShadowLodReason : std::uint8_t
     // The selector ran and this level fit the shadow budget. Includes legitimately choosing level 0
     // (a near or coarse-budget caster) — NOT a fallback.
     Selected,
-    // Mesh LOD is switched off for the frame (`FrameInfo::lodEnabled`), so every draw is full
-    // detail.
+    // SHADOW LOD is switched off for the frame (`FrameInfo::shadowLodEnabled` — its own switch
+    // since SH-03, not the forward `lodEnabled`), so every shadow draw is full detail.
     LodDisabled,
-    // The geometry carries a single level, so there is nothing to select. Cloth / storage-vertex
-    // geometry lands here: it never builds coarser levels.
+    // The geometry carries a single level, so there is nothing to select. A RIGID mesh below the
+    // simplifier's threshold lands here. Cloth no longer does: it is storage-vertex geometry and
+    // SH-04 classifies it Deformable, which is checked first and reports DeformableFallback — the
+    // point being that its safety must come from the classification and not from the accident of
+    // having one level.
     SingleLevel,
     // SH-02 forced fallbacks. Each is a level-0 result the selector could NOT justify, kept
     // distinct from `Selected` so the SH-01 panel reports a forced choice as such — a fallback
@@ -50,10 +53,13 @@ enum class ShadowLodReason : std::uint8_t
     // carried across a reassigned punctual slot, or a stale per-caster record). Deliberately NOT
     // clamped into range: clamping would hide the bug and apply one caster's history to another.
     InvalidPreviousLevel,
+    // SH-04. The caster deforms after the geometry its error was measured on (skinned,
+    // morph-capable or storage-vertex), so no level below full detail can be justified for it. Kept
+    // distinct from `LodDisabled` on purpose: that reports a user's toggle, this reports the
+    // absence of a valid error model, and a panel that showed one for the other would answer "why
+    // is this caster at full detail?" with somebody else's reason.
+    DeformableFallback,
     Count
-    // SH-04 adds an explicit deformable-fallback reason. Today skinned and morphed geometry DO
-    // build and select simplified levels, so they are `Selected` like any rigid mesh — recording
-    // that honestly now is what will make SH-04's change visible.
 };
 
 inline constexpr std::size_t kShadowLodReasonCount =

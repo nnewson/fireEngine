@@ -337,7 +337,7 @@ guessed: `ShadowLodHysteresis::coarsenRatio` defaults to an INVALID sentinel (th
 it) so no caller silently inherits an unmeasured number, and `selectShadowLod` takes its texel budget
 as an argument with no default.
 
-#### SH-03: Resolve LOD per shadow iteration
+#### SH-03: Resolve LOD per shadow iteration — ✅ landed (branch `shadow-per-view-discrete-lod`)
 
 Change the command seam so `Object` emits an unresolved shadow geometry description. Resolve its
 index buffer/count inside each directional cascade, world-only cascade, self-shadow slot, spot map,
@@ -350,7 +350,10 @@ Important invariants:
 - both passes of one self-shadow slot use one choice;
 - point-face selection uses the face actually being rendered;
 - forward `lodLevel`, indirect buffers, and `vdpmGpuFront` are irrelevant to shadow recording; and
-- the shadow LOD chain belongs to `shadowGeometry`, not necessarily the visible geometry.
+- ~~the shadow LOD chain belongs to `shadowGeometry`, not necessarily the visible geometry~~ —
+  **superseded by SH-04**, which removed the unvalidated shadow-proxy setter. The caster IS the
+  visible geometry until a validated proxy API reintroduces the distinction with the compatibility
+  rules that make it safe.
 
 The draw loop should resolve a buffer view without copying the whole command per pass. This is also
 the right seam for future cache signatures: the selected geometry identity and level become explicit
@@ -358,7 +361,7 @@ inputs to shadow content.
 
 Likely branch: `shadow-per-view-discrete-lod`.
 
-**Implementation slices** (each verifiable on its own; the first two have landed):
+**Implementation slices** (each verifiable on its own; **all six landed**, merged as PR #126):
 
 1. **Identity foundations.** `NodeId` on the scene node and into `Lighting`; `ShadowCasterId` +
    generation on `GeometryBindings`; `ShadowLogicalViewId` / `ShadowLodStateKey`. Hysteresis is
@@ -484,21 +487,58 @@ Likely branch: `shadow-per-view-discrete-lod`.
 
 #### SH-04: Conservative deformation and proxy policy
 
-Until a deformation-aware error bound exists, force skinned and morphed shadow casters to LOD0.
-Make the fallback visible in diagnostics.
+**Deformation half: landed** (`shadow-deformation-policy`). The proxy half is deliberately deferred —
+see below.
 
-Then define authored shadow proxies deliberately:
+The hole SH-03 left open: `object.cpp` built every shadow request with the frame's LOD toggle and
+nothing else, so skinned and morphed casters selected levels from a deviation the simplifier measured
+on the **bind pose**. That is not a loose estimate, it is an unfounded one — a joint rotation can
+carry a vertex arbitrarily far from where its rest-pose deviation was taken, so the number describes
+a mesh that is never drawn. SH-02 was careful to call the metric an estimate; this is the case where
+that word stopped covering it. It was live, not theoretical: BrainStem logged a shadow-level
+transition on a skinned caster within seconds of starting.
 
-- a rigid proxy may have and select its own LOD chain;
-- a skinned proxy must either share a compatible vertex/joint mapping or be rejected;
-- a morphing proxy needs an explicit compatible morph contract; and
-- proxy bounds, not visible-geometry bounds, drive per-view LOD and culling.
+What landed:
 
-The existing `Object::shadowGeometry` setter is currently unused and does not encode these
-compatibility rules. Do not start using it for deformable proxies until the rules are enforced at
-load time.
+- **`ShadowCasterDeformation` on the request** (`Rigid` / `Deformable`) — a classification, not a
+  policy switch. Deliberately NOT expressed by passing `lodEnabled = false`, which would have
+  reported `LodDisabled` and conflated a user's toggle with a safety fallback: the panel would then
+  answer "why is this caster at full detail?" with somebody else's reason. It defaults to
+  `Deformable` on the same principle as `worldScale`'s NaN — a producer that forgets the field must
+  not receive the optimistic answer.
+- **`ShadowLodReason::DeformableFallback`**, resolving to the whole mesh with an **infinite**
+  projected error. Not zero: zero would rank a deformable caster as the most accurate in the frame,
+  the exact inversion of what is known about it.
+- **Precedence**, most-specific-cause-first: `InvalidCaster` (a producer bug outranks a property of
+  well-formed geometry) → `LodDisabled` (a global switch is the operative fact about every caster;
+  a deformable one is not *more* disabled) → `DeformableFallback` → `SingleLevel` → selection.
+  Deformation is checked **before** the chain length so a single-level deformable caster still says
+  why it may not select.
+- **Classification at the object seam** (`graphics/shadow_caster_deformation.hpp`), covering all
+  three carriers: skinned instances, **morph-capable geometry regardless of current weights** (an
+  all-zero weight set is this frame's value, not a property — classifying by weights would swap a
+  caster's error model mid-animation), and **storage-vertex geometry** (cloth, whose vertices a
+  compute pass rewrites). Cloth is single-level today and so was safe *by accident*; classifying it
+  explicitly is what stops that accident from becoming load-bearing the day storage-vertex geometry
+  gains an LOD chain.
+- **No hysteresis history** for a fallback — already guaranteed by the `Selected`-only staging rule,
+  now pinned by a test so it cannot regress silently.
+- **`Object::shadowGeometry` removed.** It was unused, and it was a public route around every rule
+  above: substituting a proxy silently substitutes its topology, its deformation carriers (a rigid
+  proxy for a skinned mesh casts a shadow frozen in bind pose) and its bounds — which drive per-view
+  LOD and culling — with nothing checking that any of them match. Documenting it as unsafe would have
+  left the hole open while claiming it was closed.
 
-Likely branch: `shadow-deformation-policy`.
+**The proxy half remains open**, and reinstating a setter is what closes it. A validated proxy API
+must verify deformation compatibility (a skinned proxy shares a vertex/joint mapping or is
+rejected), state an explicit morph contract, allow a rigid proxy its own LOD chain, and take bounds
+from the **proxy** rather than the visible geometry — enforced at load time, where a rejection can
+still be reported. Until then there is no way to author one, which is the intended state: no route
+in beats an unchecked route in.
+
+**Calibration was re-run, not assumed.** `ShadowLodDemo` carries a skin and a morph primitive by
+design, so forcing them to LOD0 changes the caster mix and the measured tables move — see
+`render/constants.hpp` for the re-derived numbers against the same pre-registered 0.1% threshold.
 
 ### Milestone 2 — shadow silhouette correctness
 
@@ -705,10 +745,10 @@ The key success criteria for Milestone 1 are:
 
 | Order | Item | Why |
 |---:|---|---|
-| 1 | SH-01 diagnostics/scene | Establishes evidence and prevents quality-by-anecdote. |
-| 2 | SH-02 pure projection model | Makes the central policy testable before renderer plumbing. |
-| 3 | SH-03 per-view discrete LOD | Fixes the requested architectural mismatch. |
-| 4 | SH-04 deformation/proxy policy | Removes invalid error claims and defines safe extension points. |
+| 1 | ~~SH-01 diagnostics/scene~~ ✅ | Establishes evidence and prevents quality-by-anecdote. |
+| 2 | ~~SH-02 pure projection model~~ ✅ | Makes the central policy testable before renderer plumbing. |
+| 3 | ~~SH-03 per-view discrete LOD~~ ✅ | Fixes the requested architectural mismatch. |
+| 4 | SH-04 deformation/proxy policy — **deformation half ✅**, proxy half open | Removes invalid error claims and defines safe extension points. |
 | 5 | SH-05 material-aware casters | Fixes visibly wrong cutout and two-sided silhouettes. |
 | 6 | SH-06 cascade caster fit | Removes fixed-depth clipping and aligns candidate sets. |
 | 7 | SH-07 scale-derived bias/filtering | Makes quality controls physically tied to each map. |

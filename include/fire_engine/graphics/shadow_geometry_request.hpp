@@ -11,6 +11,26 @@
 namespace fire_engine
 {
 
+// SH-04: whether this caster's recorded error is a claim about the geometry that will actually be
+// rasterised. It is a CLASSIFICATION, not a policy switch — the resolver decides what to do with
+// it.
+//
+// The simplifier measures deviation on the mesh as authored: its bind pose, its base weights, the
+// contents of its vertex buffer at build time. For anything deformed afterwards that measurement
+// describes a mesh that is never drawn. Skinning does not merely perturb the error, it can amplify
+// it without bound — a joint rotation carries a vertex arbitrarily far from where its rest-pose
+// deviation was measured — so the number is not loose here, it is unfounded. SH-02 was careful to
+// call the metric an estimate; this is the case where that word stops covering it.
+enum class ShadowCasterDeformation : std::uint8_t
+{
+    // The rasterised geometry is the measured geometry, transformed rigidly. Error claims hold.
+    Rigid,
+    // Deformed after the measurement: skinned, morph-CAPABLE (independent of the current weights —
+    // an all-zero weight set is a value, not a guarantee, and nothing stops it changing next
+    // frame), or storage-vertex geometry whose vertices a compute pass rewrites (cloth).
+    Deformable,
+};
+
 // SH-03: a shadow caster described but NOT yet resolved to geometry.
 //
 // The whole point of the seam. A shadow command used to arrive with an index buffer already chosen
@@ -44,9 +64,16 @@ struct ShadowGeometryRequest
     // geometry cannot inherit the previous chain's dead band.
     ShadowCasterId casterId{ShadowCasterId::Invalid};
     ShadowCasterGeneration generation{ShadowCasterGeneration::First};
-    // Mirrors RenderTunables::lodEnabled at the time the command was built. Carried rather than
-    // consulted globally so one frame's commands cannot be resolved under two different answers.
+    // Mirrors `FrameInfo::shadowLodEnabled` — the SHADOW switch, which SH-03 separated from the
+    // forward `lodEnabled` so an A/B can isolate shadow selection. Carried rather than consulted
+    // globally so one frame's commands cannot be resolved under two different answers.
     bool lodEnabled{true};
+    // Deliberately defaults to Deformable, the SAFE answer, on the same principle as `worldScale`'s
+    // NaN: a producer that forgot this field must not receive the optimistic one. Forgetting it
+    // costs triangles and says so in the panel (every caster reporting DeformableFallback is a
+    // loud, findable symptom); the opposite default would silently select levels on an error claim
+    // nobody established, which is exactly the defect this field exists to close.
+    ShadowCasterDeformation deformation{ShadowCasterDeformation::Deformable};
 
     // A request that can actually be resolved into a draw. False means the producer left it
     // unfilled — which must not silently become "full detail".

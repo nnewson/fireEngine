@@ -74,9 +74,11 @@ struct RendererDebug
     // values always win, and repeated flags are last-one-wins. Only takes effect with lodMode
     // view-dependent; the overlay checkbox toggles it at runtime thereafter.
     std::optional<bool> vdpmGpuBackend{};
-    // --no-lod: start with mesh LOD switched off, so every draw is full detail. Seeds
-    // RenderTunables::lodEnabled, which both the forward and the shadow selection read — so this is
-    // the "full detail" half of an acceptance A/B, not a forward-only override.
+    // --no-lod: start with mesh LOD switched off, so every draw is full detail. Seeds BOTH
+    // RenderTunables::lodEnabled and ::shadowLodEnabled — two separate switches since SH-03, which
+    // is what lets `--no-shadow-lod` isolate the shadow half. This flag drives them together, so it
+    // remains the "full detail everywhere" end of an acceptance A/B rather than a forward-only
+    // override.
     bool lod{true};
     // --capture <path>: write the frame numbered `captureFrame` to `path` as a PNG and exit
     // successfully. Empty ⇒ no capture. The image is the final SWAPCHAIN content — post-process and

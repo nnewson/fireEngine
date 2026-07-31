@@ -248,3 +248,19 @@ TEST_CASE("ShadowIdentity.GatheredLightsCarryTheirOwningNodeId", "[ShadowIdentit
     CHECK(spotLight->nodeId == spotId);
     CHECK(pointLight->nodeId == pointId);
 }
+
+TEST_CASE("ShadowIdentity.GenerationAdvancesAndRefusesToWrap", "[ShadowIdentity]")
+{
+    // No production caller today (SH-04 removed the shadow-proxy setter), so without this the
+    // advancer would be unexercised code waiting for the proxy API to trust it blindly.
+    CHECK(nextShadowCasterGeneration(ShadowCasterGeneration::First) ==
+          static_cast<ShadowCasterGeneration>(1));
+    CHECK(nextShadowCasterGeneration(static_cast<ShadowCasterGeneration>(41)) ==
+          static_cast<ShadowCasterGeneration>(42));
+
+    // Exhaustion is deliberately NOT covered here: at UINT64_MAX the advancer logs and calls
+    // std::abort() rather than wrapping to First, where a caster would find history recorded
+    // against a chain replaced 2^64 generations ago. A test cannot survive that call, and weakening
+    // it to a sentinel return so it could be asserted would trade a loud, unreachable failure for a
+    // quiet, reachable one.
+}

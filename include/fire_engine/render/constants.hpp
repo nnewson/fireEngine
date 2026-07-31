@@ -107,6 +107,9 @@ inline constexpr float kPointShadowInfiniteRangeFallback = 100.0f;
 // zero, so every number below is signal.
 //
 //   budget   differing shadow px   worst px   cascade tris (of 43472 at full detail)
+//                                              [triangle column measured BEFORE SH-04 — see the
+//                                               re-derivation note below; the error column was
+//                                               re-measured after it and did not move]
 //   0.5      0.000%                 0/255     identical to the reference — nothing gained
 //   1        0.003%                66/255     26046  (59.9%)
 //   2        0.243%               121/255     24894  (57.3%)
@@ -127,10 +130,30 @@ inline constexpr float kPointShadowInfiniteRangeFallback = 100.0f;
 //
 // SCOPE: this calibrates the CSM. `--debug-shadow` visualises the primary directional visibility
 // and the triangle column is the cascade row, so cascade and world-only are measured; spot, point
-// and self share the constant but their QUALITY is not measured here (their savings are visible in
-// the panel's other rows — at budget 1, self 184/1248 and spot 768/10868 triangles). Extending the
-// evidence to the punctual families needs a per-family visibility view, and is worth doing before
-// this constant is treated as globally validated.
+// and self share the constant but their QUALITY is not measured here. Extending the evidence to the
+// punctual families needs a per-family visibility view, and is worth doing before this constant is
+// treated as globally validated.
+//
+// RE-DERIVED AFTER SH-04 (deformable casters forced to LOD0), because that changes the caster mix
+// and the tables above could not be assumed to survive it. What actually moved:
+//
+//   * the error column did NOT move — not one figure. WHY is not established. The honest statement
+//     is that the composite visibility mask is unchanged and the available instrumentation cannot
+//     attribute that. It is tempting to conclude the metric never saw the deformable casters — the
+//     panel reports 13 deformable resolutions scene-wide against 0 in cascade 0 — but that does not
+//     follow: `primaryDirectionalVisibility` (shader.frag) selects whichever cascade the RECEIVER
+//     depth lands in, not cascade 0, and on skinned receivers it folds in
+//     `min(worldShadow, selfShadow)`. So deformable casters can contribute to this mask through
+//     cascades nobody focused and through the self term. Attributing the result needs the
+//     per-family visibility view already listed as missing below; until it exists, "unchanged" is
+//     the measurement and the cause is open;
+//   * COST moved, which is where the change lives: the skinned self-shadow caster went from
+//     184/1248 triangles to 1248/1248 — it had been drawing a level chosen from a bind-pose error
+//     claim — and the cascade group went from 59.9% to 68.2% of full detail at this budget.
+//
+// The 0.1% threshold was re-applied unchanged, and still selects 1: budget 2 remains at 0.243% and
+// 4 at 0.356%. Budget 2 becoming eligible once deformable error disappeared was a live possibility
+// worth checking, and it did not happen.
 inline constexpr float kShadowLodPixelBudget = 1.0f;
 // Coarsening must project within `budget * ratio`, while refining triggers at `budget` — the gap is
 // the dead band, and 1.0 disables it.
@@ -142,9 +165,14 @@ inline constexpr float kShadowLodPixelBudget = 1.0f;
 // at a different budget would not reproduce this decision), over ~1100-frame runs of the animated
 // scene, per 100 frames:
 //
-//   ratio 1.0   0.27 transitions   0.00 REVERSALS
-//   ratio 0.75  0.09 transitions   0.00 REVERSALS
-//   ratio 0.5   0.09 transitions   0.00 REVERSALS
+//   ratio 1.0   0.46 transitions   0.00 REVERSALS
+//   ratio 0.75  0.16 transitions   0.00 REVERSALS
+//   ratio 0.5   0.15 transitions   0.00 REVERSALS
+//
+// (Re-measured after SH-04. The transition rates moved — 0.27/0.09/0.09 before — but they are 3, 1
+// and 1 raw events over ~650 frames, so the rates are dominated by counting noise and by where the
+// wall-clock-driven animation happened to be. The REVERSAL column, the only one that can justify a
+// ratio, is still zero at every ratio, which is the conclusion that matters.)
 //
 // Chatter is a reversal that undoes a RECENT transition (within kReversalWindowCommits) — a caster
 // oscillating across a threshold. Counting every return would have scored the scene's periodic

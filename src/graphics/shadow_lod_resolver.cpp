@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <limits>
 
 namespace fire_engine
 {
@@ -10,14 +11,20 @@ namespace
 {
 
 // The whole-mesh answer, carrying the reason that explains why nothing was selected.
+//
+// `projectedTexels` defaults to 0 because for most fallbacks no projection was attempted and zero
+// reads as "nothing measured". A deformable caster is different and passes infinity: there the
+// error is not unmeasured but UNBOUNDED, and reporting 0 would read as the most accurate caster in
+// the frame — the precise inversion of the truth.
 [[nodiscard]] ResolvedShadowDraw wholeMesh(const ShadowGeometryRequest& request,
-                                           ShadowLodReason reason) noexcept
+                                           ShadowLodReason reason,
+                                           float projectedTexels = 0.0f) noexcept
 {
     return ResolvedShadowDraw{.indexBuffer = request.baseIndexBuffer,
                               .indexCount = request.baseIndexCount,
                               .level = 0,
                               .reason = reason,
-                              .projectedTexels = 0.0f};
+                              .projectedTexels = projectedTexels};
 }
 
 } // namespace
@@ -39,6 +46,20 @@ ResolvedShadowDraw resolveShadowDraw(const ShadowGeometryRequest& request,
         // Checked before the chain: with LOD off the whole mesh is the answer even for a caster
         // that has levels, and reporting SingleLevel there would misattribute the cause.
         return wholeMesh(request, ShadowLodReason::LodDisabled);
+    }
+    if (request.deformation == ShadowCasterDeformation::Deformable)
+    {
+        // SH-04. Checked BEFORE the chain length, so a deformable caster that happens to carry one
+        // level still reports why it may not select — cloth is single-level today, and reporting
+        // SingleLevel would make it look safe for the wrong reason, quietly reopening this hole the
+        // day storage-vertex geometry grows an LOD chain.
+        //
+        // Ordered AFTER LodDisabled because when the user has switched shadow LOD off, that is the
+        // operative fact about every caster in the frame; a deformable one is not more disabled
+        // than the rest. Ordered after InvalidCaster for the same reason: a malformed request is a
+        // producer bug and outranks a property of well-formed geometry.
+        return wholeMesh(request, ShadowLodReason::DeformableFallback,
+                         std::numeric_limits<float>::infinity());
     }
     if (request.lods.size() <= 1)
     {

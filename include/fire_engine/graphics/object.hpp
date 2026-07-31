@@ -43,7 +43,17 @@ public:
 
     // Whether the instance's `geometryIndex`-th binding contributes to the shadow passes.
     [[nodiscard]] bool castsShadow(std::size_t geometryIndex) const noexcept;
-    void shadowGeometry(std::size_t geometryIndex, const Geometry* geometry) noexcept;
+    // NO shadow-proxy setter. SH-04 removed `shadowGeometry(index, geometry)`: it was unused, and
+    // it was a public route around every rule this class enforces. Substituting a proxy silently
+    // substitutes its topology, its deformation carriers (a rigid proxy for a skinned mesh casts a
+    // shadow frozen in bind pose) and its bounds — which drive per-view LOD and culling — with
+    // nothing checking that any of them match. Leaving it in place and documenting it as unsafe
+    // would have left the hole open while claiming it was closed.
+    //
+    // A validated proxy API is the remaining half of SH-04. It must, at minimum, verify deformation
+    // compatibility (a skinned proxy shares a vertex/joint mapping or is rejected), state a morph
+    // contract, and take bounds from the PROXY rather than the visible geometry. Reinstate a setter
+    // only together with those rules, at load time, where a rejection can still be reported.
     void addVariantMaterial(std::size_t geometryIndex, std::size_t variantIndex,
                             const Material* material);
     // `registry`, when non-null, creates a per-instance GPU-driven VDPM front over each geometry's
@@ -98,7 +108,6 @@ private:
     struct GeometryBindings
     {
         const Geometry* geometry{nullptr};
-        const Geometry* shadowGeometry{nullptr};
         // Per-INSTANCE shadow eligibility (see Object::addGeometry). A shared Geometry cannot
         // carry this: two instances of one mesh may legitimately disagree.
         bool castsShadow{true};
@@ -106,9 +115,13 @@ private:
         // so a multi-geometry mesh would have its bindings share one id and overwrite each other's
         // shadow-LOD hysteresis history.
         ShadowCasterId shadowCasterId{allocateShadowCasterId()};
-        // Bumped whenever `shadowGeometry` changes. Part of the hysteresis KEY (not a field checked
-        // at each lookup), so history built against a replaced chain simply finds nothing rather
-        // than relying on every future call site to remember a separate comparison.
+        // Part of the hysteresis KEY (not a field checked at each lookup), so history built against
+        // a replaced chain simply finds nothing rather than relying on every future call site to
+        // remember a separate comparison. RESERVED: nothing advances it today, because SH-04
+        // removed the shadow-proxy setter and a binding's geometry no longer changes after
+        // construction. It stays in the key because the validated proxy API that replaces that
+        // setter — and any future geometry reload — must be able to invalidate this caster's dead
+        // band, and retrofitting a key is far worse than carrying a constant one.
         ShadowCasterGeneration shadowGeneration{ShadowCasterGeneration::First};
         const Material* defaultMaterial{nullptr};
         const Material* activeMaterial{nullptr};

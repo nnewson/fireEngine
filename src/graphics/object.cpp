@@ -8,6 +8,7 @@
 #include <fire_engine/graphics/geometry.hpp>
 #include <fire_engine/graphics/material.hpp>
 #include <fire_engine/graphics/material_binding.hpp>
+#include <fire_engine/graphics/shadow_caster_deformation.hpp>
 #include <fire_engine/graphics/skin.hpp>
 #include <fire_engine/graphics/vdpm_gpu_registry.hpp>
 #include <fire_engine/graphics/vdpm_material.hpp>
@@ -98,7 +99,7 @@ Vec3 skinnedPosition(const Vertex& vertex, Vec3 position, std::span<const Mat4> 
 [[nodiscard]]
 ShadowGeometryRequest makeShadowRequest(const Geometry& geometry, ShadowCasterId casterId,
                                         ShadowCasterGeneration generation, const Mat4& model,
-                                        bool lodEnabled)
+                                        bool lodEnabled, ShadowCasterDeformation deformation)
 {
     return ShadowGeometryRequest{.lods = geometry.lods(),
                                  .baseIndexBuffer = geometry.indexBuffer(),
@@ -106,7 +107,8 @@ ShadowGeometryRequest makeShadowRequest(const Geometry& geometry, ShadowCasterId
                                  .worldScale = largestSingularValue(linearPart(model)),
                                  .casterId = casterId,
                                  .generation = generation,
-                                 .lodEnabled = lodEnabled};
+                                 .lodEnabled = lodEnabled,
+                                 .deformation = deformation};
 }
 
 } // namespace
@@ -115,7 +117,6 @@ void Object::addGeometry(const Geometry& geometry, bool castsShadow)
 {
     auto& binding = bindings_.emplace_back();
     binding.geometry = &geometry;
-    binding.shadowGeometry = &geometry;
     binding.castsShadow = castsShadow;
     binding.defaultMaterial = &geometry.material();
     binding.activeMaterial = &geometry.material();
@@ -124,24 +125,6 @@ void Object::addGeometry(const Geometry& geometry, bool castsShadow)
 bool Object::castsShadow(std::size_t geometryIndex) const noexcept
 {
     return geometryIndex < bindings_.size() && bindings_[geometryIndex].castsShadow;
-}
-
-void Object::shadowGeometry(std::size_t geometryIndex, const Geometry* geometry) noexcept
-{
-    if (geometryIndex >= bindings_.size())
-    {
-        return;
-    }
-    auto& binding = bindings_[geometryIndex];
-    const Geometry* replacement = geometry != nullptr ? geometry : binding.geometry;
-    if (replacement != binding.shadowGeometry)
-    {
-        // The LOD chain the hysteresis history was built against is gone. Advancing the generation
-        // changes the state KEY, so stored history is simply not found — rather than being
-        // reapplied to a different chain that merely happens to have the same number of levels.
-        binding.shadowGeneration = nextShadowCasterGeneration(binding.shadowGeneration);
-    }
-    binding.shadowGeometry = replacement;
 }
 
 void Object::addVariantMaterial(std::size_t geometryIndex, std::size_t variantIndex,
@@ -376,8 +359,7 @@ const Bounds3& Object::localBounds() const noexcept
         Bounds3 bounds;
         for (const auto& binding : bindings_)
         {
-            const Geometry* geometry =
-                binding.geometry != nullptr ? binding.geometry : binding.shadowGeometry;
+            const Geometry* geometry = binding.geometry;
             if (geometry == nullptr)
             {
                 continue;
@@ -398,8 +380,10 @@ Bounds3 Object::computeShadowBounds(std::span<const Mat4> jointMatrices, bool ha
     Bounds3 bounds;
     for (const auto& binding : bindings_)
     {
-        const Geometry* geometry =
-            binding.shadowGeometry != nullptr ? binding.shadowGeometry : binding.geometry;
+        // The caster IS the visible geometry. SH-04 removed the shadow-proxy setter, so there is
+        // no second geometry to prefer here; a validated proxy API would reintroduce that choice
+        // along with the rules that make it safe.
+        const Geometry* geometry = binding.geometry;
         if (geometry == nullptr)
         {
             continue;
@@ -785,8 +769,11 @@ std::vector<DrawCommand> Object::buildDrawCommands(const FrameInfo& frame, const
 
         const bool castsShadow = binding.castsShadow && frame.shadowPipeline != NullPipeline &&
                                  binding.shadowBufs[frame.currentFrame] != NullBuffer;
-        const Geometry* shadowGeometry =
-            binding.shadowGeometry != nullptr ? binding.shadowGeometry : binding.geometry;
+        // The caster IS the visible geometry — SH-04 removed the proxy route, so these can no
+        // longer differ. Still named for its role: a validated proxy API reintroduces the
+        // distinction at exactly this line, and the shadow draw below should not have to be
+        // re-derived to find it.
+        const Geometry* shadowGeometry = binding.geometry;
         // SH-03: no level can be reported HERE. A caster holds one level per shadow view, and none
         // of them exist until the shadow pass resolves — so the forward command leaves the sentinel
         // and carries only the caster's IDENTITY, which is what lets the renderer fill in the
@@ -813,9 +800,9 @@ std::vector<DrawCommand> Object::buildDrawCommands(const FrameInfo& frame, const
             shadowCmd.indexBuffer = NullBuffer;
             shadowCmd.indexCount = 0;
             shadowCmd.lodLevel = kNoShadowLod;
-            shadowCmd.shadowRequest =
-                makeShadowRequest(*shadowGeometry, binding.shadowCasterId, binding.shadowGeneration,
-                                  world, frame.shadowLodEnabled);
+            shadowCmd.shadowRequest = makeShadowRequest(
+                *shadowGeometry, binding.shadowCasterId, binding.shadowGeneration, world,
+                frame.shadowLodEnabled, shadowCasterDeformation(*shadowGeometry, deformable()));
             // Shadows keep discrete LOD and draw directly — clear the VDPM indirect handle the copy
             // inherited from the forward command, or the "non-null selects indirect" invariant
             // would point the shadow draw at the forward index count. Clear the GPU-front handle
