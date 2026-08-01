@@ -409,6 +409,10 @@ private:
     // Throttle for the periodic VDPM perf sample log (CPU record vs GPU compute ms) — the headless
     // baseline complement to the overlay's live readout.
     std::uint32_t vdpmPerfLogCounter_{0};
+    // Throttle for the SH-06 cascade-fit sample. Every cascade of every frame would be four lines a
+    // frame; the fit only moves when the camera or sun does, so a periodic sample (starting with
+    // the first frame, which is the one a capture is usually keyed to) shows the same thing.
+    std::uint32_t cascadeFitLogCounter_{0};
     // Frame capture (--capture). `framesRendered_` counts presented frames, so the capture is keyed
     // to a RENDER ORDINAL rather than elapsed time — every machine captures the same frame number.
     // That is not the same as the same picture: the main loop advances animation and physics from

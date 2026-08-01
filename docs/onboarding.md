@@ -909,6 +909,21 @@ the same change — most have a test or guard that will catch you, but not all.
   `LodDisabled`, which is a user's toggle, and the panel would then explain a safety fallback with
   somebody else's reason. There is deliberately **no shadow-proxy setter** — see `Object`'s header
   for what a validated one must enforce before it comes back.
+- **A cascade's texel size comes back OUT of the fit, never recomputed** (SH-06).
+  `fitCascadeReceiver` (`render/cascade_fit.hpp`) returns `worldPerTexel` alongside the geometry it
+  snapped to, and `Renderer::computeShadowCascades` hands that value straight to
+  `ShadowView::orthographic`. SH-02 selection reasons about that number, so a second derivation
+  anywhere would agree today and drift the moment the fit changes. Same file, same rule for the light
+  direction in the other direction: it must arrive **unit length and is rejected, not normalised**
+  (tolerance `8 * FLT_EPSILON` on squared length) — re-normalising an already-unit vector shifts it by
+  an ulp and changes the shipped matrices, which `tests/render/test_cascade_fit.cpp` pins bit-for-bit
+  against a copy of the pre-extraction code. Neither half repairs bad input: both return `nullopt`,
+  and the renderer makes that terminal, because the dangerous failures here are the FINITE ones (a
+  negative back-extension puts the near plane past the far) that the view set's non-finite validation
+  waves through. `CascadeReceiverFit` is **encapsulated like `ShadowView`** — `CascadeReceiverFit::fit`
+  is the only constructor — so a downstream policy can trust the basis it is handed instead of
+  re-validating it: as a public aggregate, `lightUp = lightDirection` was finite, passed every
+  field-wise check, and sent `Mat4::lookAt` to its own fallback up.
 - **A uniform block bound by more than one shader is DECLARED once**, in a shared `shaders/*.glsl`
   include — never hand-copied into each shader. `LightUBO` lives in
   [`shaders/light_ubo.glsl`](../shaders/light_ubo.glsl); `shader.frag` and `skybox.frag` `#include`

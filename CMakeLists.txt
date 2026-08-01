@@ -133,6 +133,7 @@ add_library(fireengine SHARED
     src/physics/physics_world_events.cpp
     src/physics/physics_world_queries.cpp
     src/physics/physics_world_shapes.cpp
+    src/render/cascade_fit.cpp
     src/render/compute_pipeline.cpp
     src/render/debug_draw.cpp
     src/render/debug_overlay.cpp
@@ -419,6 +420,7 @@ add_executable(test_fire_engine
     tests/graphics/test_shadow_render_view.cpp
     tests/graphics/test_texture.cpp
     tests/graphics/test_sampler_settings.cpp
+    tests/render/test_cascade_fit.cpp
     tests/render/test_ubo.cpp
     tests/render/test_descriptors.cpp
     tests/render/test_device_plan.cpp

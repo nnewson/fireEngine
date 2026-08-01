@@ -485,7 +485,7 @@ Likely branch: `shadow-per-view-discrete-lod`.
    SIGTERM, exit 143 after, a minimum record count — so a crashed run fails instead of reporting a
    reassuring zero. Re-run the sweep when SH-04 and SH-05 change which casters are selected.
 
-#### SH-04: Conservative deformation and proxy policy
+#### SH-04: Conservative deformation and proxy policy — ✅ deformation half landed (branch `shadow-deformation-policy`), proxy half open
 
 **Deformation half: landed** (`shadow-deformation-policy`). The proxy half is deliberately deferred —
 see below.
@@ -589,6 +589,88 @@ caster's position relative to the cluster are what a depth/candidate-set clip lo
 caster is behind the receiver slice it casts into. Note the frame number is only approximate: the
 demo advances on wall-clock time, so the moment drifts between runs. Fix this and the same capture
 must show a complete ellipse.
+
+**Agreed structure (2026-07-31).** The fit splits into TWO carriers, because the pipeline is
+`receiver slice → stable XY fit → candidate query → depth fit → render matrix` and the candidate
+query consumes the first. Baking Z into it would make the query depend on its own output:
+
+- **`CascadeReceiverFit`** — slice near/far, normalised light basis, frustum centre and snapped
+  centre, radius, snapped U/V bounds, **exact receiver min/max W taken from the eight corners** (not
+  `centreW ± radius`: the far plane must reach the receiver VOLUME, not the looser bounding sphere),
+  and world units per texel.
+- **`CascadeDepthFit`** — near/far W, light position, view-depth span, and the final view-projection
+  matrix.
+
+`fitLegacyCascadeDepth(receiver, kShadowDepthBackExtend)` reproduces today's behaviour first, so the
+receiver fit and its tests land unchanged; SH-06 then swaps that one function for the caster-aware
+policy. Pins: invalid or non-finite camera / aspect / slice / extent / light direction returns
+FAILURE rather than letting `makeViewBasis` manufacture a plausible basis from corrupt input; tests
+assert projection INVARIANTS (snapped U/V bounds map to clip edges, near/far W map to Vulkan depth
+0 and 1) as well as the literal legacy numbers; diagnostics log only values read back from the two
+carriers, including normalised light direction and aspect, never re-derived ones.
+
+**Landed (slice 2, `render/cascade_fit.{hpp,cpp}`).** The `fitCascade` lambda is gone; the renderer
+calls `fitCascadeReceiver` then `fitLegacyCascadeDepth`, and takes `worldPerTexel` back OUT of the
+receiver fit rather than recomputing it. `tests/render/test_cascade_fit.cpp` carries a verbatim copy
+of the pre-extraction lambda and asserts the resulting matrices are **bit-identical** across four
+camera/sun poses × the four shipped splits, with a second case proving that reference still responds
+to its own inputs (so the equality cannot pass vacuously).
+
+One contract fell out of that equality rather than being designed in: **`lightDirection` must arrive
+unit length and is REJECTED, not normalised, otherwise.** `Vec3::normalise` of an already-unit vector
+moves it by an ulp whenever its squared length landed just under one — enough to change two of the
+four poses' matrices. Re-normalising defensively would therefore have silently altered every shipped
+cascade, and repairing a scaled direction would hide the producer that scaled it, so the fit refuses
+it the same way it refuses a NaN aspect. The tolerance is `8 * FLT_EPSILON` on squared length —
+sized in float rounding, not a round decimal, so a 1.0001 scale is caught while real `normalise`
+output is not. (The engine normalises the sun twice on the way in: `Light::toLighting`, then
+`Renderer::updateLightData` into `directionalLightDir_`, which is the authority for what the fit
+receives.)
+
+**The receiver fit is a CLASS, not an aggregate** (`CascadeReceiverFit::fit` is the only
+constructor), for the same reason `ShadowView` is one. As a public struct it had a hole no
+field-wise validator closes cheaply: a `lightUp` set equal to `lightDirection` — or to zero — is
+finite, passes finiteness/ordering/positivity checks, and sends `Mat4::lookAt` to its own fallback
+up, manufacturing precisely the plausible basis the API says it refuses. A shared full-carrier
+validator (basis finiteness, unit lengths, orthogonality, handedness, snapped-centre and U/V-width
+consistency) would have worked only while every future consumer remembered to call it, which is the
+drift this extraction exists to remove. Encapsulation makes the invariant unexpressible instead;
+`tests/render/test_cascade_fit.cpp` pins it with `STATIC_REQUIRE_FALSE(is_default_constructible)` /
+`is_aggregate`, since there is no longer a runtime state to test.
+
+`CascadeDepthFit` stays a plain aggregate deliberately — nothing CONSUMES one, so no policy has to
+trust it. Encapsulate what is an input to something else.
+
+`fitLegacyCascadeDepth` therefore validates only `backExtend` (the one input still arriving from
+outside) and its own output. That output check is the interesting one, and it was verified against
+the raw expressions rather than assumed: the view set rejects only non-finite matrices, and a
+negative extension is always finite — a small one pulls both planes inside the sphere the cascade
+was fitted to (clipping its own contents), and one past `-radius` reverses the range so every depth
+comparison in the map inverts. Both look healthy from outside. The renderer makes either rejection
+terminal via `rejectedCascadeFit`.
+
+Per-cascade fit diagnostics log at `FE_LOG=render:debug`: every 120 frames starting with the first,
+**plus unconditionally on the frame `--capture-frame` selects**, reading only carrier fields. The
+periodic sample alone cannot describe a capture — at a 120-frame stride, frame 300's image would be
+explained by the fit from frame 241 — so every later caster-bound / cascade-blend diagnostic should
+use the same capture-triggered condition and describe one submitted frame.
+
+**Fixture status.** `ShadowDepthClipDemo` is a **probe**, not the acceptance fixture, until a pre-fix
+capture is genuinely red — the first placement produced a complete ellipse, which is consistent with
+the prediction being exact: the shadow pass front-culls, so a near plane through a sphere's centre
+removes the upstream hemisphere that never contributed, and the downstream hemisphere still projects
+the full silhouette. A null result there says nothing about the arithmetic.
+
+**The fit log settles the arithmetic half (2026-07-31).** With slice 2's diagnostics on,
+`ShadowDepthClipDemo` reports cascade 2 at `depth W [-41.340, 33.535]` — the near plane the placement
+predicted, to the printed digit, and the caster centre sits on it (its light-space W is -41.34 by
+construction). So the calculation is exact and the probe is placed where it was meant to be; what it
+is not is DISCRIMINATING, for the front-culling reason above. The probe therefore stays a probe, and
+the next step is the one already agreed: freeze the ORIGINAL failing animated pose into a static
+fixture rather than redesigning geometry, and record with it: receiver view depth, selected cascade
+and blend factor, caster U/V/W bounds against both cascades involved, and whether the caster was
+offered and rasterised in each — enough to separate depth clipping from candidate rejection or
+cascade blending.
 
 Keep the stable receiver XY fit, then determine the Z range from candidate caster bounds:
 

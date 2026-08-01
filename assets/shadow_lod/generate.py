@@ -121,6 +121,123 @@ def _morph_bulge(positions, axis=0, amount=0.6):
     return deltas, normal_deltas
 
 
+# --- SH-06 depth-clip fixture ----------------------------------------------
+# A caster far enough UPSTREAM along the sun to fall outside the cascade's fixed light-space
+# near plane (`kShadowDepthBackExtend`, 20 world units behind the fitted centre). Its own
+# scene, deliberately: ShadowLodDemo is the SH-03/SH-04 calibration baseline, and adding a
+# caster to it would silently move every recorded number.
+#
+# Placed so the whole experiment stays inside ONE cascade. The floor origin is sampled by
+# cascade 2 (camera depth ~22.6 m against its 13.64-24.05 m band), and a long thin caster's
+# shadow would stretch across the cascade 2/3 boundary — where the old near plane does not
+# clip — turning the gate into a cascade-transition experiment instead of a depth-clip one.
+# A compact sphere keeps the projected ellipse wholly within cascade 2.
+#
+# The sphere centre sits ON cascade 2's legacy near plane (w = dot(centre, lightDir) ~ -41.34),
+# so that plane cuts through it: before the fix the ellipse has a straight clipped edge, after
+# it the ellipse is complete. That is the entire acceptance statement.
+DEPTH_CLIP_SHADOW_CENTRE = (2.0, 0.0, 2.0)
+DEPTH_CLIP_CASTER_CENTRE = (24.22, 28.14, 18.29)
+DEPTH_CLIP_CASTER_RADIUS = 2.0
+
+
+def build_depth_clip_scene():
+    """The SH-06 reproduction: one sphere, one floor, one sun, one camera.
+
+    Minimal on purpose. Every extra caster is another explanation for a missing shadow, and
+    this scene exists to make exactly one failure unambiguous."""
+    s = Scene(GENERATOR)
+    named = {}
+
+    named["Receiver_Floor"] = s.box(
+        "Receiver_Floor", (FLOOR_HALF, FLOOR_THICKNESS, FLOOR_HALF),
+        (0.0, -FLOOR_THICKNESS, 0.0), GREY, extras={"Shadow": {"Casts": False}})
+
+    # Off-camera by construction: its shadow is the only evidence it exists, which is also
+    # what makes a clipped shadow impossible to mistake for a caster that simply is not there.
+    named["DepthClip_Caster"] = s.sphere(
+        "DepthClip_Caster", DEPTH_CLIP_CASTER_RADIUS, DEPTH_CLIP_CASTER_CENTRE, ORANGE)
+
+    named["Sun"] = s.add_node(
+        "Sun",
+        light=s.light("Sun", "directional", colour=(1.0, 0.97, 0.9), intensity=SUN_INTENSITY),
+        rotation=quat_from_to(LIGHT_FORWARD, SUN_DIRECTION))
+    named["Camera"] = s.camera(CAMERA_EYE, CAMERA_TARGET)
+    return s, named
+
+
+def validate_depth_clip(doc):
+    """Pins the fixture's authored geometry — NOT the engine's cascade fit.
+
+    Deliberately does not reimplement the cascade fitter in Python: a second implementation
+    would drift from the renderer's and start passing for the wrong reason. What is checked
+    here is that the AUTHORED ray, poses and scene shape are what the acceptance statement
+    assumes. That the caster overlaps the cascade in XY and straddles its legacy near plane is
+    proven by the pure fit's own headless tests once SH-06 adds them; until then the static
+    capture is the red test."""
+    nodes = doc["nodes"]
+    names = sorted(n.get("name", "") for n in nodes)
+    assert names == ["Camera", "DepthClip_Caster", "Receiver_Floor", "Sun"], \
+        f"the fixture must stay minimal; got {names}"
+
+    assert not doc.get("animations"), "the fixture is static — a moving caster is not a gate"
+    assert not doc.get("skins"), "no skins: SH-06 is about depth fitting, not deformation"
+    # RIGID and STATIC, pinned through the actual references rather than the node dict. An earlier
+    # version of this check tested `"targets" not in str(node.get("mesh"))`, which is vacuously true
+    # for every scene ever written: `node["mesh"]` is an integer index, so the string never contains
+    # "targets". A fixture whose classification is asserted by an assertion that cannot fail is worth
+    # less than no assertion, because it reads as covered.
+    meshes = doc.get("meshes", [])
+    for node in nodes:
+        extras = node.get("extras", {})
+        for unwanted in ("Physics", "Cloth"):
+            assert unwanted not in extras, \
+                f"{node.get('name')} carries extras.{unwanted}; the fixture must stay rigid"
+        assert "skin" not in node, f"{node.get('name')} is skinned"
+        assert "weights" not in node, f"{node.get('name')} carries morph weights"
+        if "mesh" in node:
+            mesh = meshes[node["mesh"]]
+            assert "weights" not in mesh, f"mesh of {node.get('name')} carries morph weights"
+            for primitive in mesh["primitives"]:
+                assert "targets" not in primitive, \
+                    f"mesh of {node.get('name')} has morph targets; SH-06 needs rigid geometry"
+
+    lights = doc.get("extensions", {}).get("KHR_lights_punctual", {}).get("lights", [])
+    kinds = [light["type"] for light in lights]
+    assert kinds == ["directional"], f"exactly one directional light, no punctual; got {kinds}"
+
+    receive_only = [n.get("name") for n in nodes
+                    if n.get("extras", {}).get("Shadow", {}).get("Casts") is False]
+    assert receive_only == ["Receiver_Floor"], \
+        f"the floor is the only receive-only object; got {receive_only}"
+
+    # The authored ray: the caster centre, followed along the sun, must land on the floor at
+    # the shadow centre this fixture is built around. Placing the sphere by eye and trusting a
+    # capture would let the ellipse drift out of the intended cascade unnoticed.
+    # Read the caster's position OUT OF THE DOCUMENT, never from the module constant. Checking the
+    # constant against itself is an assertion that cannot fail — the same vacuous shape as the morph
+    # check above — and it would pass happily while the authored node sat somewhere else entirely.
+    caster = next(n for n in nodes if n.get("name") == "DepthClip_Caster")
+    centre = tuple(caster["translation"])
+    length = math.sqrt(sum(component * component for component in SUN_DIRECTION))
+    direction = tuple(component / length for component in SUN_DIRECTION)
+    steps = centre[1] / -direction[1]
+    landing = tuple(centre[i] + steps * direction[i] for i in (0, 2))
+    for got, want, axis in zip(landing, (DEPTH_CLIP_SHADOW_CENTRE[0], DEPTH_CLIP_SHADOW_CENTRE[2]),
+                               "xz"):
+        assert abs(got - want) < 0.05, \
+            f"caster ray lands at {axis}={got:.3f}, authored shadow centre is {want}"
+
+    # Entirely behind the camera plane, so the sphere itself can never appear in a capture and
+    # be mistaken for the shadow it casts.
+    view = tuple(CAMERA_TARGET[i] - CAMERA_EYE[i] for i in range(3))
+    view_length = math.sqrt(sum(component * component for component in view))
+    view = tuple(component / view_length for component in view)
+    ahead = sum((centre[i] - CAMERA_EYE[i]) * view[i] for i in range(3))
+    assert ahead + DEPTH_CLIP_CASTER_RADIUS < 0.0, \
+        f"caster must sit behind the camera plane; it is {ahead:.2f} m in front"
+
+
 def build_scene(animated):
     """The shared content. `animated` adds the motion channels and nothing else, so the
     two files describe the same geometry at the same poses."""
@@ -509,6 +626,11 @@ VARIANTS = {
     "ShadowLodMotionDemo": True,
 }
 
+# SH-06's fixture is built by its own function and checked by its own validator: it shares
+# none of the LOD demo's content, and the LOD demo's assertions (named caster set, LOD-capable
+# triangle counts) describe a scene this one deliberately is not.
+DEPTH_CLIP_VARIANT = "ShadowDepthClipDemo"
+
 
 def main():
     out_dir = os.path.dirname(os.path.abspath(__file__))
@@ -519,6 +641,12 @@ def main():
         path = os.path.join(out_dir, f"{name}.gltf")
         kind = "animated" if animated else "static baseline"
         print(f"wrote {write_gltf(path, doc)}  ({len(scene.bin)} buffer bytes, {kind})")
+
+    scene, _ = build_depth_clip_scene()
+    doc = scene.to_gltf()
+    validate_depth_clip(doc)
+    path = os.path.join(out_dir, f"{DEPTH_CLIP_VARIANT}.gltf")
+    print(f"wrote {write_gltf(path, doc)}  ({len(scene.bin)} buffer bytes, SH-06 depth-clip fixture)")
 
 
 if __name__ == "__main__":
