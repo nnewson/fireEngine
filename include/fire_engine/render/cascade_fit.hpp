@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <optional>
 
+#include <fire_engine/graphics/bounds.hpp>
 #include <fire_engine/math/mat4.hpp>
 #include <fire_engine/math/vec3.hpp>
 
@@ -218,5 +219,75 @@ struct CascadeDepthFit
 // every depth comparison in the map inverts. Neither reports itself, so both are rejected here.
 [[nodiscard]] std::optional<CascadeDepthFit>
 fitLegacyCascadeDepth(const CascadeReceiverFit& receiver, float backExtend) noexcept;
+
+// How a caster's light-space footprint relates to the cascade's snapped rectangle.
+//
+// A relation rather than a bool because the candidate query SH-06 will build must be able to reject
+// `Outside` and only `Outside`. Edge-touching is classified conservatively as `Straddles`: a caster
+// exactly on the boundary may still contribute, and the cost of over-including one is a wasted
+// draw, while the cost of wrongly excluding it is a missing shadow nobody can trace.
+//
+// Note what `Straddles` does NOT mean. Light rays in an orthographic directional map preserve U and
+// V, so the part of a caster outside the rectangle cannot shadow any receiver inside it — a
+// straddling caster is ordinary, not defective. The classification exists to make cases
+// INSPECTABLE, not to accuse them.
+enum class CascadeFootprintRelation : std::uint8_t
+{
+    // The caster had no valid bounds; nothing was placed.
+    Invalid,
+    // No overlap with the rectangle at all.
+    Outside,
+    // Wholly within, and not touching an edge.
+    Inside,
+    // Overlaps, and reaches or crosses at least one edge.
+    Straddles,
+};
+
+// Where one caster sits relative to one cascade, in the cascade's own light space.
+//
+// This is the SH-06 evidence type, and deliberately not a verdict: it separates the two ways a
+// shadow can go missing, which a single "was it drawn" boolean cannot — clipped in DEPTH by the
+// fitted near/far planes, or outside the cascade's XY footprint entirely.
+//
+// The depth flags describe the CASTER, not the shadow it throws. What a depth clip costs is
+// measurable and was measured (SH-06, `ShadowDepthClipDemo`): the shadow pass culls FRONT faces, so
+// the surface a caster records is its far side, and the near plane removes a cap from that surface.
+// For the fixture's sphere the projected silhouette then shrinks CONCENTRICALLY — 14% smaller
+// linearly, 26% in area, matching the analytic cap prediction — rather than acquiring a straight
+// edge. That result is about a sphere and a plane perpendicular to the light; asymmetric geometry
+// can certainly present a straight projected boundary under the same clip, so do not generalise the
+// shape, only the mechanism: a depth clip removes the part of the recorded surface beyond the
+// plane.
+struct CascadeCasterPlacement
+{
+    // The caster's world bounds projected onto the cascade's light basis.
+    float minU{0.0f};
+    float maxU{0.0f};
+    float minV{0.0f};
+    float maxV{0.0f};
+    float minW{0.0f};
+    float maxW{0.0f};
+    CascadeFootprintRelation footprint{CascadeFootprintRelation::Invalid};
+    // Entirely within the fitted depth range.
+    bool insideDepth{false};
+    // Extends nearer than `nearW` / further than `farW`.
+    bool clippedNear{false};
+    bool clippedFar{false};
+    // Entirely outside the depth range — the whole caster is missing from this map rather than part
+    // of it. Distinguished from partial clipping because the two look completely different on
+    // screen: a missing shadow versus a shrunken one.
+    bool outsideDepth{false};
+};
+
+// Pure: no view set, no draw list, no GPU state — the geometric relationship only. Slice 4's
+// candidate query is expected to be built from this same function, so a diagnostic and the policy
+// it justifies cannot disagree about where a caster was.
+//
+// An INVALID bounds (`Bounds3::valid == false`) yields a placement with every flag false and zero
+// extents: a caster with no bounds has no position to report, and inventing one from the default
+// min/max sentinels would place it at infinity.
+[[nodiscard]] CascadeCasterPlacement placeCaster(const CascadeReceiverFit& receiver,
+                                                 const CascadeDepthFit& depth,
+                                                 const Bounds3& casterBounds) noexcept;
 
 } // namespace fire_engine

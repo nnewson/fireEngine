@@ -19,6 +19,7 @@
 #include <fire_engine/graphics/shadow_render_view.hpp>
 #include <fire_engine/math/mat4.hpp>
 #include <fire_engine/math/vec3.hpp>
+#include <fire_engine/render/cascade_fit.hpp>
 #include <fire_engine/render/constants.hpp>
 #include <fire_engine/render/debug_draw.hpp>
 #include <fire_engine/render/debug_overlay.hpp>
@@ -367,6 +368,7 @@ private:
     void submitAndPresent(Window& display, vk::CommandBuffer cmd, uint32_t imageIndex);
     void recordSkybox(Vec3 cameraPosition, Vec3 cameraTarget,
                       std::vector<DrawCommand>& drawCommands);
+    void logShadowCasterPlacement(std::span<const DrawCommand> shadowDraws) const;
 
     Device device_;
     Swapchain swapchain_;
@@ -409,6 +411,19 @@ private:
     // Throttle for the periodic VDPM perf sample log (CPU record vs GPU compute ms) — the headless
     // baseline complement to the overlay's live readout.
     std::uint32_t vdpmPerfLogCounter_{0};
+    // This frame's cascade fits, retained after `computeShadowCascades` so the caster placement
+    // diagnostic reasons about the SAME fit the matrices came from rather than refitting. SH-06's
+    // candidate query will consume these too, which is why they live here rather than inside the
+    // logging branch.
+    struct RetainedCascadeFit
+    {
+        CascadeReceiverFit receiver;
+        CascadeDepthFit depth;
+    };
+    std::array<std::optional<RetainedCascadeFit>, kShadowCascadeCount> cascadeFits_{};
+    // Set where the fit is logged, consumed where the shadow draws exist: the two diagnostics must
+    // describe the same frame, and the draw list is not built yet when the fit is.
+    bool logShadowPlacementThisFrame_{false};
     // Throttle for the SH-06 cascade-fit sample. Every cascade of every frame would be four lines a
     // frame; the fit only moves when the camera or sun does, so a periodic sample (starting with
     // the first frame, which is the one a capture is usually keyed to) shows the same thing.

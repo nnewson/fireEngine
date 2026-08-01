@@ -133,11 +133,24 @@ def _morph_bulge(positions, axis=0, amount=0.6):
 # clip — turning the gate into a cascade-transition experiment instead of a depth-clip one.
 # A compact sphere keeps the projected ellipse wholly within cascade 2.
 #
-# The sphere centre sits ON cascade 2's legacy near plane (w = dot(centre, lightDir) ~ -41.34),
-# so that plane cuts through it: before the fix the ellipse has a straight clipped edge, after
-# it the ellipse is complete. That is the entire acceptance statement.
+# Placement, CORRECTED 2026-08-01 after the first attempt produced a complete ellipse. The corrected
+# placement is the SH-06 red test: the legacy fit renders this sphere's shadow 14% too small
+# linearly and 26% too small by area (35253 -> 26166 shadow pixels, 306x152 -> 263x131), and the
+# caster-aware depth fit must restore it.
+#
+# The shadow pass culls FRONT faces (`Pipeline::shadowConfig`), so the depth a caster writes is
+# its BACK surface — the side facing away from the sun. That decides where a clipping plane has
+# to fall to be visible at all. A sphere centred exactly on the near plane has its entire
+# recorded surface (the downstream hemisphere) INSIDE the range, so nothing it contributes is
+# clipped and the ellipse comes out whole — which is precisely what the first placement showed.
+# The near plane must cut the RECORDED surface, so the centre sits one metre UPSTREAM of the
+# plane (w ~ -42.34 against cascade 2's near plane at -41.340) and the downstream cap crosses it.
+#
+# Moving along the sun's own direction does not move the shadow: the caster still sits on the ray
+# through the same floor point, so the target landing spot is unchanged and the earlier ray/landing
+# checks still hold.
 DEPTH_CLIP_SHADOW_CENTRE = (2.0, 0.0, 2.0)
-DEPTH_CLIP_CASTER_CENTRE = (24.22, 28.14, 18.29)
+DEPTH_CLIP_CASTER_CENTRE = (24.784, 28.855, 18.704)
 DEPTH_CLIP_CASTER_RADIUS = 2.0
 
 

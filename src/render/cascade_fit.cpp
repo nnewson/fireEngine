@@ -218,4 +218,69 @@ std::optional<CascadeDepthFit> fitLegacyCascadeDepth(const CascadeReceiverFit& r
     return depth;
 }
 
+CascadeCasterPlacement placeCaster(const CascadeReceiverFit& receiver, const CascadeDepthFit& depth,
+                                   const Bounds3& casterBounds) noexcept
+{
+    CascadeCasterPlacement placement{};
+    if (!casterBounds.valid)
+    {
+        return placement;
+    }
+
+    // All eight corners, not the centre and a radius: an axis-aligned box is not a sphere, and the
+    // whole question here is whether a FACE of it crosses a plane. A radius would round the box out
+    // and report clipping that is not there.
+    const Vec3& lo = casterBounds.min;
+    const Vec3& hi = casterBounds.max;
+    bool first = true;
+    for (int corner = 0; corner < 8; ++corner)
+    {
+        const Vec3 p{(corner & 1) != 0 ? hi.x() : lo.x(), (corner & 2) != 0 ? hi.y() : lo.y(),
+                     (corner & 4) != 0 ? hi.z() : lo.z()};
+        const float u = Vec3::dotProduct(p, receiver.lightRight());
+        const float v = Vec3::dotProduct(p, receiver.lightUp());
+        const float w = Vec3::dotProduct(p, receiver.lightDirection());
+        if (first)
+        {
+            placement.minU = placement.maxU = u;
+            placement.minV = placement.maxV = v;
+            placement.minW = placement.maxW = w;
+            first = false;
+            continue;
+        }
+        placement.minU = std::min(placement.minU, u);
+        placement.maxU = std::max(placement.maxU, u);
+        placement.minV = std::min(placement.minV, v);
+        placement.maxV = std::max(placement.maxV, v);
+        placement.minW = std::min(placement.minW, w);
+        placement.maxW = std::max(placement.maxW, w);
+    }
+
+    // Conservative on both boundaries: touching an edge counts as straddling, never as Outside
+    // (which a candidate query would reject) and never as Inside (which would claim the caster is
+    // wholly covered when a texel of it may not be).
+    const bool overlaps = placement.maxU >= receiver.minU() && placement.minU <= receiver.maxU() &&
+                          placement.maxV >= receiver.minV() && placement.minV <= receiver.maxV();
+    if (!overlaps)
+    {
+        placement.footprint = CascadeFootprintRelation::Outside;
+    }
+    else if (placement.minU > receiver.minU() && placement.maxU < receiver.maxU() &&
+             placement.minV > receiver.minV() && placement.maxV < receiver.maxV())
+    {
+        placement.footprint = CascadeFootprintRelation::Inside;
+    }
+    else
+    {
+        placement.footprint = CascadeFootprintRelation::Straddles;
+    }
+    placement.clippedNear = placement.minW < depth.nearW;
+    placement.clippedFar = placement.maxW > depth.farW;
+    placement.insideDepth = !placement.clippedNear && !placement.clippedFar;
+    // Wholly on one side of the range. Checked against the OPPOSITE bound of each pair, so a caster
+    // straddling the range reports as clipped rather than outside.
+    placement.outsideDepth = placement.maxW < depth.nearW || placement.minW > depth.farW;
+    return placement;
+}
+
 } // namespace fire_engine

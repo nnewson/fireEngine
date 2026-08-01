@@ -25,6 +25,7 @@ using fire_engine::CascadeReceiverFit;
 using fire_engine::CascadeReceiverInput;
 using fire_engine::fitLegacyCascadeDepth;
 using fire_engine::Mat4;
+using fire_engine::placeCaster;
 using fire_engine::Vec3;
 using fire_engine::Vec4;
 
@@ -637,4 +638,148 @@ TEST_CASE("CascadeFit.BitIdenticalRejectsPoisonedMatrices", "[CascadeFit]")
     Mat4 nudged = Mat4::identity();
     nudged[1, 1] = std::nextafter(1.0f, 2.0f);
     CHECK_FALSE(bitIdentical(identity, nudged));
+}
+
+namespace
+{
+
+// A box centred on a light-space (U, V, W) point, sized in light space, so a placement test can say
+// where it wants the caster without solving for a world position by hand.
+[[nodiscard]] fire_engine::Bounds3 boxAtUvw(const CascadeReceiverFit& fit, float u, float v,
+                                            float w, float halfExtent)
+{
+    const Vec3 centre = fit.lightRight() * u + fit.lightUp() * v + fit.lightDirection() * w;
+    fire_engine::Bounds3 bounds{};
+    for (int corner = 0; corner < 8; ++corner)
+    {
+        bounds.expand(centre + Vec3{(corner & 1) != 0 ? halfExtent : -halfExtent,
+                                    (corner & 2) != 0 ? halfExtent : -halfExtent,
+                                    (corner & 4) != 0 ? halfExtent : -halfExtent});
+    }
+    return bounds;
+}
+
+} // namespace
+
+// The evidence type SH-06 turns on: a shadow can go missing because the caster was clipped by the
+// depth range or because it was never in the cascade's footprint, and those need different fixes.
+TEST_CASE("CascadeFit.PlacementSeparatesDepthClippingFromFootprintMisses", "[CascadeFit]")
+{
+    const auto receiver = CascadeReceiverFit::fit(inputFor(scenarios().front(), 1.0f, 12.0f));
+    REQUIRE(receiver);
+    const auto depth = fitLegacyCascadeDepth(*receiver, fire_engine::kShadowDepthBackExtend);
+    REQUIRE(depth);
+
+    const float midU = 0.5f * (receiver->minU() + receiver->maxU());
+    const float midV = 0.5f * (receiver->minV() + receiver->maxV());
+    const float midW = 0.5f * (depth->nearW + depth->farW);
+
+    SECTION("a caster the cascade fully contains")
+    {
+        const auto p = placeCaster(*receiver, *depth, boxAtUvw(*receiver, midU, midV, midW, 0.5f));
+        CHECK(p.footprint == fire_engine::CascadeFootprintRelation::Inside);
+        CHECK(p.insideDepth);
+        CHECK_FALSE(p.clippedNear);
+        CHECK_FALSE(p.clippedFar);
+        CHECK_FALSE(p.outsideDepth);
+        // Bounds are read from the box, not invented: a 0.5 half-extent box spans at most 2 * 0.5 *
+        // sqrt(3) along any light axis, and contains the point it was centred on.
+        CHECK(p.minW <= midW);
+        CHECK(p.maxW >= midW);
+        CHECK(p.maxW - p.minW <= 2.0f * 0.5f * std::sqrt(3.0f) + 1e-4f);
+    }
+    SECTION("the defect signature: straddling the near plane")
+    {
+        // Exactly the ShadowDepthClipDemo geometry — a caster centred on the near plane, half of it
+        // before the plane. Clipped, NOT outside: part of it still writes depth, which is why the
+        // shadow arrives cut rather than absent.
+        const auto p =
+            placeCaster(*receiver, *depth, boxAtUvw(*receiver, midU, midV, depth->nearW, 1.0f));
+        CHECK(p.clippedNear);
+        CHECK_FALSE(p.clippedFar);
+        CHECK_FALSE(p.insideDepth);
+        CHECK_FALSE(p.outsideDepth);
+        CHECK(p.footprint == fire_engine::CascadeFootprintRelation::Inside);
+    }
+    SECTION("wholly behind the near plane")
+    {
+        const auto p = placeCaster(*receiver, *depth,
+                                   boxAtUvw(*receiver, midU, midV, depth->nearW - 50.0f, 1.0f));
+        CHECK(p.clippedNear);
+        CHECK(p.outsideDepth);
+        CHECK_FALSE(p.insideDepth);
+    }
+    SECTION("past the far plane")
+    {
+        const auto p =
+            placeCaster(*receiver, *depth, boxAtUvw(*receiver, midU, midV, depth->farW, 1.0f));
+        CHECK(p.clippedFar);
+        CHECK_FALSE(p.clippedNear);
+        CHECK_FALSE(p.outsideDepth);
+    }
+    SECTION("outside the footprint but at a perfectly good depth")
+    {
+        // The other way a shadow goes missing, and the reason the two flags are separate: this
+        // caster is at a legal depth and still cannot appear in this cascade.
+        const auto p = placeCaster(*receiver, *depth,
+                                   boxAtUvw(*receiver, receiver->maxU() + 10.0f, midV, midW, 1.0f));
+        CHECK(p.footprint == fire_engine::CascadeFootprintRelation::Outside);
+        CHECK(p.insideDepth);
+    }
+    SECTION("a caster with no bounds is not placed anywhere")
+    {
+        // The default Bounds3 carries max/lowest sentinels; projecting those would report a caster
+        // spanning infinity and overlapping everything.
+        const auto p = placeCaster(*receiver, *depth, fire_engine::Bounds3{});
+        CHECK(p.footprint == fire_engine::CascadeFootprintRelation::Invalid);
+        CHECK_FALSE(p.insideDepth);
+        CHECK_FALSE(p.clippedNear);
+        CHECK_FALSE(p.clippedFar);
+        CHECK_FALSE(p.outsideDepth);
+        CHECK(p.minW == 0.0f);
+        CHECK(p.maxW == 0.0f);
+    }
+}
+
+// The footprint relation exists for a candidate query that must reject `Outside` and ONLY
+// `Outside`, so its boundary behaviour is the part worth pinning: a caster touching an edge is
+// `Straddles`, never `Outside` (which would drop a possible contributor) and never `Inside` (which
+// would claim full coverage it does not have).
+TEST_CASE("CascadeFit.FootprintRelationIsConservativeAtTheEdges", "[CascadeFit]")
+{
+    using fire_engine::CascadeFootprintRelation;
+
+    const auto receiver = CascadeReceiverFit::fit(inputFor(scenarios().front(), 1.0f, 12.0f));
+    REQUIRE(receiver);
+    const auto depth = fitLegacyCascadeDepth(*receiver, fire_engine::kShadowDepthBackExtend);
+    REQUIRE(depth);
+
+    const float midU = 0.5f * (receiver->minU() + receiver->maxU());
+    const float midV = 0.5f * (receiver->minV() + receiver->maxV());
+    const float midW = 0.5f * (depth->nearW + depth->farW);
+
+    const auto relationAt = [&](float u, float v, float halfExtent)
+    {
+        return placeCaster(*receiver, *depth, boxAtUvw(*receiver, u, v, midW, halfExtent))
+            .footprint;
+    };
+
+    // Well inside.
+    CHECK(relationAt(midU, midV, 0.5f) == CascadeFootprintRelation::Inside);
+    // Centred on an edge: half in, half out.
+    CHECK(relationAt(receiver->maxU(), midV, 1.0f) == CascadeFootprintRelation::Straddles);
+    CHECK(relationAt(receiver->minU(), midV, 1.0f) == CascadeFootprintRelation::Straddles);
+    CHECK(relationAt(midU, receiver->maxV(), 1.0f) == CascadeFootprintRelation::Straddles);
+    // Far beyond it.
+    CHECK(relationAt(receiver->maxU() + 20.0f, midV, 1.0f) == CascadeFootprintRelation::Outside);
+    // A caster placed so its extreme corner lands ON the boundary. The box is axis-aligned in WORLD
+    // space, so its light-space extent is wider than the half-extent; nudging by that much puts a
+    // face against the edge rather than across it, and the conservative answer is still Straddles.
+    const auto onEdge = placeCaster(
+        *receiver, *depth,
+        boxAtUvw(*receiver, midU, midV, midW, 0.5f * (receiver->maxU() - receiver->minU())));
+    CHECK(onEdge.footprint == CascadeFootprintRelation::Straddles);
+    // No bounds at all: not a footprint judgement, and not silently Outside either.
+    CHECK(placeCaster(*receiver, *depth, fire_engine::Bounds3{}).footprint ==
+          CascadeFootprintRelation::Invalid);
 }

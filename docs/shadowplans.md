@@ -570,39 +570,60 @@ The cascade XY fit is stable, but its light-space depth currently relies on the 
 `kShadowDepthBackExtend`. A caster farther behind the receiver slice than that constant can be
 clipped even though its shadow reaches the slice.
 
-**QUALIFIED, 2026-08-01 — do not treat the paragraph below as an established depth-clip case.** Two
-things came out of building the reproduction. First, `ShadowLodMotionDemo` was rendering under the
-engine's FALLBACK sun: the glTF loader dropped lights on animated nodes, so the authored, swinging
-sun never reached the scene (fixed on `gltf-component-decomposition`; see
-[`onboarding.md`](onboarding.md) § Cross-File Invariants). Every observation on this scene, including
-the one below, was made under lighting the asset did not author. Second, sweeping the caster's whole
+**RESOLVED, 2026-08-01 — SH-06 keeps its depth-fit scope, and now has a valid red test. The
+historical half-ellipse is a SEPARATE open question.**
+
+Two things came out of building the reproduction.
+
+*The scene was mis-lit.* `ShadowLodMotionDemo` rendered under the engine's FALLBACK sun, because the
+glTF loader dropped lights on animated nodes (fixed; see [`onboarding.md`](onboarding.md)
+§ Cross-File Invariants). Every observation on this scene, including the half-ellipse, was made
+under lighting the asset did not author.
+
+*The fixed back-extension does clip real casters, and the cost is now measured.* The first probe
+placement — a sphere centred ON cascade 2's legacy near plane — produced a complete ellipse, which
+is correct and not a null result: the shadow pass culls FRONT faces
+(`Pipeline::shadowConfig`), so the surface a caster records is its far side, and a sphere centred on
+the plane has that whole surface downstream of it. Moving the caster one metre UPSTREAM along the
+sun — which does not move its shadow, since it stays on the same light ray — makes the recorded
+surface straddle the plane. The trace then reports `clippedNear=true` (`W [-45.723, -38.953]` against
+`depth W [-41.340, 33.535]`) and the shadow measurably shrinks:
+
+| probe placement | shadow pixels | bounding box |
+|---|---|---|
+| centre on the near plane | 35253 | 306 x 152 |
+| recorded surface straddling | 26166 | 263 x 131 |
+
+That is 14% smaller linearly and 26% by area, against an analytic prediction of 13.4% / 25% for the
+cap the plane removes from a sphere. **This is SH-06's acceptance gate**: the caster-aware depth fit
+must restore the full-size ellipse, and the numbers above are the pre-fix baseline.
+
+Note the scope of the shape result. A plane perpendicular to the light removes a cap symmetric about
+the light axis, so THIS fixture's sphere shrinks concentrically rather than acquiring a straight
+edge. That is a statement about a sphere: asymmetric geometry can certainly present a straight
+projected boundary under the same clip. What generalises is the mechanism, not the silhouette.
+
+*The half-ellipse itself is unexplained and is not SH-06's gate.* Sweeping the caster's whole
 animation range through `CascadeReceiverFit::fit` -> `fitLegacyCascadeDepth` -> `placeCaster` finds
-NO pose where the moving caster is clipped by a cascade near plane — closest approach 20.7 m under
-the fallback sun, 30.8 m under the authored one. The sweep reproduces the engine's own logged
-cascade-0 fit to the printed digit and detects a deliberately planted behind-the-plane caster, so the
-null is not vacuous. The symptom below is therefore real as an observation but MISATTRIBUTED as
-fixed-depth clipping; re-diagnose it under corrected lighting with `placeCaster`, which separates a
-depth clip from a footprint miss, before any fixture is frozen.
+no pose where the moving caster is depth-clipped (closest approach 20.7 m under the fallback sun,
+30.8 m under the authored one), and a 676-row live trace over a ~25 s run reports zero `clippedNear`
+events for any caster. The sweep reproduces the engine's own logged cascade-0 fit to the printed
+digit and the trace flags the probe scene, so neither null is vacuous. Diagnosing it needs, and does
+not yet have:
 
-**Observed, 2026-07-29** (reported from a live run during SH-03 slice 6, then reproduced). On
-`ShadowLodMotionDemo`, as the moving sphere passes the detail cluster, the top third of its cast
-shadow disappears: the shadow renders as a half-ellipse with a straight upper edge while the sphere
-itself is fully lit and its neighbour a metre away casts a complete ellipse. It returns once the
-sphere moves clear. Reproduce with:
+- the symptom CONFIRMED to still occur under the repaired authored sun (four sampled frames did not
+  show it, which is not a search);
+- the pass's own per-cascade filter/drawn verdict beside the placement — the trace runs before
+  `ShadowDrawFilter`, so it proves where a caster is, not whether that cascade rasterised it;
+- at the affected receiver pixels: the selected cascade, the blend factor, and the projected shadow
+  U/V, since a receiver sampling outside a map, or two cascades disagreeing across a blend, can
+  produce a straight boundary.
 
-```bash
-./fireEngineApp shadow_lod/ShadowLodMotionDemo.gltf nightbox.hdr --no-taa \
-  --no-shadow-lod --capture-frame 300 --capture /tmp/sh06.png
-```
-
-`--no-shadow-lod` forces every caster to shadow LOD0 while the visible geometry keeps selecting
-normally, which is what makes this evidence rather than an anecdote: **shadow LOD is not
-involved**. (The original reproduction used `--shadow-budget 0.001`, which is nearly but not
-exactly the same thing — selection still runs there.) The straight cut and the dependence on the
-caster's position relative to the cluster are what a depth/candidate-set clip looks like — the
-caster is behind the receiver slice it casts into. Note the frame number is only approximate: the
-demo advances on wall-clock time, so the moment drifts between runs. Fix this and the same capture
-must show a complete ellipse.
+A footprint classification (`CascadeFootprintRelation`: Invalid / Outside / Inside / Straddles, with
+edge-touching conservatively Straddles) now rides on the placement to make those cases inspectable.
+It is diagnostics, NOT an accusation: light rays in an orthographic directional map preserve U and V,
+so the part of a straddling caster outside the rectangle cannot shadow any receiver inside it. 82 of
+those 676 rows straddle, and that is ordinary.
 
 **Agreed structure (2026-07-31).** The fit splits into TWO carriers, because the pipeline is
 `receiver slice → stable XY fit → candidate query → depth fit → render matrix` and the candidate
