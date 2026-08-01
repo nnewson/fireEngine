@@ -22,6 +22,7 @@
 #include <fire_engine/graphics/renderable_scene.hpp>
 #include <fire_engine/math/constants.hpp>
 #include <fire_engine/math/view_basis.hpp>
+#include <fire_engine/render/cascade_fit.hpp>
 #include <fire_engine/render/cubemap_basis.hpp>
 #include <fire_engine/render/draw_record.hpp>
 #include <fire_engine/render/environment_precompute.hpp>
@@ -155,6 +156,16 @@ int packLight(LightUBO& lightData, int& slot, const Lighting& light) noexcept
 {
     throw std::runtime_error(
         std::format("shadow view rejected by the view set ({}) — corrupt render input", view));
+}
+
+// A cascade whose receiver fit refused the frame's camera/light input. Terminal for the same reason
+// as `rejectedShadowView`: the fit only fails on input that is non-finite or degenerate, and the
+// alternative — a cascade quietly fitted around a manufactured basis — shadows the wrong region
+// with nothing pointing back at the corrupt value that caused it.
+[[noreturn]] void rejectedCascadeFit(std::uint32_t cascade)
+{
+    throw std::runtime_error(std::format(
+        "cascade {} receiver fit rejected the camera/light input — corrupt render input", cascade));
 }
 
 // One SH-03 calibration override, validated and reported. The NUMERIC rule lives in
@@ -451,75 +462,6 @@ void Renderer::updateLightData(Vec3 cameraPosition, Vec3 cameraTarget, float asp
 void Renderer::computeShadowCascades(LightUBO& out, Vec3 cameraPosition, Vec3 cameraTarget,
                                      float aspect)
 {
-    // Camera basis + light basis (shared by every cascade fit).
-    const Vec3 lightDir = directionalLightDir_;
-    const float tanHalfFov = std::tan(kCameraFovRadians * 0.5f);
-    const ViewBasis basis = makeViewBasis(cameraPosition, cameraTarget);
-    const Vec3 lightUp = stableUpForForward(lightDir);
-    const Vec3 lightRight = normaliseOr(Vec3::crossProduct(lightDir, lightUp), {1.0f, 0.0f, 0.0f});
-    const Vec3 lightUpOrtho = normaliseOr(Vec3::crossProduct(lightRight, lightDir), lightUp);
-    const float shadowMapExtentF = static_cast<float>(kShadowMapExtent);
-
-    // Bounding-sphere fit for a single sub-frustum slice. Captures the light
-    // basis above, called once per cascade.
-    //
-    // Returns the matrix AND the descriptor SH-02 selection reasons about, because both fall out of
-    // the same fit: the texel size the cascade snaps to IS `worldPerTexel` below. Recomputing it
-    // anywhere else would make the two drift the moment this fit changes.
-    struct CascadeFit
-    {
-        Mat4 viewProj;
-        float worldPerTexel;
-    };
-    auto fitCascade = [&](float sliceNear, float sliceFar) -> CascadeFit
-    {
-        const float nearH = tanHalfFov * sliceNear;
-        const float nearW = nearH * aspect;
-        const float farH = tanHalfFov * sliceFar;
-        const float farW = farH * aspect;
-
-        const Vec3 sliceNearCentre = cameraPosition + basis.forward * sliceNear;
-        const Vec3 sliceFarCentre = cameraPosition + basis.forward * sliceFar;
-
-        const std::array<Vec3, 8> corners{sliceNearCentre - basis.right * nearW - basis.up * nearH,
-                                          sliceNearCentre + basis.right * nearW - basis.up * nearH,
-                                          sliceNearCentre + basis.right * nearW + basis.up * nearH,
-                                          sliceNearCentre - basis.right * nearW + basis.up * nearH,
-                                          sliceFarCentre - basis.right * farW - basis.up * farH,
-                                          sliceFarCentre + basis.right * farW - basis.up * farH,
-                                          sliceFarCentre + basis.right * farW + basis.up * farH,
-                                          sliceFarCentre - basis.right * farW + basis.up * farH};
-
-        Vec3 frustumCentre{0.0f, 0.0f, 0.0f};
-        for (const auto& c : corners)
-        {
-            frustumCentre += c;
-        }
-        frustumCentre /= 8.0f;
-
-        float radius = 0.0f;
-        for (const auto& c : corners)
-        {
-            radius = std::max(radius, (c - frustumCentre).magnitude());
-        }
-        radius = std::ceil(radius * 16.0f) / 16.0f;
-
-        const float worldPerTexel = (2.0f * radius) / shadowMapExtentF;
-        const float centreU = Vec3::dotProduct(frustumCentre, lightRight);
-        const float centreV = Vec3::dotProduct(frustumCentre, lightUpOrtho);
-        const float centreW = Vec3::dotProduct(frustumCentre, lightDir);
-        const float snappedU = std::floor(centreU / worldPerTexel) * worldPerTexel;
-        const float snappedV = std::floor(centreV / worldPerTexel) * worldPerTexel;
-        const Vec3 snappedCentre =
-            lightRight * snappedU + lightUpOrtho * snappedV + lightDir * centreW;
-
-        const Vec3 lightPos = snappedCentre - lightDir * (radius + kShadowDepthBackExtend);
-        const Mat4 lightView = Mat4::lookAt(lightPos, snappedCentre, lightUpOrtho);
-        const Mat4 lightProj = Mat4::ortho(-radius, radius, -radius, radius, 0.0f,
-                                           2.0f * radius + 2.0f * kShadowDepthBackExtend);
-        return CascadeFit{lightProj * lightView, worldPerTexel};
-    };
-
     // Log-uniform cascade splits — Practical Split Scheme. Keeps close cascades
     // small for near-camera detail while still covering kShadowFarPlane.
     float splits[kShadowCascadeCount];
@@ -536,13 +478,70 @@ void Renderer::computeShadowCascades(LightUBO& out, Vec3 cameraPosition, Vec3 ca
     // as this frame's. This is the ONE reset, and it must stay ahead of every populate below.
     shadowViews_.reset();
 
+    // Periodic, first frame included — AND unconditionally on the frame `--capture-frame` selects.
+    // The periodic sample alone cannot describe a capture: at a 120-frame stride, frame 300's image
+    // would be explained by the fit from frame 241 or 361, and the camera has moved in between. The
+    // capture-triggered condition is what every later caster-bound / cascade-blend diagnostic
+    // should use too, so all the evidence describes ONE submitted frame.
+    //
+    // `framesRendered_` is incremented late in drawFrame, so the frame being built here is the next
+    // one. A frame abandoned after this point (an out-of-date swapchain) therefore logs its fit and
+    // never presents, and the real capture frame logs again — read the LAST sample before the
+    // capture line, not the first.
+    const bool captureFitFrame = captureWanted() && (framesRendered_ + 1) == captureFrame_;
+    const bool logFit = ((++cascadeFitLogCounter_ % 120) == 1) || captureFitFrame;
+
     float sliceNear = kCameraNearPlane;
     for (uint32_t i = 0; i < kShadowCascadeCount; ++i)
     {
-        const CascadeFit fit = fitCascade(sliceNear, splits[i]);
-        if (!shadowViews_.setCascade(i, fit.viewProj, ShadowView::orthographic(fit.worldPerTexel)))
+        // Two halves, in the order SH-06 needs them: the receiver's stable XY/texel fit first — the
+        // input a caster candidate query will consume — then the depth policy that turns it into a
+        // matrix. Only the second call changes when the fixed back-extension goes.
+        const CascadeReceiverInput fitInput{.cameraPosition = cameraPosition,
+                                            .cameraTarget = cameraTarget,
+                                            .lightDirection = directionalLightDir_,
+                                            .fovRadians = kCameraFovRadians,
+                                            .aspect = aspect,
+                                            .sliceNear = sliceNear,
+                                            .sliceFar = splits[i],
+                                            .shadowMapExtent = kShadowMapExtent};
+        const std::optional<CascadeReceiverFit> receiver = CascadeReceiverFit::fit(fitInput);
+        if (!receiver)
+        {
+            rejectedCascadeFit(i);
+        }
+        const std::optional<CascadeDepthFit> depth =
+            fitLegacyCascadeDepth(*receiver, kShadowDepthBackExtend);
+        if (!depth)
+        {
+            rejectedCascadeFit(i);
+        }
+        // The texel size the cascade snaps to comes back FROM the fit rather than being recomputed
+        // here: SH-02 selection reasons about it, and a second derivation would drift the moment
+        // the fit changes.
+        if (!shadowViews_.setCascade(i, depth->viewProj,
+                                     ShadowView::orthographic(receiver->worldPerTexel())))
         {
             rejectedShadowView(std::format("cascade {}", i));
+        }
+        if (logFit)
+        {
+            // Every value here is READ BACK from the two carriers, never re-derived from the
+            // inputs above — a diagnostic that recomputes its own numbers agrees with itself while
+            // the shipped matrix disagrees with both.
+            log::debug(log::category::render,
+                       "cascade {} fit: slice [{:.3f}, {:.3f}] aspect {:.4f} lightDir ({:.4f}, "
+                       "{:.4f}, {:.4f}) | radius {:.4f} worldPerTexel {:.5f} | U [{:.3f}, {:.3f}] "
+                       "V [{:.3f}, {:.3f}] | centreW {:.3f} receiverW [{:.3f}, {:.3f}] | depth W "
+                       "[{:.3f}, {:.3f}] span {:.3f} lightPos ({:.3f}, {:.3f}, {:.3f})",
+                       i, receiver->sliceNear(), receiver->sliceFar(), receiver->aspect(),
+                       receiver->lightDirection().x(), receiver->lightDirection().y(),
+                       receiver->lightDirection().z(), receiver->radius(),
+                       receiver->worldPerTexel(), receiver->minU(), receiver->maxU(),
+                       receiver->minV(), receiver->maxV(), receiver->centreW(),
+                       receiver->receiverMinW(), receiver->receiverMaxW(), depth->nearW,
+                       depth->farW, depth->viewDepthSpan, depth->lightPosition.x(),
+                       depth->lightPosition.y(), depth->lightPosition.z());
         }
         out.cascadeSplits[i] = splits[i];
         sliceNear = splits[i];
