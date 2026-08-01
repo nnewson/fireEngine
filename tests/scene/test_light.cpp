@@ -173,11 +173,14 @@ TEST_CASE("LightGather.ScaledNodeStillEmitsUnitForward", "[LightGather]")
 // ---------------------------------------------------------------------------
 
 #include <fire_engine/input/input_state.hpp>
+#include <fire_engine/math/quaternion.hpp>
 #include <fire_engine/scene/node.hpp>
 #include <fire_engine/scene/scene_graph.hpp>
 
+using fire_engine::Animator;
 using fire_engine::InputState;
 using fire_engine::Node;
+using fire_engine::Quaternion;
 using fire_engine::SceneGraph;
 
 TEST_CASE("GatherLights.EmptySceneReturnsNoLights", "[GatherLights]")
@@ -324,4 +327,93 @@ TEST_CASE("HasDirectionalLight.FindsDirectionalNestedAsChild", "[HasDirectionalL
     root->addChild(std::move(child));
     scene.addNode(std::move(root));
     CHECK(scene.hasDirectionalLight());
+}
+
+// ---------------------------------------------------------------------------
+// The decomposition the glTF loader now produces for an animated light: an
+// Animator on the transform-owning node, the Light on an identity-transform
+// child. These pin the SCENE-side consequences of that layout, which is where
+// the original defect actually bit — the light vanished, `hasDirectionalLight`
+// returned false, and FireEngine seeded its fallback sun over the top.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("AnimatedLightLayout.LightOnChildOfAnimatorSuppressesTheFallbackSun", "[Light]")
+{
+    SceneGraph scene;
+    auto animated = std::make_unique<Node>("Sun");
+    animated->component().emplace<Animator>();
+    auto lightNode = std::make_unique<Node>("Sun_Light");
+    lightNode->component().emplace<Light>(); // default type = Directional
+    animated->addChild(std::move(lightNode));
+    scene.addNode(std::move(animated));
+
+    // What FireEngine consults before seeding its own directional. False here is what put a
+    // fallback sun into ShadowLodMotionDemo and silently replaced the authored one.
+    CHECK(scene.hasDirectionalLight());
+
+    InputState input;
+    scene.update(input);
+    const auto lights = scene.gatherLights();
+    // EXACTLY one: a layout that placed the light on both the node and a child would light the
+    // scene twice and look merely "a bit bright".
+    REQUIRE(lights.size() == 1u);
+    CHECK(lights[0].type == 0); // directional
+}
+
+TEST_CASE("AnimatedLightLayout.ChildLightFollowsItsAnimatedParentTransform", "[Light]")
+{
+    SceneGraph scene;
+    auto animated = std::make_unique<Node>("Sun");
+    animated->component().emplace<Animator>();
+    auto lightNode = std::make_unique<Node>("Sun_Light");
+    lightNode->component().emplace<Light>();
+    Node& lightRef = animated->addChild(std::move(lightNode));
+    Node& parentRef = scene.addNode(std::move(animated));
+
+    // The child is identity: every bit of its world orientation comes from the parent, which is
+    // exactly why the light can be moved off the animated node without losing the animation.
+    CHECK(lightRef.transform().rotation() == Quaternion{});
+
+    InputState input;
+    parentRef.transform().rotation(
+        Quaternion::fromVectors({0.0f, 0.0f, -1.0f}, {1.0f, 0.0f, 0.0f}));
+    scene.update(input);
+    const auto pointedX = scene.gatherLights();
+    REQUIRE(pointedX.size() == 1u);
+    CHECK(pointedX[0].worldDirection.x() == Catch::Approx(1.0f).margin(1e-5));
+
+    parentRef.transform().rotation(
+        Quaternion::fromVectors({0.0f, 0.0f, -1.0f}, {0.0f, -1.0f, 0.0f}));
+    scene.update(input);
+    const auto pointedDown = scene.gatherLights();
+    REQUIRE(pointedDown.size() == 1u);
+    CHECK(pointedDown[0].worldDirection.y() == Catch::Approx(-1.0f).margin(1e-5));
+    // The identity that keys shadow state must not move when the direction does.
+    CHECK(pointedDown[0].nodeId == pointedX[0].nodeId);
+}
+
+TEST_CASE("AnimatedLightLayout.SiblingComponentsDoNotDisplaceTheLight", "[Light]")
+{
+    // One Animator parent with two identity children. The defect was a SECOND component displacing
+    // the light in a single-component variant; here the sibling exists and the light survives it.
+    // (The mesh + light pairing is pinned on the rule itself in
+    // `tests/core/test_node_component_layout.cpp`, where no GPU-backed Mesh is needed.)
+    SceneGraph scene;
+    auto animated = std::make_unique<Node>("Lamp");
+    animated->component().emplace<Animator>();
+    auto cameraNode = std::make_unique<Node>("Lamp_Camera");
+    cameraNode->component().emplace<fire_engine::Camera>();
+    animated->addChild(std::move(cameraNode));
+    auto lightNode = std::make_unique<Node>("Lamp_Light");
+    auto& light = lightNode->component().emplace<Light>();
+    light.type(Light::Type::Point);
+    animated->addChild(std::move(lightNode));
+    scene.addNode(std::move(animated));
+
+    InputState input;
+    scene.update(input);
+    const auto lights = scene.gatherLights();
+    REQUIRE(lights.size() == 1u);
+    CHECK(lights[0].type == 1); // point
+    CHECK_FALSE(scene.hasDirectionalLight());
 }

@@ -570,6 +570,20 @@ The cascade XY fit is stable, but its light-space depth currently relies on the 
 `kShadowDepthBackExtend`. A caster farther behind the receiver slice than that constant can be
 clipped even though its shadow reaches the slice.
 
+**QUALIFIED, 2026-08-01 — do not treat the paragraph below as an established depth-clip case.** Two
+things came out of building the reproduction. First, `ShadowLodMotionDemo` was rendering under the
+engine's FALLBACK sun: the glTF loader dropped lights on animated nodes, so the authored, swinging
+sun never reached the scene (fixed on `gltf-component-decomposition`; see
+[`onboarding.md`](onboarding.md) § Cross-File Invariants). Every observation on this scene, including
+the one below, was made under lighting the asset did not author. Second, sweeping the caster's whole
+animation range through `CascadeReceiverFit::fit` -> `fitLegacyCascadeDepth` -> `placeCaster` finds
+NO pose where the moving caster is clipped by a cascade near plane — closest approach 20.7 m under
+the fallback sun, 30.8 m under the authored one. The sweep reproduces the engine's own logged
+cascade-0 fit to the printed digit and detects a deliberately planted behind-the-plane caster, so the
+null is not vacuous. The symptom below is therefore real as an observation but MISATTRIBUTED as
+fixed-depth clipping; re-diagnose it under corrected lighting with `placeCaster`, which separates a
+depth clip from a footprint miss, before any fixture is frozen.
+
 **Observed, 2026-07-29** (reported from a live run during SH-03 slice 6, then reproduced). On
 `ShadowLodMotionDemo`, as the moving sphere passes the detail cluster, the top third of its cast
 shadow disappears: the shadow renders as a half-ellipse with a straight upper edge while the sphere

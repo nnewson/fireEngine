@@ -477,7 +477,11 @@ at full detail.
 ./fireEngineApp shadow_lod/ShadowLodMotionDemo.gltf nightbox.hdr --overlay
 ```
 Same content, plus a caster crossing the cascade bands, a swinging sun, a swinging skinned limb and
-a pulsing morph. **This is not a screenshot reference** — an animated frame has no reproducible
+a pulsing morph. **The sun genuinely swings only since 2026-08-01**: before the glTF loader stopped
+dropping lights on animated nodes, this scene's authored sun was replaced by the engine's fallback
+directional, so shadows pointed a different way and never moved with the light. If you remember this
+loop looking static in its lighting, that is why — and any earlier note taken against it describes
+the fallback sun. **This is not a screenshot reference** — an animated frame has no reproducible
 timestamp. Watch a full loop for: shadow silhouettes popping as the caster crosses a cascade
 boundary, level chatter (a shadow flickering between two detail levels), and the skinned limb's
 shadow separating from the limb. Report what you saw; there is no numeric gate until SH-02 defines

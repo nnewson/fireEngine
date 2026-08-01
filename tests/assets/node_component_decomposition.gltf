@@ -1,0 +1,255 @@
+{
+  "asset": {
+    "version": "2.0",
+    "generator": "fire_engine tests"
+  },
+  "extensionsUsed": [
+    "KHR_lights_punctual"
+  ],
+  "extensions": {
+    "KHR_lights_punctual": {
+      "lights": [
+        {
+          "type": "directional",
+          "color": [
+            1.0,
+            0.9,
+            0.8
+          ],
+          "intensity": 2.0,
+          "name": "AnimatedSun"
+        },
+        {
+          "type": "point",
+          "color": [
+            0.2,
+            0.4,
+            1.0
+          ],
+          "intensity": 3.0,
+          "range": 12.0,
+          "name": "StaticLamp"
+        },
+        {
+          "type": "spot",
+          "color": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "intensity": 1.0,
+          "name": "CameraLamp",
+          "spot": {
+            "innerConeAngle": 0.2,
+            "outerConeAngle": 0.5
+          }
+        },
+        {
+          "type": "point",
+          "color": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "intensity": 1.0,
+          "name": "AnimatedMeshLamp"
+        }
+      ]
+    }
+  },
+  "scene": 0,
+  "scenes": [
+    {
+      "nodes": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ]
+    }
+  ],
+  "nodes": [
+    {
+      "name": "AnimatedLight",
+      "extensions": {
+        "KHR_lights_punctual": {
+          "light": 0
+        }
+      },
+      "rotation": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    },
+    {
+      "name": "StaticMeshLight",
+      "mesh": 0,
+      "translation": [
+        3.0,
+        0.0,
+        0.0
+      ],
+      "extensions": {
+        "KHR_lights_punctual": {
+          "light": 1
+        }
+      }
+    },
+    {
+      "name": "CameraLight",
+      "camera": 0,
+      "translation": [
+        0.0,
+        4.0,
+        0.0
+      ],
+      "extensions": {
+        "KHR_lights_punctual": {
+          "light": 2
+        }
+      }
+    },
+    {
+      "name": "AnimatedMeshLight",
+      "mesh": 0,
+      "translation": [
+        -3.0,
+        0.0,
+        0.0
+      ],
+      "extensions": {
+        "KHR_lights_punctual": {
+          "light": 3
+        }
+      }
+    },
+    {
+      "name": "AnimatedCamera",
+      "camera": 0,
+      "translation": [
+        0.0,
+        0.0,
+        6.0
+      ]
+    }
+  ],
+  "cameras": [
+    {
+      "type": "perspective",
+      "perspective": {
+        "yfov": 0.8,
+        "znear": 0.1,
+        "zfar": 100.0
+      }
+    }
+  ],
+  "meshes": [
+    {
+      "primitives": [
+        {
+          "attributes": {
+            "POSITION": 0
+          }
+        }
+      ]
+    }
+  ],
+  "animations": [
+    {
+      "name": "Spin",
+      "channels": [
+        {
+          "sampler": 0,
+          "target": {
+            "node": 0,
+            "path": "rotation"
+          }
+        },
+        {
+          "sampler": 0,
+          "target": {
+            "node": 3,
+            "path": "rotation"
+          }
+        },
+        {
+          "sampler": 0,
+          "target": {
+            "node": 4,
+            "path": "rotation"
+          }
+        }
+      ],
+      "samplers": [
+        {
+          "input": 1,
+          "output": 2,
+          "interpolation": "LINEAR"
+        }
+      ]
+    }
+  ],
+  "buffers": [
+    {
+      "byteLength": 76,
+      "uri": "data:application/octet-stream;base64,AAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAAAAAAIA/AAAAAPQENT8AAAAA9AQ1Pw=="
+    }
+  ],
+  "bufferViews": [
+    {
+      "buffer": 0,
+      "byteOffset": 0,
+      "byteLength": 36,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 36,
+      "byteLength": 8
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 44,
+      "byteLength": 32
+    }
+  ],
+  "accessors": [
+    {
+      "bufferView": 0,
+      "componentType": 5126,
+      "count": 3,
+      "type": "VEC3",
+      "min": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "max": [
+        1.0,
+        1.0,
+        0.0
+      ]
+    },
+    {
+      "bufferView": 1,
+      "componentType": 5126,
+      "count": 2,
+      "type": "SCALAR",
+      "min": [
+        0.0
+      ],
+      "max": [
+        1.0
+      ]
+    },
+    {
+      "bufferView": 2,
+      "componentType": 5126,
+      "count": 2,
+      "type": "VEC4"
+    }
+  ]
+}

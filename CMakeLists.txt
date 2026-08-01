@@ -79,6 +79,7 @@ add_library(fireengine SHARED
     src/collision/dynamic_aabb_tree_broad_phase.cpp
     src/collision/narrow_phase.cpp
     src/core/convex_hull_builder.cpp
+    src/core/node_component_layout.cpp
     src/core/node_id.cpp
     src/core/gltf_loader_assets.cpp
     src/core/gltf_loader_extras.cpp
@@ -440,6 +441,8 @@ add_executable(test_fire_engine
     tests/core/test_shader_loader.cpp
     tests/core/test_system.cpp
     tests/core/test_gltf_loader.cpp
+    tests/core/test_node_component_layout.cpp
+    tests/core/test_gltf_node_decomposition.cpp
     tests/core/test_convex_hull_builder.cpp
     tests/core/test_tangent_generator.cpp
     tests/input/test_camera_state.cpp
