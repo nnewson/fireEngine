@@ -154,6 +154,11 @@ inline constexpr float kPointShadowInfiniteRangeFallback = 100.0f;
 // The 0.1% threshold was re-applied unchanged, and still selects 1: budget 2 remains at 0.243% and
 // 4 at 0.356%. Budget 2 becoming eligible once deformable error disappeared was a live possibility
 // worth checking, and it did not happen.
+//
+// Re-run 2026-08-01 after the glTF animated-light fix and reproduced to every printed digit. That
+// is the expected result rather than a lucky one: the budget half of the sweep runs on the STATIC
+// `ShadowLodDemo`, whose sun sits on a node with no animation and was therefore never dropped. The
+// dead-band half, which did run under a fallback sun, is re-measured below.
 inline constexpr float kShadowLodPixelBudget = 1.0f;
 // Coarsening must project within `budget * ratio`, while refining triggers at `budget` — the gap is
 // the dead band, and 1.0 disables it.
@@ -162,23 +167,27 @@ inline constexpr float kShadowLodPixelBudget = 1.0f;
 // threshold), which costs triangles — a caster holds finer geometry longer — to buy stability.
 //
 // Measured AT THIS BUDGET (chatter depends on which thresholds casters sit near, so a ratio swept
-// at a different budget would not reproduce this decision), over ~1100-frame runs of the animated
+// at a different budget would not reproduce this decision), over ~600-frame runs of the animated
 // scene, per 100 frames:
 //
-//   ratio 1.0   0.46 transitions   0.00 REVERSALS
+//   ratio 1.0   0.50 transitions   0.00 REVERSALS
 //   ratio 0.75  0.16 transitions   0.00 REVERSALS
-//   ratio 0.5   0.15 transitions   0.00 REVERSALS
+//   ratio 0.5   0.16 transitions   0.00 REVERSALS
 //
-// (Re-measured after SH-04. The transition rates moved — 0.27/0.09/0.09 before — but they are 3, 1
-// and 1 raw events over ~650 frames, so the rates are dominated by counting noise and by where the
-// wall-clock-driven animation happened to be. The REVERSAL column, the only one that can justify a
-// ratio, is still zero at every ratio, which is the conclusion that matters.)
+// RE-MEASURED 2026-08-01, after the glTF loader stopped dropping lights on animated nodes. Until
+// then `ShadowLodMotionDemo`'s authored sun was silently replaced by the engine's fallback
+// directional, so the scene's sun-swing animation did nothing and every dead-band figure taken on
+// it described a STATIC sun. The rates barely moved (0.46/0.16/0.15 before) because they are 3, 1
+// and 1 raw events over ~600 frames — dominated by counting noise — and the REVERSAL column, the
+// only one that can justify a ratio, is still zero at every ratio.
 //
 // Chatter is a reversal that undoes a RECENT transition (within kReversalWindowCommits) — a caster
 // oscillating across a threshold. Counting every return would have scored the scene's periodic
 // animation as instability: an earlier, time-blind reversal count reported 0.31 per 100 frames,
-// which was a caster legitimately walking L1 → L2 and back as the sun swung. With the window
-// applied there is no chatter at all, at any ratio.
+// which was a caster legitimately walking L1 -> L2 and back as the MOVING CASTER crossed a
+// threshold. (That was first written up as the sun swinging, which it cannot have been: under the
+// loader defect above the sun never moved. The correction does not change the finding.) With the
+// window applied there is no chatter at all, at any ratio.
 //
 // Plain transitions likewise include ordinary motion that no dead band can or should remove, so
 // only the reversal column can justify a ratio — and it is zero.

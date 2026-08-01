@@ -1,4 +1,5 @@
 #include <fire_engine/core/gltf_loader.hpp>
+#include <fire_engine/core/node_component_layout.hpp>
 
 #include <cstddef>
 #include <memory>
@@ -67,26 +68,33 @@ Light::Type toLightType(fastgltf::LightType t) noexcept
     }
 }
 
-// KHR_lights_punctual: attach a Light component to `node` if the glTF node
-// references a light. Only fires when the variant is still Empty -- Light has
-// to share the Components variant slot, so a node already carrying a Mesh /
-// Animator / Camera skips with a warning. Cone angles only matter for Spot.
-void applyLight(const fastgltf::Asset& asset, const fastgltf::Node& gltfNode, Node& node)
+// Every direct emplacement goes through this. `materializeNodeComponentLayout` hands out targets
+// that are Empty by construction, so a non-Empty one means the layout and the attach sites have
+// come apart — two payloads believing they own the same node. Terminal rather than a warning,
+// because the failure it replaces was silent: the second emplacement simply destroyed the first,
+// and a scene rendered plausibly with a component nobody could find again.
+void requireEmptyComponent(const Node& node, std::string_view what)
+{
+    if (!std::holds_alternative<Empty>(node.component()))
+    {
+        throw std::runtime_error(
+            std::format("glTF node '{}': cannot attach {} — the target already holds {}",
+                        node.name(), what, componentName(node.component())));
+    }
+}
+
+// KHR_lights_punctual: attach the node's light to the target the layout chose. Placement is not
+// decided here and must not be — see `core/node_component_layout.hpp` for why the previous
+// order-dependent version destroyed lights without a word.
+void attachLight(const fastgltf::Asset& asset, const fastgltf::Node& gltfNode, Node& target)
 {
     if (!gltfNode.lightIndex.has_value())
     {
         return;
     }
-    if (!std::holds_alternative<Empty>(node.component()))
-    {
-        log::warn(log::category::gltf,
-                  "skipping KHR_lights_punctual on node '{}' -- node already has a non-Empty "
-                  "component (mesh/animator)",
-                  node.name());
-        return;
-    }
+    requireEmptyComponent(target, "light");
     const auto& gl = asset.lights[gltfNode.lightIndex.value()];
-    auto& light = node.component().emplace<Light>();
+    auto& light = target.component().emplace<Light>();
     light.type(toLightType(gl.type));
     light.colour(Colour3{gl.color.x(), gl.color.y(), gl.color.z()});
     light.intensity(static_cast<float>(gl.intensity));
@@ -267,33 +275,24 @@ void GltfLoader::GltfSceneBuilder::applyPhysicsConfig(std::size_t nodeIndex,
     node.physicsColliderHandle(context_.physics.createCollider(bodyHandle, colliderDesc));
 }
 
-Node& GltfLoader::GltfSceneBuilder::attachCamera(Node& node)
+// The camera goes on the node the LAYOUT chose — this function no longer inspects the variant to
+// decide for itself. That inspection is exactly how placement drifted from the rule: each attach
+// site read the current state and reached its own conclusion, so the order of the calls became the
+// real policy.
+Node& GltfLoader::GltfSceneBuilder::attachCamera(Node& target)
 {
-    auto configureCamera = [](Camera& camera)
-    {
-        camera.localPosition({0.0f, 0.0f, 0.0f});
-        camera.localYaw(-pi / 2.0f);
-        camera.localPitch(0.0f);
-    };
-
-    Node* cameraNode = &node;
-    if (std::holds_alternative<Empty>(node.component()))
-    {
-        configureCamera(node.component().emplace<Camera>());
-    }
-    else
-    {
-        auto child = std::make_unique<Node>(node.name() + "_Camera");
-        cameraNode = &node.addChild(std::move(child));
-        configureCamera(cameraNode->component().emplace<Camera>());
-    }
+    requireEmptyComponent(target, "camera");
+    Camera& camera = target.component().emplace<Camera>();
+    camera.localPosition({0.0f, 0.0f, 0.0f});
+    camera.localYaw(-pi / 2.0f);
+    camera.localPitch(0.0f);
 
     if (context_.activeCamera == nullptr)
     {
-        context_.activeCamera = cameraNode;
+        context_.activeCamera = &target;
     }
 
-    return *cameraNode;
+    return target;
 }
 
 Mesh& GltfLoader::GltfSceneBuilder::attachMeshToNode(std::size_t nodeIndex, std::size_t meshIndex,
@@ -380,12 +379,6 @@ void GltfLoader::GltfSceneBuilder::configureAnimatedNode(std::size_t nodeIndex, 
         applyTRS(gltfNode, node);
     }
 
-    // KHR_lights_punctual on this node: only attaches if the node won't
-    // otherwise be holding a Mesh / Animator (helper guards via variant
-    // alternative check). Animated nodes lose the light with a warning --
-    // rare in practice and worth documenting once, not redesigning for.
-    applyLight(asset, gltfNode, node);
-
     // Load each glTF animation as a separate Animation object for this node
     std::vector<std::pair<std::size_t, Animation*>> nodeAnimations;
     for (std::size_t ai = 0; ai < asset.animations.size(); ++ai)
@@ -412,41 +405,35 @@ void GltfLoader::GltfSceneBuilder::configureAnimatedNode(std::size_t nodeIndex, 
         nodeAnimations.emplace_back(ai, &la);
     }
 
-    if (hasTransformAnim)
+    // ONE decision, taken before anything is attached: which node holds what. Every attach below
+    // consumes a target rather than inspecting the current variant, so no reordering of these calls
+    // can change placement — the failure mode that silently destroyed lights.
+    const NodeComponentLayout layout =
+        planNodeComponents(hasTransformAnim, gltfNode.meshIndex.has_value(),
+                           gltfNode.lightIndex.has_value(), gltfNode.cameraIndex.has_value());
+    const std::string meshChildName =
+        gltfNode.meshIndex.has_value() && !asset.meshes[gltfNode.meshIndex.value()].name.empty()
+            ? std::string(asset.meshes[gltfNode.meshIndex.value()].name)
+            : std::string{};
+    const NodeComponentTargets targets =
+        materializeNodeComponentLayout(node, layout, meshChildName);
+
+    if (layout.primary == NodeComponentLayout::Primary::Animator)
     {
-        // Node gets an Animator for transform; mesh goes on a child node
+        requireEmptyComponent(node, "animator");
         node.component().emplace<Animator>();
         auto& animator = std::get<Animator>(node.component());
         for (const auto& [animId, anim] : nodeAnimations)
         {
             animator.addAnimation(animId, anim);
         }
-
-        if (gltfNode.meshIndex.has_value())
-        {
-            const auto& gltfMesh = asset.meshes[gltfNode.meshIndex.value()];
-            std::string meshName = gltfMesh.name.empty() ? std::string(gltfNode.name) + "_Mesh"
-                                                         : std::string(gltfMesh.name);
-            auto meshNode = std::make_unique<Node>(std::move(meshName));
-            auto& meshRef = node.addChild(std::move(meshNode));
-            Mesh& mesh = attachMeshToNode(nodeIndex, gltfNode.meshIndex.value(), meshRef, node);
-
-            if (hasWeightAnim)
-            {
-                for (const auto& [animId, anim] : nodeAnimations)
-                {
-                    mesh.addMorphAnimation(animId, anim);
-                }
-                mesh.initialMorphWeights(std::vector<float>(numMorphTargets, 0.0f));
-            }
-        }
     }
-    else if (gltfNode.meshIndex.has_value())
-    {
-        // Only weight animation -- mesh goes directly on this node
-        const auto& gltfMesh = asset.meshes[gltfNode.meshIndex.value()];
-        Mesh& mesh = attachMeshToNode(nodeIndex, gltfNode.meshIndex.value(), node, node);
 
+    if (targets.mesh != nullptr)
+    {
+        // Physics stays on the TRANSFORM owner, which is this node whether or not the mesh moved to
+        // a child of it.
+        Mesh& mesh = attachMeshToNode(nodeIndex, gltfNode.meshIndex.value(), *targets.mesh, node);
         if (hasWeightAnim)
         {
             for (const auto& [animId, anim] : nodeAnimations)
@@ -454,14 +441,22 @@ void GltfLoader::GltfSceneBuilder::configureAnimatedNode(std::size_t nodeIndex, 
                 mesh.addMorphAnimation(animId, anim);
             }
         }
-
-        // Apply initial weights from glTF mesh
-        mesh.initialMorphWeights(initialMorphWeights(gltfMesh, numMorphTargets));
+        // A transform-animated node starts its morph weights at zero (the animation drives them);
+        // a weight-only-animated node keeps the glTF's authored weights.
+        mesh.initialMorphWeights(
+            hasTransformAnim
+                ? std::vector<float>(numMorphTargets, 0.0f)
+                : initialMorphWeights(asset.meshes[gltfNode.meshIndex.value()], numMorphTargets));
     }
 
-    if (gltfNode.cameraIndex.has_value())
+    if (targets.light != nullptr)
     {
-        attachCamera(node);
+        attachLight(asset, gltfNode, *targets.light);
+    }
+
+    if (targets.camera != nullptr)
+    {
+        attachCamera(*targets.camera);
     }
 
     for (auto childIndex : gltfNode.children)
@@ -489,12 +484,21 @@ void GltfLoader::GltfSceneBuilder::loadNode(std::size_t nodeIndex, Node& node)
     validatePhysicsTarget(nodeIndex, gltfNode);
     applyTRS(gltfNode, node);
 
-    applyLight(asset, gltfNode, node);
+    // Same one decision as the animated path, with no transform animation in play.
+    const NodeComponentLayout layout =
+        planNodeComponents(false, gltfNode.meshIndex.has_value(), gltfNode.lightIndex.has_value(),
+                           gltfNode.cameraIndex.has_value());
+    const std::string meshChildName =
+        gltfNode.meshIndex.has_value() && !asset.meshes[gltfNode.meshIndex.value()].name.empty()
+            ? std::string(asset.meshes[gltfNode.meshIndex.value()].name)
+            : std::string{};
+    const NodeComponentTargets targets =
+        materializeNodeComponentLayout(node, layout, meshChildName);
 
-    if (gltfNode.meshIndex.has_value())
+    if (targets.mesh != nullptr)
     {
         const auto& gltfMesh = asset.meshes[gltfNode.meshIndex.value()];
-        Mesh& mesh = attachMeshToNode(nodeIndex, gltfNode.meshIndex.value(), node, node);
+        Mesh& mesh = attachMeshToNode(nodeIndex, gltfNode.meshIndex.value(), *targets.mesh, node);
 
         // Static meshes with morph targets still honour mesh.weights (e.g.
         // MorphPrimitivesTest). Without this, weights stay at zero and the
@@ -506,9 +510,14 @@ void GltfLoader::GltfSceneBuilder::loadNode(std::size_t nodeIndex, Node& node)
         }
     }
 
-    if (gltfNode.cameraIndex.has_value())
+    if (targets.light != nullptr)
     {
-        attachCamera(node);
+        attachLight(asset, gltfNode, *targets.light);
+    }
+
+    if (targets.camera != nullptr)
+    {
+        attachCamera(*targets.camera);
     }
 
     for (auto childIndex : gltfNode.children)

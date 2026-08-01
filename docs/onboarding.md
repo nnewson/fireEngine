@@ -909,6 +909,25 @@ the same change — most have a test or guard that will catch you, but not all.
   `LodDisabled`, which is a user's toggle, and the panel would then explain a safety fallback with
   somebody else's reason. There is deliberately **no shadow-proxy setter** — see `Object`'s header
   for what a validated one must enforce before it comes back.
+- **A glTF node's contents are decomposed by ONE rule, and the light is attached last.** A `Node`
+  holds a single component (`Components` is a variant), while a glTF node may carry a mesh, a light,
+  a camera and animation at once. `core/node_component_layout.hpp` states the rule —
+  Animator > Mesh > Light > Camera for the transform-owning node, everything else on an
+  identity-transform `<name>_Light` / `_Mesh` / `_Camera` child — and `gltf_loader_nodes.cpp` follows
+  it — through `materializeNodeComponentLayout`, which creates the children and returns the target
+  node for the mesh, the light and the camera. **The attach sites consume those targets and must not
+  inspect the current variant to decide placement for themselves**: that inspection is how the rule
+  and the code came apart in the first place, since each site then reached its own conclusion and
+  the ORDER of the calls became the real policy. Every direct emplacement goes through
+  `requireEmptyComponent`, which throws — the previous failure was silent: the light was attached
+  while the variant still held `Empty` and then destroyed by `emplace<Animator>()` or
+  `emplace<Mesh>()` with NO warning (the guard inside the attach had already passed). `ShadowLodMotionDemo` lost its authored sun that way,
+  `hasDirectionalLight()` went false, and `FireEngine` seeded a fallback directional over the top —
+  so the scene rendered, plausibly, under the wrong sun for every measurement taken on it. If you
+  add a component kind, add it to the rule and to `tests/core/test_node_component_layout.cpp`, which
+  is exhaustive over the combinations and over the materialised topology (both GPU-free, so CI runs
+  them); `tests/core/test_gltf_node_decomposition.cpp` is the end-to-end confirmation through the
+  real loader and is `[.][gpu]`, so it runs locally only.
 - **A cascade's texel size comes back OUT of the fit, never recomputed** (SH-06).
   `fitCascadeReceiver` (`render/cascade_fit.hpp`) returns `worldPerTexel` alongside the geometry it
   snapped to, and `Renderer::computeShadowCascades` hands that value straight to
