@@ -51,6 +51,10 @@ layout(set = LIGHT_UBO_SET, binding = LIGHT_UBO_BINDING) uniform LightUBO {
     // 4=directional raw depth, 5=velocity, 6=SSAO, 7=LOD tint, 8=shadow-LOD tint),
     // w = disable all shadow-map visibility lookups when > 0.5.
     vec4 environmentParams;
+    // x = cascade cross-fade fraction (kShadowCascadeBlendFraction). Uploaded, not a literal here:
+    // the renderer expands each cascade's fitted slice to cover the previous cascade's blend band,
+    // so the number that decides the band and the number that fits for it must be one value.
+    vec4 cascadeParams;
     int  lightCount;
     int  _pad0;
     int  _pad1;

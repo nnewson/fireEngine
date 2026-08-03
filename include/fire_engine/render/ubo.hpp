@@ -199,6 +199,13 @@ struct LightUBO
     // shader-backed values 0..8 are exactly this range.
     // w = disable all shadow-map visibility lookups when > 0.5.
     alignas(16) float environmentParams[4]{};
+    // x = the cascade cross-fade fraction (`kShadowCascadeBlendFraction`). UPLOADED rather than
+    // duplicated as a shader literal because SH-06 made it a FITTING constraint as well as a
+    // shading one: the renderer expands each cascade's slice to cover its predecessor's blend band,
+    // and the shader decides which receivers fall in that band. Two hand-kept copies of that number
+    // would put receivers in a band the fit does not cover — the fixed extension's failure, in the
+    // other direction — so both sides now read one C++ value. y/z/w reserved.
+    alignas(16) float cascadeParams[4]{};
     // Active light count and the packed light array. Convention: lights[0] is
     // the primary directional (CSM source) when one exists. The shader loops
     // 0..lightCount-1 and only applies CSM shadow at i==0 with type==0.
@@ -224,10 +231,11 @@ static_assert(offsetof(LightUBO, iblParams) == 784, "LightUBO std140 layout");
 static_assert(offsetof(LightUBO, shadowParams) == 800, "LightUBO std140 layout");
 static_assert(offsetof(LightUBO, pointSpotShadowParams) == 816, "LightUBO std140 layout");
 static_assert(offsetof(LightUBO, environmentParams) == 832, "LightUBO std140 layout");
-static_assert(offsetof(LightUBO, lightCount) == 848, "LightUBO std140 layout");
-static_assert(offsetof(LightUBO, lights) == 864, "LightUBO std140 layout");
+static_assert(offsetof(LightUBO, cascadeParams) == 848, "LightUBO std140 layout");
+static_assert(offsetof(LightUBO, lightCount) == 864, "LightUBO std140 layout");
+static_assert(offsetof(LightUBO, lights) == 880, "LightUBO std140 layout");
 static_assert(sizeof(LightData) == 64, "LightData std140 size (4x vec4)");
-static_assert(sizeof(LightUBO) == 864 + 64 * kMaxLights, "LightUBO std140 size");
+static_assert(sizeof(LightUBO) == 880 + 64 * kMaxLights, "LightUBO std140 size");
 static_assert(std::is_standard_layout_v<LightUBO>);
 static_assert(std::is_trivially_copyable_v<LightUBO>);
 

@@ -15,6 +15,7 @@
 #include <fire_engine/graphics/gpu_handle.hpp>
 #include <fire_engine/graphics/lighting.hpp>
 #include <fire_engine/graphics/particle.hpp>
+#include <fire_engine/graphics/shadow_caster_bounds_frame.hpp>
 #include <fire_engine/graphics/shadow_lod_resolver.hpp>
 #include <fire_engine/graphics/shadow_render_view.hpp>
 #include <fire_engine/math/mat4.hpp>
@@ -517,6 +518,11 @@ private:
     Mat4 previousViewProj_{Mat4::identity()};
     uint32_t taaJitterIndex_{0};
     std::vector<DrawCommand> drawCommandScratch_;
+    // This frame's shadow casters, gathered before the cascade fit (SH-06) and then handed to the
+    // draw build as the single authority on caster bounds. Member for steady-state capacity, like
+    // every other per-frame scratch here; reset at the start of each prepass, never read across
+    // frames.
+    ShadowCasterBoundsFrame shadowCasterFrame_;
     DrawBuckets drawBucketsScratch_;
     std::vector<Frustum> frustumScratch_;
     std::vector<Lighting> lightScratch_;

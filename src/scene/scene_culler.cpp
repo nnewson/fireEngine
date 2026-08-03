@@ -32,12 +32,18 @@ namespace
     return AABB{lo, hi};
 }
 
-// A rigid renderable node is one carrying a Mesh whose geometry does not deform and has
-// a valid local bound — exactly the nodes the BVH can cull by a transformed AABB.
+// A cullable renderable node carries a Mesh whose LOCAL BOUND actually contains what it draws, and
+// whose bound is valid — exactly the nodes the BVH can cull by a transformed AABB.
+//
+// The predicate is `localBoundsCoverDrawnGeometry`, not `deformable`: cloth is not "deformable" in
+// the instance sense (no skin, no morph weights) yet a compute pass rewrites its vertex buffer
+// every frame, so its bind-pose bound is not where the cloth is. Culling by it dropped cloth that
+// was on screen.
 [[nodiscard]] const Mesh* cullableMesh(const Node& node)
 {
     const Mesh* mesh = node.componentAs<Mesh>();
-    if (mesh == nullptr || mesh->object().deformable() || !mesh->object().localBounds().valid)
+    if (mesh == nullptr || !mesh->object().localBoundsCoverDrawnGeometry() ||
+        !mesh->object().localBounds().valid)
     {
         return nullptr;
     }

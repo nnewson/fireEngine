@@ -10,6 +10,7 @@
 #include <fire_engine/graphics/frustum.hpp>
 #include <fire_engine/graphics/lighting.hpp>
 #include <fire_engine/graphics/particle.hpp>
+#include <fire_engine/graphics/shadow_caster_bounds_frame.hpp>
 #include <fire_engine/math/vec3.hpp>
 
 namespace fire_engine
@@ -90,13 +91,30 @@ public:
     // Resolve this frame's active particle emitters into `out` (cleared first).
     virtual void gatherEmitters(std::vector<EmitterState>& out) const = 0;
 
+    // SH-06: every shadow caster's world bounds for THIS frame, into `out` (reset first), before
+    // any draw command is built.
+    //
+    // A prepass rather than a read of the draw list, because of an ordering constraint that cannot
+    // be worked around: the cascade depth range is fitted from these bounds, the fitted matrices
+    // decide the shadow frustums, and those frustums are what the draw walk culls against. A
+    // cascade finalised after draw collection would leave the frame's matrices describing a
+    // different fit than the one its draws were selected for.
+    //
+    // `out` is then the frame's ONLY authority on caster bounds: `buildDrawCommands` receives it
+    // and each shadow command looks up its own binding's entry, rather than anything recomputing.
+    virtual void gatherShadowCasters(ShadowCasterBoundsFrame& out) const = 0;
+
     // Build this frame's draw commands, appending them to `out`. Renderables are culled against
     // `frustums` (the camera frustum plus any shadow-caster frustums) using the scene's own spatial
     // bounds; an empty `frustums` span means culling is disabled and everything is drawn.
     // Per-object data (world matrix, skin/morph, material) is baked from `frame`. Returns
     // coarse-cull counts.
+    // `casterBounds` is this frame's prepass result, passed explicitly rather than stashed
+    // anywhere: every shadow draw takes its bounds from that record, so the geometry the cascade
+    // was fitted to and the geometry the pass culls are by construction the same measurement.
     [[nodiscard]]
     virtual CullStats buildDrawCommands(const FrameInfo& frame, std::span<const Frustum> frustums,
+                                        const ShadowCasterBoundsFrame& casterBounds,
                                         std::vector<DrawCommand>& out) = 0;
 };
 

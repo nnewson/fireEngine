@@ -4,6 +4,7 @@
 
 #include <fire_engine/graphics/bounds.hpp>
 #include <fire_engine/graphics/gpu_handle.hpp>
+#include <fire_engine/graphics/shadow_caster_bounds.hpp>
 #include <fire_engine/graphics/shadow_diagnostics.hpp>
 #include <fire_engine/graphics/shadow_geometry_request.hpp>
 #include <fire_engine/math/mat4.hpp>
@@ -120,6 +121,14 @@ struct DrawCommand
     // focused, or a focused view that did not resolve this caster.
     uint32_t shadowLodLevel{kNoShadowLod};
     Bounds3 shadowBounds{};
+    // Whether `shadowBounds` may be used to EXCLUDE this caster (SH-06). `Stale` bounds come from a
+    // bind pose whose vertices a compute pass rewrites (cloth): they are evidence of where the
+    // caster probably is, and no evidence at all about where it is not. A per-view frustum test or
+    // a cascade-candidate test that rejected on them would drop a caster that is genuinely in the
+    // view, so both must pass such a caster through until storage geometry carries a conservative
+    // envelope of its own. Defaults to `Stale`, the safe answer, so a producer that forgets the
+    // field over-includes rather than silently dropping shadows.
+    ShadowCasterBoundsKind shadowBoundsKind{ShadowCasterBoundsKind::Stale};
     Mat4 selfShadowViewProj{Mat4::identity()};
     // Indirect draw (rendering-spine #3, GPU-driven-front Stage A). When `indirectBuffer` is not
     // NullBuffer the renderer records `drawIndexedIndirect` from the `DrawIndexedIndirectCommand`

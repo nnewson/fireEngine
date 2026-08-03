@@ -188,7 +188,10 @@ TEST_CASE("SceneGraphDraw.FullyCulledMeshNodesEmitNoDrawsAndReportCullStats", "[
     const FrameInfo frame{}; // never consumed — culled nodes emit nothing
     const std::array<Frustum, 1> frustums{forwardFrustum()};
     std::vector<DrawCommand> out;
-    const CullStats stats = sg.buildDrawCommands(frame, frustums, out);
+    // The prepass authority the draw walk requires. These cases exercise the CULLED path, where no
+    // object emits a draw, so an empty record is the correct input rather than a shortcut.
+    fire_engine::ShadowCasterBoundsFrame casterBounds;
+    const CullStats stats = sg.buildDrawCommands(frame, frustums, casterBounds, out);
 
     CHECK(out.empty()); // culled → no draws (and no GPU touched)
     CHECK(stats.tracked == 2u);
@@ -206,7 +209,8 @@ TEST_CASE("SceneGraphDraw.EmptyFrustumSpanDisablesCulling", "[SceneGraphDraw]")
 
     const FrameInfo frame{};
     std::vector<DrawCommand> out;
-    const CullStats stats = sg.buildDrawCommands(frame, {}, out);
+    fire_engine::ShadowCasterBoundsFrame casterBounds;
+    const CullStats stats = sg.buildDrawCommands(frame, {}, casterBounds, out);
 
     CHECK(out.empty());
     CHECK(stats.tracked == 0u);
@@ -225,7 +229,10 @@ TEST_CASE("SceneGraphDraw.NonRenderableNodesAreNotTracked", "[SceneGraphDraw]")
     const FrameInfo frame{};
     const std::array<Frustum, 1> frustums{forwardFrustum()};
     std::vector<DrawCommand> out;
-    const CullStats stats = sg.buildDrawCommands(frame, frustums, out);
+    // The prepass authority the draw walk requires. These cases exercise the CULLED path, where no
+    // object emits a draw, so an empty record is the correct input rather than a shortcut.
+    fire_engine::ShadowCasterBoundsFrame casterBounds;
+    const CullStats stats = sg.buildDrawCommands(frame, frustums, casterBounds, out);
 
     CHECK(out.empty());
     CHECK(stats.tracked == 1u); // only the cube

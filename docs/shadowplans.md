@@ -707,6 +707,69 @@ and blend factor, caster U/V/W bounds against both cascades involved, and whethe
 offered and rasterised in each — enough to separate depth clipping from candidate rejection or
 cascade blending.
 
+**Landed so far.** The two fit carriers and `placeCaster` (slice 2 + evidence tooling), and the
+caster prepass: `RenderableScene::gatherShadowCasters` walks the scene before the fit and fills a
+`ShadowCasterBoundsFrame` with each shadow-casting binding's world bounds in the current pose, with
+cloth marked `Stale` because a compute pass rewrites its vertices. That record is the frame's ONLY
+authority — `buildDrawCommands` receives it and every shadow command looks its own binding up rather
+than anything recomputing, which both removes a second per-frame skinning walk and keeps the
+per-binding precision the depth fit needs (the old path built an object-wide union). Two rules ride
+with it: cloth is no longer coarse-culled by its bind-pose box
+(`Object::localBoundsCoverDrawnGeometry`, kept separate from `deformable()` so a rigid sibling
+binding is not misclassified), and a `Stale` bound may never EXCLUDE a caster — `ShadowDrawFilter`
+passes it through, and the caster-aware candidate test must do the same until storage geometry
+carries a conservative envelope of its own. It is a prepass and not a read of the draw list for an ordering
+reason that cannot be worked around — the fitted matrices decide the shadow frustums, and those
+frustums are what the draw walk culls against, so a cascade finalised after draw collection would
+leave the frame's matrices describing a different fit than its draws were selected for.
+
+**The `Stale` rule for the depth policy, agreed before it is written.** "Stale cannot tighten" is not
+the same as "ignore stale entries": fitting only the `Exact` casters can produce a range NARROWER
+than one that covers the cloth, which clips it — the defect, arrived at from the other side. Stale
+XY cannot even establish which cascade a cloth affects, so it cannot be excluded per view either.
+Until storage geometry carries a conservative simulation or authored envelope, the honest interim
+rule is: **if any stale caster exists in the frame, every directional cascade falls back to the
+legacy depth fit**, marked as an unresolved correctness fallback rather than a policy. That mark
+belongs in the pure depth-fit RESULT — a mode on `CascadeDepthFit`, not something the log or the
+overlay reconstructs — so the displayed reason is tied to the matrix that was actually selected and
+cannot drift from it. THREE values, not two: `fitLegacyCascadeDepth` still exists as its own
+function and its direct result is neither caster-aware nor a fallback from anything, so it reports
+`LegacyFixedExtension`. The policy reports `CasterAware` when it fitted the casters, and converts a
+legacy result to `LegacyStaleFallback` only where stale geometry forced that choice. The probe scene contains only `Exact` casters, so its 26166 -> 35253 gate still validates the
+new policy independently of that fallback.
+
+**LANDED (2026-08-03): the caster-aware depth fit.** `fitCasterAwareCascadeDepth` takes the receiver
+fit and the frame's caster record and places the planes where the geometry is: the near plane reaches
+the furthest-upstream CANDIDATE caster (footprint not `Outside`, since light rays preserve U/V), the
+far plane covers the receiver volume and no further (geometry behind every receiver in the slice
+cannot shadow one), and one texel of the fit's own `worldPerTexel` is allowed as slack rather than an
+invented epsilon. The matrix is built with the same `lookAt` / `ortho` calls as the legacy fit, so
+the ONLY difference between the policies is where the planes sit.
+
+The result carries its own mode — `LegacyFixedExtension` / `CasterAware` / `LegacyStaleFallback` —
+so the log and the panel report the policy that produced the matrix rather than reconstructing it.
+
+**Gate met.** `ShadowDepthClipDemo`, whose caster the legacy fit clipped:
+
+| | shadow pixels | bounding box |
+|---|---|---|
+| legacy fixed extension | 26166 | 263 x 131 |
+| caster-aware | 35324 | 305 x 152 |
+
+Restored, and checked rather than asserted. Against the geometrically unclipped baseline (35253 px,
+306 x 152 — the earlier probe placement, whose shadow sits at the same floor point because the caster
+only moved along the light ray) the two differ by 253 pixels, grouped into 185 HORIZONTAL SCANLINE
+RUNS (maximal spans of differing pixels within one image row) whose longest is 5 px and whose median
+is 1. Every difference is therefore a one-pixel-wide fringe following the silhouette; there is no
+clip-sized interior region, which is what residual clipping would leave — the legacy row above is
+exactly that, a concentric 26% loss of area. The remaining fringe is soft-edge rasterisation under a
+different depth range. Cascade 2's range on that scene goes from
+`[-41.340, 33.535]` (span 74.9) to `[-45.740, 8.292]` (span 54.0): it reaches further back to catch
+the caster while giving up the empty space behind the receivers.
+
+The SH-03 budget calibration reproduces to every printed digit, as it must — the depth range does not
+enter shadow-LOD selection.
+
 Keep the stable receiver XY fit, then determine the Z range from candidate caster bounds:
 
 1. Build/extract the receiver slice volume.

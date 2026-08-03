@@ -20,6 +20,14 @@ class Node;
 struct SceneDrawContext
 {
     const FrameInfo& frame;
+    // This frame's caster-bounds authority (SH-06). Every shadow draw reads its own binding's entry
+    // from here; nothing recomputes bounds during the draw walk, so the cascade fit and the draws
+    // cannot describe different geometry.
+    //
+    // A REFERENCE, like `frame`: it is mandatory, and a nullable field would only move the
+    // requirement into a runtime check at every consumer. A traversal without it cannot be
+    // constructed.
+    const ShadowCasterBoundsFrame& shadowCasterBounds;
     const std::unordered_set<const Node*>* culledNodes{nullptr};
     std::vector<DrawCommand>* drawCommands{nullptr};
     // Per-frame VDPM repair accumulators (null ⇒ not gathered): the mesh render path adds each
