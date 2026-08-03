@@ -562,9 +562,22 @@ not only geometry error; VDPM's UV-deviation channel is a useful input, but it i
 proof that a binary alpha boundary is preserved. BLEND shadow semantics should be a separate design
 decision (opaque/dithered/transmittance), not accidentally treated as MASK.
 
+**Where to start (2026-08-03).** Both symptoms are already visible in `ShadowLodDemo` and need no new
+asset: the alpha-masked quad casts a solid rectangle (`shadow.frag` samples no texture), and the
+double-sided sheet casts nothing at all (it is authored face-on to the sun, and `Pipeline::
+shadowConfig` fixes `cullMode = eFront`, so the shadow pass culls the only faces it has). Capture
+them with the SH-01 runbook's `ShadowLodDemo` command; the pair sits centre-right in every frame.
+Note the second one interacts with the first fix rather than being independent of it — making the
+pass respect `doubleSided` changes which faces record depth, which changes what an alpha test then
+discards, so land them together with one acceptance capture rather than in two passes.
+
+The measurement to re-run afterwards is the SH-03 budget sweep, which SH-05 changes by construction:
+casters that currently contribute nothing to the shadow mask will start contributing, so the
+shadowed area and every relative percentage move. Idle machine only — see `constants.hpp`.
+
 Likely branch: `shadow-material-casters`.
 
-#### SH-06: Receiver/caster-aware cascade depth fitting
+#### SH-06: Receiver/caster-aware cascade depth fitting — ✅ landed (branch `shadow-cascade-caster-depth-fit`)
 
 The cascade XY fit is stable, but its light-space depth currently relies on the fixed
 `kShadowDepthBackExtend`. A caster farther behind the receiver slice than that constant can be
@@ -930,10 +943,18 @@ The key success criteria for Milestone 1 are:
 | 3 | ~~SH-03 per-view discrete LOD~~ ✅ | Fixes the requested architectural mismatch. |
 | 4 | SH-04 deformation/proxy policy — **deformation half ✅**, proxy half open | Removes invalid error claims and defines safe extension points. |
 | 5 | SH-05 material-aware casters | Fixes visibly wrong cutout and two-sided silhouettes. |
-| 6 | SH-06 cascade caster fit | Removes fixed-depth clipping and aligns candidate sets. |
+| 6 | ~~SH-06 cascade caster fit~~ ✅ | Removed fixed-depth clipping; candidate alignment (per-view filtering from the same record) is what remains, and SH-07 consumes it. |
 | 7 | SH-07 scale-derived bias/filtering | Makes quality controls physically tied to each map. |
 | 8 | SH-08 shadow VIPM | Add only if measured popping remains. |
 | 9 | SH-09 shadow VDPM checkpoint | Highest complexity; require evidence before committing. |
 
 This ordering makes “correct LOD” a small, independently reviewable foundation rather than coupling
 it immediately to GPU-front scheduling, shadow caching, or a new filtering technique.
+
+**Next up (2026-08-03): SH-05**, per the order above and because it is self-contained, has visible
+symptoms in an existing acceptance scene, and depends on nothing parked. Its starting point is
+written up in § SH-05. Three things stay open behind it and are indexed in
+[`roadmap.md`](roadmap.md) rather than blocking it: the historical half-ellipse (unexplained, and
+NOT a depth clip — measured), the cloth `LegacyStaleFallback` (needs a conservative envelope for
+storage geometry), and SH-04's proxy half. The GPU-timestamp diagnostics branch is still parked and
+should land before SH-07's cost claims.
