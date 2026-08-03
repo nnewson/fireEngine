@@ -25,6 +25,7 @@ using fire_engine::CascadeReceiverFit;
 using fire_engine::CascadeReceiverInput;
 using fire_engine::fitLegacyCascadeDepth;
 using fire_engine::Mat4;
+using fire_engine::placeCaster;
 using fire_engine::Vec3;
 using fire_engine::Vec4;
 
@@ -214,7 +215,7 @@ TEST_CASE("CascadeFit.LegacyDepthPolicyIsBitIdentical", "[CascadeFit]")
                 s.cameraPosition, s.cameraTarget, s.lightDirection, s.aspect, sliceNear, sliceFar,
                 fire_engine::kShadowMapExtent, fire_engine::kShadowDepthBackExtend);
 
-            CHECK(bitIdentical(depth->viewProj, legacy.viewProj));
+            CHECK(bitIdentical(depth->viewProj(), legacy.viewProj));
             CHECK(receiver->worldPerTexel() == legacy.worldPerTexel);
         }
     }
@@ -259,23 +260,23 @@ TEST_CASE("CascadeFit.ProjectionMapsFittedBoundsToClipEdges", "[CascadeFit]")
         {
             const Vec3 p = receiver->lightRight() * u + receiver->lightUp() * v +
                            receiver->lightDirection() * w;
-            const Vec4 clip = depth->viewProj * Vec4{p.x(), p.y(), p.z(), 1.0f};
+            const Vec4 clip = depth->viewProj() * Vec4{p.x(), p.y(), p.z(), 1.0f};
             return clip;
         };
 
-        const float midW = 0.5f * (depth->nearW + depth->farW);
+        const float midW = 0.5f * (depth->nearW() + depth->farW());
         // Vulkan clip: x right-handed in [-1, 1], y FLIPPED by Mat4::ortho, z in [0, 1].
         CHECK(atUvw(receiver->minU(), 0.0f, midW).x() == Approx(-1.0f).margin(1e-4));
         CHECK(atUvw(receiver->maxU(), 0.0f, midW).x() == Approx(1.0f).margin(1e-4));
         CHECK(atUvw(0.0f, receiver->minV(), midW).y() == Approx(1.0f).margin(1e-4));
         CHECK(atUvw(0.0f, receiver->maxV(), midW).y() == Approx(-1.0f).margin(1e-4));
 
-        CHECK(atUvw(0.0f, 0.0f, depth->nearW).z() == Approx(0.0f).margin(1e-4));
-        CHECK(atUvw(0.0f, 0.0f, depth->farW).z() == Approx(1.0f).margin(1e-4));
-        CHECK(depth->viewDepthSpan == Approx(depth->farW - depth->nearW));
+        CHECK(atUvw(0.0f, 0.0f, depth->nearW()).z() == Approx(0.0f).margin(1e-4));
+        CHECK(atUvw(0.0f, 0.0f, depth->farW()).z() == Approx(1.0f).margin(1e-4));
+        CHECK(depth->viewDepthSpan() == Approx(depth->farW() - depth->nearW()));
         // The light sits ON the near plane: the legacy ortho near distance is zero.
-        CHECK(Vec3::dotProduct(depth->lightPosition, receiver->lightDirection()) ==
-              Approx(depth->nearW).margin(1e-3));
+        CHECK(Vec3::dotProduct(depth->lightPosition(), receiver->lightDirection()) ==
+              Approx(depth->nearW()).margin(1e-3));
     }
 }
 
@@ -637,4 +638,491 @@ TEST_CASE("CascadeFit.BitIdenticalRejectsPoisonedMatrices", "[CascadeFit]")
     Mat4 nudged = Mat4::identity();
     nudged[1, 1] = std::nextafter(1.0f, 2.0f);
     CHECK_FALSE(bitIdentical(identity, nudged));
+}
+
+namespace
+{
+
+// A box centred on a light-space (U, V, W) point, sized in light space, so a placement test can say
+// where it wants the caster without solving for a world position by hand.
+[[nodiscard]] fire_engine::Bounds3 boxAtUvw(const CascadeReceiverFit& fit, float u, float v,
+                                            float w, float halfExtent)
+{
+    const Vec3 centre = fit.lightRight() * u + fit.lightUp() * v + fit.lightDirection() * w;
+    fire_engine::Bounds3 bounds{};
+    for (int corner = 0; corner < 8; ++corner)
+    {
+        bounds.expand(centre + Vec3{(corner & 1) != 0 ? halfExtent : -halfExtent,
+                                    (corner & 2) != 0 ? halfExtent : -halfExtent,
+                                    (corner & 4) != 0 ? halfExtent : -halfExtent});
+    }
+    return bounds;
+}
+
+} // namespace
+
+// The evidence type SH-06 turns on: a shadow can go missing because the caster was clipped by the
+// depth range or because it was never in the cascade's footprint, and those need different fixes.
+TEST_CASE("CascadeFit.PlacementSeparatesDepthClippingFromFootprintMisses", "[CascadeFit]")
+{
+    const auto receiver = CascadeReceiverFit::fit(inputFor(scenarios().front(), 1.0f, 12.0f));
+    REQUIRE(receiver);
+    const auto depth = fitLegacyCascadeDepth(*receiver, fire_engine::kShadowDepthBackExtend);
+    REQUIRE(depth);
+
+    const float midU = 0.5f * (receiver->minU() + receiver->maxU());
+    const float midV = 0.5f * (receiver->minV() + receiver->maxV());
+    const float midW = 0.5f * (depth->nearW() + depth->farW());
+
+    SECTION("a caster the cascade fully contains")
+    {
+        const auto p = placeCaster(*receiver, *depth, boxAtUvw(*receiver, midU, midV, midW, 0.5f));
+        CHECK(p.footprint == fire_engine::CascadeFootprintRelation::Inside);
+        CHECK(p.insideDepth);
+        CHECK_FALSE(p.clippedNear);
+        CHECK_FALSE(p.clippedFar);
+        CHECK_FALSE(p.outsideDepth);
+        // Bounds are read from the box, not invented: a 0.5 half-extent box spans at most 2 * 0.5 *
+        // sqrt(3) along any light axis, and contains the point it was centred on.
+        CHECK(p.minW <= midW);
+        CHECK(p.maxW >= midW);
+        CHECK(p.maxW - p.minW <= 2.0f * 0.5f * std::sqrt(3.0f) + 1e-4f);
+    }
+    SECTION("the defect signature: straddling the near plane")
+    {
+        // Exactly the ShadowDepthClipDemo geometry — a caster centred on the near plane, half of it
+        // before the plane. Clipped, NOT outside: part of it still writes depth, which is why the
+        // shadow arrives cut rather than absent.
+        const auto p =
+            placeCaster(*receiver, *depth, boxAtUvw(*receiver, midU, midV, depth->nearW(), 1.0f));
+        CHECK(p.clippedNear);
+        CHECK_FALSE(p.clippedFar);
+        CHECK_FALSE(p.insideDepth);
+        CHECK_FALSE(p.outsideDepth);
+        CHECK(p.footprint == fire_engine::CascadeFootprintRelation::Inside);
+    }
+    SECTION("wholly behind the near plane")
+    {
+        const auto p = placeCaster(*receiver, *depth,
+                                   boxAtUvw(*receiver, midU, midV, depth->nearW() - 50.0f, 1.0f));
+        CHECK(p.clippedNear);
+        CHECK(p.outsideDepth);
+        CHECK_FALSE(p.insideDepth);
+    }
+    SECTION("past the far plane")
+    {
+        const auto p =
+            placeCaster(*receiver, *depth, boxAtUvw(*receiver, midU, midV, depth->farW(), 1.0f));
+        CHECK(p.clippedFar);
+        CHECK_FALSE(p.clippedNear);
+        CHECK_FALSE(p.outsideDepth);
+    }
+    SECTION("outside the footprint but at a perfectly good depth")
+    {
+        // The other way a shadow goes missing, and the reason the two flags are separate: this
+        // caster is at a legal depth and still cannot appear in this cascade.
+        const auto p = placeCaster(*receiver, *depth,
+                                   boxAtUvw(*receiver, receiver->maxU() + 10.0f, midV, midW, 1.0f));
+        CHECK(p.footprint == fire_engine::CascadeFootprintRelation::Outside);
+        CHECK(p.insideDepth);
+    }
+    SECTION("a caster with no bounds is not placed anywhere")
+    {
+        // The default Bounds3 carries max/lowest sentinels; projecting those would report a caster
+        // spanning infinity and overlapping everything.
+        const auto p = placeCaster(*receiver, *depth, fire_engine::Bounds3{});
+        CHECK(p.footprint == fire_engine::CascadeFootprintRelation::Invalid);
+        CHECK_FALSE(p.insideDepth);
+        CHECK_FALSE(p.clippedNear);
+        CHECK_FALSE(p.clippedFar);
+        CHECK_FALSE(p.outsideDepth);
+        CHECK(p.minW == 0.0f);
+        CHECK(p.maxW == 0.0f);
+    }
+}
+
+// The footprint relation exists for a candidate query that must reject `Outside` and ONLY
+// `Outside`, so its boundary behaviour is the part worth pinning: a caster touching an edge is
+// `Straddles`, never `Outside` (which would drop a possible contributor) and never `Inside` (which
+// would claim full coverage it does not have).
+TEST_CASE("CascadeFit.FootprintRelationIsConservativeAtTheEdges", "[CascadeFit]")
+{
+    using fire_engine::CascadeFootprintRelation;
+
+    const auto receiver = CascadeReceiverFit::fit(inputFor(scenarios().front(), 1.0f, 12.0f));
+    REQUIRE(receiver);
+    const auto depth = fitLegacyCascadeDepth(*receiver, fire_engine::kShadowDepthBackExtend);
+    REQUIRE(depth);
+
+    const float midU = 0.5f * (receiver->minU() + receiver->maxU());
+    const float midV = 0.5f * (receiver->minV() + receiver->maxV());
+    const float midW = 0.5f * (depth->nearW() + depth->farW());
+
+    const auto relationAt = [&](float u, float v, float halfExtent)
+    {
+        return placeCaster(*receiver, *depth, boxAtUvw(*receiver, u, v, midW, halfExtent))
+            .footprint;
+    };
+
+    // Well inside.
+    CHECK(relationAt(midU, midV, 0.5f) == CascadeFootprintRelation::Inside);
+    // Centred on an edge: half in, half out.
+    CHECK(relationAt(receiver->maxU(), midV, 1.0f) == CascadeFootprintRelation::Straddles);
+    CHECK(relationAt(receiver->minU(), midV, 1.0f) == CascadeFootprintRelation::Straddles);
+    CHECK(relationAt(midU, receiver->maxV(), 1.0f) == CascadeFootprintRelation::Straddles);
+    // Far beyond it.
+    CHECK(relationAt(receiver->maxU() + 20.0f, midV, 1.0f) == CascadeFootprintRelation::Outside);
+    // A caster placed so its extreme corner lands ON the boundary. The box is axis-aligned in WORLD
+    // space, so its light-space extent is wider than the half-extent; nudging by that much puts a
+    // face against the edge rather than across it, and the conservative answer is still Straddles.
+    const auto onEdge = placeCaster(
+        *receiver, *depth,
+        boxAtUvw(*receiver, midU, midV, midW, 0.5f * (receiver->maxU() - receiver->minU())));
+    CHECK(onEdge.footprint == CascadeFootprintRelation::Straddles);
+    // No bounds at all: not a footprint judgement, and not silently Outside either.
+    CHECK(placeCaster(*receiver, *depth, fire_engine::Bounds3{}).footprint ==
+          CascadeFootprintRelation::Invalid);
+}
+
+namespace
+{
+
+[[nodiscard]] fire_engine::ShadowCasterBounds
+casterAt(const CascadeReceiverFit& fit, float u, float v, float w, float halfExtent,
+         fire_engine::ShadowCasterBoundsKind kind = fire_engine::ShadowCasterBoundsKind::Exact)
+{
+    return fire_engine::ShadowCasterBounds{.world = boxAtUvw(fit, u, v, w, halfExtent),
+                                           .casterId = static_cast<fire_engine::ShadowCasterId>(1),
+                                           .generation = fire_engine::ShadowCasterGeneration::First,
+                                           .kind = kind};
+}
+
+} // namespace
+
+// SH-06's reason for existing: the depth range is fitted to the casters that can shadow this
+// cascade, so an upstream caster is no longer cut by a plane placed a fixed distance away.
+TEST_CASE("CascadeFit.CasterAwareDepthReachesTheFurthestUpstreamCandidate", "[CascadeFit]")
+{
+    using fire_engine::CascadeDepthFitMode;
+    using fire_engine::fitCasterAwareCascadeDepth;
+
+    const auto receiver = CascadeReceiverFit::fit(inputFor(scenarios().front(), 1.0f, 12.0f));
+    REQUIRE(receiver);
+    const auto legacy = fitLegacyCascadeDepth(*receiver, fire_engine::kShadowDepthBackExtend);
+    REQUIRE(legacy);
+    CHECK(legacy->mode() == CascadeDepthFitMode::LegacyFixedExtension);
+
+    const float midU = 0.5f * (receiver->minU() + receiver->maxU());
+    const float midV = 0.5f * (receiver->minV() + receiver->maxV());
+
+    SECTION("a caster far upstream pulls the near plane back to include it")
+    {
+        // Deliberately beyond the legacy near plane: under the fixed extension this caster was
+        // clipped, which is the defect measured on ShadowDepthClipDemo.
+        const float deepW = legacy->nearW() - 25.0f;
+        const auto casters = std::array{casterAt(*receiver, midU, midV, deepW, 1.0f)};
+        const auto fit =
+            fitCasterAwareCascadeDepth(*receiver, casters, fire_engine::kShadowDepthBackExtend);
+        REQUIRE(fit);
+        CHECK(fit->mode() == CascadeDepthFitMode::CasterAware);
+        CHECK(fit->nearW() < legacy->nearW());
+        // Nothing of the caster is outside the range any more.
+        const auto placement = placeCaster(*receiver, *fit, casters[0].world);
+        CHECK_FALSE(placement.clippedNear);
+        CHECK(placement.insideDepth);
+    }
+    SECTION("the far plane covers the receiver volume and does not chase a downstream caster")
+    {
+        // A caster BEHIND every receiver in this slice cannot shadow one, so extending the far
+        // plane to reach it would spend depth precision on nothing.
+        const float behind = receiver->receiverMaxW() + 30.0f;
+        const auto casters = std::array{casterAt(*receiver, midU, midV, behind, 1.0f)};
+        const auto fit =
+            fitCasterAwareCascadeDepth(*receiver, casters, fire_engine::kShadowDepthBackExtend);
+        REQUIRE(fit);
+        // The far plane sits at the receiver volume plus the same one-texel slack the near side
+        // gets — the boundary receiver must be inside the range, not exactly on it.
+        CHECK(fit->farW() == Approx(receiver->receiverMaxW() + receiver->worldPerTexel()));
+        CHECK(fit->farW() < behind);
+    }
+    SECTION("a caster outside the cascade footprint does not widen the range")
+    {
+        // Light rays preserve U and V, so this caster cannot shadow anything inside the rectangle.
+        const float deepW = legacy->nearW() - 25.0f;
+        const auto outside =
+            std::array{casterAt(*receiver, receiver->maxU() + 40.0f, midV, deepW, 1.0f)};
+        const auto fit =
+            fitCasterAwareCascadeDepth(*receiver, outside, fire_engine::kShadowDepthBackExtend);
+        REQUIRE(fit);
+        CHECK(fit->mode() == CascadeDepthFitMode::CasterAware);
+        // Only the receiver volume (plus the texel of slack) decides the near plane here.
+        CHECK(fit->nearW() > deepW);
+        CHECK(fit->nearW() == Approx(receiver->receiverMinW() - receiver->worldPerTexel()));
+    }
+    SECTION("no casters at all still produces a usable range over the receivers")
+    {
+        const auto fit =
+            fitCasterAwareCascadeDepth(*receiver, {}, fire_engine::kShadowDepthBackExtend);
+        REQUIRE(fit);
+        CHECK(fit->mode() == CascadeDepthFitMode::CasterAware);
+        CHECK(fit->nearW() < receiver->receiverMinW());
+        CHECK(fit->farW() > receiver->receiverMaxW());
+    }
+    SECTION("the fitted matrix still maps its own planes to Vulkan depth 0 and 1")
+    {
+        const auto casters =
+            std::array{casterAt(*receiver, midU, midV, legacy->nearW() - 25.0f, 1.0f)};
+        const auto fit =
+            fitCasterAwareCascadeDepth(*receiver, casters, fire_engine::kShadowDepthBackExtend);
+        REQUIRE(fit);
+        auto clipAt = [&](float w)
+        {
+            const Vec3 p = receiver->lightRight() * (0.5f * (receiver->minU() + receiver->maxU())) +
+                           receiver->lightUp() * (0.5f * (receiver->minV() + receiver->maxV())) +
+                           receiver->lightDirection() * w;
+            return fit->viewProj() * Vec4{p.x(), p.y(), p.z(), 1.0f};
+        };
+        CHECK(clipAt(fit->nearW()).z() == Approx(0.0f).margin(1e-4));
+        CHECK(clipAt(fit->farW()).z() == Approx(1.0f).margin(1e-4));
+        // The snapped U/V rectangle is untouched by the depth policy — the XY fit is stable.
+        CHECK(clipAt(fit->nearW()).x() == Approx(0.0f).margin(1e-3));
+    }
+}
+
+// The interim rule for geometry whose bounds cannot bound it. Fitting the rest and ignoring cloth
+// would be the same defect from the other side: the range can come out NARROWER than one covering
+// the cloth, and clip it.
+TEST_CASE("CascadeFit.OneStaleCasterForcesTheLegacyRange", "[CascadeFit]")
+{
+    using fire_engine::CascadeDepthFitMode;
+    using fire_engine::fitCasterAwareCascadeDepth;
+    using fire_engine::ShadowCasterBoundsKind;
+
+    const auto receiver = CascadeReceiverFit::fit(inputFor(scenarios().front(), 1.0f, 12.0f));
+    REQUIRE(receiver);
+    const auto legacy = fitLegacyCascadeDepth(*receiver, fire_engine::kShadowDepthBackExtend);
+    REQUIRE(legacy);
+
+    const float midU = 0.5f * (receiver->minU() + receiver->maxU());
+    const float midV = 0.5f * (receiver->minV() + receiver->maxV());
+    auto casters = std::array{
+        casterAt(*receiver, midU, midV, legacy->nearW() - 25.0f, 1.0f),
+        casterAt(*receiver, midU, midV, receiver->centreW(), 1.0f, ShadowCasterBoundsKind::Stale),
+    };
+    // The stale caster is not even in the cascade's way — being anywhere in the frame is enough,
+    // because its stale U/V cannot establish which cascade it affects either.
+    casters[1] = casterAt(*receiver, receiver->maxU() + 50.0f, midV, receiver->centreW(), 1.0f,
+                          ShadowCasterBoundsKind::Stale);
+
+    const auto fit =
+        fitCasterAwareCascadeDepth(*receiver, casters, fire_engine::kShadowDepthBackExtend);
+    REQUIRE(fit);
+    // The MODE says which policy ran, so a panel or log cannot describe this as a caster-aware fit.
+    CHECK(fit->mode() == CascadeDepthFitMode::LegacyStaleFallback);
+    CHECK(fit->nearW() == legacy->nearW());
+    CHECK(fit->farW() == legacy->farW());
+    // Same matrix as the legacy fit, not merely a similar range.
+    CHECK(bitIdentical(fit->viewProj(), legacy->viewProj()));
+}
+
+TEST_CASE("CascadeFit.CasterAwareDepthSkipsCastersWithoutBounds", "[CascadeFit]")
+{
+    using fire_engine::fitCasterAwareCascadeDepth;
+
+    const auto receiver = CascadeReceiverFit::fit(inputFor(scenarios().front(), 1.0f, 12.0f));
+    REQUIRE(receiver);
+    // A casting binding with no vertices is recorded by the prepass (so the recorded set matches
+    // the draws) but has no extent to fit to.
+    auto empty = casterAt(*receiver, 0.0f, 0.0f, 0.0f, 1.0f);
+    empty.world = fire_engine::Bounds3{};
+    const auto fit = fitCasterAwareCascadeDepth(*receiver, std::array{empty},
+                                                fire_engine::kShadowDepthBackExtend);
+    REQUIRE(fit);
+    CHECK(fit->nearW() == Approx(receiver->receiverMinW() - receiver->worldPerTexel()));
+}
+
+// The shader cross-fades into cascade i+1 over the last `kShadowCascadeBlendFraction` of cascade i,
+// so receivers in that band sample i+1's map. Once each cascade is fitted TIGHTLY to its own slice,
+// that stops being a shader detail: a cascade fitted from the hard split would not cover the
+// receivers already sampling it, which is the fixed extension's error in the other direction.
+TEST_CASE("CascadeFit.NextCascadeCoversThePrecedingBlendBand", "[CascadeFit]")
+{
+    using fire_engine::fitCasterAwareCascadeDepth;
+    using fire_engine::kShadowCascadeBlendFraction;
+
+    for (const Scenario& s : scenarios())
+    {
+        INFO(s.name);
+        const auto slices = shippedSlices();
+        for (std::size_t i = 0; i + 1 < slices.size(); ++i)
+        {
+            // The band the SHADER blends over, measured from its notion of the cascade start —
+            // which is 0 for cascade 0, not the camera near plane.
+            const float hardStart = i == 0 ? 0.0f : slices[i - 1].second;
+            const float hardEnd = slices[i].second;
+            const float blendStart = hardEnd - kShadowCascadeBlendFraction * (hardEnd - hardStart);
+
+            // Cascade i+1 as the renderer now fits it: from the blend start, not the split.
+            const auto next =
+                CascadeReceiverFit::fit(inputFor(s, blendStart, slices[i + 1].second));
+            REQUIRE(next);
+            const auto nextDepth =
+                fitCasterAwareCascadeDepth(*next, {}, fire_engine::kShadowDepthBackExtend);
+            REQUIRE(nextDepth);
+
+            // Every corner of the blend band's own sub-frustum must be inside cascade i+1's
+            // rectangle AND its depth range — those receivers are being sampled from that map.
+            const fire_engine::ViewBasis basis =
+                fire_engine::makeViewBasis(s.cameraPosition, s.cameraTarget);
+            const float tanHalfFov = std::tan(fire_engine::kCameraFovRadians * 0.5f);
+            for (const float d : {blendStart, hardEnd})
+            {
+                const float h = tanHalfFov * d;
+                const float w = h * s.aspect;
+                const Vec3 centre = s.cameraPosition + basis.forward * d;
+                for (const float sx : {-1.0f, 1.0f})
+                {
+                    for (const float sy : {-1.0f, 1.0f})
+                    {
+                        const Vec3 corner = centre + basis.right * (w * sx) + basis.up * (h * sy);
+                        const float u = Vec3::dotProduct(corner, next->lightRight());
+                        const float v = Vec3::dotProduct(corner, next->lightUp());
+                        const float cw = Vec3::dotProduct(corner, next->lightDirection());
+                        CHECK(u >= next->minU());
+                        CHECK(u <= next->maxU());
+                        CHECK(v >= next->minV());
+                        CHECK(v <= next->maxV());
+                        CHECK(cw >= nextDepth->nearW());
+                        CHECK(cw <= nextDepth->farW());
+                    }
+                }
+            }
+        }
+    }
+}
+
+// Corrupt bounds must not look like a caster that is simply elsewhere. NaN compares false against
+// everything, so an unchecked box would classify as `Outside`, be skipped, and let the range
+// tighten around geometry nobody accounted for — the exact defect this policy exists to remove.
+TEST_CASE("CascadeFit.NonFiniteCasterBoundsAreTerminalNotIgnored", "[CascadeFit]")
+{
+    using fire_engine::CascadeFootprintRelation;
+    using fire_engine::classifyFootprint;
+    using fire_engine::fitCasterAwareCascadeDepth;
+
+    const auto receiver = CascadeReceiverFit::fit(inputFor(scenarios().front(), 1.0f, 12.0f));
+    REQUIRE(receiver);
+    const auto depth = fitLegacyCascadeDepth(*receiver, fire_engine::kShadowDepthBackExtend);
+    REQUIRE(depth);
+
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    const float inf = std::numeric_limits<float>::infinity();
+
+    // Set the fields directly rather than expanding with a poisoned vertex. `Bounds3::expand` runs
+    // std::min/std::max, which return the OTHER operand when one side is NaN, so it cannot be used
+    // to BUILD a non-finite box at all — which is precisely why the production prepass uses
+    // `Bounds3::expandChecked` and reports a corrupt vertex explicitly instead
+    // (`tests/graphics/test_object_shadow_casters.cpp` covers that path end to end). What this test
+    // pins is what the POLICY does once such a box reaches it.
+    auto poisoned = [&](float bad)
+    {
+        fire_engine::Bounds3 b{};
+        b.min = Vec3{0.0f, 0.0f, 0.0f};
+        b.max = Vec3{bad, 1.0f, 1.0f};
+        b.valid = true;
+        return b;
+    };
+
+    SECTION("the footprint classification reports Invalid, never Outside")
+    {
+        CHECK(classifyFootprint(*receiver, poisoned(nan)) == CascadeFootprintRelation::Invalid);
+        CHECK(classifyFootprint(*receiver, poisoned(inf)) == CascadeFootprintRelation::Invalid);
+        CHECK(classifyFootprint(*receiver, fire_engine::Bounds3{}) ==
+              CascadeFootprintRelation::Invalid);
+    }
+    SECTION("placement reports Invalid and no flags")
+    {
+        const auto placement = placeCaster(*receiver, *depth, poisoned(nan));
+        CHECK(placement.footprint == CascadeFootprintRelation::Invalid);
+        CHECK_FALSE(placement.clippedNear);
+        CHECK_FALSE(placement.insideDepth);
+        CHECK(placement.minW == 0.0f);
+    }
+    SECTION("the depth policy fails rather than skipping the caster")
+    {
+        for (const float bad : {nan, inf, -inf})
+        {
+            fire_engine::ShadowCasterBounds caster{
+                .world = poisoned(bad),
+                .casterId = static_cast<fire_engine::ShadowCasterId>(1),
+                .generation = fire_engine::ShadowCasterGeneration::First,
+                .kind = fire_engine::ShadowCasterBoundsKind::Exact};
+            CHECK_FALSE(fitCasterAwareCascadeDepth(*receiver, std::array{caster},
+                                                   fire_engine::kShadowDepthBackExtend)
+                            .has_value());
+        }
+    }
+}
+
+// The caster-aware path must not depend on the constant it retires. Building a throwaway legacy fit
+// for the footprint test made a bad `backExtend` reject an Exact-only fit that never used one.
+TEST_CASE("CascadeFit.ExactOnlyFitDoesNotNeedAUsableBackExtension", "[CascadeFit]")
+{
+    using fire_engine::CascadeDepthFitMode;
+    using fire_engine::fitCasterAwareCascadeDepth;
+
+    const auto receiver = CascadeReceiverFit::fit(inputFor(scenarios().front(), 1.0f, 12.0f));
+    REQUIRE(receiver);
+    const float midU = 0.5f * (receiver->minU() + receiver->maxU());
+    const float midV = 0.5f * (receiver->minV() + receiver->maxV());
+    const auto casters =
+        std::array{casterAt(*receiver, midU, midV, receiver->centreW() - 30.0f, 1.0f)};
+
+    for (const float unusable :
+         {-1.0f, std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::infinity()})
+    {
+        const auto fit = fitCasterAwareCascadeDepth(*receiver, casters, unusable);
+        REQUIRE(fit);
+        CHECK(fit->mode() == CascadeDepthFitMode::CasterAware);
+    }
+
+    // The stale branch is the one that genuinely needs it, and it still fails without one.
+    const auto stale = std::array{casterAt(*receiver, midU, midV, receiver->centreW(), 1.0f,
+                                           fire_engine::ShadowCasterBoundsKind::Stale)};
+    CHECK_FALSE(fitCasterAwareCascadeDepth(*receiver, stale, -1.0f).has_value());
+}
+
+// Validation must not be short-circuited by the fallback. A frame containing BOTH cloth and a
+// corrupt Exact caster used to take the stale branch on sight and never look at the corruption —
+// the diagnosis would then name the wrong problem, and a caster with unknowable bounds would go
+// unmentioned entirely.
+TEST_CASE("CascadeFit.CorruptExactBoundsAreReportedEvenWhenClothIsPresent", "[CascadeFit]")
+{
+    using fire_engine::fitCasterAwareCascadeDepth;
+    using fire_engine::ShadowCasterBoundsKind;
+
+    const auto receiver = CascadeReceiverFit::fit(inputFor(scenarios().front(), 1.0f, 12.0f));
+    REQUIRE(receiver);
+    const float midU = 0.5f * (receiver->minU() + receiver->maxU());
+    const float midV = 0.5f * (receiver->minV() + receiver->maxV());
+
+    auto corrupt = casterAt(*receiver, midU, midV, receiver->centreW(), 1.0f);
+    corrupt.world.max = Vec3{std::numeric_limits<float>::quiet_NaN(), 1.0f, 1.0f};
+    const auto stale =
+        casterAt(*receiver, midU, midV, receiver->centreW(), 1.0f, ShadowCasterBoundsKind::Stale);
+
+    // Either order: the stale caster must not excuse the corrupt one.
+    CHECK_FALSE(fitCasterAwareCascadeDepth(*receiver, std::array{stale, corrupt},
+                                           fire_engine::kShadowDepthBackExtend)
+                    .has_value());
+    CHECK_FALSE(fitCasterAwareCascadeDepth(*receiver, std::array{corrupt, stale},
+                                           fire_engine::kShadowDepthBackExtend)
+                    .has_value());
+
+    // And with no corruption present, the same pairing still takes the documented fallback.
+    const auto clean = casterAt(*receiver, midU, midV, receiver->centreW(), 1.0f);
+    const auto fit = fitCasterAwareCascadeDepth(*receiver, std::array{clean, stale},
+                                                fire_engine::kShadowDepthBackExtend);
+    REQUIRE(fit);
+    CHECK(fit->mode() == fire_engine::CascadeDepthFitMode::LegacyStaleFallback);
 }

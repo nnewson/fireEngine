@@ -57,7 +57,20 @@ struct ShadowDrawFilter
         {
             return false;
         }
-        return frustum == nullptr || frustum->intersects(dc.shadowBounds);
+        if (frustum == nullptr)
+        {
+            return true;
+        }
+        // A caster whose bounds are STALE (cloth: a compute pass rewrites the vertices this box was
+        // measured from) cannot be rejected by them. The box says roughly where the caster was in
+        // its bind pose and nothing about where the drawn geometry is, so a frustum test against it
+        // can only produce false rejections — a cloth that is genuinely in this view, dropped. It
+        // is admitted until storage geometry carries a conservative envelope of its own.
+        if (dc.shadowBoundsKind != ShadowCasterBoundsKind::Exact)
+        {
+            return true;
+        }
+        return frustum->intersects(dc.shadowBounds);
     }
 };
 

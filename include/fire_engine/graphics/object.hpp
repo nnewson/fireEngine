@@ -11,6 +11,7 @@
 #include <fire_engine/graphics/gpu_handle.hpp>
 #include <fire_engine/graphics/gpu_limits.hpp>
 #include <fire_engine/graphics/renderable_scene.hpp>
+#include <fire_engine/graphics/shadow_caster_bounds_frame.hpp>
 #include <fire_engine/graphics/shadow_identity.hpp>
 #include <fire_engine/graphics/vdpm.hpp>
 #include <fire_engine/math/mat4.hpp>
@@ -81,9 +82,17 @@ public:
         morphWeights_.assign(weights.begin(), weights.end());
     }
 
+    // SH-06 prepass: record this object's shadow-casting bindings' world bounds — per binding, in
+    // the CURRENT pose (morph weights and skinning applied) — so the cascade depth fit can run
+    // BEFORE any draw command exists. Derives skin state exactly as `render` does, so the prepass
+    // and the draw cannot describe different poses. This is the ONLY place these bounds are
+    // computed; `render` looks them up rather than repeating the vertex walk.
+    void gatherShadowCasterBounds(const Mat4& world, ShadowCasterBoundsFrame& out) const;
+
     [[nodiscard]]
     std::vector<DrawCommand> render(const FrameInfo& frame, const Mat4& world,
-                                    const Mat4& previousWorld);
+                                    const Mat4& previousWorld,
+                                    const ShadowCasterBoundsFrame& casterBounds);
 
     // Add this frame's VDPM repair work (vertices each pass pulled back in) across this object's
     // active fronts to the running totals. Valid after render() this frame; a diagnostic surfaced
@@ -103,6 +112,18 @@ public:
     {
         return skin_ != nullptr || !morphWeights_.empty();
     }
+
+    // Whether `localBounds()` can be trusted to contain what this object DRAWS, and therefore
+    // whether the coarse scene cull may reject it by that bound.
+    //
+    // Deliberately NOT `deformable()`. That predicate answers a different question — "does this
+    // instance carry a skin or morph weights" — and it is used to classify shadow-caster
+    // deformation per binding, where broadening it would misclassify a rigid sibling binding as
+    // deformable. Storage-vertex geometry (cloth) is a third case: nothing about the INSTANCE
+    // deforms, but a compute pass rewrites the vertex buffer, so the CPU-side local bound describes
+    // the bind pose and the drawn cloth can be anywhere. Culling by it drops cloth that is on
+    // screen.
+    [[nodiscard]] bool localBoundsCoverDrawnGeometry() const noexcept;
 
 private:
     struct GeometryBindings
@@ -172,8 +193,10 @@ private:
         std::array<BufferHandle, kMaxFramesInFlight> shadowBufs{NullBuffer, NullBuffer};
     };
 
-    [[nodiscard]] Bounds3 computeShadowBounds(std::span<const Mat4> jointMatrices, bool hasSkin,
-                                              const Mat4& world) const noexcept;
+    [[nodiscard]] Bounds3 computeBindingShadowBounds(const GeometryBindings& binding,
+                                                     std::span<const Mat4> jointMatrices,
+                                                     bool hasSkin,
+                                                     const Mat4& world) const noexcept;
 
     // load() phases: createForwardBindings allocates the per-geometry vertex-stage
     // buffers; createShadowBindings allocates the per-object ShadowUBO buffers.
@@ -196,9 +219,9 @@ private:
     void writeForwardUniforms(const FrameInfo& frame, const Mat4& world, const Mat4& previousWorld,
                               bool hasSkin, std::span<const Mat4> jointMatrices);
     void writeShadowUniforms(const FrameInfo& frame, const Mat4& world, bool hasSkin);
-    [[nodiscard]] std::vector<DrawCommand> buildDrawCommands(const FrameInfo& frame,
-                                                             const Mat4& world, bool hasSkin,
-                                                             const Bounds3& shadowBounds) const;
+    [[nodiscard]] std::vector<DrawCommand>
+    buildDrawCommands(const FrameInfo& frame, const Mat4& world, bool hasSkin,
+                      const ShadowCasterBoundsFrame& casterBounds) const;
 
     Skin* skin_{nullptr};
     std::vector<float> morphWeights_;

@@ -3,6 +3,7 @@
 
 #include <cmath>
 #include <cstring>
+#include <limits>
 #include <stdexcept>
 
 #include <fire_engine/graphics/geometry.hpp>
@@ -374,45 +375,115 @@ const Bounds3& Object::localBounds() const noexcept
     return *localBounds_;
 }
 
-Bounds3 Object::computeShadowBounds(std::span<const Mat4> jointMatrices, bool hasSkin,
-                                    const Mat4& world) const noexcept
+// One binding's world-space caster extent, in its CURRENT pose: morph weights applied, skinning
+// applied. SH-06's depth fit is built on these, so the per-binding split matters — a union over an
+// object's bindings would hand the fit a box containing space no caster occupies, and the range
+// would be looser than the geometry justifies.
+Bounds3 Object::computeBindingShadowBounds(const GeometryBindings& binding,
+                                           std::span<const Mat4> jointMatrices, bool hasSkin,
+                                           const Mat4& world) const noexcept
 {
     Bounds3 bounds;
-    for (const auto& binding : bindings_)
+    // The caster IS the visible geometry. SH-04 removed the shadow-proxy setter, so there is no
+    // second geometry to prefer here; a validated proxy API would reintroduce that choice along
+    // with the rules that make it safe.
+    const Geometry* geometry = binding.geometry;
+    if (geometry == nullptr)
     {
-        // The caster IS the visible geometry. SH-04 removed the shadow-proxy setter, so there is
-        // no second geometry to prefer here; a validated proxy API would reintroduce that choice
-        // along with the rules that make it safe.
-        const Geometry* geometry = binding.geometry;
-        if (geometry == nullptr)
+        return bounds;
+    }
+
+    const auto& vertices = geometry->vertices();
+    const auto& morphPositions = geometry->morphPositions();
+    for (std::size_t v = 0; v < vertices.size(); ++v)
+    {
+        Vec3 position = vertices[v].position();
+        for (std::size_t target = 0;
+             target < morphPositions.size() && target < morphWeights_.size(); ++target)
         {
-            continue;
+            if (v < morphPositions[target].size())
+            {
+                position += morphPositions[target][v] * morphWeights_[target];
+            }
         }
 
-        const auto& vertices = geometry->vertices();
-        const auto& morphPositions = geometry->morphPositions();
-        for (std::size_t v = 0; v < vertices.size(); ++v)
+        Vec3 worldPosition = hasSkin ? skinnedPosition(vertices[v], position, jointMatrices)
+                                     : static_cast<Vec3>(world * Vec4{position});
+        if (!bounds.expandChecked(worldPosition))
         {
-            Vec3 position = vertices[v].position();
-            for (std::size_t target = 0;
-                 target < morphPositions.size() && target < morphWeights_.size(); ++target)
-            {
-                if (v < morphPositions[target].size())
-                {
-                    position += morphPositions[target][v] * morphWeights_[target];
-                }
-            }
-
-            Vec3 worldPosition = hasSkin ? skinnedPosition(vertices[v], position, jointMatrices)
-                                         : static_cast<Vec3>(world * Vec4{position});
-            bounds.expand(worldPosition);
+            // A vertex nobody can bound — a NaN joint matrix, a corrupt morph delta, a degenerate
+            // transform. Report a box that is VALID but non-finite, which is exactly what it is:
+            // this caster has an extent and we cannot state it. Plain `expand` would have dropped
+            // the vertex and returned a finite box that does not contain the geometry, and SH-06's
+            // depth range would then be fitted tight around a caster it never accounted for and
+            // clip it. Downstream (`classifyFootprint`, the depth policy) treats a non-finite box
+            // as terminal rather than as a caster that is merely elsewhere.
+            const float nan = std::numeric_limits<float>::quiet_NaN();
+            Bounds3 corrupt{};
+            corrupt.min = Vec3{nan, nan, nan};
+            corrupt.max = Vec3{nan, nan, nan};
+            corrupt.valid = true;
+            return corrupt;
         }
     }
     return bounds;
 }
 
+bool Object::localBoundsCoverDrawnGeometry() const noexcept
+{
+    if (deformable())
+    {
+        return false;
+    }
+    for (const auto& binding : bindings_)
+    {
+        if (binding.geometry != nullptr && binding.geometry->storageVertices())
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+// The SH-06 prepass: what this object contributes to the cascade depth fit, per shadow-casting
+// binding, BEFORE any draw command exists — and the ONLY place a caster's world bounds are
+// computed. `render` looks its bindings up in the same record rather than walking the vertices a
+// second time.
+//
+// Non-casting bindings are omitted entirely: a binding the shadow pass will never rasterise must
+// not widen the range it fits. Every casting binding is recorded even if its bounds came out
+// invalid (no vertices), so the recorded set matches the set of shadow draws exactly and a lookup
+// miss always means a real disagreement rather than a legitimately empty caster.
+//
+// A cloth binding reports `Stale`: its vertices live in a storage buffer a compute pass rewrites,
+// so the CPU copy this walks is the bind pose and the drawn geometry can be anywhere. The fit is
+// required to treat that as a hint rather than a bound; see `ShadowCasterBoundsKind`.
+void Object::gatherShadowCasterBounds(const Mat4& world, ShadowCasterBoundsFrame& out) const
+{
+    // Same derivation as `render`, deliberately: the prepass must describe the pose the draw will.
+    const bool hasSkin = skin_ != nullptr && !skin_->empty();
+    const std::vector<Mat4> emptyJointMatrices;
+    const std::vector<Mat4>& jointMatrices =
+        hasSkin ? skin_->cachedJointMatrices() : emptyJointMatrices;
+
+    for (const auto& binding : bindings_)
+    {
+        if (!binding.castsShadow || binding.geometry == nullptr)
+        {
+            continue;
+        }
+        out.add(ShadowCasterBounds{
+            .world = computeBindingShadowBounds(binding, jointMatrices, hasSkin, world),
+            .casterId = binding.shadowCasterId,
+            .generation = binding.shadowGeneration,
+            .kind = binding.geometry->storageVertices() ? ShadowCasterBoundsKind::Stale
+                                                        : ShadowCasterBoundsKind::Exact});
+    }
+}
+
 std::vector<DrawCommand> Object::render(const FrameInfo& frame, const Mat4& world,
-                                        const Mat4& previousWorld)
+                                        const Mat4& previousWorld,
+                                        const ShadowCasterBoundsFrame& casterBounds)
 {
     const bool hasSkin = skin_ != nullptr && !skin_->empty();
 
@@ -423,8 +494,10 @@ std::vector<DrawCommand> Object::render(const FrameInfo& frame, const Mat4& worl
     writeForwardUniforms(frame, world, previousWorld, hasSkin, jointMatrices);
     writeShadowUniforms(frame, world, hasSkin);
 
-    const Bounds3 shadowBounds = computeShadowBounds(jointMatrices, hasSkin, world);
-    return buildDrawCommands(frame, world, hasSkin, shadowBounds);
+    // NOT recomputed here. The prepass already walked these vertices with this pose, and each
+    // binding takes its OWN bounds from that record below — the object-wide union this used to
+    // build cost a second skinning pass and stamped one loose box onto every binding's command.
+    return buildDrawCommands(frame, world, hasSkin, casterBounds);
 }
 
 bool Object::vdpmGpuDrives(const FrameInfo& frame, const GeometryBindings& binding)
@@ -657,8 +730,9 @@ void Object::writeShadowUniforms(const FrameInfo& frame, const Mat4& world, bool
     }
 }
 
-std::vector<DrawCommand> Object::buildDrawCommands(const FrameInfo& frame, const Mat4& world,
-                                                   bool hasSkin, const Bounds3& shadowBounds) const
+std::vector<DrawCommand>
+Object::buildDrawCommands(const FrameInfo& frame, const Mat4& world, bool hasSkin,
+                          const ShadowCasterBoundsFrame& casterBounds) const
 {
     // Camera forward used to project draw centroids for back-to-front sort of
     // blend draws. Each mesh instance is taken as its world-translation origin
@@ -755,7 +829,21 @@ std::vector<DrawCommand> Object::buildDrawCommands(const FrameInfo& frame, const
         cmd.sortDepth = depth;
         cmd.objectId = objectId_;
         cmd.hasSkin = hasSkin;
-        cmd.shadowBounds = shadowBounds;
+        // THIS binding's bounds, from the frame's prepass — not an object-wide union, and not a
+        // recomputation. `require` is terminal on a miss: an absent entry means the prepass and
+        // this walk disagree about what the scene contains, and a caster silently given empty
+        // bounds would be fitted and culled against geometry it has nothing to do with. Non-casting
+        // bindings never reach here (the shadow command below is gated on `castsShadow`).
+        // The condition mirrors the prepass's exactly, so "recorded" and "looked up" cannot drift.
+        if (binding.castsShadow && binding.geometry != nullptr)
+        {
+            const ShadowCasterBounds& recorded =
+                casterBounds.require(binding.shadowCasterId, binding.shadowGeneration);
+            cmd.shadowBounds = recorded.world;
+            // Carried, not re-derived: whether these bounds may EXCLUDE this caster is a property
+            // of how they were measured, and only the prepass knows that.
+            cmd.shadowBoundsKind = recorded.kind;
+        }
         // Bindless material index (idempotent registration — first sight assigns a
         // slot in the global materials[] SSBO; cached thereafter).
         cmd.materialIndex = resources_ != nullptr ? resources_->registerMaterial(mat) : 0;

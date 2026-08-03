@@ -118,9 +118,14 @@ bool Mesh::isSelectableVariantState(int state) const noexcept
     return object_.wouldChangeVariant(candidate);
 }
 
+void Mesh::gatherShadowCasters(const Mat4& world, ShadowCasterBoundsFrame& out) const
+{
+    object_.gatherShadowCasterBounds(world, out);
+}
+
 Mat4 Mesh::render(const SceneDrawContext& ctx, const Mat4& world, const Mat4& previousWorld)
 {
-    auto commands = object_.render(ctx.frame, world, previousWorld);
+    auto commands = object_.render(ctx.frame, world, previousWorld, ctx.shadowCasterBounds);
     if (ctx.drawCommands != nullptr)
     {
         ctx.drawCommands->insert(ctx.drawCommands->end(), commands.begin(), commands.end());

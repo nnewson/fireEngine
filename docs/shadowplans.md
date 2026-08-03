@@ -562,47 +562,81 @@ not only geometry error; VDPM's UV-deviation channel is a useful input, but it i
 proof that a binary alpha boundary is preserved. BLEND shadow semantics should be a separate design
 decision (opaque/dithered/transmittance), not accidentally treated as MASK.
 
+**Where to start (2026-08-03).** Both symptoms are already visible in `ShadowLodDemo` and need no new
+asset: the alpha-masked quad casts a solid rectangle (`shadow.frag` samples no texture), and the
+double-sided sheet casts nothing at all (it is authored face-on to the sun, and `Pipeline::
+shadowConfig` fixes `cullMode = eFront`, so the shadow pass culls the only faces it has). Capture
+them with the SH-01 runbook's `ShadowLodDemo` command; the pair sits centre-right in every frame.
+Note the second one interacts with the first fix rather than being independent of it — making the
+pass respect `doubleSided` changes which faces record depth, which changes what an alpha test then
+discards, so land them together with one acceptance capture rather than in two passes.
+
+The measurement to re-run afterwards is the SH-03 budget sweep, which SH-05 changes by construction:
+casters that currently contribute nothing to the shadow mask will start contributing, so the
+shadowed area and every relative percentage move. Idle machine only — see `constants.hpp`.
+
 Likely branch: `shadow-material-casters`.
 
-#### SH-06: Receiver/caster-aware cascade depth fitting
+#### SH-06: Receiver/caster-aware cascade depth fitting — ✅ landed (branch `shadow-cascade-caster-depth-fit`)
 
 The cascade XY fit is stable, but its light-space depth currently relies on the fixed
 `kShadowDepthBackExtend`. A caster farther behind the receiver slice than that constant can be
 clipped even though its shadow reaches the slice.
 
-**QUALIFIED, 2026-08-01 — do not treat the paragraph below as an established depth-clip case.** Two
-things came out of building the reproduction. First, `ShadowLodMotionDemo` was rendering under the
-engine's FALLBACK sun: the glTF loader dropped lights on animated nodes, so the authored, swinging
-sun never reached the scene (fixed on `gltf-component-decomposition`; see
-[`onboarding.md`](onboarding.md) § Cross-File Invariants). Every observation on this scene, including
-the one below, was made under lighting the asset did not author. Second, sweeping the caster's whole
+**RESOLVED, 2026-08-01 — SH-06 keeps its depth-fit scope, and now has a valid red test. The
+historical half-ellipse is a SEPARATE open question.**
+
+Two things came out of building the reproduction.
+
+*The scene was mis-lit.* `ShadowLodMotionDemo` rendered under the engine's FALLBACK sun, because the
+glTF loader dropped lights on animated nodes (fixed; see [`onboarding.md`](onboarding.md)
+§ Cross-File Invariants). Every observation on this scene, including the half-ellipse, was made
+under lighting the asset did not author.
+
+*The fixed back-extension does clip real casters, and the cost is now measured.* The first probe
+placement — a sphere centred ON cascade 2's legacy near plane — produced a complete ellipse, which
+is correct and not a null result: the shadow pass culls FRONT faces
+(`Pipeline::shadowConfig`), so the surface a caster records is its far side, and a sphere centred on
+the plane has that whole surface downstream of it. Moving the caster one metre UPSTREAM along the
+sun — which does not move its shadow, since it stays on the same light ray — makes the recorded
+surface straddle the plane. The trace then reports `clippedNear=true` (`W [-45.723, -38.953]` against
+`depth W [-41.340, 33.535]`) and the shadow measurably shrinks:
+
+| probe placement | shadow pixels | bounding box |
+|---|---|---|
+| centre on the near plane | 35253 | 306 x 152 |
+| recorded surface straddling | 26166 | 263 x 131 |
+
+That is 14% smaller linearly and 26% by area, against an analytic prediction of 13.4% / 25% for the
+cap the plane removes from a sphere. **This is SH-06's acceptance gate**: the caster-aware depth fit
+must restore the full-size ellipse, and the numbers above are the pre-fix baseline.
+
+Note the scope of the shape result. A plane perpendicular to the light removes a cap symmetric about
+the light axis, so THIS fixture's sphere shrinks concentrically rather than acquiring a straight
+edge. That is a statement about a sphere: asymmetric geometry can certainly present a straight
+projected boundary under the same clip. What generalises is the mechanism, not the silhouette.
+
+*The half-ellipse itself is unexplained and is not SH-06's gate.* Sweeping the caster's whole
 animation range through `CascadeReceiverFit::fit` -> `fitLegacyCascadeDepth` -> `placeCaster` finds
-NO pose where the moving caster is clipped by a cascade near plane — closest approach 20.7 m under
-the fallback sun, 30.8 m under the authored one. The sweep reproduces the engine's own logged
-cascade-0 fit to the printed digit and detects a deliberately planted behind-the-plane caster, so the
-null is not vacuous. The symptom below is therefore real as an observation but MISATTRIBUTED as
-fixed-depth clipping; re-diagnose it under corrected lighting with `placeCaster`, which separates a
-depth clip from a footprint miss, before any fixture is frozen.
+no pose where the moving caster is depth-clipped (closest approach 20.7 m under the fallback sun,
+30.8 m under the authored one), and a 676-row live trace over a ~25 s run reports zero `clippedNear`
+events for any caster. The sweep reproduces the engine's own logged cascade-0 fit to the printed
+digit and the trace flags the probe scene, so neither null is vacuous. Diagnosing it needs, and does
+not yet have:
 
-**Observed, 2026-07-29** (reported from a live run during SH-03 slice 6, then reproduced). On
-`ShadowLodMotionDemo`, as the moving sphere passes the detail cluster, the top third of its cast
-shadow disappears: the shadow renders as a half-ellipse with a straight upper edge while the sphere
-itself is fully lit and its neighbour a metre away casts a complete ellipse. It returns once the
-sphere moves clear. Reproduce with:
+- the symptom CONFIRMED to still occur under the repaired authored sun (four sampled frames did not
+  show it, which is not a search);
+- the pass's own per-cascade filter/drawn verdict beside the placement — the trace runs before
+  `ShadowDrawFilter`, so it proves where a caster is, not whether that cascade rasterised it;
+- at the affected receiver pixels: the selected cascade, the blend factor, and the projected shadow
+  U/V, since a receiver sampling outside a map, or two cascades disagreeing across a blend, can
+  produce a straight boundary.
 
-```bash
-./fireEngineApp shadow_lod/ShadowLodMotionDemo.gltf nightbox.hdr --no-taa \
-  --no-shadow-lod --capture-frame 300 --capture /tmp/sh06.png
-```
-
-`--no-shadow-lod` forces every caster to shadow LOD0 while the visible geometry keeps selecting
-normally, which is what makes this evidence rather than an anecdote: **shadow LOD is not
-involved**. (The original reproduction used `--shadow-budget 0.001`, which is nearly but not
-exactly the same thing — selection still runs there.) The straight cut and the dependence on the
-caster's position relative to the cluster are what a depth/candidate-set clip looks like — the
-caster is behind the receiver slice it casts into. Note the frame number is only approximate: the
-demo advances on wall-clock time, so the moment drifts between runs. Fix this and the same capture
-must show a complete ellipse.
+A footprint classification (`CascadeFootprintRelation`: Invalid / Outside / Inside / Straddles, with
+edge-touching conservatively Straddles) now rides on the placement to make those cases inspectable.
+It is diagnostics, NOT an accusation: light rays in an orthographic directional map preserve U and V,
+so the part of a straddling caster outside the rectangle cannot shadow any receiver inside it. 82 of
+those 676 rows straddle, and that is ordinary.
 
 **Agreed structure (2026-07-31).** The fit splits into TWO carriers, because the pipeline is
 `receiver slice → stable XY fit → candidate query → depth fit → render matrix` and the candidate
@@ -685,6 +719,69 @@ fixture rather than redesigning geometry, and record with it: receiver view dept
 and blend factor, caster U/V/W bounds against both cascades involved, and whether the caster was
 offered and rasterised in each — enough to separate depth clipping from candidate rejection or
 cascade blending.
+
+**Landed so far.** The two fit carriers and `placeCaster` (slice 2 + evidence tooling), and the
+caster prepass: `RenderableScene::gatherShadowCasters` walks the scene before the fit and fills a
+`ShadowCasterBoundsFrame` with each shadow-casting binding's world bounds in the current pose, with
+cloth marked `Stale` because a compute pass rewrites its vertices. That record is the frame's ONLY
+authority — `buildDrawCommands` receives it and every shadow command looks its own binding up rather
+than anything recomputing, which both removes a second per-frame skinning walk and keeps the
+per-binding precision the depth fit needs (the old path built an object-wide union). Two rules ride
+with it: cloth is no longer coarse-culled by its bind-pose box
+(`Object::localBoundsCoverDrawnGeometry`, kept separate from `deformable()` so a rigid sibling
+binding is not misclassified), and a `Stale` bound may never EXCLUDE a caster — `ShadowDrawFilter`
+passes it through, and the caster-aware candidate test must do the same until storage geometry
+carries a conservative envelope of its own. It is a prepass and not a read of the draw list for an ordering
+reason that cannot be worked around — the fitted matrices decide the shadow frustums, and those
+frustums are what the draw walk culls against, so a cascade finalised after draw collection would
+leave the frame's matrices describing a different fit than its draws were selected for.
+
+**The `Stale` rule for the depth policy, agreed before it is written.** "Stale cannot tighten" is not
+the same as "ignore stale entries": fitting only the `Exact` casters can produce a range NARROWER
+than one that covers the cloth, which clips it — the defect, arrived at from the other side. Stale
+XY cannot even establish which cascade a cloth affects, so it cannot be excluded per view either.
+Until storage geometry carries a conservative simulation or authored envelope, the honest interim
+rule is: **if any stale caster exists in the frame, every directional cascade falls back to the
+legacy depth fit**, marked as an unresolved correctness fallback rather than a policy. That mark
+belongs in the pure depth-fit RESULT — a mode on `CascadeDepthFit`, not something the log or the
+overlay reconstructs — so the displayed reason is tied to the matrix that was actually selected and
+cannot drift from it. THREE values, not two: `fitLegacyCascadeDepth` still exists as its own
+function and its direct result is neither caster-aware nor a fallback from anything, so it reports
+`LegacyFixedExtension`. The policy reports `CasterAware` when it fitted the casters, and converts a
+legacy result to `LegacyStaleFallback` only where stale geometry forced that choice. The probe scene contains only `Exact` casters, so its 26166 -> 35253 gate still validates the
+new policy independently of that fallback.
+
+**LANDED (2026-08-03): the caster-aware depth fit.** `fitCasterAwareCascadeDepth` takes the receiver
+fit and the frame's caster record and places the planes where the geometry is: the near plane reaches
+the furthest-upstream CANDIDATE caster (footprint not `Outside`, since light rays preserve U/V), the
+far plane covers the receiver volume and no further (geometry behind every receiver in the slice
+cannot shadow one), and one texel of the fit's own `worldPerTexel` is allowed as slack rather than an
+invented epsilon. The matrix is built with the same `lookAt` / `ortho` calls as the legacy fit, so
+the ONLY difference between the policies is where the planes sit.
+
+The result carries its own mode — `LegacyFixedExtension` / `CasterAware` / `LegacyStaleFallback` —
+so the log and the panel report the policy that produced the matrix rather than reconstructing it.
+
+**Gate met.** `ShadowDepthClipDemo`, whose caster the legacy fit clipped:
+
+| | shadow pixels | bounding box |
+|---|---|---|
+| legacy fixed extension | 26166 | 263 x 131 |
+| caster-aware | 35324 | 305 x 152 |
+
+Restored, and checked rather than asserted. Against the geometrically unclipped baseline (35253 px,
+306 x 152 — the earlier probe placement, whose shadow sits at the same floor point because the caster
+only moved along the light ray) the two differ by 253 pixels, grouped into 185 HORIZONTAL SCANLINE
+RUNS (maximal spans of differing pixels within one image row) whose longest is 5 px and whose median
+is 1. Every difference is therefore a one-pixel-wide fringe following the silhouette; there is no
+clip-sized interior region, which is what residual clipping would leave — the legacy row above is
+exactly that, a concentric 26% loss of area. The remaining fringe is soft-edge rasterisation under a
+different depth range. Cascade 2's range on that scene goes from
+`[-41.340, 33.535]` (span 74.9) to `[-45.740, 8.292]` (span 54.0): it reaches further back to catch
+the caster while giving up the empty space behind the receivers.
+
+The SH-03 budget calibration reproduces to every printed digit, as it must — the depth range does not
+enter shadow-LOD selection.
 
 Keep the stable receiver XY fit, then determine the Z range from candidate caster bounds:
 
@@ -846,10 +943,18 @@ The key success criteria for Milestone 1 are:
 | 3 | ~~SH-03 per-view discrete LOD~~ ✅ | Fixes the requested architectural mismatch. |
 | 4 | SH-04 deformation/proxy policy — **deformation half ✅**, proxy half open | Removes invalid error claims and defines safe extension points. |
 | 5 | SH-05 material-aware casters | Fixes visibly wrong cutout and two-sided silhouettes. |
-| 6 | SH-06 cascade caster fit | Removes fixed-depth clipping and aligns candidate sets. |
+| 6 | ~~SH-06 cascade caster fit~~ ✅ | Removed fixed-depth clipping; candidate alignment (per-view filtering from the same record) is what remains, and SH-07 consumes it. |
 | 7 | SH-07 scale-derived bias/filtering | Makes quality controls physically tied to each map. |
 | 8 | SH-08 shadow VIPM | Add only if measured popping remains. |
 | 9 | SH-09 shadow VDPM checkpoint | Highest complexity; require evidence before committing. |
 
 This ordering makes “correct LOD” a small, independently reviewable foundation rather than coupling
 it immediately to GPU-front scheduling, shadow caching, or a new filtering technique.
+
+**Next up (2026-08-03): SH-05**, per the order above and because it is self-contained, has visible
+symptoms in an existing acceptance scene, and depends on nothing parked. Its starting point is
+written up in § SH-05. Three things stay open behind it and are indexed in
+[`roadmap.md`](roadmap.md) rather than blocking it: the historical half-ellipse (unexplained, and
+NOT a depth clip — measured), the cloth `LegacyStaleFallback` (needs a conservative envelope for
+storage geometry), and SH-04's proxy half. The GPU-timestamp diagnostics branch is still parked and
+should land before SH-07's cost claims.

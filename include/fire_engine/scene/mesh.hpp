@@ -93,6 +93,9 @@ public:
     [[nodiscard]]
     Mat4 render(const SceneDrawContext& ctx, const Mat4& world, const Mat4& previousWorld);
 
+    // SH-06 prepass: this mesh's shadow-casting bounds, in world space and in the current pose.
+    void gatherShadowCasters(const Mat4& world, ShadowCasterBoundsFrame& out) const;
+
     void variantNames(std::vector<std::string> names) noexcept
     {
         variantNames_ = std::move(names);

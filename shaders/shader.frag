@@ -318,7 +318,7 @@ float cascadeBlendFactor(int cascade, float viewDepth)
         return 0.0;
     float cascadeStart = cascade == 0 ? 0.0 : light.cascadeSplits[cascade - 1];
     float cascadeEnd = light.cascadeSplits[cascade];
-    float blendBand = (cascadeEnd - cascadeStart) * 0.1;
+    float blendBand = (cascadeEnd - cascadeStart) * light.cascadeParams.x;
     float blendStart = cascadeEnd - blendBand;
     return clamp((viewDepth - blendStart) / blendBand, 0.0, 1.0);
 }

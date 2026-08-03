@@ -54,14 +54,36 @@ inline constexpr uint32_t kShadowMapExtent = 2048;
 // Past this distance, casters don't shadow — keeps the cascade ortho fits
 // tight. Anything in shadow range stays inside [kCameraNearPlane, kShadowFarPlane].
 inline constexpr float kShadowFarPlane = 50.0f;
-// Pulls the light-space near plane back along lightDir so casters behind the
-// fitted bounding sphere still write to the shadow map.
+// Pulls the light-space near plane back along lightDir so casters behind the fitted bounding sphere
+// still write to the shadow map.
+//
+// SH-06 RETIRED THIS AS THE POLICY. The cascade depth range is now fitted to the frame's actual
+// caster bounds (`fitCasterAwareCascadeDepth`), which is what a fixed distance could never do: too
+// small clips a caster (measured — the probe's shadow came out 14% short linearly, 26% by area),
+// too large spends depth precision on empty space, and no constant is right for an arbitrary scene.
+// It survives for exactly two uses: `fitLegacyCascadeDepth`, which is what the caster-aware policy
+// is measured against, and the fallback that policy takes when a frame contains a caster whose
+// bounds cannot bound it (cloth). Retire it fully when storage geometry carries a conservative
+// envelope.
 inline constexpr float kShadowDepthBackExtend = 20.0f;
 // Practical Split Scheme blend between linear and log-uniform cascade splits.
 // 0 = pure linear (cascades evenly spaced in view distance), 1 = pure log
 // (each cascade covers a constant ratio of the previous). 0.5 keeps close
 // cascades tight for near-camera detail while still covering kShadowFarPlane.
 inline constexpr float kShadowCascadeSplitLambda = 0.5f;
+// The forward shader cross-fades into cascade i+1 over the last fraction of cascade i's view-depth
+// range (`cascadeBlendFactor` in `shaders/shader.frag`), so receivers in that band sample BOTH
+// maps.
+//
+// SH-06 made that a fitting constraint rather than a shader detail: cascade i+1 is now fitted from
+// the start of the band, not from the hard split, or its tightly-fitted XY rectangle and depth
+// range would not cover receivers that legitimately sample it — the fit would be exactly as wrong
+// as the fixed extension was, in the other direction.
+//
+// THIS is the single authority. The value is uploaded in `LightUBO::cascadeParams.x` and the shader
+// reads it from there (`cascadeBlendFactor` in `shaders/shader.frag`), so changing it here changes
+// both the fitting and the blending together — there is no shader-side literal to keep in step.
+inline constexpr float kShadowCascadeBlendFraction = 0.1f;
 inline constexpr float kShadowMinBias = 0.0008f;
 inline constexpr float kShadowSlopeBias = 0.0035f;
 inline constexpr float kShadowFilterRadius = 0.0f;
@@ -155,6 +177,14 @@ inline constexpr float kPointShadowInfiniteRangeFallback = 100.0f;
 // 4 at 0.356%. Budget 2 becoming eligible once deformable error disappeared was a live possibility
 // worth checking, and it did not happen.
 //
+// Re-run 2026-08-03 after SH-06's caster-aware depth fit, which changes the shadow matrices (a
+// tighter depth range, and each cascade's slice expanded to cover the previous one's blend band):
+// budget 2 moved 0.243% -> 0.289% and budget 4 0.356% -> 0.374%, with 8 and 16 within a hundredth.
+// The 0.1% threshold still selects 1 by a wide margin. Measured on an IDLE machine — a run that
+// overlapped a Docker CI build reported a 0.12% noise floor where an idle one reports 0.0000%, and
+// eight identical-flag capture pairs differed by zero pixels, so contention (not the renderer)
+// produced that sample. Discard any sweep whose noise-floor line is not zero.
+//
 // Re-run 2026-08-01 after the glTF animated-light fix and reproduced to every printed digit. That
 // is the expected result rather than a lucky one: the budget half of the sweep runs on the STATIC
 // `ShadowLodDemo`, whose sun sits on a node with no animation and was therefore never dropped. The
@@ -173,6 +203,10 @@ inline constexpr float kShadowLodPixelBudget = 1.0f;
 //   ratio 1.0   0.50 transitions   0.00 REVERSALS
 //   ratio 0.75  0.16 transitions   0.00 REVERSALS
 //   ratio 0.5   0.16 transitions   0.00 REVERSALS
+//
+// Re-run again after SH-06's caster-aware depth fit (2026-08-03): 3, 1 and 1 raw events once more,
+// over 1323 / 1250 / 642 frames, so the per-100 rates read 0.23 / 0.08 / 0.16 — the rate moves with
+// the frame count, which is what "counting noise" means. Zero reversals at every ratio, unchanged.
 //
 // RE-MEASURED 2026-08-01, after the glTF loader stopped dropping lights on animated nodes. Until
 // then `ShadowLodMotionDemo`'s authored sun was silently replaced by the engine's fallback

@@ -145,6 +145,7 @@ void SceneGraph::applyPhysics(const PhysicsWorld& physics, float alpha)
 }
 
 CullStats SceneGraph::buildDrawCommands(const FrameInfo& frame, std::span<const Frustum> frustums,
+                                        const ShadowCasterBoundsFrame& casterBounds,
                                         std::vector<DrawCommand>& out)
 {
     // Cull only when the renderer supplied frustums; an empty span means culling is disabled, so
@@ -160,6 +161,7 @@ CullStats SceneGraph::buildDrawCommands(const FrameInfo& frame, std::span<const 
     }
 
     const SceneDrawContext ctx{frame,
+                               casterBounds,
                                culled,
                                &out,
                                &stats.vdpmFoldoversRepaired,
@@ -200,6 +202,15 @@ void SceneGraph::activeCamera(Node* cameraNode) noexcept
     assert((cameraNode == nullptr || cameraNode->componentAs<Camera>() != nullptr) &&
            "SceneGraph::activeCamera: node must carry a Camera component");
     activeCameraNode_ = cameraNode;
+}
+
+void SceneGraph::gatherShadowCasters(ShadowCasterBoundsFrame& out) const
+{
+    out.reset();
+    for (const auto& node : nodes_)
+    {
+        node->gatherShadowCasters(out);
+    }
 }
 
 void SceneGraph::gatherLights(std::vector<Lighting>& out) const

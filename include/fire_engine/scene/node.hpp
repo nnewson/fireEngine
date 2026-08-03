@@ -186,6 +186,35 @@ public:
         return composedWorld_;
     }
 
+    // The world matrix a node is placed at, given its parent's. `update`, `resolve` and the draw
+    // walk all call it, so none of them can express a different rule — they did: a world-override
+    // is authoritative in the transform walks, while the draw walk used to recompute
+    // `parentWorld * local` and ignore it. That put a ragdoll-driven caster's SH-06 bounds
+    // (measured from `composedWorld_`) at a different pose than its draw.
+    //
+    // For a node with no component matrix — every Mesh — this equals `composedWorld()` exactly.
+    // Animator nodes differ by design: the component applies its own matrix on the way to the
+    // children, so this returns the world BEFORE it.
+    [[nodiscard]] Mat4 drawWorld(const Mat4& parentWorld) const noexcept
+    {
+        return worldOverride_ ? *worldOverride_ : parentWorld * transform_.local();
+    }
+
+    // The world this node hands its CHILDREN, given the one its own component produced.
+    //
+    // The second half of the same rule, and the case `drawWorld` alone does not cover. `update` and
+    // `resolve` return early on a world-override, which means they deliberately skip the component
+    // matrix too — an overridden Animator's children inherit the override itself, NOT
+    // `override * animation`. The draw walk applies the component matrix on the way down, so
+    // without this it would hand children `override * animation` while their cached bounds were
+    // measured at `override`: a mesh under a ragdoll-driven animator drawn at a pose nothing else
+    // agrees with. Physics owns an overridden node's pose outright; an animation channel underneath
+    // it does not get a second say.
+    [[nodiscard]] Mat4 childWorld(const Mat4& drawWorld, const Mat4& componentWorld) const noexcept
+    {
+        return worldOverride_ ? drawWorld : componentWorld;
+    }
+
     // The node's composed world matrix from the previous update/resolve. Used
     // for motion vectors (TAA) and continuous-collision / constraint solving.
     // Equals composedWorld() on the first frame (zero motion).
@@ -203,6 +232,11 @@ public:
 
     void update(const InputState& input_state, const Mat4& parentComposedWorld);
     void resolve(const Mat4& parentComposedWorld);
+
+    // SH-06 prepass: append every shadow caster in this subtree, using the world transforms the
+    // last `update` produced. Read-only — it must not advance or alter anything the draw walk
+    // depends on, since it runs before it.
+    void gatherShadowCasters(ShadowCasterBoundsFrame& out) const;
     void render(const SceneDrawContext& ctx, const Mat4& parentWorld);
 
 private:
