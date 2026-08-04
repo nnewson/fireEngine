@@ -276,15 +276,35 @@ struct ShadowPushConstants
     // Normalized-depth gap required before a fragment counts as the second
     // surface behind the first light-facing surface.
     float selfShadowDepthEpsilon{kSkinnedSelfShadowDepthEpsilon};
-    float _pad0{0.0f};
+    // SH-05: index into the global bindless materials[] SSBO — the SAME authority the forward pass
+    // indexes, so the masked shadow path tests the cutoff, UV set and transform of the material the
+    // surface is actually shaded with. Occupies what was explicit padding, so every offset around
+    // it is unchanged. Read only by the masked fragment paths; the opaque ones ignore it.
+    alignas(4) std::uint32_t materialIndex{0};
     // Point shadow (matrixIndex >= kShadowPointMatrixBase): xyz = light
-    // world position, w = effective range. shadow.frag writes linear distance
+    // world position, w = effective range. shadow_depth.glsl writes linear distance
     // / range so the cube-array compare sampler agrees with the main shader.
     // Zero for cascade/spot shadow passes.
     alignas(16) float lightPosRange[4]{};
     // Used when matrixIndex < 0 for tightly-fit per-object self-shadow passes.
     alignas(16) Mat4 lightViewProj{Mat4::identity()};
 };
+
+// Pinned against shaders/shadow_push.glsl, the ONE place the shadow stages declare this block. Push
+// constants are a raw byte range with no driver-side reflection, so a member reordered or resized
+// here silently reinterprets the shader's fields — a shifted materialIndex would index a different
+// bindless material and mask a caster against somebody else's texture.
+static_assert(offsetof(ShadowPushConstants, matrixIndex) == 0);
+static_assert(offsetof(ShadowPushConstants, selfShadowSlot) == 4);
+static_assert(offsetof(ShadowPushConstants, selfShadowDepthEpsilon) == 8);
+static_assert(offsetof(ShadowPushConstants, materialIndex) == 12);
+static_assert(offsetof(ShadowPushConstants, lightPosRange) == 16);
+static_assert(offsetof(ShadowPushConstants, lightViewProj) == 32);
+static_assert(sizeof(ShadowPushConstants) == 96, "ShadowPushConstants push-constant layout");
+// offsetof is only defined for standard-layout types, and the whole struct is memcpy'd into the
+// command buffer by pushConstants — both properties are load-bearing, not incidental.
+static_assert(std::is_standard_layout_v<ShadowPushConstants>);
+static_assert(std::is_trivially_copyable_v<ShadowPushConstants>);
 
 struct ForwardPushConstants
 {

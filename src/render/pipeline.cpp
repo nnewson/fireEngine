@@ -17,11 +17,19 @@ Pipeline::Pipeline(const Device& device, const PipelineConfig& config)
       pipelineCache_(&device.pipelineCache())
 {
     createDescriptorSetLayout(config.bindings, config.pushDescriptorSet0);
-    if (!config.globalBindings.empty())
+    // Set 1 exists whenever the config declares globals, AND — empty — whenever a config wants the
+    // bindless set without them. Descriptor sets must be contiguous, so without the empty layout a
+    // bindless-only pipeline (the SH-05 shadow pipelines) would receive bindless at set 1 while the
+    // forward pipelines have it at set 2. Then "which set is bindless?" would be a per-pass fact:
+    // shaders/material.glsl hard-codes `set = 2`, and every recorder would need to bind the right
+    // index for the pipeline in hand. One empty set layout buys the invariant that BINDLESS IS
+    // ALWAYS SET 2, in every pipeline that opts in, and an empty set needs nothing bound to it
+    // because nothing in the pipeline accesses it.
+    if (!config.globalBindings.empty() || config.bindlessSet)
     {
         vk::DescriptorSetLayoutCreateInfo ci{
             .bindingCount = static_cast<uint32_t>(config.globalBindings.size()),
-            .pBindings = config.globalBindings.data(),
+            .pBindings = config.globalBindings.empty() ? nullptr : config.globalBindings.data(),
         };
         globalDescSetLayout_ = vk::raii::DescriptorSetLayout(*device_, ci);
     }
@@ -294,11 +302,28 @@ PipelineConfig Pipeline::shadowConfig()
     config.depthFormat = vk::Format::eD32Sfloat;
     config.depthWrite = true;
     config.depthCompare = vk::CompareOp::eLessOrEqual;
-    config.cullMode = vk::CullModeFlagBits::eFront;
+    // SH-05: cull mode is dynamic, so the pipeline carries no static answer at all — a caster's
+    // sidedness (single-sided casters cull front faces, double-sided cull nothing) and a
+    // self-shadow layer's face policy are both set at record time. Leaving a static value here
+    // would be a second, ignored source for the same decision.
+    config.dynamicCullMode = true;
     config.writeColour = true;
     config.depthBiasEnable = true;
     config.depthBiasConstant = 0.0f;
     config.depthBiasSlope = 0.0f;
+    // SH-05: the masked fragment paths read the bindless material authority (set 2) — the same
+    // materials[] SSBO and texture array the forward shader indexes, reached through
+    // ShadowPushConstants::materialIndex. Declared on the SHARED base config, not just the masked
+    // variants, so every shadow pipeline has one identical layout: the pass can then bind the
+    // bindless set once and swap fragment paths per draw without a layout-compatibility question.
+    config.bindlessSet = true;
+    return config;
+}
+
+PipelineConfig Pipeline::shadowMaskedConfig()
+{
+    PipelineConfig config = shadowConfig();
+    config.fragShaderPath = "shadow_masked.frag.spv";
     return config;
 }
 
@@ -306,19 +331,18 @@ PipelineConfig Pipeline::selfShadowSecondConfig()
 {
     PipelineConfig config = shadowConfig();
     config.fragShaderPath = "self_shadow_second.frag.spv";
-    // Cull front faces so only back faces rasterise. Back faces are always
-    // behind the first-pass front-face depth by definition, so the per-fragment
-    // `currentDepth <= firstDepth + ε` discard inside the shader stops being a
-    // coin-flip on marginal fragments. The discard test remains as a safety
-    // net but should never fire on properly-oriented back faces.
-    config.cullMode = vk::CullModeFlagBits::eFront;
+    // The cull policy this pass needs — front faces culled, so only back faces rasterise — is set
+    // dynamically by the recorder (SH-05), because back faces are always behind the first-pass
+    // front-face depth by definition, which is what stops the per-fragment
+    // `currentDepth <= firstDepth + ε` discard from being a coin-flip on marginal fragments. The
+    // discard test remains as a safety net but should never fire on properly-oriented back faces.
     return config;
 }
 
-PipelineConfig Pipeline::selfShadowFirstConfig()
+PipelineConfig Pipeline::selfShadowSecondMaskedConfig()
 {
-    PipelineConfig config = shadowConfig();
-    config.cullMode = vk::CullModeFlagBits::eNone;
+    PipelineConfig config = selfShadowSecondConfig();
+    config.fragShaderPath = "self_shadow_second_masked.frag.spv";
     return config;
 }
 
@@ -739,12 +763,12 @@ Pipeline::createShaderStages(const PipelineConfig& config, vk::raii::ShaderModul
 
 void Pipeline::createPipelineLayout(const PipelineConfig& config)
 {
-    // setLayouts[0] = per-object set 0, always present. setLayouts[1] = forward
-    // globals set 1, only when the config declared globalBindings (forward
-    // pipelines opt in; skybox / post-process / shadow / IBL precompute don't).
-    // setLayouts[2] = bindless materials set 2, only when the config opted in
-    // (forward pipelines). Sets must be contiguous: a forward pipeline always has
-    // set 1 too, so the order is set0, set1, set2.
+    // setLayouts[0] = per-object set 0, always present. setLayouts[1] = forward globals set 1,
+    // present when the config declared globalBindings (forward pipelines) or — empty — when it
+    // wants bindless without globals (the shadow pipelines; see the constructor). setLayouts[2] =
+    // bindless materials set 2, when the config opted in. Sets must be contiguous, and the empty
+    // set-1 layout is what keeps bindless at index 2 for every pipeline rather than at whatever
+    // index its own set list happens to reach.
     std::array<vk::DescriptorSetLayout, 3> setLayouts{};
     uint32_t setCount = 1;
     setLayouts[0] = *descSetLayout_;

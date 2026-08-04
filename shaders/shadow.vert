@@ -8,14 +8,7 @@ layout(binding = 0) uniform ShadowUBO {
     int hasSkin;
 } shadow;
 
-layout(push_constant) uniform ShadowPushConstants {
-    int matrixIndex;
-    int selfShadowSlot;
-    float selfShadowDepthEpsilon;
-    float _pad0;
-    vec4 lightPosRange;
-    mat4 lightViewProj;
-} pc;
+#include "shadow_push.glsl"
 
 layout(binding = 1) uniform SkinUBO {
     mat4 joints[64];
@@ -40,10 +33,20 @@ layout(location = 3) in vec2 inTexCoord;
 layout(location = 4) in uvec4 inJoints;
 layout(location = 5) in vec4 inWeights;
 layout(location = 6) in vec4 inTangent;
+// Second UV set (SH-05). glTF lets a material's base-colour texture read TEXCOORD_0 or TEXCOORD_1,
+// so the masked fragment path needs both and the material picks — the loader copies set 0 into set 1
+// when a mesh authors only one, so this attribute is always meaningful.
+layout(location = 8) in vec2 inTexCoord1;
 
 // Forwarded to the fragment stage so the point-shadow branch can write a
 // linear distance/range depth value via gl_FragDepth.
 layout(location = 0) out vec3 worldPos;
+// SH-05: the caster's UVs, for the masked fragment path's cutout test. Emitted unconditionally
+// rather than from a second shadow vertex shader — the skinning and morph maths below is the thing
+// that must not be duplicated, and shadow.frag simply ignores these. Skinning and morphing move
+// positions, never UVs, so no deformation applies here.
+layout(location = 1) out vec2 uv0;
+layout(location = 2) out vec2 uv1;
 
 void main() {
     vec3 pos = inPos;
@@ -70,6 +73,8 @@ void main() {
 
     vec4 wp = transform * vec4(pos, 1.0);
     worldPos = wp.xyz;
+    uv0 = inTexCoord;
+    uv1 = inTexCoord1;
     mat4 lightMatrix = pc.matrixIndex < 0 ? pc.lightViewProj : shadow.lightViewProj[pc.matrixIndex];
     gl_Position = lightMatrix * wp;
 }

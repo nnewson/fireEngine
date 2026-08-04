@@ -63,7 +63,11 @@ ShadowGeometryRequest request(const std::vector<GeometryLod>& lods, ShadowCaster
         // Deformable (the safe answer), so stating it here is what keeps
         // every selection case below testing SELECTION rather than SH-04's
         // fallback. A deformable request is built by deformableRequest().
-        .deformation = ShadowCasterDeformation::Rigid};
+        .deformation = ShadowCasterDeformation::Rigid,
+        // Explicit for the same reason (SH-05): `alpha` defaults to Masked, which pins a caster to
+        // full detail, so a fixture that left it out would test the cutout fallback everywhere
+        // instead of selection. A masked request is built by maskedRequest().
+        .alpha = ShadowCasterAlpha::Opaque};
 }
 
 // A set with every cascade populated (and world-only enabled), one spot and one point light, so a
@@ -922,4 +926,143 @@ TEST_CASE("ShadowLodResolver.ARequestThatOmitsDeformationDoesNotSelect", "[Shado
         resolveShadowDraw(req, view(views, ShadowViewGroup::Cascade, 0).projection(), someBounds(),
                           kBudget, kNoHysteresis, kNoPreviousShadowLod);
     CHECK(resolved.reason == ShadowLodReason::DeformableFallback);
+}
+
+// ---------------------------------------------------------------------------
+// SH-05: an alpha-masked caster's shadow LOD begins at level 0.
+//
+// The defect being closed is upstream of the selector: a cutout's silhouette is decided by
+// base-colour alpha sampled through the level's UVs, and NO channel the simplifier records measures
+// that. A collapse can hold the surface inside the shadow budget while moving the cutout boundary
+// anywhere, so a coarser level's shadow is unbounded in exactly the dimension that defines the
+// shape. Until a silhouette-error policy exists (SH-05 leaves it as future work), a masked caster
+// draws its whole mesh and the panel says why.
+// ---------------------------------------------------------------------------
+
+namespace
+{
+
+ShadowGeometryRequest maskedRequest(const std::vector<GeometryLod>& lods, ShadowCasterId caster)
+{
+    ShadowGeometryRequest req = request(lods, caster);
+    req.alpha = ShadowCasterAlpha::Masked;
+    return req;
+}
+
+} // namespace
+
+TEST_CASE("ShadowLodResolver.AnAlphaMaskedCasterCannotSelectBelowFullDetail", "[ShadowLodResolver]")
+{
+    const auto lods = chain();
+    ShadowRenderViewSet views = populatedViews();
+
+    // The control, as in the deformable case: at this texel size the SAME chain in the SAME view
+    // selects a coarser level for an opaque caster, so "level 0" is evidence rather than a
+    // coincidence of the fixture.
+    const ResolvedShadowDraw opaque =
+        resolveShadowDraw(request(lods, static_cast<ShadowCasterId>(31)),
+                          view(views, ShadowViewGroup::Cascade, 0).projection(), someBounds(),
+                          kBudget, kNoHysteresis, kNoPreviousShadowLod);
+    REQUIRE(opaque.reason == ShadowLodReason::Selected);
+    REQUIRE(opaque.level > 0);
+
+    const ResolvedShadowDraw masked =
+        resolveShadowDraw(maskedRequest(lods, static_cast<ShadowCasterId>(32)),
+                          view(views, ShadowViewGroup::Cascade, 0).projection(), someBounds(),
+                          kBudget, kNoHysteresis, kNoPreviousShadowLod);
+    CHECK(masked.reason == ShadowLodReason::AlphaMaskedFallback);
+    CHECK(masked.level == 0);
+    // The WHOLE mesh, not lods[0] — same reasoning as the deformable fallback: a chain whose level
+    // 0 is itself simplified must not smuggle a reduced mesh in through a fallback.
+    CHECK(masked.indexBuffer == buffer(10));
+    CHECK(masked.indexCount == 900);
+    // Infinity, not zero: the silhouette error is unbounded, not measured-as-zero, and 0 would rank
+    // a cutout as the most accurate caster in the frame.
+    CHECK(std::isinf(masked.projectedTexels));
+}
+
+TEST_CASE("ShadowLodResolver.MaskingRanksBelowDeformationAndAboveTheChain", "[ShadowLodResolver]")
+{
+    const auto lods = chain();
+    ShadowRenderViewSet views = populatedViews();
+    const ShadowView projection = view(views, ShadowViewGroup::Cascade, 0).projection();
+
+    SECTION("a caster that both deforms and masks reports the deformation")
+    {
+        // Both produce the same whole-mesh draw, so only the REASON distinguishes them, and the
+        // panel must name the stronger statement: a mesh that moves after measurement has no valid
+        // error model at all, while a masked one has a valid surface error and an unmeasured
+        // silhouette.
+        ShadowGeometryRequest req = maskedRequest(lods, static_cast<ShadowCasterId>(33));
+        req.deformation = ShadowCasterDeformation::Deformable;
+        const ResolvedShadowDraw resolved = resolveShadowDraw(
+            req, projection, someBounds(), kBudget, kNoHysteresis, kNoPreviousShadowLod);
+        CHECK(resolved.reason == ShadowLodReason::DeformableFallback);
+        CHECK(resolved.level == 0);
+    }
+
+    SECTION("the user's toggle is still the operative fact when shadow LOD is off")
+    {
+        ShadowGeometryRequest req = maskedRequest(lods, static_cast<ShadowCasterId>(34));
+        req.lodEnabled = false;
+        const ResolvedShadowDraw resolved = resolveShadowDraw(
+            req, projection, someBounds(), kBudget, kNoHysteresis, kNoPreviousShadowLod);
+        CHECK(resolved.reason == ShadowLodReason::LodDisabled);
+    }
+
+    SECTION("a single-level masked caster still reports why it may not select")
+    {
+        // Same argument SH-04 made for cloth: the level proves nothing here (there is only one), so
+        // the reason is the whole point — SingleLevel would read as "safe because there was nothing
+        // to choose", and that accident stops being true the day a cutout mesh grows a chain.
+        const std::vector<GeometryLod> single{
+            GeometryLod{.indexBuffer = buffer(10), .indexCount = 900, .shadowDeviation = 0.0f}};
+        const ResolvedShadowDraw resolved =
+            resolveShadowDraw(maskedRequest(single, static_cast<ShadowCasterId>(35)), projection,
+                              someBounds(), kBudget, kNoHysteresis, kNoPreviousShadowLod);
+        CHECK(resolved.reason == ShadowLodReason::AlphaMaskedFallback);
+    }
+}
+
+TEST_CASE("ShadowLodResolver.AnAlphaMaskedCasterLeavesNoHysteresisHistory", "[ShadowLodResolver]")
+{
+    const auto lods = chain();
+    ShadowRenderViewSet views = populatedViews();
+    ShadowLodResolver resolver;
+
+    resolver.beginFrame();
+    (void)resolver.resolve(maskedRequest(lods, static_cast<ShadowCasterId>(36)),
+                           view(views, ShadowViewGroup::Cascade, 0), someBounds(), kBudget,
+                           kNoHysteresis);
+    resolver.commitFrame();
+
+    // In the frame cache (a consumer must still be able to ask what this caster drew), never in the
+    // history: a dead band derived from a forced fallback would be a dead band around nothing.
+    CHECK(resolver.frameCacheSize() == 1);
+    CHECK(resolver.historySize() == 0);
+    CHECK(resolver.lastCommitMovement().firstSeen == 0);
+    CHECK(resolver.lastCommitMovement().transitions == 0);
+}
+
+TEST_CASE("ShadowLodResolver.ARequestThatOmitsTheAlphaModeDoesNotSelect", "[ShadowLodResolver]")
+{
+    // The default is the safe answer, like `deformation`'s. A producer that forgets this field pays
+    // triangles and a texture fetch and says so in the panel; the opposite default would silently
+    // restore the bug SH-05 exists to fix — a cutout casting its quad.
+    const auto lods = chain();
+    ShadowRenderViewSet views = populatedViews();
+
+    ShadowGeometryRequest req{};
+    req.lods = lods;
+    req.baseIndexBuffer = buffer(10);
+    req.baseIndexCount = 900;
+    req.worldScale = 1.0f;
+    req.casterId = static_cast<ShadowCasterId>(37);
+    // Deformation stated, so this case isolates the ALPHA default rather than tripping SH-04's.
+    req.deformation = ShadowCasterDeformation::Rigid;
+
+    const ResolvedShadowDraw resolved =
+        resolveShadowDraw(req, view(views, ShadowViewGroup::Cascade, 0).projection(), someBounds(),
+                          kBudget, kNoHysteresis, kNoPreviousShadowLod);
+    CHECK(resolved.reason == ShadowLodReason::AlphaMaskedFallback);
 }

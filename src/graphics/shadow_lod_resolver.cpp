@@ -61,6 +61,25 @@ ResolvedShadowDraw resolveShadowDraw(const ShadowGeometryRequest& request,
         return wholeMesh(request, ShadowLodReason::DeformableFallback,
                          std::numeric_limits<float>::infinity());
     }
+    if (request.alpha == ShadowCasterAlpha::Masked)
+    {
+        // SH-05. A cutout's silhouette is decided by base-colour alpha sampled through the level's
+        // UVs, and no channel the simplifier records measures that: a collapse can hold the surface
+        // inside the budget while moving the cutout boundary anywhere. So the shadow LOD for a
+        // masked caster BEGINS at level 0, and says so — infinity for the same reason a deformable
+        // caster reports it, not 0: the error is unbounded, not measured-as-zero, and a masked
+        // caster ranked as the frame's most accurate would invert exactly what is known about it.
+        //
+        // Ordered AFTER DeformableFallback and before the chain length: a caster that is both
+        // deformable and masked gets one whole-mesh answer either way, and reporting the
+        // deformation keeps the precedence "most-specific missing evidence first" that SH-04
+        // established (a mesh that moves after measurement has no valid error model at all, which
+        // is the stronger statement). Before SingleLevel for the reason SH-04 gave: a masked caster
+        // with one level must report why it may not select, so its safety cannot come from the
+        // accident of the chain's length.
+        return wholeMesh(request, ShadowLodReason::AlphaMaskedFallback,
+                         std::numeric_limits<float>::infinity());
+    }
     if (request.lods.size() <= 1)
     {
         return wholeMesh(request, ShadowLodReason::SingleLevel);

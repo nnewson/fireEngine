@@ -3,10 +3,6 @@
 // attached) need this — we use it for the shadow map array which is bound
 // as a sampledImage so all shadow maps can share one comparison sampler.
 #extension GL_EXT_samplerless_texture_functions : require
-// Bindless material textures: a runtime-sized global combined-image-sampler array
-// (forward set 2) indexed per-slot by the material's textureIndex[]. The index is
-// dynamically uniform (one material per draw), so plain indexing is sufficient.
-#extension GL_EXT_nonuniform_qualifier : require
 
 // Per-object data (set 0, pushed per draw) — must match ObjectUBO in shader.vert / render/ubo.hpp.
 layout(binding = 0) uniform ObjectUBO {
@@ -27,65 +23,9 @@ layout(binding = 29) uniform CameraUBO {
     mat4 previousViewProj;
 } camera;
 
-// KHR_texture_transform packed per material texture slot. `offsetScale.xy` is
-// the UV offset; `offsetScale.zw` is the UV scale (identity = 0,0,1,1).
-// `rotation` is radians CCW. Matches std140 stride of the matching C++ struct
-// in render/ubo.hpp (16-byte vec4 + float, padded to 32 bytes).
-struct UvXform {
-    vec4 offsetScale;
-    float rotation;
-};
-
-// Material texture slots, ordered to match MaterialTextureSlot in
-// render/descriptor_bindings.hpp. uv[SLOT_*] indexes the UV-xform array.
-const int SLOT_BASE_COLOUR = 0;
-const int SLOT_EMISSIVE = 1;
-const int SLOT_NORMAL = 2;
-const int SLOT_METALLIC_ROUGHNESS = 3;
-const int SLOT_OCCLUSION = 4;
-const int SLOT_TRANSMISSION = 5;
-const int SLOT_CLEARCOAT = 6;
-const int SLOT_CLEARCOAT_ROUGHNESS = 7;
-const int SLOT_CLEARCOAT_NORMAL = 8;
-const int SLOT_THICKNESS = 9;
-
-struct MaterialData {
-    vec4 diffuseAlpha;
-    vec4 emissiveRoughness;
-    vec4 materialParams;
-    ivec4 textureFlags;
-    // .x = occlusion-texture present, .y = occlusion's UV-set index.
-    ivec4 extraFlags;
-    // x=baseColor, y=emissive, z=normal, w=metallicRoughness UV-set index.
-    ivec4 texCoordIndices;
-    // KHR_materials_transmission + KHR_materials_ior. .x = transmissionFactor,
-    // .y = texture-present flag, .z = transmission texCoord index, .w = ior.
-    vec4 transmissionParams;
-    // KHR_materials_clearcoat. .x = factor, .y = roughness, .z = normalScale.
-    vec4 clearcoatParams;
-    // .x = factor texture present, .y = roughness texture present,
-    // .z = normal texture present (all 0 / 1 floats).
-    vec4 clearcoatFlags;
-    // .x = factor texCoord, .y = roughness texCoord, .z = normal texCoord
-    // (encoded as floats).
-    vec4 clearcoatTexCoords;
-    // KHR_materials_volume.
-    //   .x = thicknessFactor (world units, scaled by node max scale)
-    //   .y = thickness texture present (0 / 1)
-    //   .z = thickness texCoord index (0 / 1)
-    //   .w = reserved (thickness rotation lives in uv[SLOT_THICKNESS].rotation).
-    vec4 volumeParams;
-    // .rgb = attenuationColor, .a = attenuationDistance (huge finite when
-    // the spec says +infinity — see Object::toMaterialUBO).
-    vec4 attenuation;
-    UvXform uv[10];
-    // Bindless index into the global `textures[]` array per material texture slot
-    // (packed as 3 ivec4s; matTex(SLOT_*) unpacks). Valid only where the slot's
-    // present-flag is set. Matches MaterialUBO::textureIndex in render/ubo.hpp.
-    ivec4 textureIndex[3];
-};
-
-// Declared before the materials SSBO / matTex below, which reference pc.materialIndex.
+// The material authority this draw reads lives in material.glsl (bindless set 2), which indexes
+// materials[] through `pc.materialIndex` — so the push block is declared FIRST and the include
+// follows it.
 layout(push_constant) uniform ForwardPushConstants {
     int selfShadowSlot;
     uint materialIndex; // index into the global materials[] SSBO for this draw
@@ -95,6 +35,8 @@ layout(push_constant) uniform ForwardPushConstants {
     uint shadowLodLevel;
 } pc;
 
+#include "material.glsl"
+
 // Shared palette for the two LOD debug views, so a level always means the same colour in both.
 vec3 lodTint(uint level) {
     vec3 tints[4] = vec3[4](vec3(0.2, 0.9, 0.2),   // LOD0 green
@@ -103,21 +45,6 @@ vec3 lodTint(uint level) {
                             vec3(0.9, 0.2, 0.9));  // LOD3+ magenta
     return tints[min(level, 3u)];
 }
-
-// Global materials SSBO (forward set 2, binding 1), indexed per-draw by the push
-// constant. `material` aliases this draw's entry so the existing material.* reads
-// are unchanged. std430 layout matches the std140 C++ MaterialUBO here because
-// every member is 16-byte aligned (vec4 / ivec4 / UvXform / ivec4[]).
-layout(std430, set = 2, binding = 1) readonly buffer Materials {
-    MaterialData materials[];
-};
-#define material materials[pc.materialIndex]
-
-// Bindless material texture array (forward set 2). Indexed by matTex(slot).
-layout(set = 2, binding = 0) uniform sampler2D textures[];
-
-// Unpack the per-slot bindless texture index from the packed ivec4[3].
-int matTex(int slot) { return material.textureIndex[slot >> 2][slot & 3]; }
 
 // KHR_materials_transmission F3 — captured post-opaque scene colour with mip
 // chain. Transmissive draws sample this at a screen-space UV displaced by
@@ -166,23 +93,6 @@ layout(location = 0) out vec4 outColor;
 // frame, used by the resolve to reproject history. Written before any early
 // return so every shaded fragment produces a defined velocity.
 layout(location = 1) out vec2 outVelocity;
-
-vec2 pickUv(int index)
-{
-    return index == 0 ? fragTexCoord : fragTexCoord1;
-}
-
-// KHR_texture_transform: scale → rotate → translate (CCW around origin).
-// offsetScale.xy = offset, offsetScale.zw = scale.
-vec2 applyUvTransform(vec2 uv, vec4 offsetScale, float rotation)
-{
-    vec2 scaled = uv * offsetScale.zw;
-    float c = cos(rotation);
-    float s = sin(rotation);
-    vec2 rotated = vec2(c * scaled.x - s * scaled.y,
-                        s * scaled.x + c * scaled.y);
-    return rotated + offsetScale.xy;
-}
 
 const float PI = 3.14159265359;
 
@@ -384,9 +294,8 @@ void main() {
 
     vec3 N;
     if (material.textureFlags.z == 1) {
-        vec2 uvNormal = applyUvTransform(pickUv(material.texCoordIndices.z),
-                                         material.uv[SLOT_NORMAL].offsetScale,
-                                         material.uv[SLOT_NORMAL].rotation);
+        vec2 uvNormal = materialSlotUv(SLOT_NORMAL, material.texCoordIndices.z,
+                                       fragTexCoord, fragTexCoord1);
         vec3 mapNormal = texture(textures[matTex(SLOT_NORMAL)], uvNormal).rgb * 2.0 - 1.0;
         mapNormal.xy *= material.materialParams.y;
         N = normalize(fragTBN * mapNormal);
@@ -421,22 +330,14 @@ void main() {
     // ~0.04 reflectance when the extension is absent.
     float ior = max(material.transmissionParams.w, 1e-4);
 
-    // Sample base colour texture once
-    vec4 texColor = vec4(1.0);
-    if (material.textureFlags.x == 1) {
-        vec2 uvBase = applyUvTransform(pickUv(material.texCoordIndices.x),
-                                       material.uv[SLOT_BASE_COLOUR].offsetScale,
-                                       material.uv[SLOT_BASE_COLOUR].rotation);
-        texColor = texture(textures[matTex(SLOT_BASE_COLOUR)], uvBase);
-    }
+    // Sample base colour texture once (opaque white when the material carries none).
+    vec4 texColor = materialBaseColourTexel(fragTexCoord, fragTexCoord1);
     vec3 baseColor = material.diffuseAlpha.rgb * fragColor * texColor.rgb;
 
-    // Alpha
-    float alpha = material.diffuseAlpha.a;
-    if (material.textureFlags.x == 1) {
-        alpha *= texColor.a;
-    }
-    if (alpha < material.materialParams.z) discard;
+    // Alpha, and the MASK cutout — both from material.glsl, the single implementation the shadow
+    // pass' masked path uses too (a cutout must not cast a silhouette its own surface lacks).
+    float alpha = materialAlpha(texColor);
+    if (materialAlphaCutoutFails(alpha)) discard;
 
     if (light.environmentParams.z > 0.5 && light.environmentParams.z < 1.5) {
         outColor = vec4(N * 0.5 + 0.5, alpha);
@@ -454,9 +355,8 @@ void main() {
     float roughness = material.emissiveRoughness.a;
     float metallic = material.materialParams.x;
     if (material.textureFlags.w == 1) {
-        vec2 uvMr = applyUvTransform(pickUv(material.texCoordIndices.w),
-                                     material.uv[SLOT_METALLIC_ROUGHNESS].offsetScale,
-                                     material.uv[SLOT_METALLIC_ROUGHNESS].rotation);
+        vec2 uvMr = materialSlotUv(SLOT_METALLIC_ROUGHNESS, material.texCoordIndices.w,
+                                   fragTexCoord, fragTexCoord1);
         vec4 mrSample = texture(textures[matTex(SLOT_METALLIC_ROUGHNESS)], uvMr);
         roughness *= mrSample.g;
         metallic *= mrSample.b;
@@ -474,15 +374,13 @@ void main() {
     float ccRough = material.clearcoatParams.y;
     float ccNormalScale = material.clearcoatParams.z;
     if (material.clearcoatFlags.x > 0.5) {
-        vec2 ccUv = applyUvTransform(pickUv(int(material.clearcoatTexCoords.x)),
-                                     material.uv[SLOT_CLEARCOAT].offsetScale,
-                                     material.uv[SLOT_CLEARCOAT].rotation);
+        vec2 ccUv = materialSlotUv(SLOT_CLEARCOAT, int(material.clearcoatTexCoords.x),
+                                   fragTexCoord, fragTexCoord1);
         clearcoat *= texture(textures[matTex(SLOT_CLEARCOAT)], ccUv).r;
     }
     if (material.clearcoatFlags.y > 0.5) {
-        vec2 ccRuv = applyUvTransform(pickUv(int(material.clearcoatTexCoords.y)),
-                                      material.uv[SLOT_CLEARCOAT_ROUGHNESS].offsetScale,
-                                      material.uv[SLOT_CLEARCOAT_ROUGHNESS].rotation);
+        vec2 ccRuv = materialSlotUv(SLOT_CLEARCOAT_ROUGHNESS, int(material.clearcoatTexCoords.y),
+                                    fragTexCoord, fragTexCoord1);
         ccRough *= texture(textures[matTex(SLOT_CLEARCOAT_ROUGHNESS)], ccRuv).g;
     }
     ccRough = clamp(ccRough, 0.04, 1.0);
@@ -490,9 +388,8 @@ void main() {
 
     vec3 N_cc = N;
     if (material.clearcoatFlags.z > 0.5) {
-        vec2 ccNuv = applyUvTransform(pickUv(int(material.clearcoatTexCoords.z)),
-                                      material.uv[SLOT_CLEARCOAT_NORMAL].offsetScale,
-                                      material.uv[SLOT_CLEARCOAT_NORMAL].rotation);
+        vec2 ccNuv = materialSlotUv(SLOT_CLEARCOAT_NORMAL, int(material.clearcoatTexCoords.z),
+                                    fragTexCoord, fragTexCoord1);
         vec3 cnSamp = texture(textures[matTex(SLOT_CLEARCOAT_NORMAL)], ccNuv).rgb * 2.0 - 1.0;
         cnSamp.xy *= ccNormalScale;
         N_cc = normalize(fragTBN * cnSamp);
@@ -705,9 +602,8 @@ void main() {
         // glTF spec: occluded = lerp(colour, colour * sampled, strength).
         // Equivalent to ao = mix(1.0, sampled, strength) when applied as a
         // multiplier downstream.
-        vec2 uvOcc = applyUvTransform(pickUv(material.extraFlags.y),
-                                      material.uv[SLOT_OCCLUSION].offsetScale,
-                                      material.uv[SLOT_OCCLUSION].rotation);
+        vec2 uvOcc = materialSlotUv(SLOT_OCCLUSION, material.extraFlags.y,
+                                    fragTexCoord, fragTexCoord1);
         float sampled = texture(textures[matTex(SLOT_OCCLUSION)], uvOcc).r;
         ao = mix(1.0, sampled, material.materialParams.w);
     }
@@ -750,9 +646,8 @@ void main() {
     // Emissive
     vec3 emissiveTerm = material.emissiveRoughness.rgb;
     if (material.textureFlags.y == 1) {
-        vec2 uvEm = applyUvTransform(pickUv(material.texCoordIndices.y),
-                                     material.uv[SLOT_EMISSIVE].offsetScale,
-                                     material.uv[SLOT_EMISSIVE].rotation);
+        vec2 uvEm = materialSlotUv(SLOT_EMISSIVE, material.texCoordIndices.y,
+                                   fragTexCoord, fragTexCoord1);
         emissiveTerm *= texture(textures[matTex(SLOT_EMISSIVE)], uvEm).rgb;
     }
 
@@ -763,9 +658,8 @@ void main() {
     // refraction (F3) would copy the HDR target into a sceneColor mip chain.
     float transmission = material.transmissionParams.x;
     if (material.transmissionParams.y > 0.5) {
-        vec2 uvTrans = applyUvTransform(pickUv(int(material.transmissionParams.z)),
-                                        material.uv[SLOT_TRANSMISSION].offsetScale,
-                                        material.uv[SLOT_TRANSMISSION].rotation);
+        vec2 uvTrans = materialSlotUv(SLOT_TRANSMISSION, int(material.transmissionParams.z),
+                                      fragTexCoord, fragTexCoord1);
         transmission *= texture(textures[matTex(SLOT_TRANSMISSION)], uvTrans).r;
     }
 
@@ -780,9 +674,8 @@ void main() {
         // collapses to identity. F3 thin-surface fallback is preserved.
         float thickness = material.volumeParams.x;
         if (material.volumeParams.y > 0.5) {
-            vec2 uvThick = applyUvTransform(pickUv(int(material.volumeParams.z)),
-                                            material.uv[SLOT_THICKNESS].offsetScale,
-                                            material.uv[SLOT_THICKNESS].rotation);
+            vec2 uvThick = materialSlotUv(SLOT_THICKNESS, int(material.volumeParams.z),
+                                          fragTexCoord, fragTexCoord1);
             thickness *= texture(textures[matTex(SLOT_THICKNESS)], uvThick).g;
         }
         vec3 modelScale = vec3(length(ubo.model[0].xyz),

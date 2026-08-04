@@ -102,6 +102,15 @@ struct DrawCommand
     // SH-03: the shadow caster, described but NOT resolved. Present only on a shadow command; a
     // forward command leaves it default (and therefore invalid). Each shadow view turns this into
     // its own draw — see ShadowLodResolver.
+    // SH-05 note: the caster's ALPHA classification is a field of this request
+    // (`ShadowGeometryRequest::alpha`) and lives nowhere else on the command. Both consumers read
+    // it there — the resolver, to pin a cutout to full detail, and the shadow pass, to pick the
+    // fragment path that rasterises it. A second copy on the command would be two mutable sources
+    // for one fact: nothing downstream could enforce their equality, and a divergence would pin a
+    // caster as masked while rasterising it opaque (or the reverse) with no symptom but a wrong
+    // silhouette. The SIDEDNESS half of the shadow material mode is `doubleSided` above, which the
+    // shadow pass now honours too, so the four modes the plan names are (request.alpha,
+    // doubleSided) and the sidedness needs no pipeline permutation — dynamic cull state carries it.
     ShadowGeometryRequest shadowRequest{};
     // WHICH caster this draw's mesh is, carried on the FORWARD command too (SH-03 slice 5).
     //

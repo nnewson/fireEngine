@@ -495,8 +495,12 @@ The render layer is where most difficult bugs live.
 - `Pipeline`: descriptor layouts, pipeline layouts, and graphics pipelines. Forward
   pipelines declare `PipelineConfig::bindings` (set 0, per-object), `globalBindings`
   (set 1, forward globals), and `bindlessSet` (set 2, the bindless texture array +
-  materials SSBO with update-after-bind binding flags); non-forward pipelines leave
-  globals/bindless off and use a single-set layout. Fullscreen / fragment-only config factories
+  materials SSBO with update-after-bind binding flags). The SHADOW pipelines opt into bindless too
+  (SH-05's masked fragment paths read the same materials SSBO + texture array), and because
+  descriptor sets must be contiguous, a config that wants bindless without globals gets an EMPTY
+  set-1 layout — that is what keeps bindless at set 2 in every pipeline rather than at whatever index
+  each one's set list happens to reach, so `shaders/material.glsl` can hard-code it. Skybox /
+  post-process / IBL-precompute leave both off and use a single-set layout. Fullscreen / fragment-only config factories
   share small helpers in `pipeline.cpp`; preserve their returned state and update
   `tests/render/test_pipeline_config.cpp` when intentionally changing it.
 - `Descriptors`: descriptor layout/write helpers. Neither the forward nor the shadow set 0
@@ -839,10 +843,13 @@ First decide which descriptor set the binding belongs on:
 - **Set 2 (bindless materials)** — material textures + scalars. Textures go in the global
   `sampler2D[]` array (`Resources::registerBindlessTexture`), material records in the
   materials[] SSBO (`Resources::registerMaterial`); the draw selects its material via
-  `ForwardPushConstants::materialIndex`. Lives in `BindlessBinding`; the shader reads
-  `materials[pc.materialIndex]` and samples `textures[material.textureIndex[slot]]`. A new
-  material *field* means updating `MaterialUBO`/`MaterialData` (C++ + shader) in lockstep;
-  no descriptor-binding change.
+  `ForwardPushConstants::materialIndex` — or, in the shadow pass' masked paths,
+  `ShadowPushConstants::materialIndex`. Lives in `BindlessBinding`; the SHARED declaration is
+  [`shaders/material.glsl`](../shaders/material.glsl) (`set = 2` in every pipeline — see the
+  empty-set-1 invariant below), which the shader includes after its own push block, then reads
+  `materials[pc.materialIndex]` and samples `textures[matTex(SLOT_*)]`. A new
+  material *field* means updating `MaterialUBO` (C++) and `MaterialData` (`material.glsl`) in
+  lockstep; no descriptor-binding change.
 
 Then update material storage and glTF loading if applicable, plus the relevant test in
 `tests/render/test_pipeline_config.cpp`. If the new binding references a texture that gets
@@ -909,6 +916,43 @@ the same change — most have a test or guard that will catch you, but not all.
   `LodDisabled`, which is a user's toggle, and the panel would then explain a safety fallback with
   somebody else's reason. There is deliberately **no shadow-proxy setter** — see `Object`'s header
   for what a validated one must enforce before it comes back.
+- **A shadow caster's ALPHA classification is derived once, and both consumers read that one
+  derivation** (SH-05). `shadowCasterAlpha(const Material&)`
+  (`graphics/shadow_caster_alpha.hpp`) is the only producer of `ShadowCasterAlpha`;
+  `Object::buildDrawCommands` calls it once and stores the answer in ONE
+  place — `DrawCommand::shadowRequest.alpha` — which both consumers read: the resolver, to pin a
+  cutout to level 0 as `ShadowLodReason::AlphaMaskedFallback`, and `Shadows::recordPass`, to pick the
+  fragment path (`ShadowPipelinePair::forCaster`). Do not mirror it onto the command as a second
+  field: nothing downstream could enforce the two agreeing, and a divergence would pin a caster as
+  masked while rasterising it opaque, with a wrong silhouette as the only symptom. It defaults to `Masked` on the same
+  principle as `deformation`'s `Deformable`: the pessimistic answer costs a fetch and full detail and
+  is visible in the panel, while the optimistic one silently restores a cutout casting its quad.
+  BLEND classifies as `Opaque` deliberately — its shadow semantics are an open design decision, and
+  the material authority publishes `alphaCutoff` 0 for it anyway.
+- **The alpha-cutout test has ONE implementation, and the shadow pass uses the forward one**
+  (SH-05). `materialAlphaCutoutFails` / `materialBaseColourTexel` / `materialSlotUv` live in
+  [`shaders/material.glsl`](../shaders/material.glsl); `shader.frag`, `shadow_masked.frag` and
+  `self_shadow_second_masked.frag` all call them. A shadow that tested a different cutoff, UV set or
+  `KHR_texture_transform` from its own surface would cast a silhouette the surface does not have, and
+  the symptom reads as a shadow-bias artefact rather than as a mask bug. There is deliberately no
+  shadow-only material format: the shadow pass reaches the same bindless `materials[]` entry through
+  `ShadowPushConstants::materialIndex`.
+- **Bindless materials are set 2 in EVERY pipeline that opts in** (SH-05). Descriptor sets must be
+  contiguous, so a pipeline wanting bindless without forward globals — every shadow pipeline — would
+  otherwise receive it at set 1. `Pipeline`'s constructor declares an **empty set-1 layout** in that
+  case (`config.bindlessSet && config.globalBindings.empty()`), which is what lets
+  `shaders/material.glsl` hard-code `set = 2` and every recorder bind index 2. An empty set needs
+  nothing bound to it because nothing in the pipeline accesses it. If you add a bindless-reading
+  pipeline, don't "fix" a set-index mismatch in the shader — the empty layout is the fix.
+- **Every shadow recording site sets the cull mode** (SH-05). All four shadow pipelines declare
+  `dynamicCullMode`, so there is no static answer to fall back on: `Shadows::recordPass` passes an
+  explicit `ShadowFaceCull` per family (`PerCaster` for cascade/spot/point, `AllFaces` for the
+  self-shadow first layer, `BackFacesOnly` for the second) and `recordShadowDrawBucket` sets it per
+  draw. `PerCaster` is what stops a double-sided caster being front-culled out of existence — the
+  bug was a sheet authored face-on to the sun casting nothing at all — and it reads
+  `DrawCommand::doubleSided`, the same field the forward pass' dynamic cull uses. A new shadow family
+  that forgets its policy is undefined dynamic state, so give it one at the call site rather than a
+  default.
 - **A glTF node's contents are decomposed by ONE rule, and the light is attached last.** A `Node`
   holds a single component (`Components` is a variant), while a glTF node may carry a mesh, a light,
   a camera and animation at once. `core/node_component_layout.hpp` states the rule —
@@ -966,8 +1010,16 @@ the same change — most have a test or guard that will catch you, but not all.
   is the only constructor — so a downstream policy can trust the basis it is handed instead of
   re-validating it: as a public aggregate, `lightUp = lightDirection` was finite, passed every
   field-wise check, and sent `Mat4::lookAt` to its own fallback up.
-- **A uniform block bound by more than one shader is DECLARED once**, in a shared `shaders/*.glsl`
-  include — never hand-copied into each shader. `LightUBO` lives in
+- **A block bound by more than one shader is DECLARED once**, in a shared `shaders/*.glsl`
+  include — never hand-copied into each shader. Three are guarded today: `LightUBO`
+  ([`shaders/light_ubo.glsl`](../shaders/light_ubo.glsl)), the bindless `Materials` SSBO +
+  `MaterialData` struct ([`shaders/material.glsl`](../shaders/material.glsl), shared by `shader.frag`
+  and the SH-05 masked shadow paths) and the `ShadowPushConstants` push block
+  ([`shaders/shadow_push.glsl`](../shaders/shadow_push.glsl), shared by four shadow stages). A PUSH
+  block is the worst case of the three: it is a raw byte range with no driver-side reflection at all,
+  so a member added to one copy silently reinterprets every field after it in the others — the C++
+  side is pinned by `offsetof` static_asserts on `ShadowPushConstants` in
+  [`render/ubo.hpp`](../include/fire_engine/render/ubo.hpp). `LightUBO` lives in
   [`shaders/light_ubo.glsl`](../shaders/light_ubo.glsl); `shader.frag` and `skybox.frag` `#include`
   it, each defining `LIGHT_UBO_SET` / `LIGHT_UBO_BINDING` first, because the buffer sits at a
   different descriptor address in each. The reason is that a block's field offsets depend on every

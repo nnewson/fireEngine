@@ -9,6 +9,7 @@
 #include <fire_engine/graphics/geometry.hpp>
 #include <fire_engine/graphics/material.hpp>
 #include <fire_engine/graphics/material_binding.hpp>
+#include <fire_engine/graphics/shadow_caster_alpha.hpp>
 #include <fire_engine/graphics/shadow_caster_deformation.hpp>
 #include <fire_engine/graphics/skin.hpp>
 #include <fire_engine/graphics/vdpm_gpu_registry.hpp>
@@ -100,7 +101,8 @@ Vec3 skinnedPosition(const Vertex& vertex, Vec3 position, std::span<const Mat4> 
 [[nodiscard]]
 ShadowGeometryRequest makeShadowRequest(const Geometry& geometry, ShadowCasterId casterId,
                                         ShadowCasterGeneration generation, const Mat4& model,
-                                        bool lodEnabled, ShadowCasterDeformation deformation)
+                                        bool lodEnabled, ShadowCasterDeformation deformation,
+                                        ShadowCasterAlpha alpha)
 {
     return ShadowGeometryRequest{.lods = geometry.lods(),
                                  .baseIndexBuffer = geometry.indexBuffer(),
@@ -109,7 +111,8 @@ ShadowGeometryRequest makeShadowRequest(const Geometry& geometry, ShadowCasterId
                                  .casterId = casterId,
                                  .generation = generation,
                                  .lodEnabled = lodEnabled,
-                                 .deformation = deformation};
+                                 .deformation = deformation,
+                                 .alpha = alpha};
 }
 
 } // namespace
@@ -888,9 +891,16 @@ Object::buildDrawCommands(const FrameInfo& frame, const Mat4& world, bool hasSki
             shadowCmd.indexBuffer = NullBuffer;
             shadowCmd.indexCount = 0;
             shadowCmd.lodLevel = kNoShadowLod;
+            // SH-05: the caster's alpha classification is derived once and STORED once, on the
+            // request — where both consumers read it (the resolver pins a cutout to full detail,
+            // the shadow pass picks the fragment path that rasterises it). A second copy elsewhere
+            // on the command would be a second thing to keep in step, and a divergence would pin a
+            // caster as masked while rasterising it opaque with a wrong silhouette as its only
+            // symptom.
             shadowCmd.shadowRequest = makeShadowRequest(
                 *shadowGeometry, binding.shadowCasterId, binding.shadowGeneration, world,
-                frame.shadowLodEnabled, shadowCasterDeformation(*shadowGeometry, deformable()));
+                frame.shadowLodEnabled, shadowCasterDeformation(*shadowGeometry, deformable()),
+                shadowCasterAlpha(mat));
             // Shadows keep discrete LOD and draw directly — clear the VDPM indirect handle the copy
             // inherited from the forward command, or the "non-null selects indirect" invariant
             // would point the shadow draw at the forward index count. Clear the GPU-front handle

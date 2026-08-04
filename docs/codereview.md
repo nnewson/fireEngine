@@ -656,3 +656,48 @@ with the chosen no-alias contract rather than retaining that behaviour as an acc
 - Derive mip counts and validate render-default relationships at compile time.
 - Replace string categories/rules with enum categories and an indexed logger config.
 - Move logger parsing/output state to a `.cpp` and add parser/precedence tests.
+
+---
+
+## Out-of-tier finding — the depth prepass ignores the alpha cutout (2026-08-03)
+
+Found while landing **SH-05** (material-aware shadow casters), in the same class of defect and in a
+different pass, so it is recorded here rather than folded into that item.
+
+### High: `depth_prepass.frag` writes depth through a MASK material's holes
+
+[`shaders/depth_prepass.frag`](../shaders/depth_prepass.frag) has an empty `main` by design — the
+fixed-function depth test does the work, and the pass reuses `shader.vert` so its depth matches the
+forward pass bit-for-bit. But an `alphaMode: MASK` material's coverage is not its triangles: the
+forward shader discards fragments whose base-colour alpha falls below `alphaCutoff`, and the prepass
+does not. So the prepass writes depth across the whole quad, including the holes.
+
+Consequences, in order of visibility:
+
+- **Anything behind a cutout hole is depth-rejected.** The forward pass loads that depth and tests
+  `LESS_OR_EQUAL`, so geometry farther away than the hole fails the test and never shades. On
+  `shadow_lod/ShadowLodDemo.gltf` the alpha-masked quad's holes read dark instead of showing the
+  floor and sky behind them — visible in the reference capture
+  ([`acceptance-testing.md`](acceptance-testing.md) § Reference captures), including in the
+  pre-SH-05 image, so this is long-standing and not an SH-05 regression.
+- **SSAO and contact shadows inherit it.** `Ssao` reconstructs view-space position and normal from
+  this depth buffer alone, so a cutout occludes and shadows as a solid sheet there.
+- The forward pass' own colour is then whatever was drawn before the quad, which makes the symptom
+  order-dependent and easy to misread as a blending or clear-colour problem.
+
+The fix is now small and should reuse the SH-05 machinery rather than repeat it: the prepass pipeline
+opts into the bindless set (as the shadow pipelines do — bindless is set 2 in every pipeline that
+opts in), carries a `materialIndex` in its push constants, and its fragment shader calls
+`materialAlphaCutoutFails(materialAlpha(materialBaseColourTexel(uv0, uv1)))` from
+[`shaders/material.glsl`](../shaders/material.glsl) — the SAME single implementation the forward and
+shadow passes use, which is the whole point of that file. `shader.vert` already emits both UV sets.
+
+Two decisions belong to whoever picks this up, and neither should be settled by side effect:
+
+- **BLEND materials.** They are excluded from the prepass today by virtue of the bucket they land in;
+  confirm that stays true rather than assuming the cutout test covers them (their published
+  `alphaCutoff` is 0, so it would not).
+- **Depth equality.** The prepass exists so the forward pass can test `LESS_OR_EQUAL` against depth
+  written by the identical vertex path. Adding a fragment discard does not perturb `gl_Position`, so
+  equality is preserved — but the cutout test must be evaluated from the same UVs and the same
+  material entry, or a fragment could be discarded in one pass and kept in the other.

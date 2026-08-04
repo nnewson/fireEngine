@@ -83,7 +83,14 @@ Object::writeForwardUniforms()            [per draw, per frame]
   only. Since SH-03 a caster's *shadow* level is not chosen here at all: the shadow command carries a
   `ShadowGeometryRequest` (LOD span, conservative world scale, caster id + generation) with no index
   buffer, and each shadow view resolves its own level in its own shadow-map texels — see
-  [`shadowplans.md`](shadowplans.md) § SH-03 and `graphics/shadow_lod_resolver.hpp`.
+  [`shadowplans.md`](shadowplans.md) § SH-03 and `graphics/shadow_lod_resolver.hpp`. Two caster
+  properties override that selection outright, and both are classified at this same seam: a caster
+  that DEFORMS after the simplifier measured it (SH-04) and one whose coverage is an ALPHA CUTOUT
+  (SH-05) resolve to the whole mesh, with `DeformableFallback` / `AlphaMaskedFallback` as the reason
+  and an infinite projected error. The cutout case is a limit of the metric rather than of the
+  plumbing: no deviation channel measures where a binary alpha boundary ends up, so a collapse can
+  sit inside the shadow budget and still redraw the silhouette. The UV channel is a useful input to a
+  future policy, not a proof.
 - **Morph** — `selectVipm` (`include/fire_engine/graphics/vipm.hpp`) uses the same screen-space
   selection curve as `selectLod`, but returns the next exact LOD level and a 0→1 factor. The vertex
   shader morphs only vertices whose `collapseLevel` equals that target level.

@@ -17,8 +17,17 @@ if(NOT DEFINED SHADER_DIR)
 endif()
 
 # <block name>|<the one file allowed to declare it>
+#
+# SH-05 added the last three. `ShadowPushConstants` had been hand-copied into three shadow stages
+# (and would have been four the moment the masked path arrived), and push constants are a raw byte
+# range with no reflection at all — strictly worse than a UBO, which at least has a declared size.
+# `Materials` and `MaterialData` became shared the moment a shadow fragment path had to apply the
+# VISIBLE material's alpha cutout: a second copy of that struct is a second cutoff, a second UV-set
+# choice and a second transform, and a shadow disagreeing with its own surface reads as a bias bug.
 set(guarded_blocks
   "LightUBO|light_ubo.glsl"
+  "Materials|material.glsl"
+  "ShadowPushConstants|shadow_push.glsl"
 )
 
 set(offenders "")
@@ -37,7 +46,9 @@ foreach(entry IN LISTS guarded_blocks)
   set(declaring "")
   foreach(shader IN LISTS shader_files)
     # A declaration opens the block body; a mere reference (light.environmentParams) does not.
-    file(STRINGS "${shader}" matches REGEX "uniform[ \t]+${block}[ \t]*\\{")
+    # `buffer` as well as `uniform`: the bindless materials[] SSBO is a storage block, and its field
+    # offsets drift exactly like a UBO's.
+    file(STRINGS "${shader}" matches REGEX "(uniform|buffer)[ \t]+${block}[ \t]*\\{")
     if(matches)
       get_filename_component(shader_name "${shader}" NAME)
       list(APPEND declaring "${shader_name}")

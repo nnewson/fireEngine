@@ -27,6 +27,68 @@ struct PointShadowCaster
     float range{0.0f};
 };
 
+// SH-05: which faces one shadow family keeps. A property of the PASS, not of the pipeline: the
+// shadow pipelines declare cull mode dynamic, so this is set at record time and every family must
+// name its policy — there is no static fallback to inherit if one forgets.
+enum class ShadowFaceCull : std::uint8_t
+{
+    // Cascade / spot / point: the CASTER decides. Single-sided casters cull front faces (back faces
+    // carry the depth, which is what keeps receiver acne off); a double-sided material culls
+    // nothing, because front-culling a sheet authored face-on to the light discards the only faces
+    // it has and it casts no shadow at all.
+    PerCaster,
+    // Self-shadow FIRST layer: keep everything, so the first light-facing surface is captured
+    // whatever its winding. Was its own pipeline before SH-05 made cull mode dynamic.
+    AllFaces,
+    // Self-shadow SECOND layer: cull front faces so only back faces rasterise, which is what makes
+    // the dual-depth rejection well-founded rather than a coin-flip on marginal fragments.
+    BackFacesOnly,
+};
+
+// SH-05: one shadow family's two fragment paths. A draw picks between them by its caster's alpha
+// classification, so the pair travels together — a recording site that could be handed the opaque
+// path alone is a site where a cutout silently casts its quad.
+struct ShadowPipelinePair
+{
+    PipelineHandle opaque{NullPipeline};
+    PipelineHandle masked{NullPipeline};
+
+    // Which path rasterises a caster with this classification. Deliberately a pure mapping on the
+    // header rather than a branch buried in the recorder: reversing it would compile, rasterise,
+    // and produce a solid shadow for every cutout in the scene with no test failing — so it is
+    // pinned by tests/render/test_shadow_raster_policy.cpp.
+    [[nodiscard]] PipelineHandle forCaster(ShadowCasterAlpha alpha) const noexcept
+    {
+        return alpha == ShadowCasterAlpha::Masked ? masked : opaque;
+    }
+};
+
+// SH-05: the faces one draw keeps — the family's policy, resolved against the caster's own
+// sidedness for the families where the caster decides.
+//
+// Pure, and public for the same reason `forCaster` is: every shadow pipeline declares cull mode
+// dynamic, so this function IS the cull policy, and swapping two of its answers would silently
+// restore the defect the item fixed (a double-sided sheet front-culled into casting nothing) or
+// break the dual-depth self-shadow layer. Takes the caster's `doubleSided` flag rather than a
+// DrawCommand so the mapping can be exercised exhaustively without building a draw.
+[[nodiscard]] constexpr vk::CullModeFlags shadowCullMode(ShadowFaceCull policy,
+                                                         bool casterIsDoubleSided) noexcept
+{
+    switch (policy)
+    {
+    case ShadowFaceCull::PerCaster:
+        // A double-sided caster culls NOTHING. Front-culling one authored face-on to the light
+        // discards the only faces it has, and it casts no shadow at all.
+        return casterIsDoubleSided ? vk::CullModeFlagBits::eNone : vk::CullModeFlagBits::eFront;
+    case ShadowFaceCull::AllFaces:
+        return vk::CullModeFlagBits::eNone;
+    case ShadowFaceCull::BackFacesOnly:
+        return vk::CullModeFlagBits::eFront;
+    }
+    // Unreachable for a valid policy; the switch is exhaustive over the enum.
+    return vk::CullModeFlagBits::eFront;
+}
+
 class Shadows
 {
 public:
@@ -38,9 +100,15 @@ public:
     Shadows(Shadows&&) noexcept = default;
     Shadows& operator=(Shadows&&) noexcept = default;
 
+    // The handle a shadow COMMAND carries (FrameInfo::shadowPipeline) — the marker that buckets a
+    // draw into the shadow pass, not a promise about which pipeline rasterises it. Since SH-05 the
+    // pass picks the fragment path per draw from the caster's alpha classification and the layer's
+    // face policy, so this is the family's opaque path and deliberately nothing more: producers
+    // must not be able to select a shadow pipeline, or the classification would have a second,
+    // unchecked route into the pass.
     [[nodiscard]] PipelineHandle pipelineHandle() const noexcept
     {
-        return shadowPipelineHandle_;
+        return shadowPipelines_.opaque;
     }
 
     // `views` is the frame's shadow view set and the ONLY source of each iteration's transform
@@ -82,11 +150,13 @@ public:
 private:
     Resources* resources_{nullptr};
     Pipeline shadowPipeline_;
-    Pipeline selfShadowFirstPipeline_;
+    Pipeline shadowMaskedPipeline_;
     Pipeline selfShadowSecondPipeline_;
-    PipelineHandle shadowPipelineHandle_{NullPipeline};
-    PipelineHandle selfShadowFirstPipelineHandle_{NullPipeline};
-    PipelineHandle selfShadowSecondPipelineHandle_{NullPipeline};
+    Pipeline selfShadowSecondMaskedPipeline_;
+    // The main (cascade / spot / point) pair, which the self-shadow FIRST layer also uses: since
+    // SH-05 its cull-nothing policy is dynamic state rather than a distinct pipeline.
+    ShadowPipelinePair shadowPipelines_{};
+    ShadowPipelinePair selfShadowSecondPipelines_{};
     TextureHandle shadowMapHandle_{NullTexture};
     TextureHandle worldShadowMapHandle_{NullTexture};
     TextureHandle selfShadowFirstMapHandle_{NullTexture};
