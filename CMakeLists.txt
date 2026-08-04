@@ -295,6 +295,7 @@ set(SHADER_INCLUDES
     ${PROJECT_SOURCE_DIR}/shaders/light_ubo.glsl
     ${PROJECT_SOURCE_DIR}/shaders/material.glsl
     ${PROJECT_SOURCE_DIR}/shaders/shadow_push.glsl
+    ${PROJECT_SOURCE_DIR}/shaders/forward_push.glsl
     ${PROJECT_SOURCE_DIR}/shaders/shadow_depth.glsl
     ${PROJECT_SOURCE_DIR}/shaders/self_shadow_second.glsl
 )

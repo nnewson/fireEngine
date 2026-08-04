@@ -218,14 +218,6 @@ between broadphases; handle packing silently aliases invalid inputs), 5 medium, 
    counts + compile-time render-default relationships, enum logger categories with an indexed
    immutable config, parser/output state into a `.cpp` with precedence tests.
 
-**Out-of-tier finding (2026-08-03).** `depth_prepass.frag` ignores an `alphaMode: MASK` material's
-cutout, so it writes depth through the holes: anything behind a cutout is depth-rejected by the
-forward pass, and SSAO/contact shadows treat the cutout as a solid sheet. Long-standing (visible in
-the pre-SH-05 reference capture), found while landing SH-05, and now a small fix that should reuse
-SH-05's shared `shaders/material.glsl` cutout rather than repeat it — see
-[`codereview.md`](codereview.md) § Out-of-tier finding for the evidence and the two decisions it
-carries.
-
 Further tiers of this review are expected to follow the [`review-order.md`](review-order.md) tiers.
 
 ---

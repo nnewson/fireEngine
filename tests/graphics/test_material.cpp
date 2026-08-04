@@ -2,6 +2,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <cmath>
+#include <limits>
 
 #include <fire_engine/graphics/material.hpp>
 #include <fire_engine/graphics/material_binding.hpp>
@@ -136,6 +137,129 @@ TEST_CASE("MaterialBinding.ToMaterialUboPacksCoreFields", "[MaterialBinding]")
     CHECK(ubo.materialParams[1] == Catch::Approx(0.9f).margin(1e-5f));
     CHECK(ubo.materialParams[2] == Catch::Approx(0.2f).margin(1e-5f));
     CHECK(ubo.materialParams[3] == Catch::Approx(0.7f).margin(1e-5f));
+}
+
+TEST_CASE("MaterialBinding.PackingEnforcesTheAlphaRangeInvariant", "[MaterialBinding]")
+{
+    // The invariant two depth-writing passes rest on. `shader.frag` applies `alpha < alphaCutoff`
+    // to EVERY material (a non-MASK one packs cutoff 0), while `depth_prepass.frag` SKIPS that test
+    // when the packed cutoff is 0 — equivalent only while alpha >= 0. If an out-of-range value
+    // reached the GPU the two would disagree, and a fragment the forward pass discards but the
+    // prepass keeps leaves a depth-only occluder: invisible geometry that still hides what is
+    // behind it.
+    //
+    // `Material` is a plain value type that accepts any float, so this seam is where the guarantee
+    // is made. The two clamps differ in kind: the CUTOFF clamp is behaviour-preserving (a negative
+    // cutoff already discarded nothing in the forward pass), while the ALPHA clamp deliberately
+    // CHANGES behaviour for invalid input — a negative alpha used to discard, and clamped to 0 the
+    // fragment is kept. That is glTF-spec normalisation of a value nobody meant, not preservation.
+    SECTION("base-colour alpha is clamped into glTF's [0,1]")
+    {
+        Material mat;
+        mat.alpha(-0.25f);
+        CHECK(toMaterialUBO(mat).diffuseAlpha[3] == Catch::Approx(0.0f).margin(1e-5f));
+        mat.alpha(4.0f);
+        CHECK(toMaterialUBO(mat).diffuseAlpha[3] == Catch::Approx(1.0f).margin(1e-5f));
+    }
+    SECTION("a non-finite alpha packs opaque")
+    {
+        // Every non-finite value, not just NaN: negative infinity would otherwise fall through the
+        // range path to 0 and read as fully transparent, which is a different answer from "this
+        // value names no coverage at all".
+        Material mat;
+        for (const float bad :
+             {std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::infinity(),
+              -std::numeric_limits<float>::infinity()})
+        {
+            mat.alpha(bad);
+            CHECK(toMaterialUBO(mat).diffuseAlpha[3] == Catch::Approx(1.0f).margin(1e-5f));
+        }
+    }
+    SECTION("a negative cutoff packs 0, which is what it already meant")
+    {
+        Material mat;
+        mat.alphaMode(AlphaMode::Mask);
+        mat.alphaCutoff(-0.5f);
+        CHECK(toMaterialUBO(mat).materialParams[2] == Catch::Approx(0.0f).margin(1e-5f));
+    }
+    SECTION("a non-finite cutoff packs 0")
+    {
+        Material mat;
+        mat.alphaMode(AlphaMode::Mask);
+        for (const float bad :
+             {std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::infinity(),
+              -std::numeric_limits<float>::infinity()})
+        {
+            mat.alphaCutoff(bad);
+            CHECK(toMaterialUBO(mat).materialParams[2] == Catch::Approx(0.0f).margin(1e-5f));
+        }
+    }
+    SECTION("the specific divergence that motivated this: MASK, cutoff 0, negative alpha")
+    {
+        // Pre-enforcement this pair made the forward pass discard (-0.25 < 0) and the prepass keep
+        // (its gate saw cutoff 0 and skipped the test). Packed, the pair can no longer express it:
+        // alpha is 0 and the cutoff is 0, so NEITHER pass discards.
+        Material mat;
+        mat.alphaMode(AlphaMode::Mask);
+        mat.alphaCutoff(0.0f);
+        mat.alpha(-0.25f);
+        const MaterialUBO ubo = toMaterialUBO(mat);
+        CHECK(ubo.diffuseAlpha[3] == Catch::Approx(0.0f).margin(1e-5f));
+        CHECK(ubo.materialParams[2] == Catch::Approx(0.0f).margin(1e-5f));
+        CHECK_FALSE(ubo.diffuseAlpha[3] < ubo.materialParams[2]);
+    }
+    SECTION("in-range values are packed untouched")
+    {
+        Material mat;
+        mat.alphaMode(AlphaMode::Mask);
+        mat.alpha(0.25f);
+        mat.alphaCutoff(0.75f);
+        const MaterialUBO ubo = toMaterialUBO(mat);
+        CHECK(ubo.diffuseAlpha[3] == Catch::Approx(0.25f).margin(1e-5f));
+        CHECK(ubo.materialParams[2] == Catch::Approx(0.75f).margin(1e-5f));
+    }
+}
+
+TEST_CASE("MaterialBinding.AlphaRangeIssuesAreReportableWithoutPacking", "[MaterialBinding]")
+{
+    // The diagnostic's DECISION, pinned pure. The warning itself sits behind this and is emitted
+    // once per material from Resources::registerMaterial, because `toMaterialUBO` is reachable from
+    // `Object::wouldChangeVariant` — a noexcept query — where a throw out of log formatting would
+    // terminate the process. Keeping the decision separate from the reporting is what makes it
+    // testable at all.
+    SECTION("a well-formed material reports nothing")
+    {
+        Material mat;
+        mat.alphaMode(AlphaMode::Mask);
+        mat.alpha(0.5f);
+        mat.alphaCutoff(0.5f);
+        const MaterialAlphaRangeIssues issues = materialAlphaRangeIssues(mat);
+        CHECK_FALSE(issues.alpha);
+        CHECK_FALSE(issues.cutoff);
+        CHECK_FALSE(issues.any());
+    }
+    SECTION("each field is reported independently")
+    {
+        Material alphaBad;
+        alphaBad.alpha(2.0f);
+        CHECK(materialAlphaRangeIssues(alphaBad).alpha);
+        CHECK_FALSE(materialAlphaRangeIssues(alphaBad).cutoff);
+
+        Material cutoffBad;
+        cutoffBad.alphaMode(AlphaMode::Mask);
+        cutoffBad.alphaCutoff(-1.0f);
+        CHECK(materialAlphaRangeIssues(cutoffBad).cutoff);
+        CHECK_FALSE(materialAlphaRangeIssues(cutoffBad).alpha);
+    }
+    SECTION("a cutoff nobody consults is not an issue")
+    {
+        // Only MASK packs a cutoff at all; on any other mode the authored value is discarded, so
+        // reporting it would send someone hunting for a problem that cannot reach a shader.
+        Material mat;
+        mat.alphaMode(AlphaMode::Opaque);
+        mat.alphaCutoff(-1.0f);
+        CHECK_FALSE(materialAlphaRangeIssues(mat).any());
+    }
 }
 
 TEST_CASE("MaterialBinding.ToMaterialUboUsesExtensionDefaultsWhenAbsent", "[MaterialBinding]")

@@ -929,10 +929,29 @@ the same change — most have a test or guard that will catch you, but not all.
   is visible in the panel, while the optimistic one silently restores a cutout casting its quad.
   BLEND classifies as `Opaque` deliberately — its shadow semantics are an open design decision, and
   the material authority publishes `alphaCutoff` 0 for it anyway.
-- **The alpha-cutout test has ONE implementation, and the shadow pass uses the forward one**
-  (SH-05). `materialAlphaCutoutFails` / `materialBaseColourTexel` / `materialSlotUv` live in
-  [`shaders/material.glsl`](../shaders/material.glsl); `shader.frag`, `shadow_masked.frag` and
-  `self_shadow_second_masked.frag` all call them. A shadow that tested a different cutoff, UV set or
+- **The GPU material's alpha and alphaCutoff ranges are enforced at the packing seam**, and one
+  optimisation depends on it. `toMaterialUBO` (`src/graphics/material_binding.cpp`) clamps the packed
+  alpha into glTF's [0,1] and the packed cutoff to >= 0, warning when it has to — `Material` is a
+  plain value type that accepts any float, so the guarantee is made where the value becomes GPU
+  truth. The two clamps differ in kind, and the difference is worth stating: the CUTOFF clamp is
+  behaviour-preserving (a negative cutoff already discarded nothing), while the ALPHA clamp
+  deliberately CHANGES what an invalid value does — a negative alpha used to discard, and clamped to 0
+  the fragment is kept. That is glTF-spec normalisation of nonsense input, not preservation of it. The
+  warning is emitted once per material from `Resources::registerMaterial`, never from the packing path,
+  which is reachable from `noexcept` variant queries. What breaks without the invariant:
+  `shader.frag` applies `alpha < alphaCutoff` to EVERY material, since a non-MASK one packs cutoff 0,
+  so a negative alpha would discard an OPAQUE surface — while `depth_prepass.frag`, which SKIPS that
+  test when the packed cutoff is 0, would keep the fragment and leave a depth-only occluder. Pinned by
+  `MaterialBinding.PackingEnforcesTheAlphaRangeInvariant`. If you add a packed material field that a
+  shader branches on, ask what the branch assumes about its range.
+- **EVERY pass that writes depth applies the alpha cutout, and they all use ONE implementation**
+  (SH-05, extended to the depth prepass). `materialAlphaCutoutFails` / `materialBaseColourTexel` /
+  `materialSlotUv` live in [`shaders/material.glsl`](../shaders/material.glsl); `shader.frag`,
+  `shadow_masked.frag`, `self_shadow_second_masked.frag` and `depth_prepass.frag` all call them.
+  A depth-only pass that skips the test does not merely look wrong where the cutout is — it writes
+  occlusion across the holes, so the DEPTH PREPASS rejected everything behind a leaf card in the
+  forward pass and made SSAO treat it as a solid sheet, while the SHADOW pass cast the quad instead
+  of the leaf. If you add a pass that writes depth, that is the question to ask of it. A shadow that tested a different cutoff, UV set or
   `KHR_texture_transform` from its own surface would cast a silhouette the surface does not have, and
   the symptom reads as a shadow-bias artefact rather than as a mask bug. There is deliberately no
   shadow-only material format: the shadow pass reaches the same bindless `materials[]` entry through
@@ -1015,7 +1034,9 @@ the same change — most have a test or guard that will catch you, but not all.
   ([`shaders/light_ubo.glsl`](../shaders/light_ubo.glsl)), the bindless `Materials` SSBO +
   `MaterialData` struct ([`shaders/material.glsl`](../shaders/material.glsl), shared by `shader.frag`
   and the SH-05 masked shadow paths) and the `ShadowPushConstants` push block
-  ([`shaders/shadow_push.glsl`](../shaders/shadow_push.glsl), shared by four shadow stages). A PUSH
+  ([`shaders/shadow_push.glsl`](../shaders/shadow_push.glsl), shared by four shadow stages) and
+  `ForwardPushConstants` ([`shaders/forward_push.glsl`](../shaders/forward_push.glsl), shared by
+  `shader.frag` and `depth_prepass.frag`). A PUSH
   block is the worst case of the three: it is a raw byte range with no driver-side reflection at all,
   so a member added to one copy silently reinterprets every field after it in the others — the C++
   side is pinned by `offsetof` static_asserts on `ShadowPushConstants` in

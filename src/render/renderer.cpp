@@ -934,6 +934,7 @@ void Renderer::recordDepthPrepass(vk::CommandBuffer cmd, const DrawBuckets& buck
     const vk::PipelineLayout layout = resources_.vulkanPipelineLayout(depthPrepassHandle_);
     cmd.bindPipeline(vk::PipelineBindPoint::eGraphics,
                      resources_.vulkanPipeline(depthPrepassHandle_));
+    bool bindlessBound = false;
     for (const auto& dc : buckets.opaque)
     {
         // buckets.opaque also carries the skybox (fullscreen triangle, no depth /
@@ -951,6 +952,21 @@ void Renderer::recordDepthPrepass(vk::CommandBuffer cmd, const DrawBuckets& buck
             dc.indexType == DrawIndexType::UInt32 ? vk::IndexType::eUint32 : vk::IndexType::eUint16;
         cmd.bindIndexBuffer(resources_.vulkanBuffer(dc.indexBuffer), 0, indexType);
         pushForwardObjectDescriptors(cmd, resources_, layout, dc);
+        if (!bindlessBound)
+        {
+            // Bindless materials (set 2) for the prepass' alpha-cutout test. Bound AFTER the first
+            // push-descriptor write to set 0, the same ordering the forward recorder documents:
+            // layout compatibility preserves set 0, and this order avoids a Vulkan Validation
+            // Layers 1.4.350 first-use push-state defect. Once per pass — one pipeline, one set.
+            cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, layout, 2,
+                                   resources_.bindlessDescriptorSet(), {});
+            bindlessBound = true;
+        }
+        // Per draw, because materialIndex is per draw. Built by the SAME helper the forward pass
+        // uses, so the prepass cannot end up testing a different material than the surface it is
+        // writing depth for.
+        cmd.pushConstants<ForwardPushConstants>(layout, vk::ShaderStageFlagBits::eFragment, 0,
+                                                makeForwardPushConstants(dc));
         recordIndexedDraw(cmd, dc, resources_);
     }
     cmd.endRendering();

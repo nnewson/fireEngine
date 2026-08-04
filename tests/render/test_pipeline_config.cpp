@@ -9,6 +9,7 @@
 
 using fire_engine::bindingIndex;
 using fire_engine::ForwardBinding;
+using fire_engine::ForwardPushConstants;
 using fire_engine::Pipeline;
 using fire_engine::ShadowBinding;
 
@@ -108,6 +109,29 @@ TEST_CASE("PipelineConfig.ForwardConfigPushesSet0", "[PipelineConfig]")
     CHECK(Pipeline::selfShadowSecondConfig().pushDescriptorSet0);
     CHECK(Pipeline::selfShadowSecondMaskedConfig().pushDescriptorSet0);
     CHECK_FALSE(Pipeline::skyboxConfig().pushDescriptorSet0);
+}
+
+TEST_CASE("PipelineConfig.DepthPrepassReadsTheMaterialAuthority", "[PipelineConfig]")
+{
+    // The prepass applies the alpha cutout, so it needs the same bindless material set (2) and a
+    // push block to index it with. Without either, a MASK material writes depth through its holes
+    // and the forward pass depth-rejects whatever stands behind them — the defect this pins.
+    const auto prepass = Pipeline::depthPrepassConfig();
+    const auto forward = Pipeline::forwardConfig();
+
+    CHECK(prepass.bindlessSet);
+    REQUIRE(prepass.pushConstantRanges.size() == 1u);
+    CHECK(prepass.pushConstantRanges[0].stageFlags == vk::ShaderStageFlagBits::eFragment);
+    CHECK(prepass.pushConstantRanges[0].offset == 0u);
+    // The WHOLE block, even though the stage reads one field of it: the range must cover what the
+    // shader declares, and both stages share one declaration (shaders/forward_push.glsl).
+    CHECK(prepass.pushConstantRanges[0].size == sizeof(ForwardPushConstants));
+    // Same vertex path as the forward pass, so the depth it writes and the UVs it tests are the
+    // forward pass' own — that identity is what makes the two discard the same fragments.
+    CHECK(prepass.vertShaderPath == forward.vertShaderPath);
+    CHECK(prepass.fragShaderPath == "depth_prepass.frag.spv");
+    CHECK(prepass.dynamicCullMode);
+    CHECK(prepass.depthWrite);
 }
 
 TEST_CASE("PipelineConfig.ShadowConfigLeavesCullingToTheRecorder", "[PipelineConfig]")

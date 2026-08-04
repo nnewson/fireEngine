@@ -235,7 +235,8 @@ PipelineConfig Pipeline::depthPrepassConfig()
     config.vertShaderPath = "shader.vert.spv";
     config.fragShaderPath = "depth_prepass.frag.spv";
     // Same per-object push-descriptor set 0 as forward (frame/skin/morph + morph
-    // SSBO) so pushForwardObjectDescriptors works unchanged; no globals/bindless.
+    // SSBO) so pushForwardObjectDescriptors works unchanged. No forward GLOBALS (set 1 exists here
+    // but is empty) — but it DOES take the bindless material set, see below.
     config.bindings = perObjectSet0Bindings();
     config.pushDescriptorSet0 = true;
     // Depth-only: no colour attachments. depthFormat matches the shared D32.
@@ -245,6 +246,13 @@ PipelineConfig Pipeline::depthPrepassConfig()
     // Cull per draw like the forward opaque pipeline (double-sided => no cull) so
     // double-sided geometry writes the same depth the forward pass will test.
     config.dynamicCullMode = true;
+    // The prepass applies the material's ALPHA CUTOUT, so it reads the same bindless material
+    // authority the forward shader does (set 2 — an empty set-1 layout keeps that index identical
+    // across pipelines, see the constructor) and takes the same push block to index it with.
+    // Without this the prepass wrote depth through a cutout's holes and the forward pass then
+    // depth-rejected whatever stood behind them.
+    config.bindlessSet = true;
+    addFragmentPushConstant(config, static_cast<uint32_t>(sizeof(ForwardPushConstants)));
     return config;
 }
 
