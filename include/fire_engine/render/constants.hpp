@@ -123,22 +123,22 @@ inline constexpr float kPointShadowInfiniteRangeFallback = 100.0f;
 // an image-wide average dilutes it away.
 //
 // The shadowed area is MEASURED, not assumed: the pixels that differ between the reference and the
-// same view with `--no-shadows`. It came out at 12.07% of the frame — 10.4% before SH-05, which is
-// most of why this table was re-measured (see the notes below). (A first pass called "darker than
-// half" shadowed, which counted the night skybox and every dark material — 39.8% — and flattered
-// every percentage by ~3.8x.) The reference captured twice gives a noise floor of exactly zero, so
-// every number below is signal — and a NON-ZERO noise floor invalidates the run (see the SH-06
-// note).
+// same view with `--no-shadows`. It came out at 11.68% of the frame — 10.4% before SH-05 — and the
+// notes below track every move it has made, because every relative error in this table is divided
+// by it. (A first pass called "darker than half" shadowed, which counted the night skybox and every
+// dark material — 39.8% — and flattered every percentage by ~3.8x.) The reference captured twice
+// gives a noise floor of exactly zero, so every number below is signal — and a NON-ZERO noise floor
+// invalidates the run (see the SH-06 note).
 //
-// MEASURED ON MERGED `main` (SH-05 + SH-06 together), 2026-08-04:
+// MEASURED with SH-05 + SH-06 + the cutout-aware depth prepass, 2026-08-04:
 //
 //   budget   differing shadow px   worst px   cascade tris (of 43472 at full detail)
 //   0.5      0.000%                 0/255     23272  (53.5%)  identical error to the reference
 //   1        0.003%                60/255     22120  (50.9%)
-//   2        0.249%               121/255     20968  (48.2%)
-//   4        0.322%               121/255     19624  (45.1%)
-//   8        1.426%               161/255     16200  (37.3%)
-//   16       5.103%               172/255     13064  (30.1%)
+//   2        0.257%               121/255     20968  (48.2%)
+//   4        0.333%               121/255     19624  (45.1%)
+//   8        1.472%               161/255     16200  (37.3%)
+//   16       5.271%               172/255     13064  (30.1%)
 //
 // ACCEPTANCE THRESHOLD, registered before the numbers were corrected: at most 0.1% of the shadowed
 // pixels may differ from full detail, AND the differences must sit on silhouette edges rather than
@@ -240,6 +240,27 @@ inline constexpr float kPointShadowInfiniteRangeFallback = 100.0f;
 // The 0.1% threshold was re-applied unchanged and STILL selects budget 1. It has now survived four
 // independent re-derivations — SH-04, SH-06, SH-05, and this merged run — without being moved,
 // which is the point of registering a criterion before seeing the data.
+//
+// RE-MEASURED AGAIN after the CUTOUT-AWARE DEPTH PREPASS (2026-08-04). `depth_prepass.frag` had
+// been writing depth through a MASK material's holes, so the forward pass depth-rejected everything
+// behind them; fixing it changes what the metric can see, so the table was re-taken. What moved,
+// and what did not:
+//
+//   * the ABSOLUTE differing-pixel counts did not move at all — 0.0300% / 0.0389% / 0.1720% /
+//     0.6158% of the frame at budgets 2 / 4 / 8 / 16, identical to the previous run at every
+//     printed digit. Shadow-LOD error is what it was;
+//   * the DENOMINATOR fell, 12.07% -> 11.68%, so every relative error rose in proportion (2: 0.249%
+//     -> 0.257%, 4: 0.322% -> 0.333%, 8: 1.426% -> 1.472%, 16: 5.103% -> 5.271%). Budget 1 stays at
+//     0.003%;
+//   * the change is LOCALISED, not diffuse, and that was checked rather than assumed: differencing
+//     the two runs' shadowed-area masks lights up the cutout quad's own footprint (plus sub-pixel
+//     slivers on two silhouettes elsewhere) and nothing else. Pixels inside the quad's holes used
+//     to count as shadowed and no longer do — which is the fix, not a regression in the
+//     measurement;
+//   * the triangle column and the dead band are untouched (22120/43472 and 30/52 draws at budget 1;
+//     3 / 1 / 1 transitions, ZERO reversals). The prepass has nothing to do with shadow selection.
+//
+// The 0.1% threshold still selects budget 1: 0.257% at budget 2 is 2.5x over it.
 inline constexpr float kShadowLodPixelBudget = 1.0f;
 // Coarsening must project within `budget * ratio`, while refining triggers at `budget` — the gap is
 // the dead band, and 1.0 disables it.

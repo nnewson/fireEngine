@@ -659,10 +659,29 @@ with the chosen no-alias contract rather than retaining that behaviour as an acc
 
 ---
 
-## Out-of-tier finding — the depth prepass ignores the alpha cutout (2026-08-03)
+## Out-of-tier finding — the depth prepass ignores the alpha cutout (2026-08-03) — ✅ CLEARED
 
 Found while landing **SH-05** (material-aware shadow casters), in the same class of defect and in a
-different pass, so it is recorded here rather than folded into that item.
+different pass, so it was recorded here rather than folded into that item. **Fixed on branch
+`depth-prepass-alpha-cutout`** (2026-08-04): the prepass pipeline opts into the bindless set, carries
+`ForwardPushConstants`, and its fragment stage applies the same `material.glsl` cutout the forward and
+shadow passes use — gated on the material's own `alphaCutoff`, which is exactly equivalent (a
+non-MASK material publishes 0, and at 0 the test can never discard) and costs an opaque draw one
+scalar SSBO read instead of a texture fetch. No CPU-side classification was added: the prepass needs
+none, unlike the shadow path, whose LOD pin is a CPU decision.
+
+Both decisions the finding flagged were settled rather than assumed. **BLEND** stays out of the
+prepass by virtue of its bucket, and would be inert anyway (cutoff 0). **Depth equality** is
+preserved: a fragment discard does not perturb `gl_Position`, and the two passes evaluate one
+implementation on the same UVs from the same vertex path, so neither can keep what the other drops.
+
+Measured effect, for the record: the ShadowLodDemo capture's cutout holes now show the floor and sky
+behind them instead of reading uniformly dark, and the SH-03 sweep's measured shadowed area moved
+12.07% -> 11.68% — the change localised (by differencing the two runs' area masks) to the cutout
+quad's own footprint, with the absolute differing-pixel counts unchanged at every printed digit. See
+`render/constants.hpp`.
+
+The finding as originally written follows.
 
 ### High: `depth_prepass.frag` writes depth through a MASK material's holes
 

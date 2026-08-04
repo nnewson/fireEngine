@@ -611,6 +611,12 @@ uint32_t Resources::registerMaterial(const Material& material)
     }
 
     const uint32_t index = materialCount_++;
+    // FIRST SIGHT of this material, and the only place its authored values become GPU state — so
+    // this is where an out-of-range alpha or cutoff is reported. Deliberately not inside
+    // `toMaterialUBO`: that runs on the `noexcept` variant-comparison path
+    // (Object::wouldChangeVariant), where a throw out of log formatting would terminate, and it
+    // would repeat the warning every frame.
+    warnOnMaterialAlphaRangeIssues(material);
     const MaterialUBO ubo = toMaterialUBO(material);
     writeMapped(materialMapped_.subspan(static_cast<std::size_t>(index) * sizeof(MaterialUBO)),
                 ubo);

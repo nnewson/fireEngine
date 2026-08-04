@@ -18,16 +18,19 @@ endif()
 
 # <block name>|<the one file allowed to declare it>
 #
-# SH-05 added the last three. `ShadowPushConstants` had been hand-copied into three shadow stages
-# (and would have been four the moment the masked path arrived), and push constants are a raw byte
-# range with no reflection at all — strictly worse than a UBO, which at least has a declared size.
-# `Materials` and `MaterialData` became shared the moment a shadow fragment path had to apply the
-# VISIBLE material's alpha cutout: a second copy of that struct is a second cutoff, a second UV-set
-# choice and a second transform, and a shadow disagreeing with its own surface reads as a bias bug.
+# SH-05 added `Materials` and `ShadowPushConstants`; the cutout-aware depth prepass added
+# `ForwardPushConstants`. The two push blocks are the worst case of the kinds guarded here: a raw byte
+# range with no reflection at all — strictly worse than a UBO, which at least has a declared size —
+# and `ShadowPushConstants` had already been hand-copied into three shadow stages before a fourth
+# needed it. `Materials` and `MaterialData` became shared the moment a depth-only pass had to apply
+# the VISIBLE material's alpha cutout: a second copy of that struct is a second cutoff, a second
+# UV-set choice and a second transform, and a pass disagreeing with its own surface reads as a bias
+# bug.
 set(guarded_blocks
   "LightUBO|light_ubo.glsl"
   "Materials|material.glsl"
   "ShadowPushConstants|shadow_push.glsl"
+  "ForwardPushConstants|forward_push.glsl"
 )
 
 set(offenders "")

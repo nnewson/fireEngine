@@ -421,7 +421,11 @@ this order:
    - The cutout must cast a **perforated** shadow on the floor around x [−4.1, −0.3],
      z [−10.8, −6.9] — the checker pattern of its own base-colour alpha, matching the perforation you
      see on the surface. A solid rectangle there means the masked shadow path has stopped applying
-     (`shadow_masked.frag`, or the caster's `ShadowCasterAlpha` classification). It is authored
+     (`shadow_masked.frag`, or the caster's `ShadowCasterAlpha` classification).
+   - You must also **see through** the perforation: its holes show the white floor low down and the
+     dark sky higher up. Holes that read uniformly dark mean the DEPTH PREPASS has stopped applying
+     the cutout (`depth_prepass.frag`), so the forward pass is depth-rejecting everything behind
+     them — a separate fix from the shadow one, and easy to mistake for a material bug. It is authored
      double-sided, and now for a milder reason than before: a single-sided caster no longer has to
      put the sun on its back face to cast at all, but keeping it double-sided is what exercises the
      masked *and* two-sided mode together.

@@ -1,8 +1,11 @@
 #include <fire_engine/graphics/material_binding.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <type_traits>
+
+#include <fire_engine/core/log.hpp>
 
 #include <fire_engine/graphics/material.hpp>
 #include <fire_engine/graphics/texture.hpp>
@@ -36,6 +39,57 @@ bool sameTextureSlot(const TextureSlot& a, const TextureSlot& b) noexcept
     return a.texture->handle() == b.texture->handle();
 }
 
+// The ALPHA-RANGE INVARIANT of the GPU material, enforced here because this is the one seam every
+// producer (the glTF loader, procedural materials, variant materials) passes through on its way to
+// the shaders. `Material` accepts any float — it is a plain value type — so the guarantee has to be
+// made where the value becomes GPU truth, not hoped for at each call site.
+//
+// glTF pins both ranges: `baseColorFactor.a` is [0,1], and `alphaCutoff` has a spec minimum of 0.
+// Out-of-range values are normalised to the spec's reading of them rather than rejected — this is
+// authored colour data, not a metric. The two clamps are NOT the same kind of change:
+//
+//   * the CUTOFF clamp is behaviour-preserving. A negative cutoff already discarded nothing in
+//     `shader.frag` (any alpha >= 0 clears it), so mapping it to 0 keeps exactly that;
+//   * the ALPHA clamp deliberately CHANGES behaviour for invalid input, and that is the point. A
+//     negative alpha used to discard in `shader.frag` — an OPAQUE surface silently vanishing on a
+//     value nobody meant, since a non-MASK material packs cutoff 0 and the test still runs. Clamped
+//     to 0 the fragment is kept. That is glTF-spec normalisation of nonsense, not preservation of
+//     it.
+//
+// Two passes depend on the invariant holding:
+//
+//   * `shader.frag` applies `alpha < alphaCutoff` to EVERY material, per the above;
+//   * `depth_prepass.frag` SKIPS that test when the packed cutoff is 0, which is only equivalent to
+//     running it while alpha >= 0. Without this invariant the prepass would keep a fragment the
+//     forward pass discards, leaving a depth-only occluder — the exact class of divergence the
+//     cutout-aware prepass exists to remove.
+//
+// These two are PURE and noexcept, and deliberately do not log. `toMaterialUBO` is reachable from
+// `materialsEquivalent`, which `Object::wouldChangeVariant` and `Mesh::isSelectableVariantState`
+// call from `noexcept` query functions — a throw out of formatting or allocation inside a warning
+// would terminate the process. The diagnostic lives in `warnOnMaterialAlphaRangeIssues` below,
+// which a non-noexcept caller invokes ONCE per material (see Resources::registerMaterial); that
+// also stops a variant-selection query from re-emitting the same warning every frame.
+[[nodiscard]]
+float packedAlpha(float alpha) noexcept
+{
+    if (!std::isfinite(alpha))
+    {
+        return 1.0f; // opaque: the safe reading of a value that names no coverage at all
+    }
+    return std::clamp(alpha, 0.0f, 1.0f);
+}
+
+[[nodiscard]]
+float packedAlphaCutoff(float cutoff) noexcept
+{
+    if (!std::isfinite(cutoff))
+    {
+        return 0.0f; // discards nothing, which is what a non-finite threshold cannot ask for
+    }
+    return std::max(cutoff, 0.0f);
+}
+
 void writeUv(UvXform& dst, const UvTransform& transform) noexcept
 {
     dst.offsetScale[0] = transform.offsetX;
@@ -47,20 +101,53 @@ void writeUv(UvXform& dst, const UvTransform& transform) noexcept
 
 } // namespace
 
+MaterialAlphaRangeIssues materialAlphaRangeIssues(const Material& mat) noexcept
+{
+    // The cutoff is only consulted for MASK — every other mode packs 0 regardless of what was
+    // authored, so an out-of-range cutoff on an OPAQUE material is not an issue with anything.
+    const bool cutoffMatters = mat.alphaMode() == AlphaMode::Mask;
+    return MaterialAlphaRangeIssues{
+        .alpha = packedAlpha(mat.alpha()) != mat.alpha(),
+        .cutoff = cutoffMatters && packedAlphaCutoff(mat.alphaCutoff()) != mat.alphaCutoff(),
+    };
+}
+
+void warnOnMaterialAlphaRangeIssues(const Material& mat)
+{
+    const MaterialAlphaRangeIssues issues = materialAlphaRangeIssues(mat);
+    if (issues.alpha)
+    {
+        log::warn(
+            log::category::general,
+            "material base-colour alpha {} is outside glTF's [0,1] (or not finite); packing {}",
+            mat.alpha(), packedAlpha(mat.alpha()));
+    }
+    if (issues.cutoff)
+    {
+        log::warn(
+            log::category::general,
+            "material alphaCutoff {} is negative or not finite; packing {} (discards nothing)",
+            mat.alphaCutoff(), packedAlphaCutoff(mat.alphaCutoff()));
+    }
+}
+
 MaterialUBO toMaterialUBO(const Material& mat)
 {
     MaterialUBO ubo{};
     ubo.diffuseAlpha[0] = mat.baseColor().r();
     ubo.diffuseAlpha[1] = mat.baseColor().g();
     ubo.diffuseAlpha[2] = mat.baseColor().b();
-    ubo.diffuseAlpha[3] = mat.alpha();
+    ubo.diffuseAlpha[3] = packedAlpha(mat.alpha());
     ubo.emissiveRoughness[0] = mat.emissive().r();
     ubo.emissiveRoughness[1] = mat.emissive().g();
     ubo.emissiveRoughness[2] = mat.emissive().b();
     ubo.emissiveRoughness[3] = mat.roughness();
     ubo.materialParams[0] = mat.metallic();
     ubo.materialParams[1] = mat.normalScale();
-    ubo.materialParams[2] = mat.alphaMode() == AlphaMode::Mask ? mat.alphaCutoff() : 0.0f;
+    // Cutoff reaches the GPU only for MASK — every other mode packs 0, which is what makes the
+    // shared cutout test inert rather than wrong for them.
+    ubo.materialParams[2] =
+        mat.alphaMode() == AlphaMode::Mask ? packedAlphaCutoff(mat.alphaCutoff()) : 0.0f;
     ubo.materialParams[3] = mat.occlusionStrength();
     using Slot = MaterialTextureSlot;
     ubo.textureFlags[0] = mat.texture(Slot::BaseColour).has() ? 1 : 0;

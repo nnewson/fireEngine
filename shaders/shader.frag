@@ -25,16 +25,8 @@ layout(binding = 29) uniform CameraUBO {
 
 // The material authority this draw reads lives in material.glsl (bindless set 2), which indexes
 // materials[] through `pc.materialIndex` — so the push block is declared FIRST and the include
-// follows it.
-layout(push_constant) uniform ForwardPushConstants {
-    int selfShadowSlot;
-    uint materialIndex; // index into the global materials[] SSBO for this draw
-    uint lodLevel;      // selected discrete LOD level (read only for the LOD debug tint)
-    // Level this mesh's shadow draw selected, or 0xFFFFFFFF when it casts no shadow (kNoShadowLod
-    // in graphics/shadow_diagnostics.hpp). Read only for the Shadow-LOD debug tint.
-    uint shadowLodLevel;
-} pc;
-
+// follows it. Both are shared declarations; neither may be restated here.
+#include "forward_push.glsl"
 #include "material.glsl"
 
 // Shared palette for the two LOD debug views, so a level always means the same colour in both.
