@@ -972,6 +972,29 @@ the same change — most have a test or guard that will catch you, but not all.
   is exhaustive over the combinations and over the materialised topology (both GPU-free, so CI runs
   them); `tests/core/test_gltf_node_decomposition.cpp` is the end-to-end confirmation through the
   real loader and is `[.][gpu]`, so it runs locally only.
+- **The draw walk and the transform walks place a node with ONE function**: `Node::drawWorld`.
+  `update` / `resolve` treat a world-override (a ragdoll-driven body, whose pose physics owns) as
+  authoritative and bypass the parent chain and local transform; the draw walk used to recompute
+  `parentWorld * local` and ignore it. Since SH-06 that is not merely inconsistent — the caster
+  prepass measures bounds from `composedWorld_`, so an overridden node would have been drawn at a
+  different pose than its bounds described. The rule has two halves: `drawWorld` places the node
+  itself, and `childWorld` decides what its children inherit — an overridden node does NOT let its
+  component matrix move them, because `update` / `resolve` return early on the override and skip
+  that matrix too. An overridden Animator therefore hands its children the override, not
+  `override * animation`. If you add a third traversal, place nodes with the same two functions.
+- **A shadow caster's world bounds are computed ONCE per frame, in the prepass** (SH-06).
+  `RenderableScene::gatherShadowCasters` fills a `ShadowCasterBoundsFrame` before the cascade fit
+  runs; the fit, the draw build and the diagnostics all read that record. `buildDrawCommands`
+  receives it explicitly and each shadow command looks its own binding up by
+  (`ShadowCasterId`, `ShadowCasterGeneration`) — a missing or duplicate key is terminal, never a
+  silent recompute or an empty box. The draw path used to compute an object-WIDE union of its own,
+  which cost a second skinning pass and handed every binding a box containing space no caster
+  occupied. There is no `Object::computeShadowBounds` any more; if you need bounds during the draw
+  walk, look them up. Two related rules ride with it: the coarse cull asks
+  `Object::localBoundsCoverDrawnGeometry()` (NOT `deformable()`, which answers a different question
+  and would misclassify a rigid sibling binding) so cloth is not culled by a bind-pose box; and a
+  `Stale` bound — cloth, whose vertices a compute pass rewrites — may never be used to EXCLUDE a
+  caster, so `ShadowDrawFilter` and any future cascade-candidate test must pass it through.
 - **A cascade's texel size comes back OUT of the fit, never recomputed** (SH-06).
   `fitCascadeReceiver` (`render/cascade_fit.hpp`) returns `worldPerTexel` alongside the geometry it
   snapped to, and `Renderer::computeShadowCascades` hands that value straight to

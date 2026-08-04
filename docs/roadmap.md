@@ -82,14 +82,42 @@ the plan; the priority order is its § Suggested priority.
     lands; VDPM's UV-deviation channel is an input, not a proof.
   - **A cutout with a real LOD chain** to price that pin. The sweep was re-run on this branch and
     found SH-05's pin costs ~nothing on `ShadowLodDemo` — its masked caster is a two-triangle quad,
-    so it drew its whole mesh either way. The budget/ratio calibration itself is settled (still
-    budget 1, ratio 1.0, measured against a shadowed area that grew 10.4% -> 12.08%; table in
+    so it drew its whole mesh either way. The budget/ratio calibration itself is settled and was
+    re-measured on merged `main` after SH-06 (still budget 1, ratio 1.0; table in
     `render/constants.hpp`), but the pin's cost is untested until such a caster exists.
-- **SH-06** — cascade caster fit (remove fixed-depth clipping, align candidate sets). **Has a
-  reproduction**: on `ShadowLodMotionDemo` the moving sphere loses the top third of its cast shadow
-  as it passes the detail cluster, with shadow LOD off — see [`shadowplans.md`](shadowplans.md)
-  § SH-06 for the capture command.
-- **SH-07** — scale-derived bias & filtering tied to each map's actual texel footprint.
+- ~~**SH-06** — cascade caster fit~~ ✅ **landed** (`shadow-cascade-caster-depth-fit`): the fixed
+  `kShadowDepthBackExtend` is retired as policy. The cascade fit is split into a stable receiver
+  half and a depth half; a Vulkan-free per-frame caster prepass
+  (`RenderableScene::gatherShadowCasters` → `ShadowCasterBoundsFrame`) is the single authority on
+  caster bounds for the fit, the draws and the diagnostics; and `fitCasterAwareCascadeDepth` places
+  the near plane at the furthest-upstream candidate caster and the far plane at the receiver volume.
+  Each cascade is fitted from the start of its predecessor's blend band, with the fraction uploaded
+  in `LightUBO::cascadeParams.x`. Acceptance on `ShadowDepthClipDemo`: 26166 → 35324 shadow pixels.
+  Cloth still forces a marked `LegacyStaleFallback` — see below.
+- **SH-07** — scale-derived bias & filtering tied to each map's actual texel footprint. Better
+  positioned since SH-06: the per-view metrics it needs are already returned by the fit, and the
+  depth span is no longer a fixed constant.
+
+**Open questions and follow-ups left by the milestone-2 work** (each is its own branch):
+
+- **Suggested next: SH-07.** SH-05 landed, so milestone 2 is complete apart from the follow-ups
+  listed above it. SH-07 is better positioned than it was: the per-view metrics it needs already
+  come back out of SH-06's fit, and the depth span is no longer a fixed constant.
+- **The historical half-ellipse is NOT SH-06's motivation and remains unexplained.** It was observed
+  on `ShadowLodMotionDemo` under the engine's FALLBACK sun (the glTF loader was dropping lights on
+  animated nodes), and measurement excluded depth clipping as the cause: zero `clippedNear` events
+  across a 676-row live trace, closest approach 20.7 m. Diagnosing it needs the symptom re-confirmed
+  under the repaired sun, the shadow pass's own per-cascade drawn verdict beside the placement
+  trace, and per-pixel cascade / blend factor / projected shadow U/V at the affected receivers —
+  see [`shadowplans.md`](shadowplans.md) § SH-06.
+- **Cloth cannot be fitted to.** A storage-vertex caster's bounds are its bind pose, so any frame
+  containing one falls back to the legacy depth range for every directional cascade. Closing this
+  needs a conservative simulation or authored envelope for storage geometry; until then the
+  fallback is marked `LegacyStaleFallback` in the fit result and the panel, not silently taken.
+- **GPU-timestamp diagnostics** — parked before SH-07 (invalid timestamps observed under both
+  MoltenVK and KosmicKrisp, so not driver-specific). SH-07's per-view cost claims want it working.
+- **SH-04's proxy half** — `Object::shadowGeometry` was removed rather than documented as unsafe, so
+  there is currently no way to author a shadow proxy at all.
 
 **Milestone 3 — only if measured**
 - **SH-08** — shadow VIPM, *if* discrete transitions remain visibly popping.

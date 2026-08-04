@@ -474,9 +474,51 @@ void Renderer::computeShadowCascades(LightUBO& out, Vec3 cameraPosition, Vec3 ca
             kShadowCascadeSplitLambda * logSplit + (1.0f - kShadowCascadeSplitLambda) * linear;
     }
 
+    // Cleared with the views, for the same reason: a stale fit read next frame would describe a
+    // camera that has moved.
+    cascadeFits_.fill(std::nullopt);
     // Disengage every view before the first producer writes: an inactive slot must not be readable
     // as this frame's. This is the ONE reset, and it must stay ahead of every populate below.
     shadowViews_.reset();
+
+    if (logShadowPlacementThisFrame_ || ((cascadeFitLogCounter_ % 120) == 0))
+    {
+        std::size_t exact = 0;
+        std::size_t stale = 0;
+        std::size_t unbounded = 0;
+        Bounds3 union3{};
+        for (const ShadowCasterBounds& caster : shadowCasterFrame_.entries())
+        {
+            (caster.kind == ShadowCasterBoundsKind::Exact ? exact : stale)++;
+            if (!caster.world.valid)
+            {
+                ++unbounded;
+                continue;
+            }
+            union3.expand(caster.world.min);
+            union3.expand(caster.world.max);
+        }
+        // The union is only a coordinate when something contributed to it. An empty (or wholly
+        // unbounded) caster set leaves `Bounds3`'s max/lowest sentinels, and printing those reads
+        // as a measurement of a scene stretching to the float limits.
+        if (union3.valid)
+        {
+            log::debug(
+                log::category::render,
+                "shadow caster prepass: {} casters ({} exact, {} stale, {} without bounds) | "
+                "world union ({:.2f}, {:.2f}, {:.2f}) .. ({:.2f}, {:.2f}, {:.2f})",
+                shadowCasterFrame_.size(), exact, stale, unbounded, union3.min.x(), union3.min.y(),
+                union3.min.z(), union3.max.x(), union3.max.y(), union3.max.z());
+        }
+        else
+        {
+            log::debug(
+                log::category::render,
+                "shadow caster prepass: {} casters ({} exact, {} stale, {} without bounds) | "
+                "no world union — nothing contributed bounds this frame",
+                shadowCasterFrame_.size(), exact, stale, unbounded);
+        }
+    }
 
     // Periodic, first frame included — AND unconditionally on the frame `--capture-frame` selects.
     // The periodic sample alone cannot describe a capture: at a 120-frame stride, frame 300's image
@@ -490,6 +532,7 @@ void Renderer::computeShadowCascades(LightUBO& out, Vec3 cameraPosition, Vec3 ca
     // capture line, not the first.
     const bool captureFitFrame = captureWanted() && (framesRendered_ + 1) == captureFrame_;
     const bool logFit = ((++cascadeFitLogCounter_ % 120) == 1) || captureFitFrame;
+    logShadowPlacementThisFrame_ = logFit;
 
     float sliceNear = kCameraNearPlane;
     for (uint32_t i = 0; i < kShadowCascadeCount; ++i)
@@ -510,8 +553,11 @@ void Renderer::computeShadowCascades(LightUBO& out, Vec3 cameraPosition, Vec3 ca
         {
             rejectedCascadeFit(i);
         }
-        const std::optional<CascadeDepthFit> depth =
-            fitLegacyCascadeDepth(*receiver, kShadowDepthBackExtend);
+        // SH-06: the depth range comes from this frame's casters, not from a fixed extension. The
+        // prepass ran before this — it has to, since these matrices decide the frustums the draw
+        // walk is culled against — so the caster set is already known.
+        const std::optional<CascadeDepthFit> depth = fitCasterAwareCascadeDepth(
+            *receiver, shadowCasterFrame_.entries(), kShadowDepthBackExtend);
         if (!depth)
         {
             rejectedCascadeFit(i);
@@ -519,7 +565,8 @@ void Renderer::computeShadowCascades(LightUBO& out, Vec3 cameraPosition, Vec3 ca
         // The texel size the cascade snaps to comes back FROM the fit rather than being recomputed
         // here: SH-02 selection reasons about it, and a second derivation would drift the moment
         // the fit changes.
-        if (!shadowViews_.setCascade(i, depth->viewProj,
+        cascadeFits_[i] = RetainedCascadeFit{*receiver, *depth};
+        if (!shadowViews_.setCascade(i, depth->viewProj(),
                                      ShadowView::orthographic(receiver->worldPerTexel())))
         {
             rejectedShadowView(std::format("cascade {}", i));
@@ -529,22 +576,32 @@ void Renderer::computeShadowCascades(LightUBO& out, Vec3 cameraPosition, Vec3 ca
             // Every value here is READ BACK from the two carriers, never re-derived from the
             // inputs above — a diagnostic that recomputes its own numbers agrees with itself while
             // the shipped matrix disagrees with both.
-            log::debug(log::category::render,
-                       "cascade {} fit: slice [{:.3f}, {:.3f}] aspect {:.4f} lightDir ({:.4f}, "
-                       "{:.4f}, {:.4f}) | radius {:.4f} worldPerTexel {:.5f} | U [{:.3f}, {:.3f}] "
-                       "V [{:.3f}, {:.3f}] | centreW {:.3f} receiverW [{:.3f}, {:.3f}] | depth W "
-                       "[{:.3f}, {:.3f}] span {:.3f} lightPos ({:.3f}, {:.3f}, {:.3f})",
-                       i, receiver->sliceNear(), receiver->sliceFar(), receiver->aspect(),
-                       receiver->lightDirection().x(), receiver->lightDirection().y(),
-                       receiver->lightDirection().z(), receiver->radius(),
-                       receiver->worldPerTexel(), receiver->minU(), receiver->maxU(),
-                       receiver->minV(), receiver->maxV(), receiver->centreW(),
-                       receiver->receiverMinW(), receiver->receiverMaxW(), depth->nearW,
-                       depth->farW, depth->viewDepthSpan, depth->lightPosition.x(),
-                       depth->lightPosition.y(), depth->lightPosition.z());
+            log::debug(
+                log::category::render,
+                "cascade {} fit: slice [{:.3f}, {:.3f}] aspect {:.4f} lightDir ({:.4f}, "
+                "{:.4f}, {:.4f}) | radius {:.4f} worldPerTexel {:.5f} | U [{:.3f}, {:.3f}] "
+                "V [{:.3f}, {:.3f}] | centreW {:.3f} receiverW [{:.3f}, {:.3f}] | {} depth W "
+                "[{:.3f}, {:.3f}] span {:.3f} lightPos ({:.3f}, {:.3f}, {:.3f})",
+                i, receiver->sliceNear(), receiver->sliceFar(), receiver->aspect(),
+                receiver->lightDirection().x(), receiver->lightDirection().y(),
+                receiver->lightDirection().z(), receiver->radius(), receiver->worldPerTexel(),
+                receiver->minU(), receiver->maxU(), receiver->minV(), receiver->maxV(),
+                receiver->centreW(), receiver->receiverMinW(), receiver->receiverMaxW(),
+                cascadeDepthFitModeName(depth->mode()), depth->nearW(), depth->farW(),
+                depth->viewDepthSpan(), depth->lightPosition().x(), depth->lightPosition().y(),
+                depth->lightPosition().z());
         }
         out.cascadeSplits[i] = splits[i];
-        sliceNear = splits[i];
+        // The NEXT cascade starts inside this one's blend band, not at the hard split. The forward
+        // shader cross-fades into cascade i+1 over the last `kShadowCascadeBlendFraction` of
+        // cascade i's range, so those receivers sample i+1's map — and since SH-06 fits each
+        // cascade tightly to its own slice, starting i+1 at the split would leave exactly those
+        // receivers outside the rectangle and the depth range they are being sampled from.
+        //
+        // The band is measured from the SHADER's notion of where this cascade starts, which is 0
+        // for cascade 0 rather than the camera near plane (`cascadeBlendFactor`).
+        const float shaderStart = i == 0 ? 0.0f : splits[i - 1];
+        sliceNear = splits[i] - kShadowCascadeBlendFraction * (splits[i] - shaderStart);
     }
 
     // Derived, not copied alongside: the forward shader's cascade lookup reads back out of the set,
@@ -640,6 +697,10 @@ void Renderer::writeIblAndDebugParams(LightUBO& out) const
         tunables_.debugView == DebugView::Joints ? DebugView::None : tunables_.debugView;
     out.environmentParams[2] = static_cast<float>(shaderView);
     out.environmentParams[3] = tunables_.noShadows ? 1.0f : 0.0f;
+    // The SAME constant the cascade fit expands each slice by. Uploaded rather than duplicated as a
+    // shader literal: the fit covers the band, the shader decides who is in it, and two hand-kept
+    // copies would disagree about where it starts.
+    out.cascadeParams[0] = kShadowCascadeBlendFraction;
 }
 
 void Renderer::assignSelfShadowSlots(std::span<DrawCommand> drawCommands)
@@ -932,6 +993,10 @@ void Renderer::updateFrameLighting(RenderableScene& scene, Vec3 cameraPosition, 
     const float aspect = static_cast<float>(extent.width) / static_cast<float>(extent.height);
 
     scene.gatherLights(lightScratch_);
+    // SH-06 prepass, BEFORE the cascade fit: the fit is about to depend on where the casters are,
+    // and the draw list that would otherwise report them does not exist until after the fit has
+    // decided the frustums it will be culled against.
+    scene.gatherShadowCasters(shadowCasterFrame_);
     updateLightData(cameraPosition, cameraTarget, aspect, lightScratch_);
 }
 
@@ -1023,7 +1088,8 @@ const Renderer::DrawBuckets& Renderer::collectDrawCommands(RenderableScene& scen
         pushGroup(ShadowViewGroup::Point);
     }
 
-    const CullStats cull = scene.buildDrawCommands(frame, frustumScratch_, drawCommandScratch_);
+    const CullStats cull =
+        scene.buildDrawCommands(frame, frustumScratch_, shadowCasterFrame_, drawCommandScratch_);
     stats_.trackedNodes = static_cast<int>(cull.tracked);
     stats_.culledNodes = static_cast<int>(cull.culled);
     stats_.vdpmFoldoversRepaired = static_cast<int>(cull.vdpmFoldoversRepaired);
@@ -1118,8 +1184,61 @@ const Renderer::DrawBuckets& Renderer::collectDrawCommands(RenderableScene& scen
     return drawBucketsScratch_;
 }
 
+// SH-06 evidence: where every shadow caster sits relative to every cascade, in that cascade's own
+// light space. Logged on the SAME frames as the cascade fit — periodic plus the `--capture-frame`
+// frame — so a capture and its explanation describe one submitted frame.
+//
+// It separates a caster CLIPPED by the fitted depth range from one whose light-space footprint sits
+// outside the cascade, which a picture cannot: the first shrinks a shadow (measured on
+// `ShadowDepthClipDemo`: 14% linearly, 26% by area, exactly the cap the near plane removes from the
+// recorded back-face surface), the second removes it. Both were candidate explanations for the
+// half-ellipse reported against `ShadowLodMotionDemo`, and neither had been measured.
+//
+// PLACEMENT ONLY. This runs before `ShadowDrawFilter`, so it says where a caster IS, never whether
+// this cascade rasterised it — those are different questions and a straddling caster is perfectly
+// ordinary (light rays preserve U/V, so the part outside the rectangle cannot shadow anything
+// inside it). Attributing a missing shadow needs the pass's own drawn verdict beside this.
+void Renderer::logShadowCasterPlacement(std::span<const DrawCommand> shadowDraws) const
+{
+    constexpr std::array<std::string_view, 4> kFootprintNames{"invalid", "outside", "inside",
+                                                              "straddles"};
+    for (std::uint32_t cascade = 0; cascade < kShadowCascadeCount; ++cascade)
+    {
+        const auto& fit = cascadeFits_[cascade];
+        if (!fit)
+        {
+            continue;
+        }
+        for (const DrawCommand& dc : shadowDraws)
+        {
+            const CascadeCasterPlacement placement =
+                placeCaster(fit->receiver, fit->depth, dc.shadowBounds);
+            // The caster IDENTITY, not just the object: one object can hold several caster
+            // bindings, and the shadow state (hysteresis, drawn history) is keyed on the pair.
+            log::debug(log::category::render,
+                       "cascade {} caster {}/{} (object {}): U [{:.3f}, {:.3f}] V [{:.3f}, {:.3f}] "
+                       "W [{:.3f}, {:.3f}] | cascade U [{:.3f}, {:.3f}] V [{:.3f}, {:.3f}] depth W "
+                       "[{:.3f}, {:.3f}] | footprint={} insideDepth={} clippedNear={} "
+                       "clippedFar={} outsideDepth={}",
+                       cascade, std::to_underlying(dc.shadowRequest.casterId),
+                       std::to_underlying(dc.shadowRequest.generation), dc.objectId, placement.minU,
+                       placement.maxU, placement.minV, placement.maxV, placement.minW,
+                       placement.maxW, fit->receiver.minU(), fit->receiver.maxU(),
+                       fit->receiver.minV(), fit->receiver.maxV(), fit->depth.nearW(),
+                       fit->depth.farW(),
+                       kFootprintNames[static_cast<std::size_t>(placement.footprint)],
+                       placement.insideDepth, placement.clippedNear, placement.clippedFar,
+                       placement.outsideDepth);
+        }
+    }
+}
+
 void Renderer::recordShadowPass(vk::CommandBuffer cmd, const DrawBuckets& buckets)
 {
+    if (logShadowPlacementThisFrame_)
+    {
+        logShadowCasterPlacement(buckets.shadow);
+    }
     std::span<const PointShadowCaster> pointCasterSpan{
         pointCasters_.data(), static_cast<std::size_t>(activePointCasters_)};
     // Self-shadow slots are assigned densely (assignSelfShadowSlots), so the

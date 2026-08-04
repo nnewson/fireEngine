@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <limits>
 
 #include <fire_engine/math/vec3.hpp>
@@ -29,6 +30,24 @@ struct Bounds3
 
         min = {std::min(min.x(), p.x()), std::min(min.y(), p.y()), std::min(min.z(), p.z())};
         max = {std::max(max.x(), p.x()), std::max(max.y(), p.y()), std::max(max.z(), p.z())};
+    }
+
+    // `expand` that cannot SWALLOW a corrupt point. Returns false when `p` is non-finite, and
+    // leaves the box unchanged.
+    //
+    // Plain `expand` uses std::min / std::max, which return the OTHER operand when one side is NaN
+    // — so a NaN vertex silently leaves finite bounds that do not contain the geometry they claim
+    // to. Anything that FITS to bounds (SH-06's cascade depth range) has to be able to tell "no
+    // vertices" from "a vertex nobody can bound": the first contributes nothing, the second must
+    // stop the fit, because a range tightened around geometry it never accounted for clips it.
+    [[nodiscard]] bool expandChecked(Vec3 p) noexcept
+    {
+        if (!std::isfinite(p.x()) || !std::isfinite(p.y()) || !std::isfinite(p.z()))
+        {
+            return false;
+        }
+        expand(p);
+        return true;
     }
 
     [[nodiscard]] Vec3 center() const noexcept

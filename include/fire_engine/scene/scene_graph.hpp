@@ -60,9 +60,11 @@ public:
     // frustums) using the scene's own bounds, an empty span meaning "cull disabled, render all".
     // The culled-node set stays entirely internal; only DrawCommands cross the boundary.
     void gatherLights(std::vector<Lighting>& out) const override;
+    void gatherShadowCasters(ShadowCasterBoundsFrame& out) const override;
     void gatherEmitters(std::vector<EmitterState>& out) const override;
     [[nodiscard]] CullStats buildDrawCommands(const FrameInfo& frame,
                                               std::span<const Frustum> frustums,
+                                              const ShadowCasterBoundsFrame& casterBounds,
                                               std::vector<DrawCommand>& out) override;
     [[nodiscard]] CameraView activeCamera() const override;
 
