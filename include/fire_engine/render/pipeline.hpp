@@ -161,20 +161,37 @@ public:
 
     // Factory producing the PipelineConfig for a depth-only shadow pipeline.
     // Writes only depth into an offscreen D32_SFLOAT attachment (no colour
-    // attachment). Uses front-face culling and depth bias to eliminate
-    // receiver shadow acne. Bindings 0..3 are ShadowUBO / SkinUBO / MorphUBO /
-    // MorphTargets SSBO, all vertex stage.
+    // attachment), with depth bias to eliminate receiver shadow acne. Bindings
+    // 0..3 are ShadowUBO / SkinUBO / MorphUBO / MorphTargets SSBO, all vertex
+    // stage.
+    //
+    // SH-05: cull mode is DYNAMIC here, so this one config serves both a
+    // single-sided caster (cull front faces) and a double-sided one (cull
+    // nothing — the shadow pass used to front-cull a double-sided sheet and
+    // discard the only faces it had), and also the self-shadow FIRST layer,
+    // whose cull-nothing policy is now recorded state rather than its own
+    // pipeline. Every shadow recording site must therefore set the cull mode —
+    // Shadows::recordPass does it per draw from an explicit per-family policy.
+    // It also opts into the bindless material set so the masked variant below
+    // can read the material authority; the opaque fragment path ignores it.
     [[nodiscard]] static PipelineConfig shadowConfig();
 
-    // First pass for skinned self-shadow maps. Same shader/layout as the
-    // regular shadow path but no face culling so the first visible
-    // light-facing surface is captured for dual-depth rejection.
-    [[nodiscard]] static PipelineConfig selfShadowFirstConfig();
+    // SH-05: the ALPHA-MASKED variant of shadowConfig — same vertex path,
+    // layout and dynamic state, with a fragment shader that applies the
+    // material's base-colour alpha cutout so a cutout casts its silhouette
+    // rather than its quad.
+    [[nodiscard]] static PipelineConfig shadowMaskedConfig();
 
     // Second pass for skinned self-shadow maps. Uses the same vertex path and
     // descriptor layout as shadowConfig, but the fragment shader samples the
     // first-depth self map and discards same-surface fragments.
     [[nodiscard]] static PipelineConfig selfShadowSecondConfig();
+
+    // SH-05: the ALPHA-MASKED second self-shadow layer. Same dual-depth
+    // rejection, with the cutout applied first — a cutout caster whose first
+    // layer masks and whose second does not would self-shadow through its own
+    // holes.
+    [[nodiscard]] static PipelineConfig selfShadowSecondMaskedConfig();
 
     // Factory producing the PipelineConfig for the post-process pass.
     // Draws a fullscreen triangle via gl_VertexIndex sampling the offscreen

@@ -104,17 +104,25 @@ TEST_CASE("PipelineConfig.ForwardConfigPushesSet0", "[PipelineConfig]")
     CHECK(Pipeline::forwardConfig().pushDescriptorSet0);
     CHECK(Pipeline::forwardBlendConfig().pushDescriptorSet0);
     CHECK(Pipeline::shadowConfig().pushDescriptorSet0);
-    CHECK(Pipeline::selfShadowFirstConfig().pushDescriptorSet0);
+    CHECK(Pipeline::shadowMaskedConfig().pushDescriptorSet0);
     CHECK(Pipeline::selfShadowSecondConfig().pushDescriptorSet0);
+    CHECK(Pipeline::selfShadowSecondMaskedConfig().pushDescriptorSet0);
     CHECK_FALSE(Pipeline::skyboxConfig().pushDescriptorSet0);
 }
 
-TEST_CASE("PipelineConfig.ShadowConfigCullsFrontFaces", "[PipelineConfig]")
+TEST_CASE("PipelineConfig.ShadowConfigLeavesCullingToTheRecorder", "[PipelineConfig]")
 {
     auto config = Pipeline::shadowConfig();
 
-    CHECK(config.cullMode == vk::CullModeFlagBits::eFront);
+    // SH-05: cull mode is DYNAMIC, so the pipeline carries no static answer — a single-sided caster
+    // (cull front), a double-sided one (cull nothing, which is what stops a sheet authored face-on
+    // to the light from casting nothing at all) and the self-shadow first layer are all one
+    // pipeline now. Shadows::recordPass sets it per draw from an explicit per-family policy.
+    CHECK(config.dynamicCullMode);
     CHECK(config.depthBiasEnable);
+    // The masked fragment path reads the bindless material authority, and the set index must be the
+    // same 2 the forward pipelines use — see the empty set-1 layout in Pipeline's constructor.
+    CHECK(config.bindlessSet);
 
     auto hasBinding = [&](ShadowBinding binding)
     {
@@ -126,19 +134,41 @@ TEST_CASE("PipelineConfig.ShadowConfigCullsFrontFaces", "[PipelineConfig]")
     CHECK(hasBinding(ShadowBinding::SelfShadowDepthSampler));
 }
 
-TEST_CASE("PipelineConfig.SelfShadowConfigsCulling", "[PipelineConfig]")
+TEST_CASE("PipelineConfig.ShadowMaterialModesAreTwoPipelinesEach", "[PipelineConfig]")
 {
-    // First pass rasterises both faces so it captures the light-facing depth.
-    // Second pass culls front faces so only back-facing fragments survive,
-    // which keeps the in-shader discard threshold from flipping on marginal
-    // fragments and producing per-pixel flicker.
-    auto first = Pipeline::selfShadowFirstConfig();
-    auto second = Pipeline::selfShadowSecondConfig();
+    // SH-05's four shadow material modes are (alpha x sidedness), and only the ALPHA half needs a
+    // pipeline: a different fragment shader, everything else identical. The sidedness half is
+    // dynamic cull state, which is why there are two pipelines here and not four.
+    const auto opaque = Pipeline::shadowConfig();
+    const auto masked = Pipeline::shadowMaskedConfig();
 
-    CHECK(first.cullMode == vk::CullModeFlagBits::eNone);
-    CHECK(first.fragShaderPath == "shadow.frag.spv");
-    CHECK(second.cullMode == vk::CullModeFlagBits::eFront);
+    CHECK(opaque.fragShaderPath == "shadow.frag.spv");
+    CHECK(masked.fragShaderPath == "shadow_masked.frag.spv");
+    CHECK(masked.vertShaderPath == opaque.vertShaderPath);
+    CHECK(masked.dynamicCullMode == opaque.dynamicCullMode);
+    CHECK(masked.bindlessSet == opaque.bindlessSet);
+    CHECK(masked.depthFormat == opaque.depthFormat);
+    CHECK(masked.depthCompare == opaque.depthCompare);
+    CHECK(masked.depthBiasEnable == opaque.depthBiasEnable);
+    CHECK(masked.bindings.size() == opaque.bindings.size());
+}
+
+TEST_CASE("PipelineConfig.SelfShadowSecondLayerHasItsOwnFragmentPaths", "[PipelineConfig]")
+{
+    // The FIRST self-shadow layer no longer has a config: it differed from shadowConfig in cull
+    // mode alone, and SH-05 made that dynamic state, so the pass records the main pipelines with an
+    // all-faces policy. The SECOND layer keeps its own pair — its fragment shader samples the first
+    // layer's depth and rejects same-surface fragments, and its masked variant applies the cutout
+    // before that test.
+    const auto second = Pipeline::selfShadowSecondConfig();
+    const auto secondMasked = Pipeline::selfShadowSecondMaskedConfig();
+
     CHECK(second.fragShaderPath == "self_shadow_second.frag.spv");
+    CHECK(secondMasked.fragShaderPath == "self_shadow_second_masked.frag.spv");
+    CHECK(second.dynamicCullMode);
+    CHECK(secondMasked.dynamicCullMode);
+    CHECK(second.bindlessSet);
+    CHECK(secondMasked.bindlessSet);
 }
 
 TEST_CASE("PipelineConfig.SkyboxConfigIncludesCubemapSamplerBinding", "[PipelineConfig]")

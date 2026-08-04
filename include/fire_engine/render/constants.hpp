@@ -101,29 +101,27 @@ inline constexpr float kPointShadowInfiniteRangeFallback = 100.0f;
 // an image-wide average dilutes it away.
 //
 // The shadowed area is MEASURED, not assumed: the pixels that differ between the reference and the
-// same view with `--no-shadows`. It came out at 10.4% of the frame. (A first pass called "darker
-// than half" shadowed, which counted the night skybox and every dark material — 39.8% — and
+// same view with `--no-shadows`. It came out at 12.08% of the frame — 10.4% before SH-05, which is
+// the whole reason this table was re-measured (see the SH-05 note below). (A first pass called
+// "darker than half" shadowed, which counted the night skybox and every dark material — 39.8% — and
 // flattered every percentage by ~3.8x.) The reference captured twice gives a noise floor of exactly
 // zero, so every number below is signal.
 //
 //   budget   differing shadow px   worst px   cascade tris (of 43472 at full detail)
-//                                              [triangle column measured BEFORE SH-04 — see the
-//                                               re-derivation note below; the error column was
-//                                               re-measured after it and did not move]
-//   0.5      0.000%                 0/255     identical to the reference — nothing gained
-//   1        0.003%                66/255     26046  (59.9%)
-//   2        0.243%               121/255     24894  (57.3%)
-//   4        0.356%               121/255     23166  (53.3%)
-//   8        1.551%               139/255     18974  (43.6%)
-//   16       5.837%               166/255     15550  (35.8%)
+//   0.5      0.000%                 0/255     30810  (70.9%)  identical error to the reference
+//   1        0.003%                66/255     29658  (68.2%)
+//   2        0.210%               121/255     28506  (65.6%)
+//   4        0.306%               121/255     26778  (61.6%)
+//   8        1.439%               162/255     22586  (51.9%)
+//   16       5.129%               166/255     19162  (44.1%)
 //
 // ACCEPTANCE THRESHOLD, registered before the numbers were corrected: at most 0.1% of the shadowed
 // pixels may differ from full detail, AND the differences must sit on silhouette edges rather than
-// in filled regions. Under it only 1 passes (0.003%); 2 and 4 now fail. An earlier table with the
+// in filled regions. Under it only 1 passes (0.003%); 2 and 4 fail. An earlier table with the
 // inflated denominator put 4 at 0.093% and selected it — the threshold is deliberately NOT being
 // widened to preserve that answer, because moving a stated criterion after seeing the data is how a
 // calibration becomes a rationalisation. The cost of holding the line is 6.6 percentage points of
-// geometry (59.9% of full detail rather than 53.3%); the gain is a hundredfold smaller error.
+// geometry (68.2% of full detail rather than 61.6%); the gain is a hundredfold smaller error.
 //
 // There is no knee in the savings curve to appeal to — each doubling keeps buying triangles — so a
 // threshold is the only honest basis for the choice.
@@ -154,6 +152,34 @@ inline constexpr float kPointShadowInfiniteRangeFallback = 100.0f;
 // The 0.1% threshold was re-applied unchanged, and still selects 1: budget 2 remains at 0.243% and
 // 4 at 0.356%. Budget 2 becoming eligible once deformable error disappeared was a live possibility
 // worth checking, and it did not happen.
+//
+// RE-MEASURED AFTER SH-05 (material-aware casters), 2026-08-04 — the whole table above, in one run.
+// SH-05 changed the caster mix in the one way this calibration cannot absorb: casters that
+// contributed NOTHING to the shadow mask now contribute (the double-sided sheet was front-culled
+// out of every view; the alpha-masked cutout cast a solid rectangle where it should cast a
+// perforated one). What moved:
+//
+//   * the MEASURED SHADOWED AREA grew 10.4% -> 12.08% of the frame, exactly as predicted, and that
+//     is a bigger denominator for every relative error: 2 went 0.243% -> 0.210%, 4 0.356% ->
+//     0.306%, 8 1.551% -> 1.439%, 16 5.837% -> 5.129%. Budget 1 is unchanged at 0.003%. The
+//     absolute differing-pixel counts moved very little; nearly all of the change is the
+//     denominator;
+//   * the TRIANGLE column is now measured post-SH-04 and post-SH-05 (it had been a pre-SH-04
+//     measurement carried forward with a caveat). At budget 1 it reads 29658/43472 = 68.2%,
+//     matching the 68.2% SH-04's re-derivation reported, and the whole column sits a CONSTANT +3612
+//     triangles above the old pre-SH-04 figures at every budget — the signature of casters pinned
+//     to level 0 regardless of budget, which is what a fallback is;
+//   * SH-05's own contribution to that column is ~nil ON THIS SCENE, and the reason is worth
+//     recording rather than inferring: the alpha-masked caster is a two-triangle quad
+//     (`quad_geometry` in `tools/assetgen/geometry.py`), so it carries a single level and would
+//     have drawn its whole mesh anyway. Before SH-05 it reported `SingleLevel`; now it reports
+//     `AlphaMaskedFallback`. The PIN is therefore untested by cost here — the panel reason is the
+//     only visible effect, and a scene with a cutout carrying a real LOD chain would be needed to
+//     price it.
+//
+// The 0.1% threshold was re-applied unchanged and still selects 1. Budget 2 becoming eligible on
+// the larger denominator was a live possibility — 0.210% is still twice the threshold, so it did
+// not happen.
 //
 // Re-run 2026-08-01 after the glTF animated-light fix and reproduced to every printed digit. That
 // is the expected result rather than a lucky one: the budget half of the sweep runs on the STATIC
@@ -192,8 +218,14 @@ inline constexpr float kShadowLodPixelBudget = 1.0f;
 // Plain transitions likewise include ordinary motion that no dead band can or should remove, so
 // only the reversal column can justify a ratio — and it is zero.
 //
-// Revisit when the caster mix changes — SH-04's deformable fallback and SH-05's material-aware
-// casters both alter what is selected. Instruments: the overlay's "LOD movement" line, the
+// RE-MEASURED after SH-05 (2026-08-04), in the same sweep run as the budget table: 3 / 1 / 1 raw
+// transitions over 677 / 675 / 677 frames = 0.44 / 0.15 / 0.15 per 100 frames, and ZERO reversals
+// at every ratio. Statistically indistinguishable from the figures above, which is the expected
+// result rather than a lucky one: the animated scene's masked caster is now pinned, so it cannot
+// transition at all, and it was a single-level quad that never transitioned before either.
+// Ratio 1.0 stands on the same evidence — no chatter to buy out.
+//
+// Revisit when the caster mix changes again. Instruments: the overlay's "LOD movement" line, the
 // per-frame `FE_LOG=render:debug` record, and `tools/shadow_lod_sweep.sh`.
 inline constexpr float kShadowLodCoarsenRatio = 1.0f;
 

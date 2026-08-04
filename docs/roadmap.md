@@ -24,7 +24,7 @@ the open items so they can't fork:
 |---|---|---|
 | [`codereview.md`](codereview.md) | Rolling **tiered static review**, following the [`review-order.md`](review-order.md) tiers (Tier 0 math, 18 Jul 2026; Tier 1 handles/limits/tunables, 19 Jul 2026). Further tiers expected. | **All open** — arc 3 below |
 | [`architecturalreview.md`](architecturalreview.md) | One-shot **architectural review** (25 Jul 2026) of rendering, shadows/AA, physics, simplifier/VDPM. Audited 26 Jul so every finding now maps to a §6 row or an explicit "informational" tag. **Retire it once reviewed** — arc 2 below is self-contained. | 8 of 19 landed; the rest is arc 2 |
-| [`shadowplans.md`](shadowplans.md) | The **shadow-LOD improvement plan** (SH-01…SH-09) spun out of the architectural review's §2. | SH-01 + SH-02 landed, SH-03 in progress; SH-04…SH-09 open — arc 1 |
+| [`shadowplans.md`](shadowplans.md) | The **shadow-LOD improvement plan** (SH-01…SH-09) spun out of the architectural review's §2. | SH-01…SH-03 + SH-05 landed, SH-04's deformation half landed (proxy half open); SH-06…SH-09 open — arc 1 |
 
 Suggested order below — not binding. One branch per item, off local `main`.
 
@@ -75,7 +75,16 @@ the plan; the priority order is its § Suggested priority.
   compatibility, morph contract, proxy-derived bounds, enforced at load time) is what closes it.
 
 **Milestone 2 — shadow silhouette correctness**
-- **SH-05** — material-aware casters (alpha-mask cutout, double-sided sheets).
+- **SH-05 follow-ups** — the item itself landed (`shadow-material-casters`; rationale in
+  [`shadowplans.md`](shadowplans.md) § SH-05). Two things it deliberately left open:
+  - **A coarser masked-LOD policy** needs a silhouette-error argument. Cutouts are pinned to level 0
+    (`AlphaMaskedFallback`) because no simplifier channel measures where a binary alpha boundary
+    lands; VDPM's UV-deviation channel is an input, not a proof.
+  - **A cutout with a real LOD chain** to price that pin. The sweep was re-run on this branch and
+    found SH-05's pin costs ~nothing on `ShadowLodDemo` — its masked caster is a two-triangle quad,
+    so it drew its whole mesh either way. The budget/ratio calibration itself is settled (still
+    budget 1, ratio 1.0, measured against a shadowed area that grew 10.4% -> 12.08%; table in
+    `render/constants.hpp`), but the pin's cost is untested until such a caster exists.
 - **SH-06** — cascade caster fit (remove fixed-depth clipping, align candidate sets). **Has a
   reproduction**: on `ShadowLodMotionDemo` the moving sphere loses the top third of its cast shadow
   as it passes the detail cluster, with shadow LOD off — see [`shadowplans.md`](shadowplans.md)
@@ -90,7 +99,9 @@ the plan; the priority order is its § Suggested priority.
 hygiene): make `noShadows` suppress *recording*, not just sampling; skip directional/world/self maps
 with no active primary directional light; generate the GLSL shadow-limits include from the C++
 authority instead of repeating `SHADOW_TOTAL_MATRIX_COUNT` / `SHADOW_POINT_MATRIX_BASE` / the
-self-shadow slot count (**same fix as arc 3's Tier 1 finding 2**); keep map validity explicit when a
+self-shadow slot count (**same fix as arc 3's Tier 1 finding 2**; SH-05 reduced each of the three to
+ONE hand-written copy — `shadow.vert`, `shaders/shadow_depth.glsl`, `shaders/self_shadow_second.glsl`
+— but they are still hand-written, so the finding stands); keep map validity explicit when a
 family is skipped.
 
 ---
@@ -178,6 +189,14 @@ between broadphases; handle packing silently aliases invalid inputs), 5 medium, 
 3. **Configuration & diagnostics** — frame-ring logic independent of the literal 2, derived mip
    counts + compile-time render-default relationships, enum logger categories with an indexed
    immutable config, parser/output state into a `.cpp` with precedence tests.
+
+**Out-of-tier finding (2026-08-03).** `depth_prepass.frag` ignores an `alphaMode: MASK` material's
+cutout, so it writes depth through the holes: anything behind a cutout is depth-rejected by the
+forward pass, and SSAO/contact shadows treat the cutout as a solid sheet. Long-standing (visible in
+the pre-SH-05 reference capture), found while landing SH-05, and now a small fix that should reuse
+SH-05's shared `shaders/material.glsl` cutout rather than repeat it — see
+[`codereview.md`](codereview.md) § Out-of-tier finding for the evidence and the two decisions it
+carries.
 
 Further tiers of this review are expected to follow the [`review-order.md`](review-order.md) tiers.
 

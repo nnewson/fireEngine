@@ -188,7 +188,8 @@ private:
 };
 
 void recordShadowDrawBucket(vk::CommandBuffer cmd, std::span<const DrawCommand> shadowDraws,
-                            const Resources& resources, PipelineHandle pipelineHandle,
+                            const Resources& resources, ShadowPipelinePair pipelines,
+                            ShadowFaceCull cullPolicy, const ShadowPushConstants& viewConstants,
                             ShadowDrawFilter filter, const ShadowLodContext& lod,
                             const ShadowViewTarget& target)
 {
@@ -205,7 +206,10 @@ void recordShadowDrawBucket(vk::CommandBuffer cmd, std::span<const DrawCommand> 
         contradictoryShadowViewRow(target.groupName(), target.slot());
     }
 
-    bool pipelineBound = false;
+    // The pipeline currently bound, so the two fragment paths can interleave freely within one
+    // iteration: a family's casters are one span, and splitting it by material would either reorder
+    // the draws or walk it twice. NullPipeline means "nothing bound yet in this iteration".
+    PipelineHandle boundPipeline = NullPipeline;
     for (const auto& dc : shadowDraws)
     {
         // FILTER FIRST, resolve second. Selecting for a caster this view is about to drop would
@@ -233,12 +237,22 @@ void recordShadowDrawBucket(vk::CommandBuffer cmd, std::span<const DrawCommand> 
         {
             continue;
         }
-        if (!pipelineBound)
+        // SH-05: the fragment path this caster needs, from the classification on its REQUEST — the
+        // single place that fact is stored, and the same field the resolver just read to decide the
+        // level. Never from anything the producer could point at a pipeline with directly.
+        const PipelineHandle pipelineHandle = pipelines.forCaster(dc.shadowRequest.alpha);
+        const bool pipelineChanged = pipelineHandle != boundPipeline;
+        if (pipelineChanged)
         {
             cmd.bindPipeline(vk::PipelineBindPoint::eGraphics,
                              resources.vulkanPipeline(pipelineHandle));
-            pipelineBound = true;
+            boundPipeline = pipelineHandle;
         }
+        const vk::PipelineLayout layout = resources.vulkanPipelineLayout(pipelineHandle);
+        // Cull mode is dynamic on every shadow pipeline (SH-05), so it is set per draw and not once
+        // per pass: within one iteration a single-sided and a double-sided caster need different
+        // answers, and the pipeline carries none.
+        cmd.setCullMode(shadowCullMode(cullPolicy, dc.doubleSided));
         if (dc.vertexBuffer != NullBuffer)
         {
             cmd.bindVertexBuffers(0, resources.vulkanBuffer(dc.vertexBuffer), {vk::DeviceSize{0}});
@@ -251,8 +265,32 @@ void recordShadowDrawBucket(vk::CommandBuffer cmd, std::span<const DrawCommand> 
 
         // Shadow set 0 is pushed inline (core 1.4 push descriptors) — no allocated
         // per-object descriptor set, mirroring the forward pass.
-        pushShadowObjectDescriptors(cmd, resources, resources.vulkanPipelineLayout(pipelineHandle),
-                                    dc);
+        pushShadowObjectDescriptors(cmd, resources, layout, dc);
+        if (pipelineChanged)
+        {
+            // Bindless materials (set 2) for the masked fragment path. Bound AFTER the push
+            // descriptors that establish set 0, matching the ordering the forward pass documents
+            // (Vulkan layout compatibility preserves set 0, and this order also avoids a validation
+            // -layer first-use state-tracking defect). Bound for the opaque path too: all four
+            // shadow pipelines share one layout, so this costs one call per pipeline change and
+            // removes any question of which path had the set.
+            //
+            // The SET itself is the one Resources allocated from the FORWARD pipeline's bindless
+            // layout — there is a single global materials set, not one per pipeline. That is legal
+            // because the layouts are IDENTICALLY DEFINED (same bindings, same binding flags, from
+            // Pipeline::createBindlessDescriptorSetLayout), which Vulkan treats as the same layout
+            // for compatibility. Change those bindings and every pipeline that opts in changes with
+            // them, which is exactly the coupling we want here.
+            cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, layout, 2,
+                                   resources.bindlessDescriptorSet(), {});
+        }
+        // Per draw, because materialIndex varies per draw: the view's constants supply everything
+        // else. One struct assembled in one place, so the masked path cannot read a material index
+        // that belongs to the previously recorded caster.
+        ShadowPushConstants pc = viewConstants;
+        pc.materialIndex = dc.materialIndex;
+        cmd.pushConstants<ShadowPushConstants>(
+            layout, vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment, 0, pc);
         cmd.drawIndexed(resolved.indexCount, 1, 0, 0, 0);
         // Recorded HERE, beside the draw itself, so "this family drew this caster" cannot become
         // true for a caster that was only considered.
@@ -265,15 +303,26 @@ void recordShadowDrawBucket(vk::CommandBuffer cmd, std::span<const DrawCommand> 
 Shadows::Shadows(const Device& device, Resources& resources)
     : resources_{&resources},
       shadowPipeline_(device, Pipeline::shadowConfig()),
-      selfShadowFirstPipeline_(device, Pipeline::selfShadowFirstConfig()),
-      selfShadowSecondPipeline_(device, Pipeline::selfShadowSecondConfig())
+      shadowMaskedPipeline_(device, Pipeline::shadowMaskedConfig()),
+      selfShadowSecondPipeline_(device, Pipeline::selfShadowSecondConfig()),
+      selfShadowSecondMaskedPipeline_(device, Pipeline::selfShadowSecondMaskedConfig())
 {
-    shadowPipelineHandle_ =
-        resources_->registerPipeline(shadowPipeline_.pipeline(), shadowPipeline_.pipelineLayout());
-    selfShadowFirstPipelineHandle_ = resources_->registerPipeline(
-        selfShadowFirstPipeline_.pipeline(), selfShadowFirstPipeline_.pipelineLayout());
-    selfShadowSecondPipelineHandle_ = resources_->registerPipeline(
-        selfShadowSecondPipeline_.pipeline(), selfShadowSecondPipeline_.pipelineLayout());
+    // Four pipelines for the four shadow material modes the plan names, not eight: the ALPHA half
+    // (opaque / masked) needs a different fragment shader and so a different pipeline, while the
+    // SIDEDNESS half is dynamic cull state on all of them. The self-shadow FIRST layer needs no
+    // pipeline of its own any more — it is the main pair recorded with AllFaces.
+    shadowPipelines_ = ShadowPipelinePair{
+        .opaque = resources_->registerPipeline(shadowPipeline_.pipeline(),
+                                               shadowPipeline_.pipelineLayout()),
+        .masked = resources_->registerPipeline(shadowMaskedPipeline_.pipeline(),
+                                               shadowMaskedPipeline_.pipelineLayout()),
+    };
+    selfShadowSecondPipelines_ = ShadowPipelinePair{
+        .opaque = resources_->registerPipeline(selfShadowSecondPipeline_.pipeline(),
+                                               selfShadowSecondPipeline_.pipelineLayout()),
+        .masked = resources_->registerPipeline(selfShadowSecondMaskedPipeline_.pipeline(),
+                                               selfShadowSecondMaskedPipeline_.pipelineLayout()),
+    };
 
     // Dynamic rendering needs no framebuffers: recordPass binds each per-layer
     // depth view straight into vk::RenderingInfo (depth-only — no colour
@@ -374,8 +423,9 @@ void Shadows::recordPass(vk::CommandBuffer cmd, std::span<const DrawCommand> sha
     auto recordShadowIteration =
         [&](vk::Image depthImage, uint32_t depthLayer, vk::ImageView depthView, uint32_t extent,
             const ShadowPushConstants& pc, std::span<const DrawCommand> draws,
-            ShadowDrawFilter filter, const ShadowLodContext& lod, PipelineHandle pipelineHandle,
-            float depthBiasConstant, float depthBiasSlope, const ShadowViewTarget& target)
+            ShadowDrawFilter filter, const ShadowLodContext& lod, ShadowPipelinePair pipelines,
+            ShadowFaceCull cullPolicy, float depthBiasConstant, float depthBiasSlope,
+            const ShadowViewTarget& target)
     {
         vk::Viewport vp = makeFullViewport(static_cast<float>(extent), static_cast<float>(extent));
         vk::Rect2D scissor{
@@ -402,12 +452,12 @@ void Shadows::recordPass(vk::CommandBuffer cmd, std::span<const DrawCommand> sha
         cmd.setViewport(0, vp);
         cmd.setScissor(0, scissor);
         cmd.setDepthBias(depthBiasConstant, 0.0f, depthBiasSlope);
-        const vk::PipelineLayout shadowPipelineLayout =
-            resources_->vulkanPipelineLayout(pipelineHandle);
-        cmd.pushConstants<ShadowPushConstants>(
-            shadowPipelineLayout,
-            vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment, 0, pc);
-        recordShadowDrawBucket(cmd, draws, *resources_, pipelineHandle, filter, lod, target);
+        // The push constants are pushed PER DRAW inside the bucket (SH-05 added a per-draw
+        // materialIndex to the block), so `pc` travels in as this view's part of them rather than
+        // being pushed here — one struct, assembled in one place, instead of a view-level push a
+        // per-draw push would then have to agree with.
+        recordShadowDrawBucket(cmd, draws, *resources_, pipelines, cullPolicy, pc, filter, lod,
+                               target);
         cmd.endRendering();
 
         imageLayerBarrier(cmd, depthImage, vk::ImageAspectFlagBits::eDepth, depthLayer,
@@ -423,13 +473,14 @@ void Shadows::recordPass(vk::CommandBuffer cmd, std::span<const DrawCommand> sha
     auto layeredIteration = [&](TextureHandle depthHandle, uint32_t layer, uint32_t extent,
                                 const ShadowPushConstants& pc, std::span<const DrawCommand> draws,
                                 ShadowDrawFilter filter, const ShadowLodContext& lod,
-                                PipelineHandle pipelineHandle, float depthBiasConstant,
-                                float depthBiasSlope, const ShadowViewTarget& target)
+                                ShadowPipelinePair pipelines, ShadowFaceCull cullPolicy,
+                                float depthBiasConstant, float depthBiasSlope,
+                                const ShadowViewTarget& target)
     {
         recordShadowIteration(resources_->vulkanImage(depthHandle), layer,
                               resources_->vulkanShadowMapLayerView(depthHandle, layer), extent, pc,
-                              draws, filter, lod, pipelineHandle, depthBiasConstant, depthBiasSlope,
-                              target);
+                              draws, filter, lod, pipelines, cullPolicy, depthBiasConstant,
+                              depthBiasSlope, target);
     };
 
     // The main CSM and the world-only CSM are recorded as CONTIGUOUS groups rather than interleaved
@@ -452,7 +503,7 @@ void Shadows::recordPass(vk::CommandBuffer cmd, std::span<const DrawCommand> sha
                       const ShadowDrawFilter filter{.frustum = frustum ? &*frustum : nullptr};
                       layeredIteration(
                           shadowMapHandle_, cascade, kShadowMapExtent, pc, shadowDraws, filter,
-                          lodContextFor(*view), shadowPipelineHandle_,
+                          lodContextFor(*view), shadowPipelines_, ShadowFaceCull::PerCaster,
                           kDirectionalShadowRasterBiasConstant, kDirectionalShadowRasterBiasSlope,
                           ShadowViewTarget{stats, ShadowViewGroup::Cascade, cascade, true});
                   }
@@ -486,7 +537,7 @@ void Shadows::recordPass(vk::CommandBuffer cmd, std::span<const DrawCommand> sha
                     const ShadowDrawFilter filter{.frustum = frustum ? &*frustum : nullptr};
                     layeredIteration(
                         worldShadowMapHandle_, cascade, kShadowMapExtent, pc, worldOnlyShadowDraws,
-                        filter, lodContextFor(*view), shadowPipelineHandle_,
+                        filter, lodContextFor(*view), shadowPipelines_, ShadowFaceCull::PerCaster,
                         kDirectionalShadowRasterBiasConstant, kDirectionalShadowRasterBiasSlope,
                         ShadowViewTarget{stats, ShadowViewGroup::WorldOnly, cascade, true});
                 }
@@ -520,16 +571,20 @@ void Shadows::recordPass(vk::CommandBuffer cmd, std::span<const DrawCommand> sha
                 const ShadowDrawFilter filter{.selfShadowSlot = slot};
                 // No frustum: the slot filter already restricts this layer to its one caster.
                 const ShadowLodContext lod = lodContextFor(*view);
+                // FIRST layer: the main pipeline pair with an all-faces policy — since SH-05 made
+                // cull mode dynamic, "capture whatever faces the light sees first" is recorded
+                // state rather than a pipeline that differed from the main one in nothing else.
                 layeredIteration(selfShadowFirstMapHandle_, static_cast<uint32_t>(slot),
                                  kSkinnedSelfShadowMapExtent, pc, selfShadowDraws, filter, lod,
-                                 selfShadowFirstPipelineHandle_, 0.0f, 0.0f,
+                                 shadowPipelines_, ShadowFaceCull::AllFaces, 0.0f, 0.0f,
                                  ShadowViewTarget{stats, ShadowViewGroup::Self, viewSlot, true});
                 // Second depth layer: same logical view re-rasterised, so it hits the resolver's
                 // frame cache — one decision, two layers — and its cost counts while its selection
                 // does not (that would double the histogram for one decision).
                 layeredIteration(selfShadowMapHandle_, static_cast<uint32_t>(slot),
                                  kSkinnedSelfShadowMapExtent, pc, selfShadowDraws, filter, lod,
-                                 selfShadowSecondPipelineHandle_, 0.0f, 0.0f,
+                                 selfShadowSecondPipelines_, ShadowFaceCull::BackFacesOnly, 0.0f,
+                                 0.0f,
                                  ShadowViewTarget{stats, ShadowViewGroup::Self, viewSlot, false});
             }
         });
@@ -554,7 +609,7 @@ void Shadows::recordPass(vk::CommandBuffer cmd, std::span<const DrawCommand> sha
                                                                static_cast<uint32_t>(s)),
                           kSpotShadowMapExtent, pc, shadowDraws,
                           ShadowDrawFilter{.frustum = frustum ? &*frustum : nullptr},
-                          lodContextFor(*view), shadowPipelineHandle_,
+                          lodContextFor(*view), shadowPipelines_, ShadowFaceCull::PerCaster,
                           kPunctualShadowRasterBiasConstant, kPunctualShadowRasterBiasSlope,
                           ShadowViewTarget{stats, ShadowViewGroup::Spot, viewSlot, true});
                   }
@@ -592,7 +647,7 @@ void Shadows::recordPass(vk::CommandBuffer cmd, std::span<const DrawCommand> sha
                                                                     static_cast<uint32_t>(p), face),
                               kPointShadowMapExtent, pc, shadowDraws,
                               ShadowDrawFilter{.frustum = frustum ? &*frustum : nullptr},
-                              lodContextFor(*view), shadowPipelineHandle_,
+                              lodContextFor(*view), shadowPipelines_, ShadowFaceCull::PerCaster,
                               kPunctualShadowRasterBiasConstant, kPunctualShadowRasterBiasSlope,
                               ShadowViewTarget{stats, ShadowViewGroup::Point, viewSlot, true});
                       }

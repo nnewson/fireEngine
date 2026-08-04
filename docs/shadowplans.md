@@ -258,8 +258,8 @@ would certify nothing.
 |---|---|
 | Every shadow view rasterises the level the **camera** picked; one command is replayed into all of them | **SH-03** |
 | Skinned and morphed casters select simplified levels like any rigid mesh — there is no deformation fallback, and their error claims are unverified | **SH-04** |
-| The alpha-masked cutout casts a solid silhouette — `shadow.frag` samples no texture, so the mask has no effect on its shadow | **SH-05** |
-| The double-sided sheet casts nothing at all: it is authored face-on to the sun, and the shadow pipeline fixes `cullMode = eFront` while the forward pass draws both sides of a double-sided material, so the shadow pass culls the only faces it has. The verdict is per-light — a punctual light on the quad's *back* side keeps exactly the faces the sun's view culls, so the same quad would cast a grazing sliver from it; the scene places both flat quads out of punctual reach so this second effect doesn't sit on top of the first | **SH-05** |
+| ~~The alpha-masked cutout casts a solid silhouette — `shadow.frag` samples no texture, so the mask has no effect on its shadow~~ — **fixed by SH-05** | **SH-05** ✅ |
+| ~~The double-sided sheet casts nothing at all: it is authored face-on to the sun, and the shadow pipeline fixes `cullMode = eFront` while the forward pass draws both sides of a double-sided material, so the shadow pass culls the only faces it has~~ — **fixed by SH-05** (cull mode is per-draw dynamic state now; double-sided casters cull nothing). The verdict had been per-light — a punctual light on the quad's *back* side keeps exactly the faces the sun's view culls, so the same quad would have cast a grazing sliver from it; the scene places both flat quads out of punctual reach so that second effect never sat on top of the first | **SH-05** ✅ |
 | Node scale (including the non-uniform caster) does not participate in a projected-texel policy, because there is no such policy yet | **SH-02** |
 
 Likely branch: `shadow-lod-diagnostics`.
@@ -542,27 +542,89 @@ design, so forcing them to LOD0 changes the caster mix and the measured tables m
 
 ### Milestone 2 — shadow silhouette correctness
 
-#### SH-05: Material-aware caster pipelines
+#### SH-05: Material-aware caster pipelines — ✅ landed (branch `shadow-material-casters`)
 
-The shadow fragment path currently cannot apply the visible material's alpha mask, and the generic
-shadow pipeline front-culls even double-sided materials. Add explicit shadow material modes:
+The shadow fragment path could not apply the visible material's alpha mask, and the generic shadow
+pipeline front-culled even double-sided materials. Both were visible in `ShadowLodDemo`: the
+alpha-masked cutout cast a solid rectangle, and the double-sided sheet — authored face-on to the sun —
+cast nothing at all, because `cullMode = eFront` discarded the only faces it had.
 
-- opaque single-sided;
-- opaque double-sided;
-- alpha-masked single-sided; and
-- alpha-masked double-sided.
+The item asked for four shadow material modes (opaque / alpha-masked x single- / double-sided). They
+landed as **two pipelines, not four**: only the ALPHA half needs a different fragment shader, and the
+SIDEDNESS half is dynamic cull state, which the shadow pipelines had never used.
 
-The mask path must sample base-colour alpha with the material's selected UV set,
-`KHR_texture_transform`, sampler, factor, and `alphaCutoff`, then discard consistently with the
-forward shader. Reuse the bindless material authority rather than constructing a parallel shadow
-material format.
+What landed:
 
-For alpha-masked LOD, begin at LOD0. A later coarser policy must consider UV/cutout silhouette error,
-not only geometry error; VDPM's UV-deviation channel is a useful input, but it is not by itself a
-proof that a binary alpha boundary is preserved. BLEND shadow semantics should be a separate design
-decision (opaque/dithered/transmittance), not accidentally treated as MASK.
+- **`ShadowCasterAlpha` (`Opaque` / `Masked`)** on the request and the command, classified once at
+  the object seam by `shadowCasterAlpha(const Material&)`
+  (`graphics/shadow_caster_alpha.hpp`) — the SH-04 shape, for the SH-04 reasons: a classification
+  rather than a policy switch, testable without a GPU, and derived ONCE so the LOD decision and the
+  fragment path cannot disagree about what a caster is. It defaults to **Masked**, the pessimistic
+  answer: a caster wrongly classified Masked pays a fetch and full detail and *says so* in the panel,
+  while one wrongly classified Opaque silently reinstates the solid rectangle. BLEND maps to Opaque
+  deliberately — its shadow semantics (opaque / dithered / transmittance) remain an open design
+  decision, and the cutout path would settle it by accident.
+- **`shadow_masked.frag` + `self_shadow_second_masked.frag`**, applying the cutout through the
+  BINDLESS MATERIAL AUTHORITY (`shaders/material.glsl`, set 2) reached by a new
+  `ShadowPushConstants::materialIndex` — the same `materials[]` SSBO and texture array the forward
+  shader indexes, with the material's UV set, `KHR_texture_transform`, sampler and factor. The
+  masked *second* self-shadow layer is not optional detail: a cutout caster whose first layer masks
+  and whose second does not would record a second surface where the first recorded none, and
+  self-shadow through its own holes.
+- **One implementation of the cutout test.** `materialBaseColourTexel`, `materialSlotUv`,
+  `materialAlpha` and `materialAlphaCutoutFails` moved into `shaders/material.glsl`, and
+  `shader.frag` now calls them too, so forward and shadow apply the same cutoff to the same UVs by
+  construction rather than by review. Four shared shader includes were extracted with it
+  (`material.glsl`, `shadow_push.glsl`, `shadow_depth.glsl`, `self_shadow_second.glsl`), and `Materials` + `ShadowPushConstants` are now GUARDED blocks
+  (`cmake/check_shader_blocks.cmake`) — the push block had been hand-copied into three shadow stages
+  and would have become four.
+- **Dynamic cull mode on every shadow pipeline**, set per draw from an explicit per-family
+  `ShadowFaceCull` policy (`PerCaster` / `AllFaces` / `BackFacesOnly`). `PerCaster` is what fixes the
+  sheet: double-sided casters cull nothing, single-sided still cull front faces. Because the policy
+  is now recorded state, the self-shadow FIRST pipeline disappeared — it had differed from the main
+  shadow pipeline in cull mode alone.
+- **Bindless is always set 2.** A shadow pipeline wants the bindless set without forward globals, and
+  descriptor sets must be contiguous, so it would have received it at set 1 while forward pipelines
+  have it at 2 — making "which set is bindless?" a per-pass fact for `material.glsl` and every
+  recorder. `Pipeline`'s constructor declares an EMPTY set-1 layout in that case instead.
+- **Alpha-masked shadow LOD begins at level 0**, reported as
+  `ShadowLodReason::AlphaMaskedFallback` with an INFINITE projected error (not 0, which would rank a
+  cutout as the frame's most accurate caster). Precedence: `InvalidCaster` -> `LodDisabled` ->
+  `DeformableFallback` -> **`AlphaMaskedFallback`** -> `SingleLevel` -> selection. Below deformation
+  because a mesh that moves after measurement has no valid error model at all, which is the stronger
+  statement; above the chain length so a single-level cutout still reports why it may not select.
+  Like every forced fallback it stages no hysteresis history.
 
-Likely branch: `shadow-material-casters`.
+**The silhouette policy is still open, and this reason is what keeps it visible.** No channel the
+simplifier records measures a cutout boundary: a collapse can hold the surface inside the shadow
+budget while moving the alpha edge anywhere (a shifted wedge UV redraws the leaf's edge). VDPM's
+UV-deviation channel is a useful input but is not a proof that a binary alpha boundary is preserved,
+so a coarser masked policy needs a silhouette-error argument first.
+
+**The SH-03 budget sweep was re-run in the same branch** (`tools/shadow_lod_sweep.sh`, idle machine),
+because SH-05 changes which casters reach the shadow mask and every relative percentage in that
+calibration is measured against the shadowed area. The full table lives in `render/constants.hpp`;
+the outcome:
+
+- the measured shadowed area grew **10.4% -> 12.08%** of the frame — the predicted effect, and a
+  bigger denominator, so every relative error fell slightly (budget 2 0.243% -> 0.210%, 4 0.356% ->
+  0.306%, 8 1.551% -> 1.439%, 16 5.837% -> 5.129%; budget 1 unchanged at 0.003%);
+- the **0.1% acceptance threshold re-applied unchanged still selects budget 1**. Budget 2 becoming
+  eligible on the larger denominator was a live possibility and did not happen;
+- the dead-band half is statistically unchanged (3 / 1 / 1 transitions, **zero reversals** at every
+  ratio), so ratio 1.0 stands;
+- SH-05's LOD pin costs ~nothing on this scene, and the reason is recorded rather than inferred: the
+  masked caster is a two-triangle quad, so it carried a single level and drew its whole mesh anyway.
+  It reported `SingleLevel` before and reports `AlphaMaskedFallback` now. **The pin is therefore
+  untested by cost** — pricing it needs a cutout with a real LOD chain, which is a scene the
+  acceptance set does not yet have.
+
+The acceptance capture for the cutout and the sheet is a single `ShadowLodDemo` frame, and both
+reference images were regenerated. The two fixes interact (making the pass respect `doubleSided`
+changes which faces record depth, which changes what the alpha test then discards), so they were
+landed and signed off together rather than in two passes. Expect the sheet's camera-facing side to
+read DARK in the new capture: the sun is behind it, so once it records depth it correctly shadows
+itself — before SH-05 it was bright because nothing of it reached the shadow map at all.
 
 #### SH-06: Receiver/caster-aware cascade depth fitting
 
@@ -845,7 +907,7 @@ The key success criteria for Milestone 1 are:
 | 2 | ~~SH-02 pure projection model~~ ✅ | Makes the central policy testable before renderer plumbing. |
 | 3 | ~~SH-03 per-view discrete LOD~~ ✅ | Fixes the requested architectural mismatch. |
 | 4 | SH-04 deformation/proxy policy — **deformation half ✅**, proxy half open | Removes invalid error claims and defines safe extension points. |
-| 5 | SH-05 material-aware casters | Fixes visibly wrong cutout and two-sided silhouettes. |
+| 5 | ~~SH-05 material-aware casters~~ ✅ | Fixed the cutout and two-sided silhouettes; the coarser masked-LOD policy stays open behind `AlphaMaskedFallback`. |
 | 6 | SH-06 cascade caster fit | Removes fixed-depth clipping and aligns candidate sets. |
 | 7 | SH-07 scale-derived bias/filtering | Makes quality controls physically tied to each map. |
 | 8 | SH-08 shadow VIPM | Add only if measured popping remains. |

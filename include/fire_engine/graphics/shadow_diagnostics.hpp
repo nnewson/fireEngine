@@ -59,6 +59,15 @@ enum class ShadowLodReason : std::uint8_t
     // absence of a valid error model, and a panel that showed one for the other would answer "why
     // is this caster at full detail?" with somebody else's reason.
     DeformableFallback,
+    // SH-05. The caster's coverage comes from an alpha cutout, so its silhouette is a property of
+    // base-colour alpha and UVs — which the simplifier's deviation channels do not measure. A
+    // coarser level can preserve the surface to within the budget and still move the cutout
+    // boundary arbitrarily (a collapse that shifts a wedge UV redraws the leaf's edge), so no level
+    // below full detail is justified yet. Distinct from DeformableFallback because the missing
+    // evidence is different: there the geometry moves after measurement, here the measurement never
+    // covered what decides the silhouette. SH-05 leaves the coarser policy — silhouette error over
+    // the UV channel — as future work, and this reason is what makes its absence visible.
+    AlphaMaskedFallback,
     Count
 };
 

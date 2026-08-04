@@ -28,6 +28,8 @@ std::string_view toString(ShadowLodReason reason) noexcept
         return "invalid previous level";
     case ShadowLodReason::DeformableFallback:
         return "deformable caster";
+    case ShadowLodReason::AlphaMaskedFallback:
+        return "alpha-masked caster";
     case ShadowLodReason::Count:
         break;
     }

@@ -31,6 +31,26 @@ enum class ShadowCasterDeformation : std::uint8_t
     Deformable,
 };
 
+// SH-05: whether this caster's shadow silhouette is its geometry, or its geometry MINUS the
+// fragments an alpha cutout discards.
+//
+// A MASK material's shadow is not the shadow of its triangles. A leaf card is a quad whose visible
+// shape comes entirely from base-colour alpha, so a depth-only pass that samples no texture records
+// the quad — not a slightly wrong leaf, a rectangle. Like ShadowCasterDeformation above this is a
+// CLASSIFICATION and not a policy switch: the resolver decides what it means for LOD, and the
+// shadow pass decides which fragment path rasterises it.
+enum class ShadowCasterAlpha : std::uint8_t
+{
+    // Every rasterised fragment occludes. OPAQUE materials, and — deliberately — BLEND ones: what a
+    // blended surface ought to cast (opaque / dithered / transmittance) is its own design decision,
+    // and routing it through the cutout path would answer that question with "cutout" by accident.
+    Opaque,
+    // Fragments below the material's alphaCutoff must not occlude: the pass samples base-colour
+    // alpha through this material's UV set, KHR_texture_transform, sampler and factor, and discards
+    // on exactly the test the forward shader applies.
+    Masked,
+};
+
 // SH-03: a shadow caster described but NOT yet resolved to geometry.
 //
 // The whole point of the seam. A shadow command used to arrive with an index buffer already chosen
@@ -74,6 +94,13 @@ struct ShadowGeometryRequest
     // loud, findable symptom); the opposite default would silently select levels on an error claim
     // nobody established, which is exactly the defect this field exists to close.
     ShadowCasterDeformation deformation{ShadowCasterDeformation::Deformable};
+    // SH-05. Defaults to Masked, the safe answer, on the same principle as `deformation`'s
+    // Deformable: the optimistic default is the one whose failure is silent. A rigid caster wrongly
+    // classified Masked pins to full detail and pays a texture fetch per shadow fragment — visible
+    // in the panel as AlphaMaskedFallback, and identical depth either way, because the material
+    // authority publishes alphaCutoff 0 for everything that is not MASK. One wrongly classified
+    // Opaque casts a solid rectangle for a leaf card and reports nothing at all.
+    ShadowCasterAlpha alpha{ShadowCasterAlpha::Masked};
 
     // A request that can actually be resolved into a draw. False means the producer left it
     // unfilled — which must not silently become "full detail".

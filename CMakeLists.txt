@@ -101,6 +101,7 @@ add_library(fireengine SHARED
     src/graphics/mesh_topology.cpp
     src/graphics/shadow_identity.cpp
     src/graphics/shadow_lod_resolver.cpp
+    src/graphics/shadow_caster_alpha.cpp
     src/graphics/shadow_caster_deformation.cpp
     src/graphics/shadow_render_view.cpp
     src/graphics/shadow_diagnostics.cpp
@@ -231,7 +232,9 @@ set(SHADER_SOURCES
     shaders/brdf_integration.frag
     shaders/shadow.vert
     shaders/shadow.frag
+    shaders/shadow_masked.frag
     shaders/self_shadow_second.frag
+    shaders/self_shadow_second_masked.frag
     shaders/depth_prepass.frag
     shaders/ssao.frag
     shaders/ssao_blur.frag
@@ -289,6 +292,10 @@ set(SHADER_INCLUDES
     ${PROJECT_SOURCE_DIR}/shaders/vdpm_repair_classify.glsl
     ${PROJECT_SOURCE_DIR}/shaders/vdpm_apply_classify.glsl
     ${PROJECT_SOURCE_DIR}/shaders/light_ubo.glsl
+    ${PROJECT_SOURCE_DIR}/shaders/material.glsl
+    ${PROJECT_SOURCE_DIR}/shaders/shadow_push.glsl
+    ${PROJECT_SOURCE_DIR}/shaders/shadow_depth.glsl
+    ${PROJECT_SOURCE_DIR}/shaders/self_shadow_second.glsl
 )
 
 foreach(shader IN LISTS SHADER_SOURCES)
@@ -418,6 +425,7 @@ add_executable(test_fire_engine
     tests/graphics/test_shadow_identity.cpp
     tests/graphics/test_shadow_lod_resolver.cpp
     tests/graphics/test_shadow_caster_deformation.cpp
+    tests/graphics/test_shadow_caster_alpha.cpp
     tests/graphics/test_shadow_render_view.cpp
     tests/graphics/test_texture.cpp
     tests/graphics/test_sampler_settings.cpp
@@ -426,6 +434,7 @@ add_executable(test_fire_engine
     tests/render/test_descriptors.cpp
     tests/render/test_device_plan.cpp
     tests/render/test_pipeline_config.cpp
+    tests/render/test_shadow_raster_policy.cpp
     tests/render/test_vdpm_gpu.cpp
     tests/render/test_vdpm_gpu_front.cpp
     tests/render/test_vdpm_gpu_repair.cpp

@@ -415,24 +415,28 @@ this order:
    open floor near x 14, z 11 — front-right of the view. It must not vanish or change silhouette as
    the camera turns.
 5. **Cutout and sheet** — out at z ≈ −8 and z ≈ −12, deliberately beyond every punctual light's
-   reach so the **sun is the only light that can cast from them** (the generator asserts it). Both
-   are **known** SH-05 exposures: record what you see, don't "fix" them here.
-   - The cutout casts a **solid rectangle** on the floor around x [−4.1, −0.3], z [−10.8, −6.9],
-     while the surface itself is visibly perforated: `shadow.frag` samples no texture at all, so the
-     alpha mask has no effect on its shadow. It is authored double-sided because it must be: to cast
-     at all, the sun has to be on its back side (the shadow pass culls front faces), which puts the
-     camera on the back face too — so a single-sided flat caster cannot be both visible and casting
-     in the engine today. That constraint is itself an SH-05 note.
+   reach so the **sun is the only light that can cast from them** (the generator asserts it). These
+   were the two **SH-05** exposures, and since that item landed they are the two things to CHECK
+   rather than record:
+   - The cutout must cast a **perforated** shadow on the floor around x [−4.1, −0.3],
+     z [−10.8, −6.9] — the checker pattern of its own base-colour alpha, matching the perforation you
+     see on the surface. A solid rectangle there means the masked shadow path has stopped applying
+     (`shadow_masked.frag`, or the caster's `ShadowCasterAlpha` classification). It is authored
+     double-sided, and now for a milder reason than before: a single-sided caster no longer has to
+     put the sun on its back face to cast at all, but keeping it double-sided is what exercises the
+     masked *and* two-sided mode together.
    - The sheet is a zero-thickness quad turned **face-on to the sun** (the generator computes the
      rotation, and asserts it isn't near edge-on — an edge-on quad projects to a line, which is
-     indistinguishable from casting nothing). You see its **lit** face; the floor beneath it, around
-     x [−0.5, 5.0], z [−15.0, −10.9], stays **clear**. That gap is the finding: the shadow pipeline
-     fixes `cullMode = eFront` (`Pipeline::shadowConfig`, non-dynamic) while the forward pass draws
-     both sides of a double-sided material, so the shadow pass culls the only faces the quad has.
-     When SH-05 makes the two passes agree, this same node starts casting a full quad there — no
-     re-authoring needed. Note the verdict is **per light**: a punctual light on the quad's back
-     side would keep exactly the faces the sun's view culls, which is why both flat quads are placed
-     beyond punctual reach.
+     indistinguishable from casting nothing). It must cast a **full quad** on the floor around
+     x [−0.5, 5.0], z [−15.0, −10.9]. Expect the face you see to be **dark**, and that is the same
+     fix, not a second finding: the sun is behind the quad from the camera, so once the quad records
+     depth it correctly shadows its own camera-facing side — before SH-05 it was bright there because
+     nothing of it reached the shadow map at all. An empty floor beneath it means the pass has gone
+     back to front-culling a double-sided caster (`ShadowFaceCull::PerCaster` in
+     `Shadows::recordPass`). Note the verdict used to be **per light**: a punctual light on the
+     quad's back side would have kept exactly the faces the sun's view culled, which is why both
+     flat quads are placed beyond punctual reach — that isolation is still worth keeping, because it
+     is what makes "the sun's view" the only variable in these two checks.
 
 #### Reference captures
 
@@ -461,7 +465,11 @@ would be 800×600 on a non-HiDPI machine. Compare like with like.
 
 **These are documented baselines, not a pass/fail gate.** Identical input pixels encode to identical
 PNG bytes, but the Vulkan output itself is not guaranteed byte-identical across GPUs, drivers or
-platforms, so a hash comparison would produce false failures. The enforceable tolerance arrives with
+platforms, so a hash comparison would produce false failures. Nor is it byte-identical **run to run
+on one machine**: measured while landing SH-05, two consecutive captures of this static scene differ
+by up to **3/255** on some pixels — the same magnitude as a fresh capture against the committed one.
+So `cmp` is the wrong tool even locally; compare with the sweep's own metric
+(`tools/shadow_lod_sweep.sh` counts pixels differing by more than 8/255, which is above this floor). The enforceable tolerance arrives with
 SH-02's shadow-texel metric; until then these record what the engine did on the day.
 
 | Selected LOD (default) | Full detail (`--no-lod`) |
