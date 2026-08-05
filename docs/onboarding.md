@@ -556,7 +556,11 @@ The render layer is where most difficult bugs live.
   (dynamic rendering, after post-process) and forwards `WantCaptureMouse/Keyboard` so the main loop
   can gate camera input. Non-movable (owns ImGui global state).
 - `GpuProfiler`: timestamp `VkQueryPool` ring. Each pass writes a begin/end pair; results are read
-  back a frame-cycle later into a `FrameStats`. Disabled gracefully when timestamps are unsupported.
+  back a frame-cycle later into a `FrameStats`. Disabled gracefully when timestamps are unsupported —
+  and `FrameStats::gpuTiming` says WHICH of unsupported / warming-up / valid applies, because
+  collapsing those three into one "unavailable" message is how a readback bug (see § Sharp Edges)
+  survived as a supposed driver limitation. The pure half — availability policy and tick arithmetic —
+  is the free `resolveTimestampWords`, unit-tested without a GPU.
 - `RenderTunables` (`render_tunables.hpp`): the live, overlay-editable render parameters (TAA,
   debug view, bloom/IBL/sun, particle scales, cloth solver substeps/compliance/damping/gravity/wind).
   Seeded from `constants.hpp` + the CLI debug flags; the `Renderer` reads it every frame instead of
@@ -581,7 +585,11 @@ Per-frame render order:
 12. draw the ImGui debug overlay over the swap image, then transition it to present
 13. submit and present
 
-Each GPU pass is bracketed by `GpuProfiler` timestamp writes; the results feed the overlay one frame-cycle later.
+Each GPU pass is bracketed by `GpuProfiler` timestamp writes — both boundaries at bottom-of-pipe, so
+the per-pass values are consecutive deltas along one timeline rather than a mix of conventions — and
+the results feed the overlay one frame-cycle later. The panel's figure is labelled **"Measured pass
+sum"**, not "Total": it adds the instrumented passes only, and a frame also contains setup, present
+and anything nobody bracketed, so it is not GPU frame latency.
 
 Interesting detail: shadow rendering replays compatible draw commands through different
 pipelines. Skinning and morph targets still run in the shadow vertex shader so animated
@@ -1177,6 +1185,16 @@ the same change — most have a test or guard that will catch you, but not all.
 ## Sharp Edges
 
 - `graphics/` must remain Vulkan-free, and `render/`/`scene/` are siblings that meet only through `graphics/` — enforced by the `layering_guards` CTest case (`cmake/check_layering.cmake`): `graphics/` and `scene/` *headers* must not include `render/`, and `render/` headers must not include `scene/` (CR-09). The scene reaches the renderer through the Vulkan-free `graphics/renderable_scene.hpp` `RenderableScene` interface, not a concrete type. Shared GPU data-layout limits live in `graphics/gpu_limits.hpp` so graphics headers can size arrays without reaching into `render/`. Graphics `.cpp` files may still include `render/resources.hpp` to allocate GPU resources.
+- **`VK_NOT_READY` from `vkGetQueryPoolResults` is not an error — it is the expected result of a
+  polling read.** Without `VK_QUERY_RESULT_WAIT_BIT` the call returns it whenever ANY query in the
+  requested range is unavailable, and with `VK_QUERY_RESULT_WITH_AVAILABILITY_BIT` the per-query
+  availability words are written anyway, which is the whole point of asking for them. `GpuProfiler`
+  treated it as failure and returned early, so per-pass GPU timings were dead on every device and
+  every driver — a frame always has passes that did not run (no transmissive draw, no spot light, no
+  VDPM front), and their queries stay reset and unavailable for that slot. The symptom ("GPU
+  timestamps unavailable" under both MoltenVK and KosmicKrisp) read as a platform limitation and was
+  parked as one for months. If you add a query-pool read, decide explicitly whether you are polling
+  (accept NotReady, filter on availability) or waiting (`WAIT` bit, and accept the stall).
 - Vulkan-Hpp is built with `VULKAN_HPP_NO_CONSTRUCTORS`; use designated initializers.
 - Vulkan structs often contain pointers. Keep pointed-to arrays and descriptor infos alive
   until the Vulkan call using them has returned.

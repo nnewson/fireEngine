@@ -251,7 +251,7 @@ void drawShadowDiagnostics(const FrameStats& stats, RenderTunables& tunables)
             // "n/a", not the word: the column is narrow enough that "unavailable" clipped, and a
             // clipped diagnostic is one nobody reads. The banner above already says why.
             char timing[32] = "n/a";
-            if (stats.gpuValid)
+            if (stats.gpuValid())
             {
                 // A family that never rasterised has no bracketed span this frame — its resolved
                 // time is 0 because nothing ran, which is a different fact from "not measured".
@@ -295,7 +295,7 @@ void drawShadowDiagnostics(const FrameStats& stats, RenderTunables& tunables)
         // The five families are disjoint spans (there is no outer shadow timer), so their sum IS
         // the frame's shadow time.
         char totalTiming[32] = "n/a";
-        if (stats.gpuValid)
+        if (stats.gpuValid())
         {
             float shadowMs = 0.0f;
             for (std::size_t g = 0; g < kShadowViewGroupCount; ++g)
@@ -405,7 +405,7 @@ void DebugOverlay::buildUi(const FrameStats& stats, RenderTunables& tunables)
                      0.0f, 33.3f, ImVec2(0.0f, 50.0f));
 
     ImGui::Separator();
-    if (stats.gpuValid)
+    if (stats.gpuValid())
     {
         ImGui::Text("GPU passes (ms):");
         if (ImGui::BeginTable("gpu", 2, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_RowBg))
@@ -420,15 +420,28 @@ void DebugOverlay::buildUi(const FrameStats& stats, RenderTunables& tunables)
             }
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
-            ImGui::TextUnformatted("Total");
+            // NOT "Total": this is the sum of the passes that are INSTRUMENTED, and the frame
+            // contains work that is not — command-buffer setup, present, anything between passes,
+            // and any pass nobody bracketed. Calling it a total invites reading it as GPU frame
+            // latency, which it is not. A dedicated outer span would be the honest way to show that
+            // number; until one exists the label says what the figure actually is.
+            ImGui::TextUnformatted("Measured pass sum");
             ImGui::TableNextColumn();
-            ImGui::Text("%.3f", stats.gpuTotalMs);
+            ImGui::Text("%.3f", stats.gpuMeasuredPassSumMs);
             ImGui::EndTable();
         }
     }
+    else if (stats.gpuTiming == GpuTimingState::Unsupported)
+    {
+        // The device genuinely cannot: zero timestampPeriod or zero queue timestampValidBits. The
+        // startup WARN carries both numbers.
+        ImGui::TextDisabled("GPU timestamps unsupported on this device");
+    }
     else
     {
-        ImGui::TextDisabled("GPU timestamps unavailable");
+        // Supported, nothing to show yet. Distinguished from the above because the two used to
+        // render identically, and a readback bug spent months looking like a device limitation.
+        ImGui::TextDisabled("GPU timings warming up...");
     }
 
     ImGui::Separator();

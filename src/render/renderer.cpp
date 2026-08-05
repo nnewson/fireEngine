@@ -1587,7 +1587,7 @@ void Renderer::drawFrame(Window& display, RenderableScene& scene, float dt)
                 "VDPM GPU perf: record {:.3f} ms CPU | compute {:.3f} ms GPU (valid {}) | {} "
                 "front(s), ~{} dispatches ({} apply + {} repair batched jobs), max {}/{} marked "
                 "rounds",
-                stats_.vdpmRecordCpuMs, gpuMs, stats_.gpuValid, stats_.vdpmFrontsRecorded,
+                stats_.vdpmRecordCpuMs, gpuMs, stats_.gpuValid(), stats_.vdpmFrontsRecorded,
                 stats_.vdpmAnalyticDispatches, stats_.vdpmApplyJobs, stats_.vdpmRepairJobs,
                 stats_.vdpmMaxMarkedRounds, stats_.vdpmRepairRoundBudget);
             // Per-stage breakdown (apply-kernel checkpoint). CPU ms is summed over the frame's
@@ -1625,8 +1625,9 @@ void Renderer::drawFrame(Window& display, RenderableScene& scene, float dt)
     particles_.update(emitterScratch_, view_, unjitteredProj, dt, currentFrame_);
 
     // No outer Shadow span: the five families are timed individually with bottom-to-bottom
-    // boundaries inside recordPass, and an enclosing top-to-bottom timer would overlap them (and
-    // would then have to be excluded from the frame total to avoid double-counting).
+    // boundaries inside recordPass, and an enclosing timer would overlap them (and would then have
+    // to be excluded from the measured-pass sum to avoid double-counting, like the VDPM stage
+    // rows).
     recordShadowPass(cmd, buckets);
 
     // The levels the shadow views just chose are the tint's subject matter, and the forward draws

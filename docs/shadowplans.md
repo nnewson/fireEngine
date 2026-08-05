@@ -1014,8 +1014,10 @@ depth span is no longer a fixed constant. Four things stay open behind it and ar
 roadmap rather than blocking it: the historical half-ellipse (unexplained, and NOT a depth clip —
 measured), the cloth `LegacyStaleFallback` (needs a conservative envelope for storage geometry),
 SH-04's proxy half, and SH-05's masked-LOD policy (which needs a cutout carrying a real LOD chain
-before its pin can even be priced). The GPU-timestamp diagnostics branch is still parked and should
-land before SH-07's cost claims.
+before its pin can even be priced). The GPU-timestamp diagnostics SH-07's cost claims need are now
+WORKING (branch `gpu-timestamp-diagnostics`, 2026-08-05): the readback treated `VK_NOT_READY` as a
+failed read, so the panel said "unavailable" on every device — our bug, not MoltenVK's. Per-pass GPU
+milliseconds are live in the overlay, which SH-07 should use rather than re-deriving cost.
 
 **The post-merge sweep is done** (2026-08-04): SH-05 and SH-06 were each measured without the other
 and move the same figures in opposite directions, so the table in `render/constants.hpp` is now the

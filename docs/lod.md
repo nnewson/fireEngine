@@ -914,8 +914,12 @@ at a fraction of the triangles. The remaining residuals and follow-ons, in rough
   (full / apply-only / zero-split), shuffled order, N=1, a job-array growth boundary, and two frame slots.
   **Measured (state-fair GPU-timestamp benchmark, 13 fronts, `[.][gpu][BatchBench]`): apply serial 3.07 →
   batched 0.25 ms (~12×), repair serial 4.99 → batched 0.41 ms (~12×)** — the serialised multi-front cost
-  collapses toward the concurrent floor. (The benchmark is authoritative because the in-app `VdpmCompute`
-  GPU timestamp reads `gpuValid=false` on heavier multi-front frames.) 0-VUID on TransmissionTest +
+  collapses toward the concurrent floor. (The benchmark was authoritative because the in-app `VdpmCompute`
+  GPU timestamp read `gpuValid=false` on heavier multi-front frames — **now explained and fixed**: the
+  readback treated `VK_NOT_READY` as failure, which a frame containing any pass that did not run
+  always produces, so EVERY in-app per-pass timing was suppressed rather than these frames
+  specifically. See `render/gpu_profiler.cpp`. The benchmark numbers above stand; the in-app timing is
+  now usable as a cross-check.) 0-VUID on TransmissionTest +
   DamagedHelmet + DamagedHelmetBlend (`--vdpm-gpu`; AlphaBlendModeTest sits below the VDPM eligibility
   threshold, so it does not exercise this path).
 - **Apply+repair FUSION — SKIPPED (complexity/value judgment).** A fused kernel (apply then repair per

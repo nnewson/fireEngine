@@ -114,8 +114,6 @@ the plan; the priority order is its § Suggested priority.
   containing one falls back to the legacy depth range for every directional cascade. Closing this
   needs a conservative simulation or authored envelope for storage geometry; until then the
   fallback is marked `LegacyStaleFallback` in the fit result and the panel, not silently taken.
-- **GPU-timestamp diagnostics** — parked before SH-07 (invalid timestamps observed under both
-  MoltenVK and KosmicKrisp, so not driver-specific). SH-07's per-view cost claims want it working.
 - **SH-04's proxy half** — `Object::shadowGeometry` was removed rather than documented as unsafe, so
   there is currently no way to author a shadow proxy at all.
 
