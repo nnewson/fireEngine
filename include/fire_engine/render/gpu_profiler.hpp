@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdint>
+#include <span>
 #include <utility>
 
 #include <vulkan/vulkan_raii.hpp>
@@ -32,8 +33,8 @@ enum class ProfilePass : uint32_t
     VdpmEmit,
     // The five shadow families, timed separately (SH-01): a single Shadow total could not say
     // whether a change moved cost between cascades, punctual lights, or self-shadowing. They are
-    // disjoint spans — there is no outer Shadow timer to overlap them — so the frame total sums
-    // them like any other pass.
+    // disjoint spans — there is no outer Shadow timer to overlap them — so the measured-pass sum
+    // adds them like any other pass.
     ShadowCascades,
     ShadowWorldOnly,
     ShadowSelf,
@@ -90,10 +91,11 @@ static_assert(kProfilePassNames.size() == kProfilePassCount,
     return ProfilePass::Count;
 }
 
-// Whether a pass's time belongs in the frame total. The four VDPM breakdown rows are SUBRANGES of
-// VdpmCompute, so summing them alongside it double-counts that work; every other pass is a disjoint
-// span and contributes. Pure, so the overlay and any future consumer share one policy.
-[[nodiscard]] constexpr bool profilePassContributesToTotal(ProfilePass pass) noexcept
+// Whether a pass's time belongs in the measured-pass sum. The four VDPM breakdown rows are
+// SUBRANGES of VdpmCompute, so summing them alongside it double-counts that work; every other pass
+// is a disjoint span and contributes. Pure, so the overlay and any future consumer share one
+// policy.
+[[nodiscard]] constexpr bool profilePassContributesToMeasuredSum(ProfilePass pass) noexcept
 {
     switch (pass)
     {
@@ -107,6 +109,27 @@ static_assert(kProfilePassNames.size() == kProfilePassCount,
     }
 }
 
+// What the GPU timing half of FrameStats is currently able to say. Three states, kept DISTINCT
+// because they call for different responses and the overlay used to render all of them as
+// "GPU timestamps unavailable" — which is how a live bug in the readback (see resolve()) spent
+// months looking like a device limitation, on two different drivers.
+enum class GpuTimingState : std::uint8_t
+{
+    // The device or its graphics queue cannot write timestamps (zero timestampPeriod or zero
+    // timestampValidBits). Nothing will ever arrive; the overlay should say so and stop.
+    Unsupported,
+    // Supported, but this ring slot has nothing to report yet: it has not been reset a full cycle
+    // ago, or no span in it had both ends available. Transient — the next cycles fill in.
+    WarmingUp,
+    // At least one pass resolved to a real span. `passMs` is meaningful (0 for passes that did not
+    // run this cycle).
+    Valid,
+};
+
+// Queries per frame slot: a begin and an end for every pass. Public because the pure resolver below
+// is specified in terms of it, and its tests build buffers of exactly this shape.
+inline constexpr std::uint32_t kProfileQueriesPerFrame = kProfilePassCount * 2;
+
 // Resolved per-frame timings consumed by the overlay.
 struct FrameStats
 {
@@ -116,8 +139,19 @@ struct FrameStats
     // didn't run this cycle (e.g. transmission with no transmissive draws)
     // reports 0.
     std::array<float, kProfilePassCount> passMs{};
-    float gpuTotalMs{0.0f};
-    bool gpuValid{false};
+    // Sum of the INSTRUMENTED passes, and deliberately not called a total: a frame also contains
+    // command-buffer setup, present, the gaps between passes, and any pass nobody bracketed.
+    // Reading it as GPU frame latency would overstate how much of the frame is accounted for here.
+    // A dedicated outer span is the honest way to get that number if it is ever wanted.
+    float gpuMeasuredPassSumMs{0.0f};
+    // ONE field for the timing state, with the boolean derived from it — the overlay and the VDPM
+    // log line both used to read a bare `gpuValid`, which could not distinguish "this device
+    // cannot" from "not yet".
+    GpuTimingState gpuTiming{GpuTimingState::Unsupported};
+    [[nodiscard]] bool gpuValid() const noexcept
+    {
+        return gpuTiming == GpuTimingState::Valid;
+    }
     // SH-01 shadow diagnostics from the COMPLETED frame whose ring slot this is (see
     // Renderer::shadowStatsRing_). `shadowValid` is false during ring warm-up and is entirely
     // independent of `gpuValid` — the counters are CPU-side and survive a device with no timestamp
@@ -206,20 +240,26 @@ public:
     // Reset this frame's query range. Must be recorded outside a render pass,
     // before any begin()/end() for the frame.
     void beginFrame(vk::CommandBuffer cmd, uint32_t frameIndex);
+
+    // Both boundaries stamp at BOTTOM-of-pipe, and that uniformity is the point.
+    //
+    // A top-of-pipe begin fires when the command reaches the top of the pipe, which on a pipelined
+    // GPU is while the PREVIOUS pass is still draining — so the span silently absorbs part of its
+    // predecessor, and two adjacent sub-millisecond passes each report time the other spent. The
+    // shadow families already stamped bottom-to-bottom for exactly that reason, which left the
+    // measured-pass sum adding two conventions together. With one convention every passMs is a
+    // consecutive delta along a single timeline, which is what makes comparing and summing them
+    // honest.
+    //
+    // The cost of the convention, stated so nobody rediscovers it as a bug: a pass's span starts
+    // when the preceding work DRAINED, so a bubble before it is charged to it. That is the right
+    // default for "what did this pass cost the frame".
     void begin(vk::CommandBuffer cmd, uint32_t frameIndex, ProfilePass pass) const;
     void end(vk::CommandBuffer cmd, uint32_t frameIndex, ProfilePass pass) const;
 
-    // Write a pass's begin (`end`=false) or end (`end`=true) query at BOTTOM-of-pipe. begin() uses
-    // top-of-pipe, which is fine for a coarse whole-pass span but bleeds badly across adjacent
-    // SUB-millisecond stages (a stage's top-of-pipe begin fires while the prior stage is still
-    // draining). For the VDPM per-stage breakdown the boundaries are stamped bottom-of-pipe on BOTH
-    // sides — the shared boundary written as one stage's end AND the next stage's begin — so each
-    // resolved passMs is a clean consecutive delta. resolve() is unchanged (end − begin per pass).
-    void stampBottom(vk::CommandBuffer cmd, uint32_t frameIndex, ProfilePass pass, bool end) const;
-
-    // Read back the results currently held in `frameIndex`'s slot (written a full
-    // ring-cycle ago) into out.passMs / gpuTotalMs / gpuValid. No-op when timing
-    // is unsupported.
+    // Read back the results currently held in `frameIndex`'s slot (written a full ring-cycle ago)
+    // into out.passMs / gpuMeasuredPassSumMs / gpuTiming. Leaves `Unsupported` when the device
+    // cannot time.
     void resolve(uint32_t frameIndex, FrameStats& out) const;
 
     [[nodiscard]] bool enabled() const noexcept
@@ -234,15 +274,52 @@ private:
         return frameIndex * kQueriesPerFrame + static_cast<uint32_t>(pass) * 2 + (end ? 1u : 0u);
     }
 
-    static constexpr uint32_t kQueriesPerFrame = kProfilePassCount * 2;
+    static constexpr uint32_t kQueriesPerFrame = kProfileQueriesPerFrame;
 
     const vk::raii::Device* device_{nullptr};
     vk::raii::QueryPool pool_{nullptr};
     float timestampPeriodNs_{0.0f};
+    // Meaningful low bits of a timestamp on the graphics queue. KEPT, not merely checked against
+    // zero at construction: the delta arithmetic is modulo 2^this.
+    std::uint32_t timestampValidBits_{0};
     bool enabled_{false};
     // A slot must be reset (beginFrame) at least once before its results may be
     // read, or validation flags reading uninitialised queries on the first cycle.
     std::array<bool, kMaxFramesInFlight> slotUsed_{};
 };
+
+// The width of a meaningful timestamp, as a mask. Vulkan guarantees only the LOW
+// `timestampValidBits` of a query result carry data — the upper bits are undefined — and it defines
+// overflow as wrapping to zero within that width. So a delta is modular arithmetic in
+// 2^timestampValidBits, not a 64-bit subtraction.
+//
+// The 64 case is branched, not shifted: `1ull << 64` is undefined behaviour, and a device reporting
+// the full width is the common case (this Mac's MoltenVK does).
+[[nodiscard]] constexpr std::uint64_t timestampMask(std::uint32_t timestampValidBits) noexcept
+{
+    return timestampValidBits >= 64 ? ~std::uint64_t{0}
+                                    : (std::uint64_t{1} << timestampValidBits) - 1;
+}
+
+// The PURE half of resolve(): turn one slot's interleaved query words into per-pass milliseconds.
+//
+// `words` is `kProfileQueriesPerFrame * 2` entries — for each pass, the begin query's value then
+// its availability, then the end query's value and availability — exactly the layout
+// `VK_QUERY_RESULT_WITH_AVAILABILITY_BIT` writes with a two-word stride. A span counts only when
+// BOTH ends are available; anything else leaves that pass at 0, and the VDPM breakdown rows are
+// excluded from the SUM because they are subranges of VdpmCompute
+// (`profilePassContributesToMeasuredSum`).
+//
+// `timestampValidBits` comes from the graphics queue family. Both values are MASKED to that width
+// and the delta taken modulo it, which is what makes an end value numerically below its begin a
+// legitimate WRAP rather than an anomaly — the reason there is no "malformed span" count here. A
+// queue reporting fewer than 64 bits is not exotic, and on one the raw upper bits are undefined, so
+// comparing or subtracting the full words would manufacture garbage spans on exactly those devices.
+//
+// Free and Vulkan-free by design: the arithmetic and the availability policy are where the mistakes
+// live, and this way they are tested headlessly (tests/render/test_gpu_profiler.cpp) instead of
+// only on whatever GPU the developer happens to have.
+void resolveTimestampWords(std::span<const std::uint64_t> words, float timestampPeriodNs,
+                           std::uint32_t timestampValidBits, FrameStats& out) noexcept;
 
 } // namespace fire_engine

@@ -438,6 +438,7 @@ add_executable(test_fire_engine
     tests/render/test_descriptors.cpp
     tests/render/test_device_plan.cpp
     tests/render/test_pipeline_config.cpp
+    tests/render/test_gpu_profiler.cpp
     tests/render/test_shadow_raster_policy.cpp
     tests/render/test_vdpm_gpu.cpp
     tests/render/test_vdpm_gpu_front.cpp

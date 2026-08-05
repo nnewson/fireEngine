@@ -382,14 +382,15 @@ void Shadows::recordPass(vk::CommandBuffer cmd, std::span<const DrawCommand> sha
                          bool renderWorldShadow, ShadowFrameStats& stats,
                          const GpuProfiler& profiler, uint32_t frameIndex) const
 {
-    // Bottom-to-bottom group timing (the VDPM sub-stage pattern): both boundaries are
-    // bottom-of-pipe stamps, so adjacent sub-millisecond groups cannot overlap and inflate each
-    // other the way repeated top-to-bottom spans do. A group that records nothing leaves its two
-    // stamps unwritten and reports 0.
-    // `active` gates the STAMPS, not the body: a family that renders nothing this frame must leave
-    // its two timestamps unwritten so the pass reports 0, rather than recording an empty span that
-    // reads as a small real cost and inflates the frame total. An active family with zero candidate
-    // draws is still timed — its clears and layout barriers are real GPU work.
+    // Bottom-to-bottom group timing: both boundaries are bottom-of-pipe stamps, so adjacent
+    // sub-millisecond groups cannot overlap and inflate each other the way top-to-bottom spans do.
+    // Every pass in the engine stamps this way now — begin() itself is bottom-of-pipe — so this is
+    // no longer a shadow-only convention, just the convention. A group that records nothing leaves
+    // its two stamps unwritten and reports 0. `active` gates the STAMPS, not the body: a family
+    // that renders nothing this frame must leave its two timestamps unwritten so the pass reports
+    // 0, rather than recording an empty span that reads as a small real cost and inflates the frame
+    // total. An active family with zero candidate draws is still timed — its clears and layout
+    // barriers are real GPU work.
     const auto timeGroup = [&](ProfilePass pass, bool active, auto&& body)
     {
         if (!active)
@@ -397,9 +398,9 @@ void Shadows::recordPass(vk::CommandBuffer cmd, std::span<const DrawCommand> sha
             body(); // no-op for an inactive family, but keeps the control flow in one place
             return;
         }
-        profiler.stampBottom(cmd, frameIndex, pass, false);
+        profiler.begin(cmd, frameIndex, pass);
         body();
-        profiler.stampBottom(cmd, frameIndex, pass, true);
+        profiler.end(cmd, frameIndex, pass);
     };
 
     const vk::ClearValue depthClear{.depthStencil =

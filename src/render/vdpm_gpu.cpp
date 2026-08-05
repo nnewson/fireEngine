@@ -1272,18 +1272,26 @@ void VdpmGpuFront::recordFrame(
         throw std::logic_error("VdpmGpuFront::recordFrame: front is not a runtime front");
     }
 
-    // Per-stage timing (no-ops unless stageProfile is set). The GPU boundaries are stamped
-    // BOTTOM-of-pipe and SHARED — the timestamp after stage i is written as both stage i's end and
-    // stage i+1's begin — so each resolved passMs is a clean consecutive delta with no top-of-pipe
-    // bleed across these sub-millisecond stages. `gpuBoundary(pass, end)` writes one such stamp
-    // (only when a single front is recorded — the query slots are one-shot per frame). CPU timing
-    // is independent: steady_clock around each record call, accumulated into cpuMs[idx].
+    // Per-stage timing (no-ops unless stageProfile is set). The GPU boundaries are SHARED — the
+    // timestamp after stage i is written as both stage i's end and stage i+1's begin — so each
+    // resolved passMs is a clean consecutive delta. Every profiler stamp is bottom-of-pipe now
+    // (begin() included), so these stages no longer need a special entry point to get that.
+    // `gpuBoundary(pass, end)` writes one such stamp (only when a single front is recorded — the
+    // query slots are one-shot per frame). CPU timing is independent: steady_clock around each
+    // record call, accumulated into cpuMs[idx].
     const bool gpuStage = stageProfile != nullptr && stageProfile->gpu != nullptr;
     auto gpuBoundary = [&](ProfilePass pass, bool end)
     {
         if (gpuStage)
         {
-            stageProfile->gpu->stampBottom(cmd, stageProfile->gpuFrameIndex, pass, end);
+            if (end)
+            {
+                stageProfile->gpu->end(cmd, stageProfile->gpuFrameIndex, pass);
+            }
+            else
+            {
+                stageProfile->gpu->begin(cmd, stageProfile->gpuFrameIndex, pass);
+            }
         }
     };
     auto cpuAccumulate = [&](std::size_t idx, std::chrono::steady_clock::time_point t0)
