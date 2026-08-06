@@ -1,5 +1,7 @@
 #include <fire_engine/graphics/shadow_render_view.hpp>
 
+#include <fire_engine/graphics/shadow_bias.hpp>
+
 #include <cassert>
 #include <cmath>
 
@@ -45,9 +47,37 @@ void ShadowRenderViewSet::reset() noexcept
     worldOnlyActive_.fill(false);
 }
 
+ShadowViewMetrics ShadowViewMetrics::orthographic(float worldUnitsPerTexel,
+                                                  float depthSpanWorld) noexcept
+{
+    // Both constants of the layer, so both are resolved here rather than per fragment.
+    return ShadowViewMetrics{
+        ShadowViewMetricsKind::Orthographic,
+        {worldUnitsPerTexel, orthographicNormalizedDepthPerWorldUnit(depthSpanWorld), 0.0f, 0.0f}};
+}
+
+ShadowViewMetrics ShadowViewMetrics::spot(float texelAngleScale, float nearPlane,
+                                          float farPlane) noexcept
+{
+    // Neither quantity is constant across a cone, so what travels is the per-view constants the
+    // receiver derives both from — with its own forward and radial depth, which only it knows.
+    return ShadowViewMetrics{ShadowViewMetricsKind::Spot,
+                             {texelAngleScale, nearPlane, farPlane, 0.0f}};
+}
+
+ShadowViewMetrics ShadowViewMetrics::pointLight(float texelAxisScale, float rangeWorld) noexcept
+{
+    // Footprint is per-fragment (major axis), depth conversion is not: the point path stores radial
+    // distance / range, which is linear in range.
+    return ShadowViewMetrics{
+        ShadowViewMetricsKind::PointLight,
+        {texelAxisScale, cubeNormalizedDepthPerWorldUnit(rangeWorld), 0.0f, 0.0f}};
+}
+
 bool ShadowRenderViewSet::store(ShadowViewGroup group, std::size_t slot,
-                                ShadowViewKind expectedKind, const Mat4& viewProj,
-                                const ShadowView& projection,
+                                ShadowViewKind expectedKind,
+                                ShadowViewMetricsKind expectedMetricsKind, const Mat4& viewProj,
+                                const ShadowView& projection, const ShadowViewMetrics& biasMetrics,
                                 const ShadowLogicalViewId& logicalId) noexcept
 {
     // ADDRESSING is checked first and separately from CONTENT. An out-of-range address names no
@@ -66,6 +96,11 @@ bool ShadowRenderViewSet::store(ShadowViewGroup group, std::size_t slot,
     // in a cascade slot is meaningless and would be read back as authoritative.
     assert(projection.kind() == expectedKind &&
            "shadow view projection kind does not fit its slot");
+    // SH-07: the same argument for the metrics. The three packings share a shape, so a mismatched
+    // one is not rejected by any later check — it is simply read as different quantities and yields
+    // a plausible, wrong bias.
+    assert(biasMetrics.kind() == expectedMetricsKind &&
+           "shadow view bias metrics do not fit their slot's projection");
     // An engaged entry always carries a usable identity, even when its projection is unusable:
     // hysteresis keys on the identity, so an invalid one would make the entry unkeyable while
     // still rendering.
@@ -74,7 +109,8 @@ bool ShadowRenderViewSet::store(ShadowViewGroup group, std::size_t slot,
     // against, and a non-finite one cannot do either job — so it is not a view, however good the
     // descriptor beside it looks.
     assert(allFinite(viewProj) && "a shadow view's render matrix must be finite");
-    if (projection.kind() != expectedKind || !logicalId.valid() || !allFinite(viewProj))
+    if (projection.kind() != expectedKind || biasMetrics.kind() != expectedMetricsKind ||
+        !logicalId.valid() || !allFinite(viewProj))
     {
         // The addressed slot is CLEARED, not merely left unwritten. A rejected write is a producer
         // that tried and failed to describe this view; keeping whatever was there before would
@@ -83,15 +119,18 @@ bool ShadowRenderViewSet::store(ShadowViewGroup group, std::size_t slot,
         views_[shadowViewIndex(group, slot)].reset();
         return false;
     }
-    views_[shadowViewIndex(group, slot)] = ShadowRenderView{viewProj, projection, logicalId};
+    views_[shadowViewIndex(group, slot)] =
+        ShadowRenderView{viewProj, projection, biasMetrics, logicalId};
     return true;
 }
 
 bool ShadowRenderViewSet::setCascade(std::uint32_t index, const Mat4& viewProj,
-                                     const ShadowView& projection) noexcept
+                                     const ShadowView& projection,
+                                     const ShadowViewMetrics& biasMetrics) noexcept
 {
-    return store(ShadowViewGroup::Cascade, index, ShadowViewKind::Orthographic, viewProj,
-                 projection, ShadowLogicalViewId::cascade(index));
+    return store(ShadowViewGroup::Cascade, index, ShadowViewKind::Orthographic,
+                 ShadowViewMetricsKind::Orthographic, viewProj, projection, biasMetrics,
+                 ShadowLogicalViewId::cascade(index));
 }
 
 bool ShadowRenderViewSet::enableWorldOnly(std::uint32_t index) noexcept
@@ -111,38 +150,72 @@ bool ShadowRenderViewSet::enableWorldOnly(std::uint32_t index) noexcept
 }
 
 bool ShadowRenderViewSet::setSelf(std::size_t slot, std::uint32_t objectId, const Mat4& viewProj,
-                                  const ShadowView& projection) noexcept
+                                  const ShadowView& projection,
+                                  const ShadowViewMetrics& biasMetrics) noexcept
 {
-    return store(ShadowViewGroup::Self, slot, ShadowViewKind::Orthographic, viewProj, projection,
+    return store(ShadowViewGroup::Self, slot, ShadowViewKind::Orthographic,
+                 ShadowViewMetricsKind::Orthographic, viewProj, projection, biasMetrics,
                  ShadowLogicalViewId::self(objectId));
 }
 
 bool ShadowRenderViewSet::setSpot(std::size_t slot, NodeId light, const Mat4& viewProj,
-                                  const ShadowView& projection) noexcept
+                                  const ShadowView& projection,
+                                  const ShadowViewMetrics& biasMetrics) noexcept
 {
-    return store(ShadowViewGroup::Spot, slot, ShadowViewKind::Perspective, viewProj, projection,
+    return store(ShadowViewGroup::Spot, slot, ShadowViewKind::Perspective,
+                 ShadowViewMetricsKind::Spot, viewProj, projection, biasMetrics,
                  ShadowLogicalViewId::spot(light));
 }
 
-bool ShadowRenderViewSet::setPoint(std::size_t lightSlot, std::uint8_t face, NodeId light,
-                                   const Mat4& viewProj, const ShadowView& projection) noexcept
+bool ShadowRenderViewSet::setPointLight(
+    std::size_t lightSlot, NodeId light, const ShadowViewMetrics& biasMetrics,
+    std::span<const ShadowPointFace, kCubeFaceCount> faces) noexcept
 {
-    // ADDRESS first, and before flattening: `lightSlot * kCubeFaceCount + face` can wrap a huge
-    // slot back into the valid range, which would alias a real light's face instead of being
-    // rejected — and the flat index would then pass every check downstream. Like any out-of-range
-    // address this leaves every real slot untouched.
-    assert(face < kCubeFaceCount && "point face out of range");
+    // ADDRESS first, before any flattening: `lightSlot * kCubeFaceCount + face` can wrap a huge
+    // slot back into the valid range, aliasing a real light's faces instead of being rejected. Like
+    // any out-of-range address this leaves every real slot untouched.
     assert(lightSlot < static_cast<std::size_t>(kMaxPointShadowCasters) &&
            "point light slot out of range");
-    if (face >= kCubeFaceCount || lightSlot >= static_cast<std::size_t>(kMaxPointShadowCasters))
+    if (lightSlot >= static_cast<std::size_t>(kMaxPointShadowCasters))
     {
         return false;
     }
-    // ONE derivation: the flat slot and the identity's face come from the same arguments, so the
-    // entry cannot sit at one face while claiming another.
-    return store(ShadowViewGroup::Point, shadowPointViewSlot(lightSlot, face),
-                 ShadowViewKind::Perspective, viewProj, projection,
-                 ShadowLogicalViewId::point(light, face));
+
+    // VALIDATE THE WHOLE CUBE before storing any of it. A partially-installed cube is the state
+    // this writer exists to make unrepresentable: five faces rasterise and the sixth reads whatever
+    // the previous frame left, which is a shadow that is wrong only when the light is looked at
+    // from one direction.
+    const ShadowLogicalViewId identity = ShadowLogicalViewId::point(light, 0);
+    bool acceptable = identity.valid() && biasMetrics.kind() == ShadowViewMetricsKind::PointLight;
+    for (const ShadowPointFace& face : faces)
+    {
+        acceptable = acceptable && face.projection.kind() == ShadowViewKind::Perspective &&
+                     allFinite(face.viewProj);
+    }
+    assert(acceptable && "a point light's cube needs six perspective faces, finite matrices, a "
+                         "valid identity and PointLight metrics");
+    if (!acceptable)
+    {
+        // Cleared, not left unwritten — see store(): whatever was there is a previous attempt's
+        // fit, and rasterising that silently is worse than the view going missing.
+        for (std::uint8_t face = 0; face < kCubeFaceCount; ++face)
+        {
+            views_[shadowViewIndex(ShadowViewGroup::Point, shadowPointViewSlot(lightSlot, face))]
+                .reset();
+        }
+        return false;
+    }
+
+    for (std::uint8_t face = 0; face < kCubeFaceCount; ++face)
+    {
+        // ONE derivation of the flat slot and the identity's face, from the same loop variable, and
+        // ONE metrics value copied into all six — which is what makes "the faces cannot disagree
+        // about the light" true of the type rather than of the caller.
+        views_[shadowViewIndex(ShadowViewGroup::Point, shadowPointViewSlot(lightSlot, face))] =
+            ShadowRenderView{faces[face].viewProj, faces[face].projection, biasMetrics,
+                             ShadowLogicalViewId::point(light, face)};
+    }
+    return true;
 }
 
 const ShadowRenderView* ShadowRenderViewSet::find(ShadowViewGroup group,
@@ -264,6 +337,69 @@ selfShadowViewProjArray(const ShadowRenderViewSet& views) noexcept
         if (const ShadowRenderView* view = views.find(ShadowViewGroup::Self, slot))
         {
             out[slot] = view->viewProj();
+        }
+    }
+    return out;
+}
+
+namespace
+{
+
+// One family's packed metrics, zero-filled where the slot is inactive. Zeros are not a neutral
+// default here, they are the "no metrics" the bias law answers with no bias — visible acne rather
+// than a silently invented scale.
+template <std::size_t N>
+[[nodiscard]] std::array<std::array<float, 4>, N> packedMetrics(const ShadowRenderViewSet& views,
+                                                                ShadowViewGroup group) noexcept
+{
+    std::array<std::array<float, 4>, N> out{};
+    for (std::size_t slot = 0; slot < N; ++slot)
+    {
+        if (const ShadowRenderView* view = views.find(group, slot); view != nullptr)
+        {
+            out[slot] = view->biasMetrics().packed();
+        }
+    }
+    return out;
+}
+
+} // namespace
+
+std::array<std::array<float, 4>, kShadowCascadeCount>
+cascadeBiasMetricsArray(const ShadowRenderViewSet& views) noexcept
+{
+    return packedMetrics<kShadowCascadeCount>(views, ShadowViewGroup::Cascade);
+}
+
+std::array<std::array<float, 4>, static_cast<std::size_t>(kMaxSkinnedSelfShadowCasters)>
+selfBiasMetricsArray(const ShadowRenderViewSet& views) noexcept
+{
+    return packedMetrics<static_cast<std::size_t>(kMaxSkinnedSelfShadowCasters)>(
+        views, ShadowViewGroup::Self);
+}
+
+std::array<std::array<float, 4>, static_cast<std::size_t>(kMaxSpotShadowCasters)>
+spotBiasMetricsArray(const ShadowRenderViewSet& views) noexcept
+{
+    return packedMetrics<static_cast<std::size_t>(kMaxSpotShadowCasters)>(views,
+                                                                          ShadowViewGroup::Spot);
+}
+
+std::array<std::array<float, 4>, static_cast<std::size_t>(kMaxPointShadowCasters)>
+pointBiasMetricsArray(const ShadowRenderViewSet& views) noexcept
+{
+    // FACE 0 of each light. Reading one face is sound because `setPointLight` installs the cube
+    // atomically with ONE metrics value — the faces cannot disagree, and a cube cannot be missing
+    // face 0 while holding another.
+    std::array<std::array<float, 4>, static_cast<std::size_t>(kMaxPointShadowCasters)> out{};
+    for (std::size_t lightSlot = 0; lightSlot < static_cast<std::size_t>(kMaxPointShadowCasters);
+         ++lightSlot)
+    {
+        const ShadowRenderView* view =
+            views.find(ShadowViewGroup::Point, shadowPointViewSlot(lightSlot, 0));
+        if (view != nullptr)
+        {
+            out[lightSlot] = view->biasMetrics().packed();
         }
     }
     return out;

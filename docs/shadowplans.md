@@ -852,29 +852,88 @@ or scene shadow bounds rather than silently returning to a fixed hidden extensio
 
 Likely branch: `shadow-cascade-caster-fit`.
 
-#### SH-07: Derive bias and filtering from each fitted view
+#### SH-07: Derive bias and filtering from each fitted view — ✅ landed (branch `shadow-scale-derived-bias`)
 
-The receiver shader currently scales directional bias with `exp2(cascade)`, which assumes each
-cascade's relevant scale doubles. Practical splits and bounding-sphere fits do not guarantee that.
+The receiver shader scaled directional bias with `exp2(cascade)`, which assumes each cascade's
+relevant scale doubles. Measured on `ShadowLodDemo`, the footprint ratios are **1.84 / 1.71 / 2.11**
+and the fitted depth spans (9.9 / 18.2 / 30.4 / 60.7 world units) do not double either — so one
+constant was standing in for **two independent scales**, and it over-biased cascade 3 by about **7x**.
 
-Retain and upload per-view metrics produced while fitting:
+**The law is projection-independent**, which is what let one implementation serve four families. It
+consumes `worldUnitsPerTexel`, `normalizedDepthPerWorldUnit`, `nDotL` and `filterRadiusTexels`,
+computes in world units and converts once at the end. Each projection supplies the two metrics its
+own geometry defines:
 
-- world units per texel;
-- light-space depth span / world-to-depth scale; and
-- effective filter radius.
+| view | world units per texel | normalised depth per world unit |
+|---|---|---|
+| cascade / self (ortho) | the fit's own value, constant across the layer | `1 / depthSpan` |
+| spot | `texelAngleScale · forwardDepth` | `near·far / ((far−near)·forwardDepth²) · cos(ray, forward)` |
+| point face | `texelAxisScale · max(abs(toFragment))` | `1 / range` |
 
-Derive raster bias, receiver bias, and normal offset from those values. Apply the same principle to
-spot/point maps, whose perspective depth precision and texel footprint vary with distance. Keep
-units explicit (world units, texels, or normalised depth) so tuning one stage cannot unknowingly
-double-apply a scale in another.
+Two details in that table are load-bearing and were both corrected during review. The spot conversion
+needs the **ray-forward cosine**: the slope term is measured along the local light ray while the
+stored depth is a projection onto the cone axis, so omitting it over-converts every off-axis fragment
+(~41% too much bias at 45° off-axis, worst at the rim). The point footprint follows the **major axis**
+rather than the radial distance — that is the axis the face's 90° projection divides by — while the
+comparison depth stays radial, because `shadow_depth.glsl` stores radial/range.
 
-Only after the scale model is correct should filtering change. The Poisson comparison path exists
-but is currently configured with zero radius. Evaluate a small, scale-consistent PCF kernel first;
-then consider temporal/rotated sampling or PCSS only if the validation scene demonstrates a need.
-Contact shadows should remain a short-range complement, not compensation for an under-resolved or
-over-biased CSM.
+What landed:
 
-Likely branch: `shadow-scale-derived-bias`.
+- **`graphics/shadow_bias.hpp`** — the pure law plus the per-projection metrics, unit-tested
+  headlessly (16 cases). It is the EXECUTABLE SPECIFICATION; `shaders/shadow_bias.glsl` is the single
+  production implementation every receiver path shares, and the C++ golden values are the arbiter if
+  the two disagree. Both sanitise a malformed policy identically — a negative scale is not a smaller
+  bias but an inverted one.
+- **Metrics ride on `ShadowRenderView`**, produced from the same fit as the matrix, extracted into
+  `LightUBO` arrays appended after `lights[]`. No parallel renderer array, so the SH-03 property that
+  a matrix and its descriptor cannot drift now covers the bias metrics too. The metrics carry a KIND
+  checked against the slot's family, because the three packings share a shape and a mismatch would be
+  read as different quantities without complaint.
+- **`setPointLight` is atomic** — one light identity, one metrics value, six face payloads, installed
+  or cleared together. "All six faces or none" and "the faces cannot disagree about the light" became
+  properties of the type rather than comments in the renderer.
+- **The punctual raster CONSTANT is zero.** Vulkan scales it by a format-dependent `r`, so it cannot
+  carry a world-derived amount; the constant term belongs on the receiver where the units are ours.
+  The raster SLOPE factor stays — it multiplies the polygon's measured depth slope and is already
+  scale-correct.
+- **A guard** (`cmake/check_shadow_bias.cmake`, CTest case `shadow_bias_guard`) pins that all five
+  receiver paths call the shared law, that each family reads its own metrics array, and that `exp2(`
+  never returns. It strips both GLSL comment forms first, and every check is mutation-tested — three
+  review rounds found it weaker than its own documentation, each time via a false-pass route
+  (commented-out code, a floor instead of an exact count, a vacuously hidden definition).
+
+**Calibration, on evidence.** `constantTexels 3.0 / normalOffsetTexels 3.0`, chosen by sweeping and
+reading the captures, because the shadowed-area metric CANNOT make this call — it falls monotonically
+with bias whether or not acne is being removed. 1.5/1.0 showed dark blotches on lit caps and a ragged
+terminator; 3.0/2.0 still had one speck; 3.0/3.0 is clean; 6.0/3.0 buys nothing. Contact was checked
+in the other direction at every setting and never detached. The normal offset is what fixes the
+terminator, where the slope term saturates against its clamp.
+
+**Filtering: enabled at radius 2.** First the Poisson table was **normalised to unit support** — it
+reached 1.2339, with 8 of 16 taps outside the unit disc, so "radius R" sampled out to 1.234R while the
+law cleared R+1. The taps now live in `shaders/poisson_taps.inl`, consumed by both the shader and the
+test, so the support check pins what ships rather than a transcription. The cost result decided the
+radius: measured over ~445 frames per setting, the forward pass goes **1.647 ms → 2.271 (r=1) → 2.203
+(r=2)** — r=1 and r=2 are within noise of each other, because the cost is the 16 extra TAPS and not
+their spread. Filtering is a binary **~+0.6 ms** decision on this scene, and stepping from radius 1 to
+2 cost nothing measurable **on this scene and this GPU** — not a general result, since a much wider
+radius spreads taps across more shadow-map cache lines and a scene with more shadowed pixels weights
+them differently. 2 is where the stair-stepping stops.
+
+**The SH-03 sweep was re-run** (table in `render/constants.hpp`). The shadowed area fell 11.68% →
+9.76% in two measured steps — the calibrated bias policy to 10.53%, then filtering to 9.76% — and the
+first step's direction is worth stating because the obvious reading is backwards: correcting the scale
+REMOVED over-bias from the far cascades, which makes those shadows larger, not smaller. The net shrink
+is the calibrated policy sitting on top (3 texels of constant plus a 3-texel normal offset erode edges
+everywhere) outweighing the coverage restored at distance. Splitting it further would need a
+per-cascade mask differential, which was not measured and is therefore not claimed. Worst-pixel deltas
+roughly halved, budget 1 improved to 0.001%, and the triangle column is unchanged — verified at budgets
+0.5, 1 and 16, since nothing SH-07 touched is an input to LOD selection. Budget 1 and ratio 1.0 both
+stand, for the fifth independent re-derivation.
+
+**Open behind this item**: PCSS or temporal/rotated sampling were deliberately not attempted — the
+plan gates them on the validation scene demonstrating a need, and a 2-texel kernel removes the
+aliasing this scene shows. Contact shadows remain a short-range complement and were not touched.
 
 ### Milestone 3 — smooth/progressive shadow LOD, only if justified
 
@@ -1000,24 +1059,31 @@ The key success criteria for Milestone 1 are:
 | 4 | SH-04 deformation/proxy policy — **deformation half ✅**, proxy half open | Removes invalid error claims and defines safe extension points. |
 | 5 | ~~SH-05 material-aware casters~~ ✅ | Fixed the cutout and two-sided silhouettes; the coarser masked-LOD policy stays open behind `AlphaMaskedFallback`. |
 | 6 | ~~SH-06 cascade caster fit~~ ✅ | Removed fixed-depth clipping; candidate alignment (per-view filtering from the same record) is what remains, and SH-07 consumes it. |
-| 7 | SH-07 scale-derived bias/filtering | Makes quality controls physically tied to each map. |
+| 7 | ~~SH-07 scale-derived bias/filtering~~ ✅ | Bias now derives from each view's own footprint and depth conversion; PCF enabled at 2 texels. PCSS / temporal sampling stay gated on evidence. |
 | 8 | SH-08 shadow VIPM | Add only if measured popping remains. |
 | 9 | SH-09 shadow VDPM checkpoint | Highest complexity; require evidence before committing. |
 
 This ordering makes “correct LOD” a small, independently reviewable foundation rather than coupling
 it immediately to GPU-front scheduling, shadow caching, or a new filtering technique.
 
-**Next up (2026-08-04): SH-07.** SH-05 and SH-06 both landed, so milestone 2 is complete except for
-the follow-ups indexed in [`roadmap.md`](roadmap.md), and SH-07 is better positioned than the
-ordering above implies: the per-view metrics it needs already come back out of SH-06's fit, and the
-depth span is no longer a fixed constant. Four things stay open behind it and are indexed in the
-roadmap rather than blocking it: the historical half-ellipse (unexplained, and NOT a depth clip —
-measured), the cloth `LegacyStaleFallback` (needs a conservative envelope for storage geometry),
-SH-04's proxy half, and SH-05's masked-LOD policy (which needs a cutout carrying a real LOD chain
-before its pin can even be priced). The GPU-timestamp diagnostics SH-07's cost claims need are now
-WORKING (branch `gpu-timestamp-diagnostics`, 2026-08-05): the readback treated `VK_NOT_READY` as a
-failed read, so the panel said "unavailable" on every device — our bug, not MoltenVK's. Per-pass GPU
-milliseconds are live in the overlay, which SH-07 should use rather than re-deriving cost.
+**Milestones 0-2 are complete (2026-08-06).** SH-01 through SH-07 have all landed; what remains of
+this plan is milestone 3, which is EVIDENCE-GATED by design and should not be started on schedule
+pressure. **SH-08 (shadow VIPM) requires SH-01 to show visible whole-mesh popping after per-view
+selection and hysteresis** — the dead-band measurement has reported ZERO reversals at every ratio in
+five consecutive runs, so that evidence does not currently exist. **SH-09 (shadow VDPM) requires
+SH-08 or the diagnostics to show shadow geometry is still a meaningful cost or quality limit**, and
+its own section says to start with a union front and compare, not to assume.
+
+Five things stay open behind the milestones and are indexed in [`roadmap.md`](roadmap.md): the
+historical half-ellipse (unexplained, and NOT a depth clip — measured), the cloth
+`LegacyStaleFallback` (needs a conservative envelope for storage geometry), SH-04's proxy half,
+SH-05's masked-LOD policy (needs a cutout carrying a real LOD chain before its pin can even be
+priced), and SH-06's candidate alignment. None of them blocks the others.
+
+The GPU-timestamp diagnostics that SH-07's cost claims needed are working as of
+`gpu-timestamp-diagnostics` (2026-08-05): the readback treated `VK_NOT_READY` as a failed read, so the
+panel said "unavailable" on every device — our bug, not MoltenVK's. SH-07 used them, and the per-family
+`ms` column in the Shadows panel is live for whatever comes next.
 
 **The post-merge sweep is done** (2026-08-04): SH-05 and SH-06 were each measured without the other
 and move the same figures in opposite directions, so the table in `render/constants.hpp` is now the

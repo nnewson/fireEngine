@@ -19,10 +19,13 @@
 #error "define LIGHT_UBO_SET and LIGHT_UBO_BINDING before including light_ubo.glsl"
 #endif
 
-// Mirrors gpu_limits.hpp: kMaxLights, kMaxSpotShadowCasters, kMaxSkinnedSelfShadowCasters.
+// Mirrors gpu_limits.hpp: kMaxLights, kMaxSpotShadowCasters, kMaxSkinnedSelfShadowCasters,
+// kMaxPointShadowCasters, kShadowCascadeCount.
 const int MAX_LIGHTS = 8;
 const int MAX_SPOT_SHADOW_CASTERS = 4;
 const int MAX_SKINNED_SELF_SHADOW_CASTERS = 4;
+const int MAX_POINT_SHADOW_CASTERS = 4;
+const int SHADOW_CASCADE_COUNT = 4;
 
 struct LightData {
     // .xyz = world position (point/spot), .w = type (0=dir, 1=point, 2=spot)
@@ -44,8 +47,10 @@ layout(set = LIGHT_UBO_SET, binding = LIGHT_UBO_BINDING) uniform LightUBO {
     mat4 selfShadowViewProj[MAX_SKINNED_SELF_SHADOW_CASTERS];
     vec4 cascadeSplits;
     vec4 iblParams;
+    // SH-07 bias policy in TEXELS: x = slopeScale, y = constantTexels, z = normalOffsetTexels,
+    // w = maxSlopeTangent. Passed straight to shadowBiasFor(); the per-view conversion into stored
+    // depth lives in the metrics arrays at the end of this block.
     vec4 shadowParams;
-    vec4 pointSpotShadowParams;
     // x = kSkyboxIntensity, y = kEnvironmentShadowStrength,
     // z = debug view (0=off, 1=normals, 2=NdotL, 3=shadow visibility,
     // 4=directional raw depth, 5=velocity, 6=SSAO, 7=LOD tint, 8=shadow-LOD tint),
@@ -54,12 +59,25 @@ layout(set = LIGHT_UBO_SET, binding = LIGHT_UBO_BINDING) uniform LightUBO {
     // x = cascade cross-fade fraction (kShadowCascadeBlendFraction). Uploaded, not a literal here:
     // the renderer expands each cascade's fitted slice to cover the previous cascade's blend band,
     // so the number that decides the band and the number that fits for it must be one value.
+    // y = PCF kernel radius in TEXELS, read both by the kernel's offsets and by shadowBiasFor (the
+    // slope term has to clear the whole disc the filter samples, not just the centre texel).
+    // z/w reserved.
     vec4 cascadeParams;
     int  lightCount;
     int  _pad0;
     int  _pad1;
     int  _pad2;
     LightData lights[MAX_LIGHTS];
+    // SH-07 per-view bias metrics, appended after lights[] so no offset above moved. Read the array
+    // matching the map being sampled — the three packings differ:
+    //   cascade / self : (worldUnitsPerTexel, normalizedDepthPerWorldUnit, 0, 0)
+    //   spot           : (texelAngleScale, nearPlane, farPlane, 0)
+    //   point          : (texelAxisScale, 1 / range, 0, 0)   — per LIGHT, not per face
+    // Zeros mean "no metrics" (an inactive slot); shadow_bias.glsl answers those with no bias.
+    vec4 cascadeBiasMetrics[SHADOW_CASCADE_COUNT];
+    vec4 selfBiasMetrics[MAX_SKINNED_SELF_SHADOW_CASTERS];
+    vec4 spotBiasMetrics[MAX_SPOT_SHADOW_CASTERS];
+    vec4 pointBiasMetrics[MAX_POINT_SHADOW_CASTERS];
 } light;
 
 #endif // FIRE_ENGINE_LIGHT_UBO_GLSL

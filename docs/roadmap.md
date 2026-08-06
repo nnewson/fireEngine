@@ -24,7 +24,7 @@ the open items so they can't fork:
 |---|---|---|
 | [`codereview.md`](codereview.md) | Rolling **tiered static review**, following the [`review-order.md`](review-order.md) tiers (Tier 0 math, 18 Jul 2026; Tier 1 handles/limits/tunables, 19 Jul 2026). Further tiers expected. | **All open** — arc 3 below |
 | [`architecturalreview.md`](architecturalreview.md) | One-shot **architectural review** (25 Jul 2026) of rendering, shadows/AA, physics, simplifier/VDPM. Audited 26 Jul so every finding now maps to a §6 row or an explicit "informational" tag. **Retire it once reviewed** — arc 2 below is self-contained. | 8 of 19 landed; the rest is arc 2 |
-| [`shadowplans.md`](shadowplans.md) | The **shadow-LOD improvement plan** (SH-01…SH-09) spun out of the architectural review's §2. | SH-01…SH-03 + SH-05 landed, SH-04's deformation half landed (proxy half open); SH-06…SH-09 open — arc 1 |
+| [`shadowplans.md`](shadowplans.md) | The **shadow-LOD improvement plan** (SH-01…SH-09) spun out of the architectural review's §2. | Milestones 0–2 landed (SH-01…SH-03, SH-05…SH-07, SH-04's deformation half); what remains is the follow-ups those left, plus evidence-gated SH-08/SH-09 — arc 1 |
 
 Suggested order below — not binding. One branch per item, off local `main`.
 
@@ -32,96 +32,48 @@ Suggested order below — not binding. One branch per item, off local `main`.
 
 ## Arc 1 — Shadow LOD & shadow correctness ([`shadowplans.md`](shadowplans.md))
 
-The central defect: a shadow caster's LOD is inherited from the camera view instead of being
-selected for the shadow view that rasterises it, in shadow-map texels. Milestones 0–2 are the
-correctness work; milestone 3 is evidence-gated. Detail, contracts, and verification gates are in
-the plan; the priority order is its § Suggested priority.
+The plan's correctness work (milestones 0–2, SH-01…SH-07) has landed; its rationale, contracts and
+verification gates live in [`shadowplans.md`](shadowplans.md) and are not repeated here. What is left
+is the follow-ups those items deliberately deferred, plus a milestone 3 that is evidence-gated.
 
-**Milestone 0 — evidence before policy**
-- ~~**SH-01** — shadow diagnostics + a purpose-built owned acceptance scene~~ ✅ **landed**
-  (`shadow-lod-diagnostics`): per-group GPU time, per-view candidate/drawn counts, LOD histograms
-  and selection reasons, the `ShadowLod` debug view, the Shadows panel, `assets/shadow_lod/`, and
-  scriptable `--capture`. Runbook in [`acceptance-testing.md`](acceptance-testing.md); its captures
-  are the measurement baseline SH-03 is read against.
+**Suggested next: nothing in this plan without evidence.** Milestone 3 is gated — SH-08 needs SH-01
+to show visible popping (the dead band has reported ZERO reversals in five consecutive runs, so it
+does not), and SH-09 needs SH-08 or the diagnostics to show shadow geometry is still a cost or
+quality limit. The honest next steps are the follow-ups below, or another arc entirely.
 
-**Milestone 1 — correct discrete shadow LOD**
-- ~~**SH-02** — the pure, Vulkan-free shadow-view projection model~~ ✅ **landed**
-  (`shadow-view-lod-model`): `ShadowView` + `projectShadowErrorTexels` + `selectShadowLod` +
-  hysteresis, plus a dedicated per-cut Euclidean shadow-deviation channel through the simplifier
-  (the RMS error measured 2x BELOW true deviation; point-to-plane misses in-plane silhouette
-  movement; the support radius measured 12x-21,000x loose). Deliberately an **estimate, not a
-  bound** — see [`shadowplans.md`](shadowplans.md) § SH-02 for why, and for the one-sided limitation
-  it carries. No runtime behaviour changed; SH-03 threads it through.
-- **SH-03** — thread per-shadow-view discrete LOD through the renderer (the requested architectural
-  fix: one caster may select different levels for different shadow views). Slices 1–3 have landed —
-  identity, the per-frame view set, and the unresolved command seam with per-view resolution, which
-  also brought forward per-view diagnostic reasons and moved the tuning into
-  `render/constants.hpp` (`kShadowLodPixelBudget` + `kShadowLodCoarsenRatio`, `kShadowLodBias`
-  retired), plus per-view diagnostics with a focused-view reason breakdown (slice 4), a ShadowLod
-  tint driven by that focused view (slice 5, with `--shadow-focus` for scripted captures), and the
-  calibration (slice 6: budget 1 texel, no dead band, both measured against a stated threshold,
-  CSM-only — see
-  [`shadowplans.md`](shadowplans.md) § SH-03).
-- **SH-04** — deformation / proxy policy. **Deformation half landed** (`shadow-deformation-policy`):
-  skinned, morph-capable and storage-vertex casters are classified `Deformable` and resolve to full
-  detail with their own `DeformableFallback` reason, infinite projected error and no hysteresis
-  history — closing a hole SH-03 left open, where deformable casters selected levels from a
-  BIND-POSE deviation (live, not theoretical: BrainStem transitioned a skinned caster's shadow level
-  within seconds). Calibration re-run: the error column did not move (the demo's deformable casters
-  are not in the measured directional view), but self-shadow cost went 184/1248 → 1248/1248 and the
-  cascade group 59.9% → 68.2% of full detail; the 0.1% threshold still selects budget 1.
-  **Proxy half still open** — `Object::shadowGeometry` was REMOVED rather than documented as unsafe,
-  so there is currently no way to author a proxy; reinstating a validated setter (deformation
-  compatibility, morph contract, proxy-derived bounds, enforced at load time) is what closes it.
+**Open follow-ups** (each is its own branch):
 
-**Milestone 2 — shadow silhouette correctness**
-- **SH-05 follow-ups** — the item itself landed (`shadow-material-casters`; rationale in
-  [`shadowplans.md`](shadowplans.md) § SH-05). Two things it deliberately left open:
-  - **A coarser masked-LOD policy** needs a silhouette-error argument. Cutouts are pinned to level 0
-    (`AlphaMaskedFallback`) because no simplifier channel measures where a binary alpha boundary
-    lands; VDPM's UV-deviation channel is an input, not a proof.
-  - **A cutout with a real LOD chain** to price that pin. The sweep was re-run on this branch and
-    found SH-05's pin costs ~nothing on `ShadowLodDemo` — its masked caster is a two-triangle quad,
-    so it drew its whole mesh either way. The budget/ratio calibration itself is settled and was
-    re-measured on merged `main` after SH-06 (still budget 1, ratio 1.0; table in
-    `render/constants.hpp`), but the pin's cost is untested until such a caster exists.
-- ~~**SH-06** — cascade caster fit~~ ✅ **landed** (`shadow-cascade-caster-depth-fit`): the fixed
-  `kShadowDepthBackExtend` is retired as policy. The cascade fit is split into a stable receiver
-  half and a depth half; a Vulkan-free per-frame caster prepass
-  (`RenderableScene::gatherShadowCasters` → `ShadowCasterBoundsFrame`) is the single authority on
-  caster bounds for the fit, the draws and the diagnostics; and `fitCasterAwareCascadeDepth` places
-  the near plane at the furthest-upstream candidate caster and the far plane at the receiver volume.
-  Each cascade is fitted from the start of its predecessor's blend band, with the fraction uploaded
-  in `LightUBO::cascadeParams.x`. Acceptance on `ShadowDepthClipDemo`: 26166 → 35324 shadow pixels.
-  Cloth still forces a marked `LegacyStaleFallback` — see below.
-- **SH-07** — scale-derived bias & filtering tied to each map's actual texel footprint. Better
-  positioned since SH-06: the per-view metrics it needs are already returned by the fit, and the
-  depth span is no longer a fixed constant.
-
-**Open questions and follow-ups left by the milestone-2 work** (each is its own branch):
-
-- **Suggested next: SH-07.** SH-05 landed, so milestone 2 is complete apart from the follow-ups
-  listed above it. SH-07 is better positioned than it was: the per-view metrics it needs already
-  come back out of SH-06's fit, and the depth span is no longer a fixed constant.
-- **The historical half-ellipse is NOT SH-06's motivation and remains unexplained.** It was observed
-  on `ShadowLodMotionDemo` under the engine's FALLBACK sun (the glTF loader was dropping lights on
-  animated nodes), and measurement excluded depth clipping as the cause: zero `clippedNear` events
-  across a 676-row live trace, closest approach 20.7 m. Diagnosing it needs the symptom re-confirmed
-  under the repaired sun, the shadow pass's own per-cascade drawn verdict beside the placement
-  trace, and per-pixel cascade / blend factor / projected shadow U/V at the affected receivers —
-  see [`shadowplans.md`](shadowplans.md) § SH-06.
+- **The historical half-ellipse remains unexplained.** It was observed on `ShadowLodMotionDemo`
+  under the engine's FALLBACK sun (the glTF loader was dropping lights on animated nodes), and
+  measurement excluded depth clipping as the cause: zero `clippedNear` events across a 676-row live
+  trace, closest approach 20.7 m. Diagnosing it needs the symptom re-confirmed under the repaired
+  sun, the shadow pass's own per-cascade drawn verdict beside the placement trace, and per-pixel
+  cascade / blend factor / projected shadow U/V at the affected receivers — see
+  [`shadowplans.md`](shadowplans.md) § SH-06.
 - **Cloth cannot be fitted to.** A storage-vertex caster's bounds are its bind pose, so any frame
   containing one falls back to the legacy depth range for every directional cascade. Closing this
   needs a conservative simulation or authored envelope for storage geometry; until then the
   fallback is marked `LegacyStaleFallback` in the fit result and the panel, not silently taken.
 - **SH-04's proxy half** — `Object::shadowGeometry` was removed rather than documented as unsafe, so
   there is currently no way to author a shadow proxy at all.
+- **SH-05's masked-caster pin** — cutouts resolve to level 0 (`AlphaMaskedFallback`) and nothing
+  prices that. Two halves: a **coarser masked-LOD policy** needs a silhouette-error argument, since
+  no simplifier channel measures where a binary alpha boundary lands (VDPM's UV-deviation channel is
+  an input, not a proof); and **a cutout with a real LOD chain** is needed to price the pin at all —
+  `ShadowLodDemo`'s masked caster is a two-triangle quad, so it draws its whole mesh either way.
+- **SH-06's candidate alignment** — per-view caster filtering from the same record the fit used. SH-07
+  consumed the metrics half of SH-06's output but not this.
+- **A softer-shadow technique, only on evidence** (SH-07 left it deliberately): PCSS or
+  temporal/rotated sampling. A 2-texel PCF kernel removes the aliasing `ShadowLodDemo` shows, and the
+  plan gates anything further on a validation scene demonstrating a need. Note the cost shape
+  measured there — the tap count dominates, not the radius — so a technique that adds taps is a
+  different bargain from one that widens them.
 
 **Milestone 3 — only if measured**
 - **SH-08** — shadow VIPM, *if* discrete transitions remain visibly popping.
 - **SH-09** — shadow VDPM checkpoint; highest complexity, requires evidence before committing.
 
-**Independent shadow hygiene** (need not block the milestones; see the plan's § Independent shadow
+**Independent shadow hygiene** (independent of everything above; see the plan's § Independent shadow
 hygiene): make `noShadows` suppress *recording*, not just sampling; skip directional/world/self maps
 with no active primary directional light; generate the GLSL shadow-limits include from the C++
 authority instead of repeating `SHADOW_TOTAL_MATRIX_COUNT` / `SHADOW_POINT_MATRIX_BASE` / the

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <limits>
 
 #include <fire_engine/graphics/gpu_limits.hpp>
 #include <fire_engine/math/constants.hpp>
@@ -84,10 +85,67 @@ inline constexpr float kShadowCascadeSplitLambda = 0.5f;
 // reads it from there (`cascadeBlendFactor` in `shaders/shader.frag`), so changing it here changes
 // both the fitting and the blending together — there is no shader-side literal to keep in step.
 inline constexpr float kShadowCascadeBlendFraction = 0.1f;
-inline constexpr float kShadowMinBias = 0.0008f;
-inline constexpr float kShadowSlopeBias = 0.0035f;
-inline constexpr float kShadowFilterRadius = 0.0f;
-inline constexpr float kShadowNormalOffset = 0.0f;
+// SH-07 shadow bias policy, in TEXELS of each view's own world footprint — see
+// `graphics/shadow_bias.hpp` for the law these feed and why the units are what they are. The
+// previous `kShadowMinBias` / `kShadowSlopeBias` were normalised-depth constants that assumed one
+// scale for every view and were then multiplied by `exp2(cascade)` in the shader to paper over the
+// difference; a texel-relative policy needs no such correction because each view converts with its
+// own fitted metrics.
+//
+// CALIBRATED on `ShadowLodDemo` (2026-08-06) by sweeping the two terms and reading both failure
+// directions off the captures, because they fail differently and the metric alone cannot tell them
+// apart — bias erodes shadow edges whether or not it is removing acne, so the measured shadowed
+// area falls monotonically either way:
+//
+//   constant / offset   shadowed area   what the capture shows
+//   1.5 / 1.0           11.31%          acne: dark blotches on lit caps, ragged terminator band
+//   1.5 / 2.0           10.90%          one blotch left
+//   3.0 / 2.0           10.90%          one speck left on the brightest cap
+//   3.0 / 3.0           10.53%          clean caps, smooth terminator  <-- shipped
+//   6.0 / 3.0           10.53%          no further improvement, so no reason to pay for it
+//
+// The offset is what fixes the TERMINATOR specifically: there the slope term saturates against
+// `kShadowBiasMaxSlopeTangent`, and only moving the sample off the surface clears the footprint.
+// Its cost is a mild light leak at that same rim, which is why it is 3 texels and not more. Contact
+// was checked in the other direction at every setting — the tan sphere's shadow stays attached, so
+// none of these peter-pan.
+inline constexpr float kShadowBiasSlopeScale = 1.0f;
+inline constexpr float kShadowBiasConstantTexels = 3.0f;
+inline constexpr float kShadowBiasNormalOffsetTexels = 3.0f;
+inline constexpr float kShadowBiasMaxSlopeTangent = 8.0f;
+// PCF kernel radius in TEXELS, and it means exactly that since SH-07 normalised the Poisson table
+// to unit support (it reached 1.234 before, so the sampler and the bias law disagreed about the
+// number).
+//
+// ENABLED at 2 on evidence. Unfiltered shadow edges on `ShadowLodDemo` are visibly stair-stepped; 2
+// texels removes that without softening contact. The cost is the surprising part and it decided the
+// value: measured over ~445 frames per setting on an idle machine, the FORWARD pass goes 1.647 ms
+// unfiltered -> 2.271 (r=1) -> 2.203 (r=2). Radius 1 and 2 are indistinguishable — 3% apart, within
+// run-to-run noise ON THIS SCENE AND THIS GPU — the tap count dominates there, and equal tap counts
+// are not a general guarantee of equal cost: a much wider radius spreads samples across more shadow
+// -map cache lines, and a scene with more shadowed pixels weights the taps differently. Filtering
+// is therefore a binary ~+0.6 ms decision on this scene (~+38% of the forward pass), and going from
+// radius 1 to 2 cost nothing measurable HERE — which is a statement about those two radii on this
+// scene and GPU, not a general licence to widen. 2 is where the stair-stepping stops; no reason to pay quality
+// for a smaller one and no cost saving in it either.
+inline constexpr float kShadowFilterRadius = 2.0f;
+
+// The policy's precondition, checked where the values are DEFINED rather than trusted at the point
+// of use (`shadowBias` and `shaders/shadow_bias.glsl` both sanitise, but a shipped value that
+// needed sanitising is a bug, not a supported configuration). A negative scale would invert the
+// bias — the receiver biases into its caster and self-shadows everywhere — and a non-finite one
+// unlights whatever it touches. std::isfinite is not constexpr, so the two halves are spelled out:
+// `v == v` rejects NaN, and comparing against the largest representable float rejects an infinity
+// without inventing a ceiling of its own.
+consteval bool validShadowBiasPolicyValue(float v)
+{
+    return v == v && v >= 0.0f && v <= std::numeric_limits<float>::max();
+}
+static_assert(validShadowBiasPolicyValue(kShadowBiasSlopeScale));
+static_assert(validShadowBiasPolicyValue(kShadowBiasConstantTexels));
+static_assert(validShadowBiasPolicyValue(kShadowBiasNormalOffsetTexels));
+static_assert(validShadowBiasPolicyValue(kShadowBiasMaxSlopeTangent));
+static_assert(validShadowBiasPolicyValue(kShadowFilterRadius));
 // Keep directional caster bias conservative so contact shadows remain attached.
 // Punctual lights use their own bias constants below.
 inline constexpr float kDirectionalShadowRasterBiasConstant = 0.0f;
@@ -99,9 +157,13 @@ inline constexpr uint32_t kSpotShadowMapExtent = 1024;
 inline constexpr uint32_t kPointShadowMapExtent = 512;
 inline constexpr uint32_t kSkinnedSelfShadowMapExtent = 1024;
 inline constexpr float kSkinnedSelfShadowDepthEpsilon = 0.0005f;
-inline constexpr float kPointSpotShadowMinBias = 0.005f;
-inline constexpr float kPointSpotShadowSlopeBias = 0.01f;
-inline constexpr float kPunctualShadowRasterBiasConstant = 1.25f;
+// ZERO since SH-07, deliberately. Vulkan's depth-bias CONSTANT factor is scaled by an
+// implementation-defined `r` derived from the depth format's representation — for D32_SFLOAT it
+// depends on the primitive's own depth exponent — so a constant there is not a portable
+// normalised-depth amount and cannot be derived from world units. The constant term now lives on
+// the RECEIVER, in texels of the view's own footprint, where the units are ours. The SLOPE factor
+// below stays: it multiplies the polygon's measured depth slope, which is already scale-correct.
+inline constexpr float kPunctualShadowRasterBiasConstant = 0.0f;
 inline constexpr float kPunctualShadowRasterBiasSlope = 1.75f;
 inline constexpr float kPointShadowNearPlane = 0.1f;
 // Substituted far plane for point lights with range==0 (glTF "infinite") so
@@ -130,15 +192,16 @@ inline constexpr float kPointShadowInfiniteRangeFallback = 100.0f;
 // gives a noise floor of exactly zero, so every number below is signal — and a NON-ZERO noise floor
 // invalidates the run (see the SH-06 note).
 //
-// MEASURED with SH-05 + SH-06 + the cutout-aware depth prepass, 2026-08-04:
+// MEASURED with SH-05 + SH-06 + the cutout-aware depth prepass + SH-07 (scale-derived bias and a
+// 2-texel PCF kernel), 2026-08-06:
 //
 //   budget   differing shadow px   worst px   cascade tris (of 43472 at full detail)
 //   0.5      0.000%                 0/255     23272  (53.5%)  identical error to the reference
-//   1        0.003%                60/255     22120  (50.9%)
-//   2        0.257%               121/255     20968  (48.2%)
-//   4        0.333%               121/255     19624  (45.1%)
-//   8        1.472%               161/255     16200  (37.3%)
-//   16       5.271%               172/255     13064  (30.1%)
+//   1        0.001%                 9/255     22120  (50.9%)
+//   2        0.475%                62/255     20968  (48.2%)
+//   4        0.653%                62/255     19624  (45.1%)
+//   8        1.929%                89/255     16200  (37.3%)
+//   16       4.663%               106/255     13064  (30.1%)
 //
 // ACCEPTANCE THRESHOLD, registered before the numbers were corrected: at most 0.1% of the shadowed
 // pixels may differ from full detail, AND the differences must sit on silhouette edges rather than
@@ -260,7 +323,33 @@ inline constexpr float kPointShadowInfiniteRangeFallback = 100.0f;
 //   * the triangle column and the dead band are untouched (22120/43472 and 30/52 draws at budget 1;
 //     3 / 1 / 1 transitions, ZERO reversals). The prepass has nothing to do with shadow selection.
 //
-// The 0.1% threshold still selects budget 1: 0.257% at budget 2 is 2.5x over it.
+// The 0.1% threshold still selects budget 1.
+//
+// RE-MEASURED AGAIN after SH-07 (2026-08-06), because bias and filtering both change the mask this
+// metric reads:
+//
+//   * the DENOMINATOR fell again, 11.68% -> 9.76% of the frame, in two measured steps: the
+//     CALIBRATED BIAS POLICY took it to 10.53%, and FILTERING took it from there to 9.76% (a 2-texel
+//     kernel softens every silhouette, so its fringe falls under the 8/255 threshold).
+//
+//     The bias step is worth stating carefully, because the obvious explanation is backwards.
+//     Correcting the scale REMOVED over-bias from the far cascades — the old exp2 scheme was ~7x too
+//     large at cascade 3 — and less bias means those shadows got LARGER, not smaller. The net area
+//     still fell, so the shrink comes from the calibrated policy that had to sit on top: 3 texels of
+//     constant plus a 3-texel normal offset, both of which erode edges everywhere, outweighing the
+//     coverage restored at distance. Attributing it more precisely than that would need a
+//     per-cascade mask differential, which has not been measured — so it is not claimed;
+//   * budget 1's error IMPROVED to 0.001% (from 0.003%), and the WORST-PIXEL column roughly halved
+//     at every budget — 121 -> 62 at budget 2. That is the filtering: a difference spread across a
+//     penumbra is a smaller peak difference than the same difference at a hard edge;
+//   * budgets 2 and up read HIGHER as a fraction (0.257% -> 0.475% at budget 2) purely because the
+//     denominator shrank ~17% while their absolute pixel counts barely moved;
+//   * the TRIANGLE column is unchanged, verified at budget 0.5, 1 and 16 rather than assumed: SH-07
+//     touches bias and filtering, and nothing it changed is an input to LOD selection;
+//   * the dead band is unchanged (3 / 1 / 1 transitions, ZERO reversals), so ratio 1.0 stands.
+//
+// The threshold, re-applied unchanged for the fifth time, still selects budget 1: 0.475% at budget
+// 2 is nearly 5x over it.
 inline constexpr float kShadowLodPixelBudget = 1.0f;
 // Coarsening must project within `budget * ratio`, while refining triggers at `budget` — the gap is
 // the dead band, and 1.0 disables it.
@@ -298,12 +387,14 @@ inline constexpr float kShadowLodPixelBudget = 1.0f;
 // Plain transitions likewise include ordinary motion that no dead band can or should remove, so
 // only the reversal column can justify a ratio — and it is zero.
 //
-// RE-MEASURED after SH-05 and again on merged `main` (2026-08-04), both in the same sweep run as
-// the budget table: 3 / 1 / 1 raw transitions over ~675 frames = 0.44 / 0.15 / 0.15 per 100 frames,
-// and ZERO reversals at every ratio, in both runs. Statistically indistinguishable from the figures
-// above, which is the expected result rather than a lucky one: the animated scene's masked caster
-// is now pinned, so it cannot transition at all, and it was a single-level quad that never
-// transitioned before either. Ratio 1.0 stands on the same evidence — no chatter to buy out.
+// RE-MEASURED after SH-05, on merged `main`, and again after SH-07 (2026-08-06) — every time in the
+// same sweep run as the budget table: 3 / 1 / 1 raw transitions over ~675-1200 frames, and ZERO
+// reversals at every ratio, in all three runs. SH-07 could not have moved this and did not: bias
+// and filtering change how a shadow is SAMPLED, not which level a caster selects. Statistically
+// indistinguishable from the figures above, which is the expected result rather than a lucky one:
+// the animated scene's masked caster is now pinned, so it cannot transition at all, and it was a
+// single-level quad that never transitioned before either. Ratio 1.0 stands on the same evidence —
+// no chatter to buy out.
 //
 // Revisit when the caster mix changes again. Instruments: the overlay's "LOD movement" line, the
 // per-frame `FE_LOG=render:debug` record, and `tools/shadow_lod_sweep.sh`.

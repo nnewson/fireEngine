@@ -937,6 +937,26 @@ the same change — most have a test or guard that will catch you, but not all.
   is visible in the panel, while the optimistic one silently restores a cutout casting its quad.
   BLEND classifies as `Opaque` deliberately — its shadow semantics are an open design decision, and
   the material authority publishes `alphaCutoff` 0 for it anyway.
+- **Shadow bias is derived from each view's OWN fitted metrics, by one law, in named units** (SH-07).
+  `graphics/shadow_bias.hpp` is the executable specification — pure, headless-tested — and
+  `shaders/shadow_bias.glsl` is the single production implementation every receiver path calls. The
+  law takes `worldUnitsPerTexel`, `normalizedDepthPerWorldUnit`, `nDotL` and `filterRadiusTexels`,
+  works in world units and converts ONCE at the end; keeping the footprint and the depth conversion
+  separate is what makes it projection-independent, and it is what `exp2(cascade)` could not do —
+  that constant stood in for both at once and was wrong about each. Each family supplies its own
+  metrics (ortho: constants of the fit; spot: per-fragment, including the ray-forward cosine; point:
+  major-axis footprint with a linear `1/range`), and they travel on `ShadowRenderView` beside the
+  matrix so no parallel array can drift from the fit. If you add a receiver path, call the law —
+  `shadow_bias_guard` (CTest) fails if the call count, the per-family metrics reads, or the absence
+  of `exp2(` stops holding, and it strips both comment forms first so commented-out code cannot
+  satisfy it.
+- **The PCF kernel's taps live in ONE file** (`shaders/poisson_taps.inl`), a list of
+  `POISSON_TAP(x, y)` invocations that `shader.frag` and `tests/graphics/test_shadow_bias.cpp` each
+  expand for themselves. That is the only arrangement in which the unit-support check pins what
+  SHIPS: a transcribed table in the test proves the transcription is normalised while a production
+  tap can be edited back outside the disc with everything still green. Support must stay 1.0 —
+  the bias law clears `filterRadiusTexels + 1`, so a table reaching further would put its outer taps
+  past what the bias covered.
 - **The GPU material's alpha and alphaCutoff ranges are enforced at the packing seam**, and one
   optimisation depends on it. `toMaterialUBO` (`src/graphics/material_binding.cpp`) clamps the packed
   alpha into glTF's [0,1] and the packed cutoff to >= 0, warning when it has to — `Material` is a

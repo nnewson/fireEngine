@@ -188,10 +188,13 @@ struct LightUBO
     // View-space far-plane distances for each cascade (x..w = cascades 0..3).
     alignas(16) float cascadeSplits[4]{};
     alignas(16) float iblParams[4]{}; // x = maxReflectionLod, y/z = IBL strengths
-    // x = csm minBias, y = csm slopeBias, z = filterRadius, w = normalOffset.
+    // SH-07 BIAS POLICY, in texels of each view's own world footprint — not normalised depth, and
+    // not per family. Unpacked in this order by `shaders/shadow_bias.glsl`:
+    //   x = slopeScale, y = constantTexels, z = normalOffsetTexels, w = maxSlopeTangent.
+    // What converts texels into stored depth is per VIEW and travels in the metrics arrays below;
+    // that separation is the item, so resist folding a scale back in here. (The PCF radius lives in
+    // cascadeParams.y — this vec4 is exactly the four-term policy.)
     alignas(16) float shadowParams[4]{};
-    // x = punctual minBias, y = punctual slopeBias.
-    alignas(16) float pointSpotShadowParams[4]{};
     // x = kSkyboxIntensity, y = kEnvironmentShadowStrength,
     // z = debug view (0=off, 1=normals, 2=NdotL, 3=shadow visibility,
     // 4=directional raw depth: red=receiver, green=stored, blue=cascade,
@@ -204,7 +207,11 @@ struct LightUBO
     // shading one: the renderer expands each cascade's slice to cover its predecessor's blend band,
     // and the shader decides which receivers fall in that band. Two hand-kept copies of that number
     // would put receivers in a band the fit does not cover — the fixed extension's failure, in the
-    // other direction — so both sides now read one C++ value. y/z/w reserved.
+    // other direction — so both sides now read one C++ value.
+    // y = the PCF kernel radius in TEXELS (`kShadowFilterRadius`). It lives here rather than in
+    // shadowParams because that vec4 is exactly the four-term bias policy, and it is read twice: by
+    // the kernel's own offsets and by the bias law, which must clear the whole disc the filter
+    // samples. z/w reserved.
     alignas(16) float cascadeParams[4]{};
     // Active light count and the packed light array. Convention: lights[0] is
     // the primary directional (CSM source) when one exists. The shader loops
@@ -214,6 +221,20 @@ struct LightUBO
     int _pad1{0};
     int _pad2{0};
     LightData lights[kMaxLights]{};
+    // SH-07 per-view bias metrics, APPENDED after lights[] so every offset above is untouched. Each
+    // row is one view's packed metrics from `ShadowViewMetrics::packed()`, and the reading depends
+    // on the family — the shader must use the array that matches the map it is sampling:
+    //
+    //   cascade / self : (worldUnitsPerTexel, normalizedDepthPerWorldUnit, 0, 0)
+    //   spot           : (texelAngleScale, nearPlane, farPlane, 0)
+    //   point          : (texelAxisScale, 1 / range, 0, 0)   — per LIGHT, not per face
+    //
+    // An inactive slot is all zeros, which `shaders/shadow_bias.glsl` reads as "no metrics" and
+    // answers with no bias. That is the visible failure (acne) rather than the invented one.
+    alignas(16) float cascadeBiasMetrics[kShadowCascadeCount][4]{};
+    alignas(16) float selfBiasMetrics[kMaxSkinnedSelfShadowCasters][4]{};
+    alignas(16) float spotBiasMetrics[kMaxSpotShadowCasters][4]{};
+    alignas(16) float pointBiasMetrics[kMaxPointShadowCasters][4]{};
 };
 
 // Every offset in this block is load-bearing: a uniform block's field offsets depend on every field
@@ -229,13 +250,34 @@ static_assert(offsetof(LightUBO, selfShadowViewProj) == 512, "LightUBO std140 la
 static_assert(offsetof(LightUBO, cascadeSplits) == 768, "LightUBO std140 layout");
 static_assert(offsetof(LightUBO, iblParams) == 784, "LightUBO std140 layout");
 static_assert(offsetof(LightUBO, shadowParams) == 800, "LightUBO std140 layout");
-static_assert(offsetof(LightUBO, pointSpotShadowParams) == 816, "LightUBO std140 layout");
-static_assert(offsetof(LightUBO, environmentParams) == 832, "LightUBO std140 layout");
-static_assert(offsetof(LightUBO, cascadeParams) == 848, "LightUBO std140 layout");
-static_assert(offsetof(LightUBO, lightCount) == 864, "LightUBO std140 layout");
-static_assert(offsetof(LightUBO, lights) == 880, "LightUBO std140 layout");
+// SH-07 removed `pointSpotShadowParams` (a dead punctual bias pair — punctual receivers derive
+// their bias from their own view metrics now), so everything after it moved DOWN by one vec4.
+// Keeping the field as dead ABI would have been the worse choice: an unused uniform is an
+// invitation to read it.
+static_assert(offsetof(LightUBO, environmentParams) == 816, "LightUBO std140 layout");
+static_assert(offsetof(LightUBO, cascadeParams) == 832, "LightUBO std140 layout");
+static_assert(offsetof(LightUBO, lightCount) == 848, "LightUBO std140 layout");
+static_assert(offsetof(LightUBO, lights) == 864, "LightUBO std140 layout");
 static_assert(sizeof(LightData) == 64, "LightData std140 size (4x vec4)");
-static_assert(sizeof(LightUBO) == 880 + 64 * kMaxLights, "LightUBO std140 size");
+// SH-07's arrays sit AFTER lights[], which is why every offset above still reads as it did. Each
+// row is a vec4 in std140, and `float[N][4]` with a 16-byte alignment is exactly that — the asserts
+// below are what catch a well-meaning change to `float[N]` (whose std140 stride would be 16 per
+// SCALAR).
+static_assert(offsetof(LightUBO, cascadeBiasMetrics) == 864 + 64 * kMaxLights,
+              "LightUBO std140 layout");
+static_assert(offsetof(LightUBO, selfBiasMetrics) ==
+                  offsetof(LightUBO, cascadeBiasMetrics) + 16 * kShadowCascadeCount,
+              "LightUBO std140 layout");
+static_assert(offsetof(LightUBO, spotBiasMetrics) ==
+                  offsetof(LightUBO, selfBiasMetrics) + 16 * kMaxSkinnedSelfShadowCasters,
+              "LightUBO std140 layout");
+static_assert(offsetof(LightUBO, pointBiasMetrics) ==
+                  offsetof(LightUBO, spotBiasMetrics) + 16 * kMaxSpotShadowCasters,
+              "LightUBO std140 layout");
+static_assert(sizeof(LightUBO) == 864 + 64 * kMaxLights + 16 * kShadowCascadeCount +
+                                      16 * kMaxSkinnedSelfShadowCasters +
+                                      16 * kMaxSpotShadowCasters + 16 * kMaxPointShadowCasters,
+              "LightUBO std140 size");
 static_assert(std::is_standard_layout_v<LightUBO>);
 static_assert(std::is_trivially_copyable_v<LightUBO>);
 

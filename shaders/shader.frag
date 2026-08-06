@@ -28,6 +28,7 @@ layout(binding = 29) uniform CameraUBO {
 // follows it. Both are shared declarations; neither may be restated here.
 #include "forward_push.glsl"
 #include "material.glsl"
+#include "shadow_bias.glsl"
 
 // Shared palette for the two LOD debug views, so a level always means the same colour in both.
 vec3 lodTint(uint level) {
@@ -116,16 +117,15 @@ vec3 fresnelSchlick(float cosTheta, vec3 F0)
 }
 
 // 16-tap Poisson disk for directional CSM PCF.
+// The PCF kernel, normalised to unit support (SH-07) — see shaders/poisson_taps.inl, which is the
+// ONE place the numbers live. `tests/graphics/test_shadow_bias.cpp` includes that same file and
+// checks the support, so the test pins the taps this shader actually samples rather than a copy of
+// them.
+#define POISSON_TAP(x, y) vec2(x, y)
 const vec2 poissonDisk[16] = vec2[16](
-    vec2(-0.94201624, -0.39906216), vec2( 0.94558609, -0.76890725),
-    vec2(-0.09418410, -0.92938870), vec2( 0.34495938,  0.29387760),
-    vec2(-0.91588581,  0.45771432), vec2(-0.81544232, -0.87912464),
-    vec2(-0.38277543,  0.27676845), vec2( 0.97484398,  0.75648379),
-    vec2( 0.44323325, -0.97511554), vec2( 0.53742981, -0.47373420),
-    vec2(-0.26496911, -0.41893023), vec2( 0.79197514,  0.19090188),
-    vec2(-0.24188840,  0.99706507), vec2(-0.81409955,  0.91437590),
-    vec2( 0.19984126,  0.78641367), vec2( 0.14383161, -0.14100790)
+#include "poisson_taps.inl"
 );
+#undef POISSON_TAP
 
 // Per-pixel rotation hash so neighbouring fragments use different rotations
 // of the same Poisson kernel. Stops the kernel pattern from showing as moiré.
@@ -140,7 +140,16 @@ mat2 poissonRotation(vec3 worldPos)
 float sampleDirectionalShadowFrom(texture2DArray shadowTex, vec3 worldPos, vec3 normal,
                                   vec3 lightDir, int cascade)
 {
-    vec3 sampleWorldPos = worldPos + normal * light.shadowParams.w * exp2(float(cascade));
+    // SH-07: this cascade's OWN fitted metrics — footprint and depth conversion — instead of
+    // exp2(cascade), which asserted that both doubled per cascade and was wrong about each
+    // independently.
+    vec4 metrics = light.cascadeBiasMetrics[cascade];
+    ShadowBias bias = shadowBiasFor(metrics.x, metrics.y, dot(normal, lightDir),
+                                    light.cascadeParams.y, light.shadowParams);
+
+    // The normal offset is WORLD space and applied BEFORE projection, so each projection converts it
+    // through its own mapping rather than through an assumed one.
+    vec3 sampleWorldPos = worldPos + normal * bias.normalOffsetWorld;
     vec4 lightSpace = light.cascadeViewProj[cascade] * vec4(sampleWorldPos, 1.0);
     vec3 proj = lightSpace.xyz / lightSpace.w;
     proj.xy = proj.xy * 0.5 + 0.5;
@@ -150,17 +159,11 @@ float sampleDirectionalShadowFrom(texture2DArray shadowTex, vec3 worldPos, vec3 
         return 1.0;
     }
 
-    float minBias = light.shadowParams.x;
-    float slopeBias = light.shadowParams.y;
-    float baseBias = max(minBias, slopeBias * (1.0 - max(dot(normal, lightDir), 0.0)));
-    // Far cascades cover proportionally more world per texel; bias must scale
-    // with cascade size.
-    float bias = baseBias * exp2(float(cascade));
-    float receiverDepth = proj.z - bias;
+    float receiverDepth = proj.z - bias.depth;
 
     mat2 rot = poissonRotation(worldPos);
     float texelSize = 1.0 / float(textureSize(shadowTex, 0).x);
-    float filterRadius = max(light.shadowParams.z, 0.0) * texelSize;
+    float filterRadius = max(light.cascadeParams.y, 0.0) * texelSize;
 
     float vis = texture(sampler2DArrayShadow(shadowTex, shadowCompareSampler),
                         vec4(proj.xy, float(cascade), receiverDepth));
@@ -181,7 +184,12 @@ float sampleSelfShadow(vec3 worldPos, vec3 normal, vec3 lightDir, int slot)
         return 1.0;
     }
 
-    vec3 sampleWorldPos = worldPos + normal * light.shadowParams.w;
+    // The self layer is its own tight ortho fit, so it has its own footprint and depth span — it is
+    // NOT a cascade and never shared their scale.
+    vec4 metrics = light.selfBiasMetrics[slot];
+    ShadowBias bias = shadowBiasFor(metrics.x, metrics.y, dot(normal, lightDir), 0.0,
+                                    light.shadowParams);
+    vec3 sampleWorldPos = worldPos + normal * bias.normalOffsetWorld;
     vec4 lightSpace = light.selfShadowViewProj[slot] * vec4(sampleWorldPos, 1.0);
     vec3 proj = lightSpace.xyz / lightSpace.w;
     proj.xy = proj.xy * 0.5 + 0.5;
@@ -191,9 +199,7 @@ float sampleSelfShadow(vec3 worldPos, vec3 normal, vec3 lightDir, int slot)
         return 1.0;
     }
 
-    float baseBias = max(light.shadowParams.x,
-                         light.shadowParams.y * (1.0 - max(dot(normal, lightDir), 0.0)));
-    float receiverDepth = proj.z - baseBias;
+    float receiverDepth = proj.z - bias.depth;
     return texture(sampler2DArrayShadow(selfShadowMapTex, shadowCompareSampler),
                    vec4(proj.xy, float(slot), receiverDepth));
 }
@@ -249,7 +255,12 @@ float computeWorldShadow(vec3 worldPos, vec3 normal, vec3 lightDir, int cascade,
 
 vec2 directionalShadowDepths(vec3 worldPos, vec3 normal, vec3 lightDir, int cascade)
 {
-    vec3 sampleWorldPos = worldPos + normal * light.shadowParams.w * exp2(float(cascade));
+    // The DEBUG readout must use the same law as the sampler it explains — a debug view that reports
+    // a different bias than the one in effect is worse than no debug view.
+    vec4 metrics = light.cascadeBiasMetrics[cascade];
+    ShadowBias bias = shadowBiasFor(metrics.x, metrics.y, dot(normal, lightDir),
+                                    light.cascadeParams.y, light.shadowParams);
+    vec3 sampleWorldPos = worldPos + normal * bias.normalOffsetWorld;
     vec4 lightSpace = light.cascadeViewProj[cascade] * vec4(sampleWorldPos, 1.0);
     vec3 proj = lightSpace.xyz / lightSpace.w;
     proj.xy = proj.xy * 0.5 + 0.5;
@@ -259,11 +270,7 @@ vec2 directionalShadowDepths(vec3 worldPos, vec3 normal, vec3 lightDir, int casc
         return vec2(0.0, 0.0);
     }
 
-    float minBias = light.shadowParams.x;
-    float slopeBias = light.shadowParams.y;
-    float baseBias = max(minBias, slopeBias * (1.0 - max(dot(normal, lightDir), 0.0)));
-    float bias = baseBias * exp2(float(cascade));
-    float receiverDepth = proj.z - bias;
+    float receiverDepth = proj.z - bias.depth;
     float storedDepth = texture(sampler2DArray(shadowDebugImageTex, shadowDebugSampler),
                                 vec3(proj.xy, float(cascade))).r;
     return vec2(receiverDepth, storedDepth);
@@ -442,9 +449,28 @@ void main() {
 
             int shIdx = int(L.cone.z + 0.5);
             if (shIdx >= 0 && attenuation > 0.0 && light.environmentParams.w <= 0.5) {
-                float bias = light.pointSpotShadowParams.x;
+                // The GEOMETRIC normal, not the shaded one. `N` carries normal-map detail, and
+                // biasing or displacing a receiver by it would let a texture physically move the
+                // surface the shadow test is performed against — crawling and leaks that track the
+                // map rather than the geometry. The directional and self paths use shadowNormal for
+                // exactly this reason.
+                float nDotLForBias = dot(shadowNormal, lightVec);
                 if (type == 2) {
-                    vec4 sp = light.spotViewProj[shIdx] * vec4(fragWorldPos, 1.0);
+                    // SPOT. Both metrics are per fragment: the footprint grows with FORWARD depth,
+                    // and the depth conversion falls as its square and is measured along the light
+                    // RAY — hence the radial distance beside it.
+                    vec4 metrics = light.spotBiasMetrics[shIdx];
+                    vec3 toFrag = fragWorldPos - L.position.xyz;
+                    float forwardDepth = dot(toFrag, normalize(L.direction.xyz));
+                    float radialDepth = length(toFrag);
+                    ShadowBias bias = shadowBiasFor(
+                        metrics.x * max(forwardDepth, 0.0),
+                        spotNormalizedDepthPerWorldUnit(metrics.y, metrics.z, forwardDepth,
+                                                        radialDepth),
+                        nDotLForBias, 0.0, light.shadowParams);
+                    // Offset in WORLD space first, then project — the mapping converts it.
+                    vec4 sp = light.spotViewProj[shIdx]
+                              * vec4(fragWorldPos + shadowNormal * bias.normalOffsetWorld, 1.0);
                     vec3 proj = sp.xyz / max(sp.w, 1e-4);
                     proj.xy = proj.xy * 0.5 + 0.5;
                     if (proj.z >= 0.0 && proj.z <= 1.0
@@ -452,14 +478,25 @@ void main() {
                         && all(lessThanEqual(proj.xy, vec2(1.0)))) {
                         float visibility = texture(
                             sampler2DArrayShadow(spotShadowMapTex, shadowCompareSampler),
-                            vec4(proj.xy, float(shIdx), proj.z - bias));
+                            vec4(proj.xy, float(shIdx), proj.z - bias.depth));
                         attenuation *= visibility;
                     }
                 } else if (type == 1) {
-                    vec3 toFrag = fragWorldPos - L.position.xyz;
+                    // POINT. Footprint follows the MAJOR AXIS (what the face's projection divides
+                    // by); the stored comparison stays RADIAL, and its conversion is the constant
+                    // 1/range the metrics carry.
+                    vec4 metrics = light.pointBiasMetrics[shIdx];
+                    vec3 rawToFrag = fragWorldPos - L.position.xyz;
+                    ShadowBias bias = shadowBiasFor(
+                        metrics.x * pointMajorAxisDepth(rawToFrag), metrics.y, nDotLForBias, 0.0,
+                        light.shadowParams);
+                    // Offset BEFORE the distance is taken, so the radial depth compared against the
+                    // map is the offset position's own.
+                    vec3 toFrag =
+                        (fragWorldPos + shadowNormal * bias.normalOffsetWorld) - L.position.xyz;
                     float dist = length(toFrag);
                     float range = max(L.direction.w, 1e-4);
-                    float compareValue = clamp(dist / range - bias, 0.0, 1.0);
+                    float compareValue = clamp(dist / range - bias.depth, 0.0, 1.0);
                     vec3 sampleDir = toFrag / max(dist, 1e-4);
                     float visibility = texture(
                         samplerCubeArrayShadow(pointShadowMapTex, shadowCompareSampler),

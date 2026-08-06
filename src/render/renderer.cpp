@@ -197,6 +197,10 @@ struct SelfShadowFit
 {
     Mat4 viewProj;
     float worldPerTexel;
+    // SH-07: the ortho box's light-space depth range, which is what converts a world-space bias
+    // into the stored depth. From the SAME radius the projection below is built from — deriving it
+    // again at the call site is how the two would come to describe different boxes.
+    float depthSpanWorld;
 };
 
 // PRECONDITION: `bounds.valid`. A caster without bounds gets no self-shadow slot at all
@@ -216,7 +220,8 @@ SelfShadowFit fitSelfShadowMatrix(const Bounds3& bounds, Vec3 lightDir) noexcept
     const Mat4 view = Mat4::lookAt(lightPos, center, up);
     const Mat4 proj = Mat4::ortho(-radius, radius, -radius, radius, 0.0f, radius * 2.0f);
     return SelfShadowFit{proj * view,
-                         (2.0f * radius) / static_cast<float>(kSkinnedSelfShadowMapExtent)};
+                         (2.0f * radius) / static_cast<float>(kSkinnedSelfShadowMapExtent),
+                         2.0f * radius};
 }
 
 } // namespace
@@ -450,6 +455,18 @@ void Renderer::updateLightData(Vec3 cameraPosition, Vec3 cameraTarget, float asp
     // Unassigned slots come back identity — no light indexes them (cone[2] stays -1).
     const auto spots = spotViewProjArray(shadowViews_);
     std::ranges::copy(spots, std::begin(lightData.spotViewProj));
+    // SH-07 metrics beside the matrices they belong to, projected out of the same set (see
+    // `shadow_render_view.hpp`) rather than recomputed here.
+    const auto spotMetrics = spotBiasMetricsArray(shadowViews_);
+    for (std::size_t slot = 0; slot < spotMetrics.size(); ++slot)
+    {
+        std::ranges::copy(spotMetrics[slot], std::begin(lightData.spotBiasMetrics[slot]));
+    }
+    const auto pointMetrics = pointBiasMetricsArray(shadowViews_);
+    for (std::size_t slot = 0; slot < pointMetrics.size(); ++slot)
+    {
+        std::ranges::copy(pointMetrics[slot], std::begin(lightData.pointBiasMetrics[slot]));
+    }
 
     writeIblAndDebugParams(lightData);
     lightData_ = lightData;
@@ -566,8 +583,9 @@ void Renderer::computeShadowCascades(LightUBO& out, Vec3 cameraPosition, Vec3 ca
         // here: SH-02 selection reasons about it, and a second derivation would drift the moment
         // the fit changes.
         cascadeFits_[i] = RetainedCascadeFit{*receiver, *depth};
-        if (!shadowViews_.setCascade(i, depth->viewProj(),
-                                     ShadowView::orthographic(receiver->worldPerTexel())))
+        if (!shadowViews_.setCascade(
+                i, depth->viewProj(), ShadowView::orthographic(receiver->worldPerTexel()),
+                ShadowViewMetrics::orthographic(receiver->worldPerTexel(), depth->viewDepthSpan())))
         {
             rejectedShadowView(std::format("cascade {}", i));
         }
@@ -608,6 +626,11 @@ void Renderer::computeShadowCascades(LightUBO& out, Vec3 cameraPosition, Vec3 ca
     // so it cannot disagree with what the shadow pass rasterises.
     const auto cascades = cascadeViewProjArray(shadowViews_);
     std::ranges::copy(cascades, std::begin(out.cascadeViewProj));
+    const auto cascadeMetrics = cascadeBiasMetricsArray(shadowViews_);
+    for (std::size_t slot = 0; slot < cascadeMetrics.size(); ++slot)
+    {
+        std::ranges::copy(cascadeMetrics[slot], std::begin(out.cascadeBiasMetrics[slot]));
+    }
 }
 
 void Renderer::assignSpotShadow(LightUBO& out, int packedSlot, const Lighting& light)
@@ -629,9 +652,16 @@ void Renderer::assignSpotShadow(LightUBO& out, int packedSlot, const Lighting& l
     // the projection above was built from. The view is stored BEFORE the caster is counted: a
     // rejected view that had already advanced activeSpotCasters_ would leave the pass driven by a
     // count the set does not back.
-    if (!shadowViews_.setSpot(static_cast<std::size_t>(shadowIndex), light.nodeId, viewProj,
-                              ShadowView::perspective(light.worldPosition, dir, fov,
-                                                      kSpotShadowMapExtent, kPointShadowNearPlane)))
+    // SH-07 metrics from the SAME fov / extent / frustum the projection above was built from: the
+    // texel angle scale is 2 * tan(fov/2) / extent, which the receiver multiplies by its own
+    // forward depth.
+    const float spotTexelAngleScale =
+        2.0f * std::tan(0.5f * fov) / static_cast<float>(kSpotShadowMapExtent);
+    if (!shadowViews_.setSpot(
+            static_cast<std::size_t>(shadowIndex), light.nodeId, viewProj,
+            ShadowView::perspective(light.worldPosition, dir, fov, kSpotShadowMapExtent,
+                                    kPointShadowNearPlane),
+            ShadowViewMetrics::spot(spotTexelAngleScale, kPointShadowNearPlane, far)))
     {
         rejectedShadowView(std::format("spot slot {}", shadowIndex));
     }
@@ -650,22 +680,30 @@ void Renderer::assignPointShadow(LightUBO& out, int packedSlot, const Lighting& 
     const int shadowIndex = activePointCasters_;
     const float far = light.range > 0.0f ? light.range : kPointShadowInfiniteRangeFallback;
     const Mat4 proj = Mat4::perspective(0.5f * pi, 1.0f, kPointShadowNearPlane, far);
-    // ALL SIX faces, before any of the bookkeeping below: a point light with five accepted faces is
-    // not a usable caster, so the light is only counted once the whole cube is in the set.
-    for (std::uint8_t face = 0; face < kCubeFaceCount; ++face)
+    // ALL SIX faces built first, then installed as ONE cube: the set's writer accepts or clears the
+    // whole light, so a five-face cube cannot reach the pass. Each face's descriptor is built from
+    // the very direction its matrix looks down.
+    // Constructed IN PLACE, one expression per face: `ShadowView` has no default state to fill in
+    // first, which is the same refusal the set makes about a partially-described cube.
+    const auto faceAt = [&](std::uint8_t face)
     {
-        // Each face is its OWN view — same light, same fov, different forward — so each gets its
-        // own descriptor built from the very direction its matrix looks down.
-        const Mat4 view =
-            Mat4::lookAt(light.worldPosition, light.worldPosition + kCubemapFaceForward[face],
-                         kCubemapFaceUp[face]);
-        if (!shadowViews_.setPoint(
-                static_cast<std::size_t>(shadowIndex), face, light.nodeId, proj * view,
-                ShadowView::perspective(light.worldPosition, kCubemapFaceForward[face], 0.5f * pi,
-                                        kPointShadowMapExtent, kPointShadowNearPlane)))
-        {
-            rejectedShadowView(std::format("point slot {} face {}", shadowIndex, face));
-        }
+        return ShadowPointFace{
+            proj * Mat4::lookAt(light.worldPosition,
+                                light.worldPosition + kCubemapFaceForward[face],
+                                kCubemapFaceUp[face]),
+            ShadowView::perspective(light.worldPosition, kCubemapFaceForward[face], 0.5f * pi,
+                                    kPointShadowMapExtent, kPointShadowNearPlane)};
+    };
+    const std::array<ShadowPointFace, kCubeFaceCount> faces{faceAt(0), faceAt(1), faceAt(2),
+                                                            faceAt(3), faceAt(4), faceAt(5)};
+    // Metrics are per LIGHT: a 90-degree face has tan(fov/2) == 1, so the axis scale is 2 / extent,
+    // and the range is the light's own.
+    if (!shadowViews_.setPointLight(
+            static_cast<std::size_t>(shadowIndex), light.nodeId,
+            ShadowViewMetrics::pointLight(2.0f / static_cast<float>(kPointShadowMapExtent), far),
+            std::span<const ShadowPointFace, kCubeFaceCount>{faces}))
+    {
+        rejectedShadowView(std::format("point slot {}", shadowIndex));
     }
     ++activePointCasters_;
     out.lights[packedSlot].cone[2] = static_cast<float>(shadowIndex);
@@ -683,12 +721,14 @@ void Renderer::writeIblAndDebugParams(LightUBO& out) const
     out.iblParams[0] = static_cast<float>(mipLevels > 0 ? mipLevels - 1 : 0);
     out.iblParams[1] = tunables_.diffuseIbl;
     out.iblParams[2] = tunables_.specularIbl;
-    out.shadowParams[0] = kShadowMinBias;
-    out.shadowParams[1] = kShadowSlopeBias;
-    out.shadowParams[2] = kShadowFilterRadius;
-    out.shadowParams[3] = kShadowNormalOffset;
-    out.pointSpotShadowParams[0] = kPointSpotShadowMinBias;
-    out.pointSpotShadowParams[1] = kPointSpotShadowSlopeBias;
+    // SH-07: shadowParams IS the bias policy, in texels of each view's own footprint, in the order
+    // `shadow_bias.glsl` unpacks it. What converts texels into normalised depth is per view and
+    // travels with the views (the metrics arrays below), so nothing here assumes a scale shared
+    // between cascades.
+    out.shadowParams[0] = kShadowBiasSlopeScale;
+    out.shadowParams[1] = kShadowBiasConstantTexels;
+    out.shadowParams[2] = kShadowBiasNormalOffsetTexels;
+    out.shadowParams[3] = kShadowBiasMaxSlopeTangent;
     out.environmentParams[0] = kSkyboxIntensity;
     out.environmentParams[1] = kEnvironmentShadowStrength;
     // Joints is an overlay-only view with no shader branch (it suppresses geometry instead), so it
@@ -701,6 +741,10 @@ void Renderer::writeIblAndDebugParams(LightUBO& out) const
     // shader literal: the fit covers the band, the shader decides who is in it, and two hand-kept
     // copies would disagree about where it starts.
     out.cascadeParams[0] = kShadowCascadeBlendFraction;
+    // The PCF radius in texels. It lives here rather than in shadowParams because that vec4 is now
+    // exactly the four-term bias policy — and because the radius is consumed twice, by the kernel's
+    // offsets and by the bias (a kernel reads a disc, so the slope term must clear all of it).
+    out.cascadeParams[1] = kShadowFilterRadius;
 }
 
 void Renderer::assignSelfShadowSlots(std::span<DrawCommand> drawCommands)
@@ -727,8 +771,10 @@ void Renderer::assignSelfShadowSlots(std::span<DrawCommand> drawCommands)
         // many self-shadow slots to render, so recording a slot the set rejected would rasterise a
         // layer with no view behind it.
         const SelfShadowFit fit = fitSelfShadowMatrix(dc.shadowBounds, directionalLightDir_);
-        if (!shadowViews_.setSelf(static_cast<std::size_t>(nextSlot), dc.objectId, fit.viewProj,
-                                  ShadowView::orthographic(fit.worldPerTexel)))
+        if (!shadowViews_.setSelf(
+                static_cast<std::size_t>(nextSlot), dc.objectId, fit.viewProj,
+                ShadowView::orthographic(fit.worldPerTexel),
+                ShadowViewMetrics::orthographic(fit.worldPerTexel, fit.depthSpanWorld)))
         {
             rejectedShadowView(std::format("self-shadow slot {}", nextSlot));
         }
@@ -740,6 +786,14 @@ void Renderer::assignSelfShadowSlots(std::span<DrawCommand> drawCommands)
     // rasterises with, and the one stamped on the draw are one value.
     const auto selfMatrices = selfShadowViewProjArray(shadowViews_);
     std::ranges::copy(selfMatrices, std::begin(lightData_.selfShadowViewProj));
+    // SH-07 metrics for the same slots, from the same set, in the same place — a self layer's fit
+    // is only known here, and splitting the two copies would let a slot carry one frame's matrix
+    // beside another frame's footprint.
+    const auto selfMetrics = selfBiasMetricsArray(shadowViews_);
+    for (std::size_t slot = 0; slot < selfMetrics.size(); ++slot)
+    {
+        std::ranges::copy(selfMetrics[slot], std::begin(lightData_.selfBiasMetrics[slot]));
+    }
 
     for (auto& dc : drawCommands)
     {
