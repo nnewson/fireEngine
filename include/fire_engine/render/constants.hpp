@@ -126,8 +126,8 @@ inline constexpr float kShadowBiasMaxSlopeTangent = 8.0f;
 // -map cache lines, and a scene with more shadowed pixels weights the taps differently. Filtering
 // is therefore a binary ~+0.6 ms decision on this scene (~+38% of the forward pass), and going from
 // radius 1 to 2 cost nothing measurable HERE — which is a statement about those two radii on this
-// scene and GPU, not a general licence to widen. 2 is where the stair-stepping stops; no reason to pay quality
-// for a smaller one and no cost saving in it either.
+// scene and GPU, not a general licence to widen. 2 is where the stair-stepping stops; no reason to
+// pay quality for a smaller one and no cost saving in it either.
 inline constexpr float kShadowFilterRadius = 2.0f;
 
 // The policy's precondition, checked where the values are DEFINED rather than trusted at the point
@@ -329,16 +329,16 @@ inline constexpr float kPointShadowInfiniteRangeFallback = 100.0f;
 // metric reads:
 //
 //   * the DENOMINATOR fell again, 11.68% -> 9.76% of the frame, in two measured steps: the
-//     CALIBRATED BIAS POLICY took it to 10.53%, and FILTERING took it from there to 9.76% (a 2-texel
-//     kernel softens every silhouette, so its fringe falls under the 8/255 threshold).
+//     CALIBRATED BIAS POLICY took it to 10.53%, and FILTERING took it from there to 9.76% (a
+//     2-texel kernel softens every silhouette, so its fringe falls under the 8/255 threshold).
 //
 //     The bias step is worth stating carefully, because the obvious explanation is backwards.
-//     Correcting the scale REMOVED over-bias from the far cascades — the old exp2 scheme was ~7x too
-//     large at cascade 3 — and less bias means those shadows got LARGER, not smaller. The net area
-//     still fell, so the shrink comes from the calibrated policy that had to sit on top: 3 texels of
-//     constant plus a 3-texel normal offset, both of which erode edges everywhere, outweighing the
-//     coverage restored at distance. Attributing it more precisely than that would need a
-//     per-cascade mask differential, which has not been measured — so it is not claimed;
+//     Correcting the scale REMOVED over-bias from the far cascades — the old exp2 scheme was ~7x
+//     too large at cascade 3 — and less bias means those shadows got LARGER, not smaller. The net
+//     area still fell, so the shrink comes from the calibrated policy that had to sit on top: 3
+//     texels of constant plus a 3-texel normal offset, both of which erode edges everywhere,
+//     outweighing the coverage restored at distance. Attributing it more precisely than that would
+//     need a per-cascade mask differential, which has not been measured — so it is not claimed;
 //   * budget 1's error IMPROVED to 0.001% (from 0.003%), and the WORST-PIXEL column roughly halved
 //     at every budget — 121 -> 62 at budget 2. That is the filtering: a difference spread across a
 //     penumbra is a smaller peak difference than the same difference at a hard edge;
