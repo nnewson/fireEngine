@@ -103,6 +103,7 @@ add_library(fireengine SHARED
     src/graphics/shadow_identity.cpp
     src/graphics/shadow_lod_resolver.cpp
     src/graphics/shadow_caster_alpha.cpp
+    src/graphics/shadow_bias.cpp
     src/graphics/shadow_caster_deformation.cpp
     src/graphics/shadow_render_view.cpp
     src/graphics/shadow_diagnostics.cpp
@@ -295,6 +296,9 @@ set(SHADER_INCLUDES
     ${PROJECT_SOURCE_DIR}/shaders/light_ubo.glsl
     ${PROJECT_SOURCE_DIR}/shaders/material.glsl
     ${PROJECT_SOURCE_DIR}/shaders/shadow_push.glsl
+    # Not a .glsl: a list of POISSON_TAP() invocations shared by shader.frag and the unit test, so
+    # the test pins the taps that ship rather than a transcription of them.
+    ${PROJECT_SOURCE_DIR}/shaders/poisson_taps.inl
     ${PROJECT_SOURCE_DIR}/shaders/forward_push.glsl
     ${PROJECT_SOURCE_DIR}/shaders/shadow_depth.glsl
     ${PROJECT_SOURCE_DIR}/shaders/self_shadow_second.glsl
@@ -430,6 +434,7 @@ add_executable(test_fire_engine
     tests/graphics/test_shadow_lod_resolver.cpp
     tests/graphics/test_shadow_caster_deformation.cpp
     tests/graphics/test_shadow_caster_alpha.cpp
+    tests/graphics/test_shadow_bias.cpp
     tests/graphics/test_shadow_render_view.cpp
     tests/graphics/test_texture.cpp
     tests/graphics/test_sampler_settings.cpp
@@ -503,6 +508,7 @@ add_custom_target(tests-full
   # One COMMAND per guard: a regex alternation here would reach /bin/sh as a pipe.
   COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure -R layering_guards
   COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure -R shader_block_guards
+    COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure -R shadow_bias_guard
   DEPENDS test_fire_engine
   COMMENT "Running the full test suite, including [slow] tests"
 )
@@ -525,6 +531,16 @@ add_test(
   COMMAND ${CMAKE_COMMAND}
     -DSHADER_DIR=${PROJECT_SOURCE_DIR}/shaders
     -P ${PROJECT_SOURCE_DIR}/cmake/check_shader_blocks.cmake
+)
+
+# SH-07: the receiver must use the SHARED bias law and must not grow a private one. A local formula
+# would produce no error of any kind — just shadows that are subtly wrong in one family — so the only
+# thing standing between the fix and its quiet reversal is this check.
+add_test(
+  NAME shadow_bias_guard
+  COMMAND ${CMAKE_COMMAND}
+    -DSHADER_DIR=${PROJECT_SOURCE_DIR}/shaders
+    -P ${PROJECT_SOURCE_DIR}/cmake/check_shadow_bias.cmake
 )
 
 find_program(CLANG_TIDY_EXE NAMES clang-tidy)

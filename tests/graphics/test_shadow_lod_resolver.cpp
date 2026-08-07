@@ -3,6 +3,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <span>
 #include <vector>
 
 #include <fire_engine/graphics/shadow_lod_resolver.hpp>
@@ -11,6 +12,22 @@ using namespace fire_engine;
 
 namespace
 {
+
+// SH-07: metrics for a fixture view. Values are arbitrary but WELL-FORMED, and each family gets its
+// own kind — the writers check the metrics kind against the slot, so a fixture cannot pin a pairing
+// the production code is forbidden to make.
+[[nodiscard]] ShadowViewMetrics someOrthoMetrics()
+{
+    return ShadowViewMetrics::orthographic(0.05f, 100.0f);
+}
+[[nodiscard]] ShadowViewMetrics someSpotMetrics()
+{
+    return ShadowViewMetrics::spot(0.002f, 0.1f, 50.0f);
+}
+[[nodiscard]] ShadowViewMetrics somePointMetrics()
+{
+    return ShadowViewMetrics::pointLight(0.004f, 25.0f);
+}
 
 // ---------------------------------------------------------------------------
 // SH-03 slice 3: resolving one unresolved caster per shadow view.
@@ -78,23 +95,31 @@ ShadowRenderViewSet populatedViews()
     for (std::uint32_t cascade = 0; cascade < kShadowCascadeCount; ++cascade)
     {
         // A coarse texel: 0.05 world units per texel puts level 2's 0.20 deviation at 4 texels.
-        REQUIRE(views.setCascade(cascade, Mat4::identity(), ShadowView::orthographic(0.05f)));
+        REQUIRE(views.setCascade(cascade, Mat4::identity(), ShadowView::orthographic(0.05f),
+                                 someOrthoMetrics()));
         REQUIRE(views.enableWorldOnly(cascade));
     }
-    REQUIRE(views.setSelf(0, 7, Mat4::identity(), ShadowView::orthographic(0.05f)));
+    REQUIRE(
+        views.setSelf(0, 7, Mat4::identity(), ShadowView::orthographic(0.05f), someOrthoMetrics()));
     const auto light = static_cast<NodeId>(21);
-    REQUIRE(views.setSpot(0, light, Mat4::identity(),
-                          ShadowView::perspective(Vec3{0.0f, 0.0f, 20.0f}, Vec3{0.0f, 0.0f, -1.0f},
-                                                  1.0f, 1024, 0.1f)));
-    for (std::uint8_t face = 0; face < kCubeFaceCount; ++face)
+    REQUIRE(views.setSpot(
+        0, light, Mat4::identity(),
+        ShadowView::perspective(Vec3{0.0f, 0.0f, 20.0f}, Vec3{0.0f, 0.0f, -1.0f}, 1.0f, 1024, 0.1f),
+        someSpotMetrics()));
+    const std::array<Vec3, kCubeFaceCount> forwards{Vec3{1, 0, 0},  Vec3{-1, 0, 0}, Vec3{0, 1, 0},
+                                                    Vec3{0, -1, 0}, Vec3{0, 0, 1},  Vec3{0, 0, -1}};
+    const auto pointFace = [&](std::uint8_t face)
     {
-        const std::array<Vec3, kCubeFaceCount> forwards{Vec3{1, 0, 0}, Vec3{-1, 0, 0},
-                                                        Vec3{0, 1, 0}, Vec3{0, -1, 0},
-                                                        Vec3{0, 0, 1}, Vec3{0, 0, -1}};
-        REQUIRE(views.setPoint(
-            0, face, light, Mat4::identity(),
-            ShadowView::perspective(Vec3{0.0f, 0.0f, 30.0f}, forwards[face], 1.5708f, 512, 0.1f)));
-    }
+        return ShadowPointFace{
+            Mat4::identity(),
+            ShadowView::perspective(Vec3{0.0f, 0.0f, 30.0f}, forwards[face], 1.5708f, 512, 0.1f)};
+    };
+    // One atomic cube: the six faces differ only by forward, and the light's identity and metrics
+    // are passed once.
+    const std::array<ShadowPointFace, kCubeFaceCount> cube{
+        pointFace(0), pointFace(1), pointFace(2), pointFace(3), pointFace(4), pointFace(5)};
+    REQUIRE(views.setPointLight(0, light, somePointMetrics(),
+                                std::span<const ShadowPointFace, kCubeFaceCount>{cube}));
     return views;
 }
 
@@ -363,7 +388,8 @@ TEST_CASE("ShadowLodResolver.AnInvalidViewStillDraws", "[ShadowLodResolver]")
     // than the map being left with a hole.
     const auto lods = chain();
     ShadowRenderViewSet views;
-    REQUIRE(views.setCascade(0, Mat4::identity(), ShadowView::orthographic(0.0f)));
+    REQUIRE(
+        views.setCascade(0, Mat4::identity(), ShadowView::orthographic(0.0f), someOrthoMetrics()));
     ShadowLodResolver resolver;
     resolver.beginFrame();
 
@@ -572,8 +598,10 @@ TEST_CASE("ShadowLodResolver.OneCasterTintsDifferentlyPerFocusedView", "[ShadowL
     ShadowRenderViewSet views;
     // A coarse cascade (0.5 world units per texel) and a fine one (0.005): level 2's 0.20 deviation
     // is 0.4 texels in the first and 40 in the second.
-    REQUIRE(views.setCascade(0, Mat4::identity(), ShadowView::orthographic(0.5f)));
-    REQUIRE(views.setCascade(1, Mat4::identity(), ShadowView::orthographic(0.005f)));
+    REQUIRE(
+        views.setCascade(0, Mat4::identity(), ShadowView::orthographic(0.5f), someOrthoMetrics()));
+    REQUIRE(views.setCascade(1, Mat4::identity(), ShadowView::orthographic(0.005f),
+                             someOrthoMetrics()));
 
     ShadowLodResolver resolver;
     resolver.beginFrame();
@@ -628,8 +656,8 @@ TEST_CASE("ShadowLodResolver.MovementSeparatesFirstSeenHeldTransitionedAndRevers
     const auto commitLevelUsing = [&](float worldUnitsPerTexel)
     {
         ShadowRenderViewSet frameViews;
-        REQUIRE(frameViews.setCascade(0, Mat4::identity(),
-                                      ShadowView::orthographic(worldUnitsPerTexel)));
+        REQUIRE(frameViews.setCascade(
+            0, Mat4::identity(), ShadowView::orthographic(worldUnitsPerTexel), someOrthoMetrics()));
         resolver.beginFrame();
         const ResolvedShadowDraw drawn =
             resolver.resolve(request(lods, caster), view(frameViews, ShadowViewGroup::Cascade, 0),
@@ -676,8 +704,8 @@ TEST_CASE("ShadowLodResolver.AReversalAfterALongHoldIsNotChatter", "[ShadowLodRe
     const auto commitAt = [&](float worldUnitsPerTexel)
     {
         ShadowRenderViewSet frameViews;
-        REQUIRE(frameViews.setCascade(0, Mat4::identity(),
-                                      ShadowView::orthographic(worldUnitsPerTexel)));
+        REQUIRE(frameViews.setCascade(
+            0, Mat4::identity(), ShadowView::orthographic(worldUnitsPerTexel), someOrthoMetrics()));
         resolver.beginFrame();
         (void)resolver.resolve(request(lods, caster), view(frameViews, ShadowViewGroup::Cascade, 0),
                                someBounds(), kBudget, kNoHysteresis);

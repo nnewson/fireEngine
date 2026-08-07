@@ -405,10 +405,21 @@ void DebugOverlay::buildUi(const FrameStats& stats, RenderTunables& tunables)
                      0.0f, 33.3f, ImVec2(0.0f, 50.0f));
 
     ImGui::Separator();
+    // COLLAPSED by default. The per-pass table is 20 rows, and once the timestamp readback started
+    // working (it had been dead on every device) those rows pushed the Shadows panel below the
+    // bottom of the window — which is where the acceptance runbook reads the cascade triangle
+    // counts from, so a diagnostic that came back to life silently broke a measurement procedure.
+    // Open it when profiling; the shadow counters are the thing more often needed.
     if (stats.gpuValid())
     {
-        ImGui::Text("GPU passes (ms):");
-        if (ImGui::BeginTable("gpu", 2, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_RowBg))
+        const bool expanded = ImGui::CollapsingHeader("GPU passes (ms)");
+        if (!expanded)
+        {
+            // Still one number when closed: the panel should never go quiet about GPU cost.
+            ImGui::Text("measured pass sum: %.3f ms", stats.gpuMeasuredPassSumMs);
+        }
+        if (expanded &&
+            ImGui::BeginTable("gpu", 2, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_RowBg))
         {
             for (uint32_t p = 0; p < kProfilePassCount; ++p)
             {

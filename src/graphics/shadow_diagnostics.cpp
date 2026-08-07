@@ -304,7 +304,7 @@ std::optional<ShadowViewSlotRequest> parseShadowViewSlotRequest(std::string_view
         // BOTH validated before flattening. `light * kCubeFaceCount + face` is unsigned arithmetic,
         // so a large enough light index wraps back into the valid range — 2^63 lands on slot 0 —
         // and a request for a nonsense light would silently focus a real one. Same defect, and the
-        // same fix, as ShadowRenderViewSet::setPoint.
+        // same fix, as ShadowRenderViewSet::setPointLight.
         if (!light || !face || *face >= kCubeFaceCount ||
             *light >= static_cast<std::size_t>(kMaxPointShadowCasters))
         {

@@ -371,8 +371,15 @@ Everything is static, so the authored camera pose makes this reproducible run to
 this order:
 
 1. **Shadows (SH-01) panel** — every family that should be rasterising is: cascades (4 slots), spot,
-   point (6 faces of slot 0), self (the skinned limb). Read the columns knowing what each pair
-   means: `Draws d/c` is drawn over offered, and the difference is that view's cull yield;
+   point (6 faces of slot 0), self (the skinned limb).
+
+   The **"GPU passes (ms)" section above it is COLLAPSED by default**, and deliberately: once the
+   timestamp readback was fixed (2026-08-05 — it had been reporting "unavailable" on every device),
+   its 20 rows pushed this table below the bottom of the window, so a diagnostic coming back to life
+   silently broke the step you are reading. Expand it when profiling; the collapsed header still
+   shows the measured pass sum. If the shadow table is missing here, check that header first.
+
+   Read the columns knowing what each pair means: `Draws d/c` is drawn over offered, and the difference is that view's cull yield;
    `Tris d/c` is drawn over **full detail**, so its difference is culling *and* LOD together;
    `L0..L3+` are the LOD selections of the DRAWN casters — a rejected candidate is never resolved,
    so it contributes no level — counted once per logical view (a self slot rasterises twice and is

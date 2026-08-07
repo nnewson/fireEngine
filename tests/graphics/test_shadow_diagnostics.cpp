@@ -459,7 +459,7 @@ TEST_CASE("--shadow-focus parses a group and slot, or nothing", "[ShadowDiagnost
     // The adversarial one: `light * kCubeFaceCount + face` is unsigned, so a large enough light
     // index WRAPS back into range — with an even face count, the top bit times 6 is 0 modulo the
     // word — and a nonsense light would silently focus a real view. Same defect and same fix as
-    // ShadowRenderViewSet::setPoint: the light is validated BEFORE it is flattened.
+    // ShadowRenderViewSet::setPointLight: the light is validated BEFORE it is flattened.
     constexpr std::size_t wrapping = std::size_t{1}
                                      << (std::numeric_limits<std::size_t>::digits - 1);
     STATIC_REQUIRE(kCubeFaceCount % 2 == 0);
