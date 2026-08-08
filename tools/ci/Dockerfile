@@ -25,6 +25,15 @@ RUN apt-get update \
         libxinerama-dev \
         libxcursor-dev \
         libglu1-mesa-dev \
+        # Autotools, for ports vcpkg builds with `vcpkg_make` rather than CMake. glfw3 3.5.1 pulls
+        # `pthread-stubs` on Linux, which is autotools-only and refuses to configure without these —
+        # `autoconf-archive` in particular is NOT preinstalled on ubuntu-latest either, so the hosted
+        # runner needs the same four. Not needed on macOS: glfw3 there uses the Cocoa backend and
+        # never reaches the X11 dependency chain.
+        autoconf \
+        autoconf-archive \
+        automake \
+        libtool \
     && wget -qO - https://apt.llvm.org/llvm-snapshot.gpg.key \
         | gpg --dearmor -o /usr/share/keyrings/apt.llvm.org.gpg \
     && echo "deb [signed-by=/usr/share/keyrings/apt.llvm.org.gpg] http://apt.llvm.org/noble/ llvm-toolchain-noble-22 main" \

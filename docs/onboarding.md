@@ -1111,6 +1111,9 @@ the same change — most have a test or guard that will catch you, but not all.
   preserves the lower set when the higher sets are bound. Keep `Renderer::recordDrawBucket` and
   `recordTransmissionDrawBucket` in lockstep: reversing this order exposes a Vulkan Validation Layers
   1.4.350 first-use push-state defect in an all-blend pass with no preceding depth-prepass push.
+  (That version is the SDK's, not the manifest's — the layer ships with the installed Vulkan SDK
+  while vcpkg pins only the headers and loader, so bumping the baseline neither retires this note nor
+  re-tests it.)
 - **Platform-conditional Vulkan capabilities are *queried*, never `#ifdef`'d** — and the decisions
   come from **one** pure planner (`render/device_plan.hpp`, unit-tested in
   `tests/render/test_device_plan.cpp`; `render/device.cpp` only enumerates and obeys). One binary
