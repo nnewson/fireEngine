@@ -4,6 +4,12 @@
 // as a sampledImage so all shadow maps can share one comparison sampler.
 #extension GL_EXT_samplerless_texture_functions : require
 
+// SHADOW_CASCADE_COUNT and MAX_SKINNED_SELF_SHADOW_CASTERS, bounding the cascade search and the
+// self-shadow slot. Included DIRECTLY rather than leant on through light_ubo.glsl: this file uses
+// the names in its own code, and an include it can see is what keeps that true if the block's
+// includes are ever rearranged. The file is idempotent, so the second include costs nothing.
+#include "gpu_limits.glsl"
+
 // Per-object data (set 0, pushed per draw) — must match ObjectUBO in shader.vert / render/ubo.hpp.
 layout(binding = 0) uniform ObjectUBO {
     mat4 model;
@@ -127,6 +133,19 @@ const vec2 poissonDisk[16] = vec2[16](
 );
 #undef POISSON_TAP
 
+// Did the renderer RECORD this map family this frame? A family whose bit is clear was skipped —
+// `--no-shadows`, no primary directional light for the directional families to be fitted to, no
+// caster of that kind — and its depth image still holds whatever the last frame that rendered it
+// left behind. Every sampling path asks this first and answers "fully lit" when the answer is no.
+//
+// Reading a stale map is not a theoretical worry: the previous arrangement skipped families and
+// relied on nothing sampling them, which was true only because of how the light loop happened to be
+// written. The bit makes it a property of the frame instead.
+bool shadowMapValid(int familyBit)
+{
+    return (light.shadowMapValidMask & familyBit) != 0;
+}
+
 // Per-pixel rotation hash so neighbouring fragments use different rotations
 // of the same Poisson kernel. Stops the kernel pattern from showing as moiré.
 mat2 poissonRotation(vec3 worldPos)
@@ -180,7 +199,10 @@ float sampleDirectionalShadowFrom(texture2DArray shadowTex, vec3 worldPos, vec3 
 
 float sampleSelfShadow(vec3 worldPos, vec3 normal, vec3 lightDir, int slot)
 {
-    if (slot < 0 || slot >= 4) {
+    if (!shadowMapValid(SHADOW_MAP_VALID_SELF)) {
+        return 1.0;
+    }
+    if (slot < 0 || slot >= MAX_SKINNED_SELF_SHADOW_CASTERS) {
         return 1.0;
     }
 
@@ -206,8 +228,8 @@ float sampleSelfShadow(vec3 worldPos, vec3 normal, vec3 lightDir, int slot)
 
 int selectCascade(float viewDepth)
 {
-    int cascade = 3;
-    for (int i = 0; i < 4; ++i)
+    int cascade = SHADOW_CASCADE_COUNT - 1;
+    for (int i = 0; i < SHADOW_CASCADE_COUNT; ++i)
     {
         if (viewDepth < light.cascadeSplits[i])
         {
@@ -222,7 +244,7 @@ int selectCascade(float viewDepth)
 // current cascade; 1.0 = pure next cascade. Always 0.0 for the last cascade.
 float cascadeBlendFactor(int cascade, float viewDepth)
 {
-    if (cascade >= 3)
+    if (cascade >= SHADOW_CASCADE_COUNT - 1)
         return 0.0;
     float cascadeStart = cascade == 0 ? 0.0 : light.cascadeSplits[cascade - 1];
     float cascadeEnd = light.cascadeSplits[cascade];
@@ -233,6 +255,11 @@ float cascadeBlendFactor(int cascade, float viewDepth)
 
 float computeShadow(vec3 worldPos, vec3 normal, vec3 lightDir, int cascade, float viewDepth)
 {
+    // Gated at the CALLER of the sampler rather than inside it: the two directional maps share one
+    // sampling function but are separate families with separate bits, and a check inside would have
+    // to guess which map it was handed.
+    if (!shadowMapValid(SHADOW_MAP_VALID_CASCADES))
+        return 1.0;
     float current = sampleDirectionalShadowFrom(shadowMapTex, worldPos, normal, lightDir, cascade);
     float t = cascadeBlendFactor(cascade, viewDepth);
     if (t <= 0.0)
@@ -243,6 +270,8 @@ float computeShadow(vec3 worldPos, vec3 normal, vec3 lightDir, int cascade, floa
 
 float computeWorldShadow(vec3 worldPos, vec3 normal, vec3 lightDir, int cascade, float viewDepth)
 {
+    if (!shadowMapValid(SHADOW_MAP_VALID_WORLD_ONLY))
+        return 1.0;
     float current =
         sampleDirectionalShadowFrom(worldShadowMapTex, worldPos, normal, lightDir, cascade);
     float t = cascadeBlendFactor(cascade, viewDepth);
@@ -448,7 +477,12 @@ void main() {
             }
 
             int shIdx = int(L.cone.z + 0.5);
-            if (shIdx >= 0 && attenuation > 0.0 && light.environmentParams.w <= 0.5) {
+            // The family this light would sample must have been RECORDED this frame. Spot and point
+            // are separate bits: a scene can legitimately record one and skip the other, and
+            // `--no-shadows` clears both.
+            bool punctualMapValid = (type == 2) ? shadowMapValid(SHADOW_MAP_VALID_SPOT)
+                                                : shadowMapValid(SHADOW_MAP_VALID_POINT);
+            if (shIdx >= 0 && attenuation > 0.0 && punctualMapValid) {
                 // The GEOMETRIC normal, not the shaded one. `N` carries normal-map detail, and
                 // biasing or displacing a receiver by it would let a texture physically move the
                 // surface the shadow test is performed against — crawling and leaks that track the
@@ -543,19 +577,21 @@ void main() {
             primaryDirectionalNdotL = NdotL;
             int cascade = selectCascade(fragViewDepth);
             float shadow = 1.0;
-            if (light.environmentParams.w <= 0.5) {
-                if (ubo.hasSkin == 1) {
-                    float worldShadow =
-                        computeWorldShadow(fragWorldPos, shadowNormal, lightVec, cascade,
-                                           fragViewDepth);
-                    float selfShadow = sampleSelfShadow(fragWorldPos, shadowNormal, lightVec,
-                                                        pc.selfShadowSlot);
-                    shadow = min(worldShadow, selfShadow);
-                } else {
-                    shadow =
-                        computeShadow(fragWorldPos, shadowNormal, lightVec, cascade,
-                                      fragViewDepth);
-                }
+            // No blanket "shadows off" flag here any more: each path asks its own family's bit
+            // (inside computeWorldShadow / sampleSelfShadow / computeShadow), and `--no-shadows` is
+            // simply the case where every bit is clear. One mechanism, so suppressing a family and
+            // telling the receiver about it cannot diverge — and a skinned receiver whose
+            // world-only map was skipped still gets its self-shadow, which a shared gate here
+            // would have thrown away with it.
+            if (ubo.hasSkin == 1) {
+                float worldShadow = computeWorldShadow(fragWorldPos, shadowNormal, lightVec,
+                                                       cascade, fragViewDepth);
+                float selfShadow = sampleSelfShadow(fragWorldPos, shadowNormal, lightVec,
+                                                    pc.selfShadowSlot);
+                shadow = min(worldShadow, selfShadow);
+            } else {
+                shadow = computeShadow(fragWorldPos, shadowNormal, lightVec, cascade,
+                                       fragViewDepth);
             }
             primaryDirectionalVisibility = shadow;
             // Contact shadows (screen-space) further occlude the *direct* sun,
@@ -583,10 +619,19 @@ void main() {
     }
 
     if (light.environmentParams.z > 3.5 && light.environmentParams.z < 4.5) {
+        // NO MAP, NO READOUT. This view samples the cascade image directly and reads lights[0] as
+        // the sun — both are wrong when the cascade family was not recorded: lights[0] is then
+        // whatever light happened to pack first (a point light's `direction` is its range and a
+        // forward of zero), and the image holds another frame's depth. Magenta says "this frame has
+        // no directional shadow map" instead of drawing a plausible-looking readout of stale data.
+        if (!shadowMapValid(SHADOW_MAP_VALID_CASCADES)) {
+            outColor = vec4(1.0, 0.0, 1.0, alpha);
+            return;
+        }
         int cascade = selectCascade(fragViewDepth);
         vec3 lightVec = normalize(-light.lights[0].direction.xyz);
         vec2 depths = directionalShadowDepths(fragWorldPos, shadowNormal, lightVec, cascade);
-        float cascadeDebug = float(cascade) / 3.0;
+        float cascadeDebug = float(cascade) / float(SHADOW_CASCADE_COUNT - 1);
         outColor = vec4(depths.x, depths.y, cascadeDebug, alpha);
         return;
     }

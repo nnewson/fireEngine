@@ -5,13 +5,15 @@
 // G-buffer); a hemisphere kernel estimates occlusion. R = AO, G = contact term.
 // Mirrors SsaoUBO in include/fire_engine/render/ubo.hpp.
 
-const int KERNEL_SIZE = 16; // == kSsaoKernelSize
+// SSAO_KERNEL_SIZE — the shared declaration graphics/gpu_limits.hpp re-exports as kSsaoKernelSize,
+// so the UBO array here and the C++ block it must match are one value, not two that agree today.
+#include "gpu_limits.glsl"
 
 layout(set = 0, binding = 0) uniform sampler2D depthTex;
 layout(set = 0, binding = 1) uniform SsaoUBO
 {
-    mat4 proj;               // jittered projection the depth was rendered with
-    vec4 kernel[KERNEL_SIZE]; // hemisphere samples (xyz), tangent space (+Z = normal)
+    mat4 proj;                    // jittered projection the depth was rendered with
+    vec4 kernel[SSAO_KERNEL_SIZE]; // hemisphere samples (xyz), tangent space (+Z = normal)
     vec4 params;             // x=radius y=bias z=intensity (0=off) w=power
     vec4 contact;            // x=length y=steps z=sunEnabled(>0.5) w=edgeThreshold
     vec4 sunViewDir;         // xyz sun direction in view space
@@ -133,7 +135,7 @@ void main()
     float radius = ssao.params.x;
     float bias = ssao.params.y;
     float occlusion = 0.0;
-    for (int i = 0; i < KERNEL_SIZE; ++i)
+    for (int i = 0; i < SSAO_KERNEL_SIZE; ++i)
     {
         vec3 samplePos = viewPos + (TBN * ssao.kernel[i].xyz) * radius;
         vec4 clip = ssao.proj * vec4(samplePos, 1.0);
@@ -154,7 +156,7 @@ void main()
         float rangeCheck = smoothstep(0.0, 1.0, radius / max(abs(viewPos.z - sampleViewZ), 1e-4));
         occlusion += (sampleViewZ >= samplePos.z + bias ? 1.0 : 0.0) * rangeCheck;
     }
-    float ao = 1.0 - (occlusion / float(KERNEL_SIZE)) * ssao.params.z;
+    float ao = 1.0 - (occlusion / float(SSAO_KERNEL_SIZE)) * ssao.params.z;
     ao = pow(clamp(ao, 0.0, 1.0), ssao.params.w);
 
     // Contact shadows are unreliable at depth silhouettes — the ray skims the

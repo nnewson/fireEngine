@@ -122,6 +122,10 @@ struct MorphUBO
     alignas(4) int morphTargetCount{0};
     alignas(4) int vertexCount{0};
     int _pad0{0};
+    // A flat float array here, `vec4 weights[MORPH_WEIGHT_VEC4_COUNT]` in GLSL — the SAME bytes,
+    // because std140 gives a scalar array a 16-byte stride and packing them as vec4s is what avoids
+    // paying it. Both lengths come from the shared `MAX_MORPH_TARGETS`, whose divisibility by four
+    // `gpu_limits.hpp` asserts; the shader indexes `weights[i / 4][i % 4]`.
     float weights[kMaxMorphTargets]{};
     // VIPM geomorph (Continuous LOD): the vertex shader slides each drawn vertex whose removal
     // level equals vipmTargetLevel toward its target by morphFactor. Both 0 in Discrete mode / for
@@ -179,13 +183,15 @@ struct LightUBO
     // Per-cascade light-space view-projection matrices. Computed against the
     // first directional light in `lights[]` if any; otherwise against a
     // default direction so the matrices stay valid for the shadow pass.
-    alignas(16) Mat4 cascadeViewProj[4]{};
+    alignas(16) Mat4 cascadeViewProj[kShadowCascadeCount]{};
     // Spot-light view-projection matrices for shadow sampling. Indexed by
     // LightData::cone.z (shadow index). Identity when the slot is unused.
     alignas(16) Mat4 spotViewProj[kMaxSpotShadowCasters]{};
     // Per-skinned-object self-shadow matrices. Indexed by ForwardPushConstants::selfShadowSlot.
     alignas(16) Mat4 selfShadowViewProj[kMaxSkinnedSelfShadowCasters]{};
-    // View-space far-plane distances for each cascade (x..w = cascades 0..3).
+    // View-space far-plane distances for each cascade (x..w = cascades 0..3). A single vec4 on the
+    // shader side, so unlike the matrix arrays it cannot grow with the cascade count — hence the
+    // assertion below rather than a sizing expression that would silently misdescribe the block.
     alignas(16) float cascadeSplits[4]{};
     alignas(16) float iblParams[4]{}; // x = maxReflectionLod, y/z = IBL strengths
     // SH-07 BIAS POLICY, in texels of each view's own world footprint — not normalised depth, and
@@ -200,7 +206,8 @@ struct LightUBO
     // 4=directional raw depth: red=receiver, green=stored, blue=cascade,
     // 5=velocity, 6=SSAO, 7=LOD tint, 8=shadow-LOD tint). See DebugView, whose
     // shader-backed values 0..8 are exactly this range.
-    // w = disable all shadow-map visibility lookups when > 0.5.
+    // w = RESERVED (0). It was the "disable shadow lookups" flag; `shadowMapValidMask` replaced it,
+    // because that flag suppressed only the SAMPLING while the pass kept recording.
     alignas(16) float environmentParams[4]{};
     // x = the cascade cross-fade fraction (`kShadowCascadeBlendFraction`). UPLOADED rather than
     // duplicated as a shader literal because SH-06 made it a FITTING constraint as well as a
@@ -217,7 +224,12 @@ struct LightUBO
     // the primary directional (CSM source) when one exists. The shader loops
     // 0..lightCount-1 and only applies CSM shadow at i==0 with type==0.
     alignas(16) int lightCount{0};
-    int _pad0{0};
+    // Which shadow-map families this frame RECORDED, as `ShadowMapValidity::packedMask()` (bit
+    // values in shaders/gpu_limits.glsl). A cleared bit means the family was skipped and its depth
+    // image is stale, so the receiver must answer "fully lit" instead of sampling it. It occupies
+    // what was padding, so no offset below moved — and it is padding well spent: the alternative
+    // was a sixth vec4 carrying one integer.
+    int shadowMapValidMask{0};
     int _pad1{0};
     int _pad2{0};
     LightData lights[kMaxLights]{};
@@ -244,6 +256,10 @@ struct LightUBO
 // multiplied the sky by a shadow matrix element. These asserts pin the C++ side; shaders share one
 // declaration (shaders/light_ubo.glsl) so they cannot drift from it independently.
 static_assert(sizeof(Mat4) == 64, "LightUBO offsets below assume a 4x4 float matrix");
+// `cascadeSplits` is one vec4 on both sides, so it is the field that does NOT scale with the
+// cascade count: raising kShadowCascadeCount past four needs a second field (or a different
+// packing) here and in the shader, not just a wider matrix array.
+static_assert(kShadowCascadeCount <= 4, "cascadeSplits packs one split per vec4 component");
 static_assert(offsetof(LightUBO, cascadeViewProj) == 0, "LightUBO std140 layout");
 static_assert(offsetof(LightUBO, spotViewProj) == 256, "LightUBO std140 layout");
 static_assert(offsetof(LightUBO, selfShadowViewProj) == 512, "LightUBO std140 layout");

@@ -347,17 +347,21 @@ Recommended change:
 VDPM front/mesh lookup already validates generation before dereferencing its table; use that as the
 minimum owner-side contract.
 
-#### 2. High: GPU layout limits have no machine-enforced C++/GLSL authority
+#### 2. ~~High: GPU layout limits have no machine-enforced C++/GLSL authority~~ ✅ **landed** (`shadow-hygiene`)
 
-[`gpu_limits.hpp`](include/fire_engine/graphics/gpu_limits.hpp) calls itself the shared source of
-truth, but shader-visible values are independently repeated as literals:
+[`gpu_limits.hpp`](include/fire_engine/graphics/gpu_limits.hpp) called itself the shared source of
+truth while every shader-visible value was independently repeated as a literal. All six are now read
+from one declaration:
 
-- `kMaxJoints = 64` versus `mat4 joints[64]` in two vertex shaders;
-- `kMaxMorphTargets = 8` versus `vec4 weights[2]`;
-- `kMaxLights = 8` versus `MAX_LIGHTS = 8`;
-- shadow cascade/spot/self-shadow counts and the total matrix count;
-- `kMaxParticleEmitters = 4` versus `emitters[4]` in two particle shaders;
-- `kSsaoKernelSize = 16` versus `KERNEL_SIZE = 16`.
+- ~~`kMaxJoints = 64` versus `mat4 joints[64]` in two vertex shaders~~ ✅;
+- ~~`kMaxMorphTargets = 8` versus `vec4 weights[2]`~~ ✅ (the GLSL length is DERIVED —
+  `MORPH_WEIGHT_VEC4_COUNT = MAX_MORPH_TARGETS / 4` — with the divisibility asserted C++-side, since
+  the block packs weights as vec4s and a ninth weight would need a third vec4 the shader never
+  declared);
+- ~~`kMaxLights = 8` versus `MAX_LIGHTS = 8`~~ ✅;
+- ~~shadow cascade/spot/self-shadow counts and the total matrix count~~ ✅;
+- ~~`kMaxParticleEmitters = 4` versus `emitters[4]` in two particle shaders~~ ✅;
+- ~~`kSsaoKernelSize = 16` versus `KERNEL_SIZE = 16`~~ ✅.
 
 The C++ layout assertions prove only the CPU layout. A one-sided constant change can still compile
 both languages successfully while making array bounds, UBO sizes, or shader loops disagree.
@@ -369,6 +373,24 @@ making drift impossible.
 
 Keep device-dependent capacity validation in `Device`, but generate the compile-time ABI values.
 This is a correctness boundary, not a documentation convention.
+
+**How** (`shadow-hygiene`, with arc 1's hygiene item — see [`shadowplans.md`](shadowplans.md)
+§ Independent shadow hygiene): `shaders/gpu_limits.glsl` holds the values once, written in the
+subset that is valid GLSL *and* valid C++, and `graphics/gpu_limits.hpp` includes it and re-exports
+them under the engine's `k`-names. That is stronger than the "parser test comparing literals" this
+finding warned against and cheaper than generation: there is nothing to compare, because there is
+one declaration and both languages read it.
+
+`gpu_limits_guard` enforces both directions — no shader may declare a shared name itself (the whole
+`shaders/` tree is swept, so a new shader is covered), each consumer must include the file and use
+the name **as many times as it is used today**, and the C++ header must define each `k`-constant *as*
+the shared declaration, so C++ cannot drift back to hard-coded values behind green shader checks.
+The use COUNT rather than mere presence came out of mutation-testing: reverting `ssao.frag`'s loop
+bound to `16` passed a presence check, because the UBO array above it still named the constant.
+
+**Scope, stated honestly**: this owns shared GPU DATA-LAYOUT values — the sizes and indices a C++
+block and a shader block must agree on. GLSL-only algorithm constants with no C++ counterpart (VDPM
+scan/workgroup sizes, for instance) are not in scope and are not claimed by the mechanism.
 
 #### 3. High: `ColliderId` registration state is inconsistent between broadphases
 

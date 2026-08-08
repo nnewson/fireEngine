@@ -5,6 +5,11 @@
 // their emitter up to a per-frame spawn budget claimed via an atomic counter.
 // The pool is partitioned per emitter (emitterIndex = i / particlesPerEmitter).
 
+// MAX_PARTICLE_EMITTERS, sizing the emitter array below from the same declaration
+// graphics/gpu_limits.hpp re-exports as kMaxParticleEmitters. (The workgroup size below is a
+// compute tuning choice with no C++ counterpart, so it stays a literal here.)
+#include "gpu_limits.glsl"
+
 layout(local_size_x = 64) in;
 
 struct Particle {
@@ -36,7 +41,7 @@ layout(std140, binding = 2) uniform Frame {
     uint frameCounter;
     uint emitterCount;
     uint particlesPerEmitter;
-    EmitterGpu emitters[4]; // kMaxParticleEmitters
+    EmitterGpu emitters[MAX_PARTICLE_EMITTERS];
 } frame;
 
 uint hashU(uint x) {

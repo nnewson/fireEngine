@@ -17,6 +17,7 @@
 #include <fire_engine/graphics/particle.hpp>
 #include <fire_engine/graphics/shadow_caster_bounds_frame.hpp>
 #include <fire_engine/graphics/shadow_lod_resolver.hpp>
+#include <fire_engine/graphics/shadow_map_validity.hpp>
 #include <fire_engine/graphics/shadow_render_view.hpp>
 #include <fire_engine/math/mat4.hpp>
 #include <fire_engine/math/vec3.hpp>
@@ -297,6 +298,15 @@ private:
     // engine-wide constants plus the debug-flag members.
     void writeIblAndDebugParams(LightUBO& out) const;
     void assignSelfShadowSlots(std::span<DrawCommand> drawCommands);
+    // Derives this frame's shadow-map validity from the COMPLETED view set and performs the single
+    // per-frame LightUBO upload. Must run after every view producer — cascades, punctual, self
+    // layers, and the world-only enablement that only `anySkinned` decides — because the mask it
+    // uploads and the families the shadow pass records are the same value.
+    void uploadFrameLighting();
+    // Reports which shadow families the completed ring slot recorded, with their raster counts and
+    // GPU time. This is how "`--no-shadows` suppresses RECORDING" is checked: a frame that still
+    // renders into maps nobody samples looks identical on screen and to the validation layers.
+    void logShadowRecordingSample() const;
     static void clearDrawBuckets(DrawBuckets& buckets) noexcept;
     void buildDrawBuckets(std::span<const DrawCommand> drawCommands, DrawBuckets& buckets) const;
     void recordDrawBucket(vk::CommandBuffer cmd, std::span<const DrawCommand> bucket,
@@ -486,6 +496,15 @@ private:
     std::optional<ShadowViewSlotRequest> pendingShadowFocus_{};
     LightUBO lightData_{};
     Vec3 directionalLightDir_{1.0f, -1.0f, 1.0f};
+    // Whether `directionalLightDir_` came from a real light or from the fallback direction. The
+    // cascades are fitted either way — the shadow views must stay well-formed — but a fit against a
+    // sun that is not in the scene describes nothing, which is why the directional families' map
+    // validity asks this rather than asking whether a matrix exists.
+    bool hasPrimaryDirectional_{false};
+    // Which map families this frame records, decided ONCE (after the view set is complete) and used
+    // twice: it gates the families in `Shadows::recordPass` and it is uploaded in
+    // `LightUBO::shadowMapValidMask` for the receiver. See graphics/shadow_map_validity.hpp.
+    ShadowMapValidity shadowMapValidity_{};
     int activeSpotCasters_{0};
     int activePointCasters_{0};
     std::array<PointShadowCaster, kMaxPointShadowCasters> pointCasters_{};
@@ -509,6 +528,10 @@ private:
     // Per-slot "collected AND submitted" bit, consumed on publication. Independent of the GPU
     // timestamp validity: a device without timestamp support still produces valid CPU counters.
     std::array<bool, kMaxFramesInFlight> shadowStatsSlotUsed_{};
+    // The validity that decided each slot's recording, ringed for the same reason the counters are:
+    // the diagnostic that reports "this family was skipped and cost nothing" must read one frame's
+    // decision beside that same frame's raster counts.
+    std::array<ShadowMapValidity, kMaxFramesInFlight> shadowValidityRing_{};
     // Per-frame camera matrices (set at the top of drawFrame). view_ + jitteredProj_
     // drive rasterisation; currentViewProj_/previousViewProj_ are jitter-free for
     // TAA motion vectors. previousViewProj_ persists across frames.

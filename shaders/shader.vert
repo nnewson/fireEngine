@@ -1,5 +1,9 @@
 #version 450
 
+// MAX_JOINTS and MORPH_WEIGHT_VEC4_COUNT, sizing the skin and morph blocks below from the same
+// declarations graphics/gpu_limits.hpp re-exports as kMaxJoints / kMorphWeightVec4Count.
+#include "gpu_limits.glsl"
+
 // Per-object data (set 0, pushed per draw). previousModel is last frame's world for motion vectors.
 layout(binding = 0) uniform ObjectUBO {
     mat4 model;
@@ -22,13 +26,13 @@ layout(binding = 29) uniform CameraUBO {
 } camera;
 
 layout(binding = 3) uniform SkinUBO {
-    mat4 joints[64];
+    mat4 joints[MAX_JOINTS];
 } skin;
 
 // Previous-frame joint matrices (TAA motion vectors for skinned meshes). Identity for non-skinned
 // draws (unread there). Same layout as SkinUBO.
 layout(binding = 30) uniform PrevSkinUBO {
-    mat4 joints[64];
+    mat4 joints[MAX_JOINTS];
 } prevSkin;
 
 layout(binding = 4) uniform MorphUBO {
@@ -36,7 +40,7 @@ layout(binding = 4) uniform MorphUBO {
     int morphTargetCount;
     int vertexCount;
     int _pad0;
-    vec4 weights[2];
+    vec4 weights[MORPH_WEIGHT_VEC4_COUNT];
     float morphFactor;    // VIPM geomorph amount (0 = discrete / no morph)
     int vipmTargetLevel;  // vertices removed by this 1-based LOD level morph in this transition
 } morph;

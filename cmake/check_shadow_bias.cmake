@@ -24,16 +24,8 @@ if(NOT DEFINED SHADER_DIR)
   message(FATAL_ERROR "SHADER_DIR must be set (path to shaders/)")
 endif()
 
-# Both GLSL comment forms, block first so a `//` inside a block cannot survive it. The block pattern
-# is the classic non-greedy-free form — CMake's regex has no lazy quantifier, and `/\*.*\*/` would
-# swallow everything between the FIRST and LAST comment in the file, silently blanking the shader and
-# making every check "fail" for the wrong reason. The line pattern anchors on start-of-string as well
-# as newline, so a comment at byte zero is stripped too.
-function(strip_glsl_comments in_text out_var)
-  string(REGEX REPLACE "/\\*[^*]*\\*+([^/*][^*]*\\*+)*/" "" stripped "${in_text}")
-  string(REGEX REPLACE "//[^\n]*" "" stripped "${stripped}")
-  set(${out_var} "${stripped}" PARENT_SCOPE)
-endfunction()
+# Comment stripping is shared with the other shader guards — see the file for why both forms matter.
+include("${CMAKE_CURRENT_LIST_DIR}/strip_glsl_comments.cmake")
 
 set(offenders "")
 set(law "${SHADER_DIR}/shadow_bias.glsl")

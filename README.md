@@ -189,7 +189,7 @@ The transient pipelines are destroyed once the bake completes; only the resultin
 4. `PhysicsWorld::step(1.0f / 60.0f)` runs zero or more fixed substeps from the frame accumulator.
 5. `scene_.applyPhysics(physics_, alpha)` pulls dynamic and corrected kinematic transforms back into scene nodes — interpolated by `alpha = accumulator / fixedDt` between the last two simulated poses for smooth motion above 60 Hz — and resolves composed-world matrices.
 6. `Renderer::drawFrame()` acquires a swapchain image and records the frame passes:
-   - **Shadow passes** — directional cascades render both the full CSM and a world-only CSM that excludes skinned casters. Each skinned self-shadow slot renders two tightly-fit passes: the first captures the nearest light-facing surface, and the second samples that first depth and discards it so the forward shader can sample the next useful self-occluder. Spot and point shadow passes replay the same compatible shadow draw commands through their per-layer/per-face depth attachment views. Skin and morph still apply in the shadow vertex shader
+   - **Shadow passes** — directional cascades render both the full CSM and a world-only CSM that excludes skinned casters. Each skinned self-shadow slot renders two tightly-fit passes: the first captures the nearest light-facing surface, and the second samples that first depth and discards it so the forward shader can sample the next useful self-occluder. Spot and point shadow passes replay the same compatible shadow draw commands through their per-layer/per-face depth attachment views. Skin and morph still apply in the shadow vertex shader. **Which families record is one decision per frame** (`ShadowMapValidity`): the slot-addressed families disappear when nothing assigns them — no self-shadow caster, no spot or point caster, no skinned draw for the world-only CSM — while the main cascades still record (and clear) whenever there is a sun to fit them to, casters or not. The directional families additionally require a primary directional light, and `--no-shadows` clears everything. A skipped family costs nothing at all — no draws, no clears, no timestamps — and the *same* value is uploaded as a bit mask the forward shader reads, so its sampling path answers fully lit instead of reading depth left over from an earlier frame
    - **Forward pass** — begin the HDR offscreen pass, draw the skybox (LEQUAL depth, no write), then call `scene.buildDrawCommands(frameInfo, frustums, out)` through the Vulkan-free `RenderableScene` interface (the scene culls internally and emits draws); Mesh/Object emit `DrawCommand`s that the Renderer buckets into opaque, transmissive, and blend lists, sorts the blend bucket back-to-front by `sortDepth`, and replays through the same bind/draw loop resolving handles via `Resources`
    - **Transmission pass** — when transmissive draws are present, capture the opaque scene colour mip chain and replay transmissive draws so the shader can sample scene-behind-glass data
    - **TAA resolve** — the forward/transmission passes also write a screen-space velocity (motion-vector) attachment; the resolve reprojects the previous frame's accumulated history along that buffer, neighbourhood-clamps it against the current 3×3 to kill ghosting, blends, and blits the result back into the HDR target. Sub-pixel projection jitter (Halton(2,3)) drives the accumulation; particles render afterwards with the un-jittered projection so they stay out of history. Skipped under `--no-taa`
@@ -395,6 +395,11 @@ FE_LOG=render:debug ./fireEngineApp
 ```
 
 Current categories are `app`, `general`, `gltf`, `physics`, `ragdoll`, and `render`.
+
+`render:debug` also prints a periodic **shadow recording** line — per family, whether it was recorded
+or skipped, its raster passes and its GPU milliseconds — which is how `--no-shadows` is checked: it
+suppresses the *recording*, not only the sampling, so every family must read `skipped passes=0
+0.000ms`. A frame that still rendered into maps nobody samples would look identical on screen.
 
 ## Dependencies
 

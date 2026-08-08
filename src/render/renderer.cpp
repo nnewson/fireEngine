@@ -401,6 +401,7 @@ void Renderer::updateLightData(Vec3 cameraPosition, Vec3 cameraTarget, float asp
     // (glTF/KHR convention), so the shadow camera must look down that vector.
     // The forward shader negates it separately when it needs surface-to-light.
     const Lighting* primaryDirectional = primaryDirectionalLight(lights);
+    hasPrimaryDirectional_ = primaryDirectional != nullptr;
     directionalLightDir_ = primaryDirectional != nullptr
                                ? Vec3::normalise(primaryDirectional->worldDirection)
                                : Vec3::normalise(Vec3{1.0f, -1.0f, 1.0f});
@@ -470,10 +471,11 @@ void Renderer::updateLightData(Vec3 cameraPosition, Vec3 cameraTarget, float asp
 
     writeIblAndDebugParams(lightData);
     lightData_ = lightData;
-    // No upload here: assignSelfShadowSlots — which runs later this frame in collectDrawCommands,
-    // before any submit — fills the self-shadow matrices and writes the whole struct once. That is
-    // the single authoritative per-frame LightUBO upload; a write here would be immediately
-    // overwritten (the struct is multi-KB), so don't reinstate one.
+    // No upload here. The struct is not COMPLETE yet: the self-shadow matrices need the draws, and
+    // `shadowMapValidMask` needs the world-only views, which are enabled last of all. The single
+    // authoritative per-frame upload therefore sits at the end of collectDrawCommands — see
+    // `uploadFrameLighting`. A write here would be overwritten anyway (the struct is multi-KB), so
+    // don't reinstate one.
 }
 
 void Renderer::computeShadowCascades(LightUBO& out, Vec3 cameraPosition, Vec3 cameraTarget,
@@ -736,7 +738,10 @@ void Renderer::writeIblAndDebugParams(LightUBO& out) const
     const DebugView shaderView =
         tunables_.debugView == DebugView::Joints ? DebugView::None : tunables_.debugView;
     out.environmentParams[2] = static_cast<float>(shaderView);
-    out.environmentParams[3] = tunables_.noShadows ? 1.0f : 0.0f;
+    // environmentParams[3] is RESERVED. It carried the `noShadows` flag until the family validity
+    // mask subsumed it: `--no-shadows` now clears every bit in `shadowMapValidMask`, which both
+    // suppresses recording and tells the receiver, where this flag only ever did the second half.
+    out.environmentParams[3] = 0.0f;
     // The SAME constant the cascade fit expands each slice by. Uploaded rather than duplicated as a
     // shader literal: the fit covers the band, the shader decides who is in it, and two hand-kept
     // copies would disagree about where it starts.
@@ -808,9 +813,34 @@ void Renderer::assignSelfShadowSlots(std::span<DrawCommand> drawCommands)
         dc.selfShadowViewProj = selfMatrices[static_cast<std::size_t>(it->second)];
     }
 
-    // The single authoritative per-frame LightUBO upload (updateLightData deliberately does not
-    // write — see the note there). Runs unconditionally, even with no self-shadow casters, so the
-    // rest of lightData_ (lights, cascades, IBL) still reaches the GPU.
+    // No upload here either: `uploadFrameLighting` runs once the world-only views are enabled, so
+    // the mask it writes describes the families the pass will actually record.
+}
+
+void Renderer::uploadFrameLighting()
+{
+    // The frame's map validity, decided ONCE from the completed view set — every producer has run:
+    // cascades and punctual views in updateFrameLighting, self layers in assignSelfShadowSlots,
+    // world-only last. Deriving it earlier would read a set that is still being written, and the
+    // two consumers (this upload and the pass's family gates) would then be answering different
+    // questions with the same name.
+    shadowMapValidity_ = shadowMapValidity(ShadowMapValidityInputs{
+        .shadowsDisabled = tunables_.noShadows,
+        .primaryDirectionalLight = hasPrimaryDirectional_,
+        .activeCascadeViews = shadowViews_.activeCount(ShadowViewGroup::Cascade),
+        .activeWorldOnlyViews = shadowViews_.activeCount(ShadowViewGroup::WorldOnly),
+        .activeSelfViews = shadowViews_.activeCount(ShadowViewGroup::Self),
+        .activeSpotViews = shadowViews_.activeCount(ShadowViewGroup::Spot),
+        .activePointViews = shadowViews_.activeCount(ShadowViewGroup::Point),
+    });
+    lightData_.shadowMapValidMask = shadowMapValidity_.packedMask();
+    // Into the frame ring beside the counters it explains: the diagnostics publish a slot a
+    // ring-cycle later, and a report pairing this frame's decision with that frame's raster counts
+    // would be two frames' answers under one heading.
+    shadowValidityRing_[currentFrame_] = shadowMapValidity_;
+
+    // The single authoritative per-frame LightUBO upload. Runs unconditionally — with no shadows at
+    // all the rest of the struct (lights, IBL, debug params) still has to reach the GPU.
     writeMapped(lightUbo_.mapped[currentFrame_], lightData_);
 }
 
@@ -1199,6 +1229,9 @@ const Renderer::DrawBuckets& Renderer::collectDrawCommands(RenderableScene& scen
         }
     }
 
+    // The view set is complete: derive this frame's map validity and upload the lighting block.
+    uploadFrameLighting();
+
     // GPU-driven VDPM (Stage B5b): distil the request sink down to the fronts that are actually
     // camera-visible this frame, and (B5b-2) resolve each visible forward draw's buffers to the GPU
     // output. Object appended a request for every front on a coarse-cull survivor (camera ∪
@@ -1313,20 +1346,67 @@ void Renderer::recordShadowPass(vk::CommandBuffer cmd, const DrawBuckets& bucket
         pointCasters_.data(), static_cast<std::size_t>(activePointCasters_)};
     // Self-shadow slots are assigned densely (assignSelfShadowSlots), so the
     // scratch map's size is the number of slots the pass must render.
-    // THE SET decides whether the world-only CSM runs, not `buckets.anySkinned` — that was the
-    // request, made before the views existed. Every world-only slot must be active: the pass loops
-    // all cascades, so a partially enabled set would rasterise cascades the set reports as
-    // inactive. (`anySkinned` false leaves them all inactive, which is the same answer by a
-    // shorter route.)
-    const bool renderWorldShadow = shadowViews_.activeCount(ShadowViewGroup::WorldOnly) ==
-                                   shadowViewSlotCount(ShadowViewGroup::WorldOnly);
+    // WHICH FAMILIES RECORD is `shadowMapValidity_`, the same value the receiver was told about in
+    // `LightUBO::shadowMapValidMask` — including the world-only decision, which used to be re-read
+    // from the set here. `anySkinned` was only ever the request; the set's whole-family answer is
+    // what the validity law consumes, so the pass and the shader cannot disagree about which maps
+    // this frame's depth belongs to.
     shadows_.recordPass(cmd, buckets.shadow, buckets.worldShadow, buckets.selfShadow,
                         static_cast<int>(selfShadowSlotsScratch_.size()), activeSpotCasters_,
                         pointCasterSpan, shadowViews_, shadowLodResolver_,
                         tunables_.shadowLodPixelBudget,
                         ShadowLodHysteresis{.coarsenRatio = tunables_.shadowLodCoarsenRatio},
-                        tunables_.cullingEnabled, renderWorldShadow,
+                        tunables_.cullingEnabled, shadowMapValidity_,
                         shadowStatsRing_[currentFrame_], profiler_, currentFrame_);
+}
+
+// What the shadow pass actually RECORDED, per family — the observable half of the validity
+// contract. `--no-shadows` (or a scene with no light a family is fitted to) must show zero raster
+// passes and zero GPU milliseconds for every family, and only a report like this can show it: a
+// frame that still records into maps nobody samples looks identical on screen and identical to the
+// validation layers, while costing exactly as much as it did before.
+//
+// Same cadence and category as the cascade-fit diagnostics (`FE_LOG=render:debug`), and the same
+// reason: periodic so a long run stays readable, plus the `--capture-frame` frame so a capture and
+// its explanation describe one submitted frame. The counters and timings are a ring-cycle old —
+// they were published above from the frame that has completed — so they describe a real submission
+// rather than the frame being built.
+void Renderer::logShadowRecordingSample() const
+{
+    if (!logShadowPlacementThisFrame_)
+    {
+        return;
+    }
+    if (!stats_.shadowValid)
+    {
+        log::debug(log::category::render,
+                   "shadow recording: no completed frame's counters yet (ring warm-up)");
+        return;
+    }
+
+    // The validity that DECIDED this slot's recording, not the decision being made for the frame
+    // under construction — it rides the same ring as the counters for exactly that reason, and the
+    // publish above happens before this frame's `uploadFrameLighting` overwrites the slot.
+    const ShadowMapValidity& recorded = shadowValidityRing_[currentFrame_];
+
+    const auto familyLine = [&](ShadowViewGroup group, bool valid) -> std::string
+    {
+        const ShadowViewStats totals = stats_.shadow.groupTotal(group);
+        const ProfilePass pass = shadowProfilePass(group);
+        const float ms =
+            pass == ProfilePass::Count ? 0.0f : stats_.passMs[static_cast<std::size_t>(pass)];
+        return std::format("{} {} passes={} {:.3f}ms", toString(group),
+                           valid ? "recorded" : "skipped", totals.rasterPasses, ms);
+    };
+
+    log::debug(log::category::render, "shadow recording: {} | {} | {} | {} | {}{}{}",
+               familyLine(ShadowViewGroup::Cascade, recorded.cascades),
+               familyLine(ShadowViewGroup::WorldOnly, recorded.worldOnly),
+               familyLine(ShadowViewGroup::Self, recorded.self),
+               familyLine(ShadowViewGroup::Spot, recorded.spot),
+               familyLine(ShadowViewGroup::Point, recorded.point),
+               recorded.none() ? " | no family recorded" : "",
+               stats_.gpuValid() ? "" : " | timings unavailable on this device");
 }
 
 void Renderer::resolveShadowFocusRequest()
@@ -1462,6 +1542,8 @@ void Renderer::drawFrame(Window& display, RenderableScene& scene, float dt)
     // CPU time.
     profiler_.resolve(currentFrame_, stats_);
     stats_.cpuFrameMs = dt * 1000.0f;
+
+    logShadowRecordingSample();
 
     // Start the ImGui frame before recording. GLFW events were already polled
     // this frame (Input::update), so the overlay's input state is current.

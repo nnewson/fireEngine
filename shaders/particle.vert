@@ -4,6 +4,10 @@
 // per pool slot; the quad is generated from gl_VertexIndex (6 verts = 2 tris) and
 // faced toward the camera using the view matrix's world-space right/up axes.
 
+// MAX_PARTICLE_EMITTERS, sizing the emitter array below from the same declaration
+// graphics/gpu_limits.hpp re-exports as kMaxParticleEmitters.
+#include "gpu_limits.glsl"
+
 struct Particle {
     vec4 posAge;     // xyz position, w age
     vec4 velLife;    // xyz velocity, w lifetime
@@ -28,7 +32,7 @@ layout(std140, binding = 1) uniform Frame {
     uint frameCounter;
     uint emitterCount;
     uint particlesPerEmitter;
-    EmitterGpu emitters[4];
+    EmitterGpu emitters[MAX_PARTICLE_EMITTERS];
 } frame;
 
 layout(location = 0) out vec2 fragUv;
