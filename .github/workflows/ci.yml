@@ -39,8 +39,12 @@ jobs:
       - name: Install system packages
         run: |
           sudo apt-get update
+          # autoconf/autoconf-archive/automake/libtool are for ports vcpkg builds with `vcpkg_make`:
+          # glfw3 3.5.1 pulls `pthread-stubs` on Linux, which is autotools-only and refuses to
+          # configure without them. `autoconf-archive` is not preinstalled on ubuntu-latest.
           sudo apt-get install -y ninja-build cmake clang-tidy libvulkan-dev \
-            xorg-dev libxinerama-dev libxcursor-dev libglu1-mesa-dev pkg-config
+            xorg-dev libxinerama-dev libxcursor-dev libglu1-mesa-dev pkg-config \
+            autoconf autoconf-archive automake libtool
 
       - name: Checkout vcpkg
         uses: actions/checkout@v4
@@ -86,8 +90,11 @@ jobs:
       - name: Install system packages
         run: |
           sudo apt-get update
+          # See the clang-tidy job above for why autotools are here: glfw3 3.5.1's `pthread-stubs`
+          # dependency is autotools-only on Linux.
           sudo apt-get install -y ninja-build cmake libvulkan-dev \
-            xorg-dev libxinerama-dev libxcursor-dev libglu1-mesa-dev pkg-config
+            xorg-dev libxinerama-dev libxcursor-dev libglu1-mesa-dev pkg-config \
+            autoconf autoconf-archive automake libtool
 
       - name: Checkout vcpkg
         uses: actions/checkout@v4

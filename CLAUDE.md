@@ -73,7 +73,7 @@ Assets copied via `cmake/copy_assets.cmake`.
 
 ## Dependencies
 
-vcpkg manifest (`vcpkg.json`; versions from the default-registry baseline in `vcpkg-configuration.json`): `vulkan-headers`, `vulkan-memory-allocator`, `shaderc` (provides the `glslc` tool under `<vcpkg-installed>/<triplet>/tools/shaderc`), `catch2`, `stb`, `fastgltf`, `ktx`, `imgui[glfw-binding,vulkan-binding]`. The Vulkan **loader** and `glfw3` arrive transitively, so Vulkan + GLFW + the shader compiler all build from vcpkg — **no system Vulkan SDK / GLFW / glslang-tools**. System requirement is just a C++23 toolchain + Ninja; a Vulkan ICD (MoltenVK on macOS) is needed only at *runtime* to render, not to build or run the headless tests. `fireengine` links Vulkan/GLFW directly; `cmake/fireengine_imgui.cmake` wraps vcpkg's ImGui archive without its transitive Vulkan/GLFW link interface to avoid duplicate static-library warnings.
+vcpkg manifest (`vcpkg.json`; versions from the default-registry baseline in `vcpkg-configuration.json`): `vulkan-headers`, `vulkan-memory-allocator`, `shaderc` (provides the `glslc` tool under `<vcpkg-installed>/<triplet>/tools/shaderc`), `catch2`, `stb`, `fastgltf`, `ktx`, `imgui[glfw-binding,vulkan-binding]`. The Vulkan **loader** and `glfw3` arrive transitively, so Vulkan + GLFW + the shader compiler all build from vcpkg — **no system Vulkan SDK / GLFW / glslang-tools**. System requirement is a C++23 toolchain + Ninja on macOS; **on Linux, add X11 dev packages and autotools** (`xorg-dev`, `libxinerama-dev`, `libxcursor-dev`, `libglu1-mesa-dev`, `autoconf`, `autoconf-archive`, `automake`, `libtool`) — glfw3's X11 backend pulls ports that vcpkg builds with autotools rather than CMake, and they fail to configure without them. A Vulkan ICD (MoltenVK on macOS) is needed only at *runtime* to render, not to build or run the headless tests. `fireengine` links Vulkan/GLFW directly; `cmake/fireengine_imgui.cmake` wraps vcpkg's ImGui archive without its transitive Vulkan/GLFW link interface to avoid duplicate static-library warnings.
 
 **Pinned headers must beat `/usr/local/include`, and `-isystem` cannot do it.** Clang searches
 `/usr/local/include` ahead of every `-isystem` path, which is where CMake puts an imported target's
@@ -90,10 +90,17 @@ include site** with a narrow `#pragma GCC diagnostic ignored` and a reason (see
 
 **Upgrade the vcpkg baseline after each major item lands**, not mid-arc. The baseline in
 `vcpkg-configuration.json` pins every dependency version, so it only moves when someone moves it —
-and a stale pin quietly drifts from the SDK on the machine (it had sat on a Feb 2026 commit carrying
-`vulkan-headers 1.4.335.0` while the installed SDK reached 1.4.357). Bumping it is its own branch
-with its own verification: full rebuild, `tests-full` on both platforms, and the render smoke, since
-a loader/ICD change can alter device capabilities.
+and a stale pin quietly drifts from the SDK on the machine (it had once sat on a Feb 2026 commit
+carrying `vulkan-headers 1.4.335.0` while the installed SDK reached 1.4.357). Bumping it is its own
+branch with its own verification: full rebuild, `tests-full` on both platforms, and the render smoke,
+since a loader/ICD change can alter device capabilities. **Do it in the gap BETWEEN items, and
+before a perf item rather than after one** — measurements taken across a toolchain move cannot
+attribute a change to the work.
+
+Current pin: `ea1a7396` (Aug 2026) — `vulkan-headers`/`vulkan-loader` **1.4.357.0**, matching the
+SDK installed here, which is what keeps the mixed-vulkan-hpp trap below out of reach; plus `glfw3
+3.5.1`, `glslang 16.4.0`, `spirv-tools 1.4.357.0`, `imgui 1.92.8#1`, `shaderc 2026.2`, `ktx 4.4.2`,
+`fastgltf 0.9.0`, `catch2 3.15.3`, `vulkan-memory-allocator 3.4.0`.
 
 **"Full rebuild" there means `--clean-first`, and that is not pedantry.** vcpkg preserves each
 port's *upstream* file timestamps, so an upgraded header can land with an mtime OLDER than the object
@@ -190,6 +197,16 @@ uses your existing vcpkg + C++ toolchain, installs nothing; Vulkan/GLFW/glslc al
 working tree into volumes (host artifacts untouched), defaults to `linux/amd64` to match CI
 (`DOCKER_PLATFORM=linux/arm64` is faster but off-platform). Run the relevant one before committing
 anything that could trip the stricter warnings / clang-tidy / format gate.
+
+**The Linux image needs system packages the manifest cannot supply**, so a baseline bump can break
+the build with no source change: some vcpkg ports build with `vcpkg_make` rather than CMake and
+refuse to configure without autotools. `glfw3 3.5.1` pulls `pthread-stubs` on Linux for exactly this
+reason, which is why `autoconf autoconf-archive automake libtool` sit in `tools/ci/Dockerfile` **and**
+in both Linux jobs of `.github/workflows/ci.yml` — `autoconf-archive` is not preinstalled on
+`ubuntu-latest` either. macOS is unaffected: glfw3 uses the Cocoa backend and never reaches that
+dependency chain, which is exactly why a green macOS run does not clear a bump. When a port fails to
+build after a bump, read the error before assuming a flake — vcpkg prints the missing programs and
+the `apt install` line for them.
 
 **GoldenHash is platform-specific — re-baseline BOTH on a solver change.** `Determinism.GoldenHash`
 (`tests/physics/test_physics_determinism.cpp`) compares the physics end-state hash (raw float bits) to

@@ -403,7 +403,10 @@ suppresses the *recording*, not only the sampling, so every family must read `sk
 
 ## Dependencies
 
-Managed via the vcpkg manifest (`vcpkg.json`):
+Managed via the vcpkg manifest (`vcpkg.json`); every version comes from the baseline pinned in
+`vcpkg-configuration.json`, currently `ea1a7396` (Aug 2026) — Vulkan headers + loader **1.4.357.0**,
+`glfw3 3.5.1`, `glslang 16.4.0`, `spirv-tools 1.4.357.0`, `imgui 1.92.8`, `shaderc 2026.2`,
+`ktx 4.4.2`, `fastgltf 0.9.0`, `catch2 3.15.3`, `vulkan-memory-allocator 3.4.0`:
 
 - `vulkan-headers` — Vulkan API headers (the Vulkan **loader** + `glfw3` arrive transitively, so
   both come from vcpkg — no system Vulkan SDK / GLFW needed to build)
@@ -426,8 +429,17 @@ broke the vcpkg builds of gtest/glfw3/imgui and forced classic-mode global insta
 a vendored imgui backend; the Clang switch removed all of that.
 
 Also requires a C++23 toolchain, CMake, and Ninja. Building and the headless test suite need no
-system Vulkan — the loader, headers, GLFW, and `glslc` all come from vcpkg. To actually *run* the
-app you additionally need a Vulkan ICD at runtime: **MoltenVK** on macOS, a GPU driver on Linux.
+system Vulkan — the loader, headers, GLFW, and `glslc` all come from vcpkg. On **Linux** add the X11
+development packages and autotools, which vcpkg needs to build GLFW's X11 dependency chain (some of
+those ports use autotools rather than CMake and stop with a clear message if they are absent):
+
+```bash
+sudo apt install xorg-dev libxinerama-dev libxcursor-dev libglu1-mesa-dev pkg-config \
+                 autoconf autoconf-archive automake libtool
+```
+
+macOS needs none of that — GLFW uses the Cocoa backend there. To actually *run* the app you
+additionally need a Vulkan ICD at runtime: **MoltenVK** on macOS, a GPU driver on Linux.
 
 The GPU must expose **Vulkan 1.4** (the renderer uses core 1.4 push descriptors); a device below
 that is rejected at startup with the version named in the log. Instance layers and platform
