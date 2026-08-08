@@ -73,15 +73,6 @@ quality limit. The honest next steps are the follow-ups below, or another arc en
 - **SH-08** — shadow VIPM, *if* discrete transitions remain visibly popping.
 - **SH-09** — shadow VDPM checkpoint; highest complexity, requires evidence before committing.
 
-**Independent shadow hygiene** (independent of everything above; see the plan's § Independent shadow
-hygiene): make `noShadows` suppress *recording*, not just sampling; skip directional/world/self maps
-with no active primary directional light; generate the GLSL shadow-limits include from the C++
-authority instead of repeating `SHADOW_TOTAL_MATRIX_COUNT` / `SHADOW_POINT_MATRIX_BASE` / the
-self-shadow slot count (**same fix as arc 3's Tier 1 finding 2**; SH-05 reduced each of the three to
-ONE hand-written copy — `shadow.vert`, `shaders/shadow_depth.glsl`, `shaders/self_shadow_second.glsl`
-— but they are still hand-written, so the finding stands); keep map validity explicit when a
-family is skipped.
-
 ---
 
 ## Arc 2 — Architectural-review remainder ([`architecturalreview.md`](architecturalreview.md) §6)
@@ -154,13 +145,14 @@ conventions, duplicated conversion authority) + a standardisation list. Sequence
 3. **Transform & API redesign** — `Affine3` + direct TRS, split affine point/vector/normal from
    projective, explicit projection conventions, standardise the access/operator surface.
 
-**Tier 1 — handles, limits, tunables.** 4 high (texture generations not enforced on lookup/release;
-GPU layout limits have no machine-enforced C++/GLSL authority; `ColliderId` registration inconsistent
-between broadphases; handle packing silently aliases invalid inputs), 5 medium, 2 low. Sequenced:
+**Tier 1 — handles, limits, tunables.** 3 high open (texture generations not enforced on
+lookup/release; `ColliderId` registration inconsistent between broadphases; handle packing silently
+aliases invalid inputs) — the fourth, the missing C++/GLSL limits authority, landed — plus 5 medium
+and 2 low. Sequenced:
 1. **Close correctness holes** — enforce texture generation everywhere, fix dynamic-tree collider-ID
-   clearing/re-registration + broadphase parity tests, derive the shadow matrix ranges with
-   compile-time relationship asserts, add the build-enforced C++/GLSL limits authority (**the same
-   authority arc 1's hygiene item needs**).
+   clearing/re-registration + broadphase parity tests. (The shadow matrix ranges and the
+   build-enforced C++/GLSL limits authority — finding 2 — **landed** with arc 1's hygiene item:
+   `shaders/gpu_limits.glsl` + `gpu_limits_guard`.)
 2. **Identity foundation** — neutral raw-index + generational strong-handle primitives, move
    `GenerationalSlotPool` out of `graphics/` with occupancy tracking and invalid-release rejection,
    pick a no-resurrection generation policy, migrate the GPU/physics handle families.

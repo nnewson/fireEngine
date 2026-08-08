@@ -1003,21 +1003,83 @@ contracts from this work:
 Already-landed fixes—skipping the redundant world CSM when no skinned draw exists and skipping
 unassigned self-shadow slots—remain valid under this design.
 
-## Independent shadow hygiene
+## Independent shadow hygiene — ✅ landed (`shadow-hygiene`)
 
-These small items are useful but need not block the LOD milestones:
+All four items landed together, because three of them are one change. "Skip a family's recording"
+and "tell the receiver the family is invalid" are the same fact: skipping without the signal means
+the shader samples a depth image the frame never wrote, and the only thing making that safe is the
+current arrangement of the light loop — an accident, not a property.
 
-- Make `noShadows` suppress shadow pass recording, not only sampling in the forward shader.
-  Re-enabling is safe because the maps are rendered before their next sample.
-- Do not render directional/world/self maps when there is no active primary directional light.
-  Likewise, avoid clearing an unused punctual family merely because its texture exists.
-- Remove manually repeated shader limits such as `SHADOW_TOTAL_MATRIX_COUNT = 32`,
-  `SHADOW_POINT_MATRIX_BASE = 8`, and self-shadow slot count `4`. Generate a GLSL limits include
-  from the C++ authority or make shader compilation validate both sides. A one-sided count change
-  can otherwise compile cleanly and index the wrong UBO region.
-- Preserve explicit map validity when skipping a map family. Sampling code should either know that
-  the map is valid for this frame or return fully lit; it should never rely on stale depth being
-  harmless by accident.
+**One declaration of the limits both languages need** (`shaders/gpu_limits.glsl`). The file is
+written in the subset that is simultaneously valid GLSL and valid C++: the shaders `#include` it,
+and `graphics/gpu_limits.hpp` includes it inside a `shader_limits` namespace and re-exports every
+value under the engine's `k`-names, so the C++ types and names are unchanged while the numbers exist
+once. `SHADOW_TOTAL_MATRIX_COUNT = 32` and `SHADOW_POINT_MATRIX_BASE = 8` are gone as literals, and
+so is the arithmetic behind them — the bases are derived in the shared file, so moving a family's
+capacity moves every index after it in one edit. The semantic literals went too: `shader.frag`'s
+cascade search and self-slot bound, `light_ubo.glsl`'s `cascadeViewProj[4]`, the second-depth pass's
+slot bound, and the C++ `LightUBO::cascadeViewProj`. `cascadeSplits` is the one field that does NOT
+scale (it packs one split per `vec4` component), which is now a `static_assert` rather than a trap.
+
+The same mechanism then took the other four data-layout limits the tiered review's Tier 1 finding 2
+listed, which closes that finding: joints, morph weights, particle emitters and the SSAO kernel. The
+morph one is not a literal swap — the block packs weights as `vec4`s, so the shader's array length is
+`MORPH_WEIGHT_VEC4_COUNT = MAX_MORPH_TARGETS / 4`, derived in the shared file, with the divisibility
+asserted C++-side (GLSL cannot say it). A ninth weight would otherwise need a third `vec4` the shader
+never declared. Scope stops there: this owns values a C++ block and a shader block must AGREE on, not
+GLSL-only algorithm constants such as the VDPM workgroup sizes.
+
+The `gpu_limits_guard` CTest case pins the arrangement from **both** sides: no shader may declare a
+shared name itself (the whole `shaders/` tree is swept, so a new shader is covered too), every
+consumer must include the file and use the name **as many times as it uses it today**, the shared
+file must still declare everything and stay inside the common subset (a stray `constexpr` there
+breaks shader compiles in files that never mention it), and `gpu_limits.hpp` must define each
+`k`-constant *as* the shared declaration. Without that last half, C++ could drift back to hard-coded
+values with every shader-side check still green.
+
+Mutation-testing earned two of those checks. Presence was not enough — reverting `ssao.frag`'s loop
+bound to `16` passed, because the UBO array above it still named the constant — so the check counts
+uses, and the counting itself had a bug worth recording: `MATCHALL` returns a CMake *list*, and a
+match spanning a `;` (`for (i < NAME; ++i)`) split into two elements, inflating the count enough to
+hide a lost use. Semicolons are neutralised before counting. Fourteen mutations, fourteen failures.
+
+**Recording gated by an explicit, uploaded validity.** `graphics/shadow_map_validity.hpp` is a pure,
+Vulkan-free law: from `--no-shadows`, whether a primary directional light exists, and the per-family
+active view counts, it produces one bit per family. The renderer computes it **once**, after the
+view set is complete — the world-only views are enabled last, so anything earlier reads a set still
+being written — and uses that single value twice: it gates the families in `Shadows::recordPass`,
+and its packed form is uploaded as `LightUBO::shadowMapValidMask`. Neither side can be right while
+the other is wrong, because there is only one of them. The upload moved out of
+`assignSelfShadowSlots` to a `uploadFrameLighting` step at the end of `collectDrawCommands` for the
+same reason.
+
+Whole-family, where the family is addressed as a unit: a fragment picks its cascade layer from its
+view depth, so three fitted cascades out of four is a hole rather than three-quarters of a map, and
+the cascade/world-only families require *all* of them plus a real primary directional light (they
+are fitted to a fallback direction otherwise, which produces a map describing a sun that is not in
+the scene). Point requires whole cubes, leaning on `setPointLight`'s atomic six-face installation;
+self and spot slots are addressed by an index the draw or the light carries, so any active slot
+validates those families.
+
+Every receiver path asks its family's bit first and answers fully lit otherwise, including the
+raw-depth debug view — which samples the cascade image directly *and* reads `lights[0]` as the sun,
+both wrong without a directional light, so it now shows magenta ("no map this frame") instead of a
+plausible readout of stale data. `environmentParams.w`, the old "disable shadow lookups" flag, is
+retired: it only ever suppressed the sampling, while the pass kept rendering.
+
+**Verification.** `--no-shadows` is now *observably* suppressed, which validation-clean rendering
+alone would not show: `FE_LOG=render:debug` prints a per-family recording line on the cascade-fit
+cadence, and on `ShadowLodDemo` it goes from `cascade recorded passes=4 0.718ms | world-only
+recorded passes=4 0.260ms | self recorded passes=2 | spot recorded passes=1 | point recorded
+passes=6` to every family `skipped passes=0 0.000ms | no family recorded`. The line pairs one
+frame's decision with that same frame's counters (the validity rides the stats ring). With shadows
+on, the reference capture is byte-identical under the sweep's own metric: **zero** pixels differ by
+more than 8/255 from `docs/images/shadow-lod-selected.png`.
+
+One honest limitation: the "no primary directional light" branch is exercised by the headless tests,
+not by a scene, because the app seeds a default sun whenever an asset authors none
+(`FireEngine::loadScene`). It is still the right guard — a light removed at runtime, or a loader
+regression like the one that dropped lights on animated nodes, produces exactly that frame.
 
 ## Verification gates
 

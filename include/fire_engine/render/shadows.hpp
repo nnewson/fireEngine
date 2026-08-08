@@ -5,6 +5,7 @@
 
 #include <fire_engine/graphics/draw_command.hpp>
 #include <fire_engine/graphics/shadow_lod_resolver.hpp>
+#include <fire_engine/graphics/shadow_map_validity.hpp>
 #include <fire_engine/graphics/shadow_render_view.hpp>
 #include <fire_engine/math/vec3.hpp>
 #include <fire_engine/render/constants.hpp>
@@ -125,9 +126,16 @@ public:
     //
     // `activeSelfShadowCasters` bounds the self-shadow slot loop (slots are assigned densely, and
     // an unassigned slot's layers are never sampled — no fragment carries that slot index — so they
-    // need no clear). `renderWorldShadow` gates the world-only CSM: only skinned fragments sample
-    // it (shader.frag gates on hasSkin), so a frame with no skinned draw skips those iterations,
-    // and the frame that reintroduces one re-renders the map before anything samples it.
+    // need no clear).
+    //
+    // `validity` decides WHICH FAMILIES RECORD, and it is the same value the receiver read in
+    // `LightUBO::shadowMapValidMask`. A family whose bit is clear draws nothing, clears nothing and
+    // stamps no timestamp, so its diagnostic rows and its GPU time both stay at zero — that is the
+    // honest report, since the views were not rasterised. Re-enabling is safe in the same frame:
+    // this pass runs before anything samples a map, so the frame that turns a family back on
+    // re-renders it before its first read. What makes SKIPPING safe is the other half of the same
+    // value: the receiver is told the family is invalid and answers fully lit, rather than sampling
+    // depth left behind by whichever frame last rendered it.
     //
     // `stats` (SH-01) is MUTATED: every iteration marks its view rasterised and observes every
     // command it walks, so a view that renders nothing is still reported. Rows are keyed by
@@ -144,8 +152,8 @@ public:
                     int activeSpotCasters, std::span<const PointShadowCaster> pointCasters,
                     const ShadowRenderViewSet& views, ShadowLodResolver& resolver,
                     float lodBudgetTexels, ShadowLodHysteresis hysteresis, bool cullingEnabled,
-                    bool renderWorldShadow, ShadowFrameStats& stats, const GpuProfiler& profiler,
-                    uint32_t frameIndex) const;
+                    ShadowMapValidity validity, ShadowFrameStats& stats,
+                    const GpuProfiler& profiler, uint32_t frameIndex) const;
 
 private:
     Resources* resources_{nullptr};

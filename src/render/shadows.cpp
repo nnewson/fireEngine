@@ -379,23 +379,32 @@ void Shadows::recordPass(vk::CommandBuffer cmd, std::span<const DrawCommand> sha
                          int activeSpotCasters, std::span<const PointShadowCaster> pointCasters,
                          const ShadowRenderViewSet& views, ShadowLodResolver& resolver,
                          float lodBudgetTexels, ShadowLodHysteresis hysteresis, bool cullingEnabled,
-                         bool renderWorldShadow, ShadowFrameStats& stats,
+                         ShadowMapValidity validity, ShadowFrameStats& stats,
                          const GpuProfiler& profiler, uint32_t frameIndex) const
 {
+    // Nothing to record at all — `--no-shadows`, or a scene with no light any family is fitted to.
+    // Returning here is what makes suppression OBSERVABLE: no draws, no clears, no timestamps, so
+    // every shadow row in the diagnostics and every shadow group in the GPU timings reads zero.
+    if (validity.none())
+    {
+        return;
+    }
     // Bottom-to-bottom group timing: both boundaries are bottom-of-pipe stamps, so adjacent
     // sub-millisecond groups cannot overlap and inflate each other the way top-to-bottom spans do.
     // Every pass in the engine stamps this way now — begin() itself is bottom-of-pipe — so this is
     // no longer a shadow-only convention, just the convention. A group that records nothing leaves
-    // its two stamps unwritten and reports 0. `active` gates the STAMPS, not the body: a family
-    // that renders nothing this frame must leave its two timestamps unwritten so the pass reports
-    // 0, rather than recording an empty span that reads as a small real cost and inflates the frame
-    // total. An active family with zero candidate draws is still timed — its clears and layout
-    // barriers are real GPU work.
-    const auto timeGroup = [&](ProfilePass pass, bool active, auto&& body)
+    // its two stamps unwritten and reports 0, rather than an empty span that reads as a small real
+    // cost and inflates the frame total. An active family with zero candidate draws is still timed
+    // — its clears and layout barriers are real GPU work.
+    //
+    // `recording` gates the body AND the stamps together, which is the point: a family this frame
+    // does not record must draw nothing, clear nothing and time nothing, and one gate is what makes
+    // those three the same answer. It comes from `ShadowMapValidity`, the same value the receiver
+    // was told, so a skipped family's diagnostics read zero and its shader path reads "fully lit".
+    const auto timeGroup = [&](ProfilePass pass, bool recording, auto&& body)
     {
-        if (!active)
+        if (!recording)
         {
-            body(); // no-op for an inactive family, but keeps the control flow in one place
             return;
         }
         profiler.begin(cmd, frameIndex, pass);
@@ -501,7 +510,7 @@ void Shadows::recordPass(vk::CommandBuffer cmd, std::span<const DrawCommand> sha
     // per cascade. Nothing depends on the interleaving (each layer is independently barriered), and
     // grouping them is what lets each family carry one bottom-to-bottom timestamp boundary in the
     // per-group GPU timing — interleaved, the two families' costs could not be separated at all.
-    timeGroup(ProfilePass::ShadowCascades, /*active=*/true,
+    timeGroup(ProfilePass::ShadowCascades, validity.cascades,
               [&]
               {
                   for (uint32_t cascade = 0; cascade < kShadowCascadeCount; ++cascade)
@@ -524,46 +533,43 @@ void Shadows::recordPass(vk::CommandBuffer cmd, std::span<const DrawCommand> sha
               });
 
     // The world-only CSM exists so skinned receivers can sample a cascade without their own
-    // geometry; with no skinned draw this frame nothing samples it, so skip the duplicate
-    // 4-cascade render entirely (stale content is unreachable — see the recordPass contract in
-    // shadows.hpp). Skipping leaves its diagnostic rows untouched, which is the honest report: the
-    // views were not rasterised.
-    timeGroup(
-        ProfilePass::ShadowWorldOnly, renderWorldShadow,
-        [&]
-        {
-            if (renderWorldShadow)
-            {
-                for (uint32_t cascade = 0; cascade < kShadowCascadeCount; ++cascade)
-                {
-                    // The set's world-only entry ALIASES the cascade's, so this iteration
-                    // resolves against the same logical view — the resolver returns the
-                    // cascade's cached answer, which is what makes the two CSMs agree for a
-                    // rigid caster rather than agreeing by coincidence.
-                    const ShadowRenderView* view = viewFor(ShadowViewGroup::WorldOnly, cascade);
-                    if (view == nullptr)
-                    {
-                        continue;
-                    }
-                    ShadowPushConstants pc{};
-                    pc.matrixIndex = kShadowCascadeMatrixBase + static_cast<int>(cascade);
-                    const std::optional<Frustum> frustum = frustumFor(*view, cullingEnabled);
-                    const ShadowDrawFilter filter{.frustum = frustum ? &*frustum : nullptr};
-                    layeredIteration(
-                        worldShadowMapHandle_, cascade, kShadowMapExtent, pc, worldOnlyShadowDraws,
-                        filter, lodContextFor(*view), shadowPipelines_, ShadowFaceCull::PerCaster,
-                        kDirectionalShadowRasterBiasConstant, kDirectionalShadowRasterBiasSlope,
-                        ShadowViewTarget{stats, ShadowViewGroup::WorldOnly, cascade, true});
-                }
-            }
-        });
+    // geometry; with no skinned draw this frame no world-only view is enabled, so the duplicate
+    // 4-cascade render is skipped entirely. Skipping leaves its diagnostic rows untouched, which is
+    // the honest report: the views were not rasterised. The receiver is told (the WORLD_ONLY bit)
+    // rather than left to rely on nothing sampling it.
+    timeGroup(ProfilePass::ShadowWorldOnly, validity.worldOnly,
+              [&]
+              {
+                  for (uint32_t cascade = 0; cascade < kShadowCascadeCount; ++cascade)
+                  {
+                      // The set's world-only entry ALIASES the cascade's, so this iteration
+                      // resolves against the same logical view — the resolver returns the cascade's
+                      // cached answer, which is what makes the two CSMs agree for a rigid caster
+                      // rather than agreeing by coincidence.
+                      const ShadowRenderView* view = viewFor(ShadowViewGroup::WorldOnly, cascade);
+                      if (view == nullptr)
+                      {
+                          continue;
+                      }
+                      ShadowPushConstants pc{};
+                      pc.matrixIndex = kShadowCascadeMatrixBase + static_cast<int>(cascade);
+                      const std::optional<Frustum> frustum = frustumFor(*view, cullingEnabled);
+                      const ShadowDrawFilter filter{.frustum = frustum ? &*frustum : nullptr};
+                      layeredIteration(
+                          worldShadowMapHandle_, cascade, kShadowMapExtent, pc,
+                          worldOnlyShadowDraws, filter, lodContextFor(*view), shadowPipelines_,
+                          ShadowFaceCull::PerCaster, kDirectionalShadowRasterBiasConstant,
+                          kDirectionalShadowRasterBiasSlope,
+                          ShadowViewTarget{stats, ShadowViewGroup::WorldOnly, cascade, true});
+                  }
+              });
 
     // Only the densely-assigned slots render; an unassigned slot's layers are
     // never sampled (no fragment carries its index), so they need no clear. An
     // assigned slot whose caster produced no shadow draw still clears here —
     // correctly reading "no occluder" (depth 1.0) for its forward fragments.
     timeGroup(
-        ProfilePass::ShadowSelf, activeSelfShadowCasters > 0,
+        ProfilePass::ShadowSelf, validity.self,
         [&]
         {
             for (int slot = 0;
@@ -603,7 +609,7 @@ void Shadows::recordPass(vk::CommandBuffer cmd, std::span<const DrawCommand> sha
             }
         });
 
-    timeGroup(ProfilePass::ShadowSpot, activeSpotCasters > 0,
+    timeGroup(ProfilePass::ShadowSpot, validity.spot,
               [&]
               {
                   for (int s = 0; s < activeSpotCasters && s < kMaxSpotShadowCasters; ++s)
@@ -629,7 +635,7 @@ void Shadows::recordPass(vk::CommandBuffer cmd, std::span<const DrawCommand> sha
                   }
               });
 
-    timeGroup(ProfilePass::ShadowPoint, !pointCasters.empty(),
+    timeGroup(ProfilePass::ShadowPoint, validity.point,
               [&]
               {
                   for (std::size_t p = 0; p < pointCasters.size() &&

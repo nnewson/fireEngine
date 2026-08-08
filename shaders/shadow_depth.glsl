@@ -6,9 +6,9 @@
 // the main shader's samplerCubeArrayShadow on one of them only, and cutout casters would lose their
 // point shadows for a reason that looks like a bias problem.
 //
-// Mirrors kShadowPointMatrixBase (graphics/gpu_limits.hpp) — the matrix-slot layout that puts the
-// point faces last.
-const int SHADOW_POINT_MATRIX_BASE = 8;
+// SHADOW_POINT_MATRIX_BASE — the shared matrix-slot layout that puts the point faces last, from the
+// one file graphics/gpu_limits.hpp also reads.
+#include "gpu_limits.glsl"
 
 // Point faces store linear distance / range into gl_FragDepth so the main pass' comparison sampler
 // tests the same ratio. Cascade, spot and self views write nothing here and keep the fixed-function

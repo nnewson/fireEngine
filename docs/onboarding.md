@@ -649,7 +649,11 @@ and resolve pass:
   requested only when capture is asked for and rejected loudly if the surface lacks it, and supports
   8-bit BGRA/RGBA swapchain formats only (anything else throws rather than guessing the channel
   order). The captured extent is the SWAPCHAIN's — 2× the 800×600 window on a HiDPI display.
-- `--no-shadows`: disable shadow-map visibility lookups.
+- `--no-shadows`: record no shadow maps and sample none. It clears every bit of the frame's
+  `ShadowMapValidity`, which both skips the pass's families (no draws, no clears, no timestamps) and
+  tells the forward shader to answer fully lit — `FE_LOG=render:debug` prints the per-family
+  recording line that shows it. Re-enabling mid-run is safe: the pass records before anything
+  samples a map, so the frame that turns shadows back on renders them first.
 - `--no-taa`: skip the projection jitter and TAA resolve — reverts to the raw aliased image.
 - `--overlay`: start with the ImGui debug overlay visible (also toggled at runtime with **F1**).
 - `-f`: add a receiver-only floor plane at y=0.
@@ -912,6 +916,26 @@ the same change — most have a test or guard that will catch you, but not all.
   shader must match the corresponding `ForwardBinding` / `ForwardGlobalBinding` / `ShadowBinding` /
   `SkyboxBinding` / `PostProcessBinding` enumerator. `tests/render/test_pipeline_config.cpp` checks
   the C++ side; the GLSL side is on you.
+- **A shared GPU data-layout limit is declared ONCE, in `shaders/gpu_limits.glsl`.** "Shared
+  data-layout" is the scope: a size or index that a C++ block and a shader block must agree on. A
+  GLSL-only algorithm constant with no C++ counterpart — a compute workgroup size, a scan radix —
+  is not in scope and stays where it is used. That file is
+  written in the subset that is valid GLSL *and* valid C++; shaders `#include` it, and
+  `graphics/gpu_limits.hpp` includes it inside a `shader_limits` namespace and re-exports each value
+  under its `k`-name. Adding a shader-visible limit means adding it there and re-exporting it here —
+  never writing the number twice, and never a `constexpr` in the shared file (it must stay in the
+  common subset, or shaders that never mention it stop compiling). `gpu_limits_guard` enforces both
+  directions: no shader may declare a shared name, each consumer must use the name rather than a
+  literal, and each `k`-constant must be defined *as* the shared declaration.
+- **A shadow family's recording and its uploaded validity are one value** (`ShadowMapValidity`).
+  `Renderer::uploadFrameLighting` derives it once, from the COMPLETED view set — every producer has
+  run, including the world-only enablement that only `anySkinned` decides — then gates
+  `Shadows::recordPass` with it and uploads its packed form as `LightUBO::shadowMapValidMask`. If
+  you add a shadow family, or a new place that decides whether a family renders, route it through
+  that value: a family skipped without the bit leaves the receiver sampling a depth image this frame
+  never wrote, and nothing in the pipeline will complain. Every sampling path in `shader.frag` asks
+  its bit first (the guard pins that too), including the raw-depth debug view, which has no valid
+  `lights[0]` to read when the cascade family is invalid.
 - **A shadow caster that deforms after the simplifier measured it may not select a level** (SH-04).
   The deviation channel is measured on the mesh as authored — bind pose, base weights, the vertex
   buffer at build time — so for skinned, morph-capable or storage-vertex geometry it describes a mesh

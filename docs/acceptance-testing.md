@@ -625,6 +625,26 @@ them. Flags are position-independent. Images are `placeholder.jpg` for now.
 
 ## Feature checks (overlay-driven)
 
+### Shadow-map recording — `--no-shadows` must suppress the PASS, not just the lookups
+`--no-shadows` clears every bit of the frame's `ShadowMapValidity`, which skips the recording of
+every family as well as the sampling. That cannot be judged from the image — a frame that still
+renders into maps nobody samples looks identical, and stays validation-clean — so read the counters:
+
+```bash
+FE_LOG=render:debug ./fireEngineApp shadow_lod/ShadowLodDemo.gltf skybox.hdr
+FE_LOG=render:debug ./fireEngineApp shadow_lod/ShadowLodDemo.gltf skybox.hdr --no-shadows
+```
+
+Each prints a periodic `shadow recording:` line, one entry per family, on the cascade-fit cadence.
+Without the flag every family that has casters reads `recorded passes=N <ms>`; with it **every**
+family must read `skipped passes=0 0.000ms`, and the line must end `| no family recorded`. The same
+line is how a partially-fitted family is spotted: a `skipped` entry in a scene that should have
+casters means the whole-family rule rejected it, not that the geometry vanished.
+
+A scene with no skinned draw legitimately shows `world-only skipped` and `self skipped`
+(`DamagedHelmet`); a skinned one shows both recorded (`BrainStem`). Spot and point follow their own
+casters — `LightsPunctualLamp` records 24 point passes (four cubes) and no spot.
+
 ### Mesh LOD — discrete / VIPM / VDPM
 ```bash
 ./fireEngineApp DamagedHelmet/DamagedHelmet.gltf skybox.hdr --overlay

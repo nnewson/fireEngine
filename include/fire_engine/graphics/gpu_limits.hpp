@@ -12,52 +12,94 @@
 // Pure scalar tunables (biases, strengths, FOV, IBL/shadow extents) stay in
 // render/constants.hpp, which includes this header so existing render-side
 // users keep seeing every constant through a single include.
+//
+// The values the SHADERS also need are not written here: they live in
+// `shaders/gpu_limits.glsl`, a file in the common subset of GLSL and C++ that
+// is included below and re-exported under the engine's `k`-names. Add a limit
+// there — not here — whenever a shader must know it too, so the two sides
+// cannot drift. The rest (frames in flight, joints, bindless capacities…) is
+// C++-only and stays in this file.
 
 namespace fire_engine
 {
+
+// The shared declarations, parked in their own namespace: they are GLSL-style
+// SHOUTING_CASE and this header exists to give them engine names and engine
+// types. Nothing outside this file should name them.
+namespace shader_limits
+{
+#include "gpu_limits.glsl" // NOLINT(bugprone-suspicious-include): the shared GLSL/C++ limits
+} // namespace shader_limits
 
 // Frames-in-flight: how many copies of per-frame GPU resources exist.
 inline constexpr int kMaxFramesInFlight = 2;
 
 // Skinning joint matrices per SkinUBO.
-inline constexpr std::size_t kMaxJoints = 64;
+inline constexpr std::size_t kMaxJoints = shader_limits::MAX_JOINTS;
 
-// Morph target weights per MorphUBO.
-inline constexpr int kMaxMorphTargets = 8;
+// Morph target weights per MorphUBO. The GPU block packs them as vec4s, so the shader's array
+// length is kMorphWeightVec4Count — derived, not written twice. The packing REQUIRES a multiple of
+// four: a ninth weight would need a third vec4 the shader would not have declared, and the write
+// would land outside the block. GLSL cannot say that, so it is asserted here, on the shared value
+// both sides read.
+inline constexpr int kMaxMorphTargets = shader_limits::MAX_MORPH_TARGETS;
+inline constexpr int kMorphWeightVec4Count = shader_limits::MORPH_WEIGHT_VEC4_COUNT;
+static_assert(kMaxMorphTargets % 4 == 0,
+              "MorphUBO packs weights as vec4s; a non-multiple of four would not fit the block");
+static_assert(kMorphWeightVec4Count * 4 == kMaxMorphTargets);
 
 // Cap on lights consumed by the forward shader's main lighting loop. Sized so
 // the LightUBO array fits comfortably under any sane Vulkan UBO limit. Bump
 // when scenes routinely exceed this; or swap to an SSBO at that point.
-inline constexpr int kMaxLights = 8;
+inline constexpr int kMaxLights = shader_limits::MAX_LIGHTS;
 
 // Per-skinned-object self-shadow slots (LightUBO::selfShadowViewProj).
-inline constexpr int kMaxSkinnedSelfShadowCasters = 4;
+inline constexpr int kMaxSkinnedSelfShadowCasters = shader_limits::MAX_SKINNED_SELF_SHADOW_CASTERS;
 
 // Directional cascade layers in the 2D-array shadow map.
-inline constexpr uint32_t kShadowCascadeCount = 4;
+inline constexpr uint32_t kShadowCascadeCount = shader_limits::SHADOW_CASCADE_COUNT;
 
 // Shadow casters for punctual lights. Caps are independent of kMaxLights;
 // excess punctual lights remain unshadowed. First-N policy in gather order.
-inline constexpr int kMaxSpotShadowCasters = 4;
-inline constexpr int kMaxPointShadowCasters = 4;
+inline constexpr int kMaxSpotShadowCasters = shader_limits::MAX_SPOT_SHADOW_CASTERS;
+inline constexpr int kMaxPointShadowCasters = shader_limits::MAX_POINT_SHADOW_CASTERS;
 
 // Faces of a cube map — ONE authority, because this value participates in four separate things:
 // logical-view key validation, shadow matrix indexing, image layer indexing, and the flat
 // point-view slot arithmetic. Two definitions drifting apart would corrupt all of them at once,
 // and quietly: every index would still be in range, just pointing at the wrong face.
-inline constexpr std::uint32_t kCubeFaceCount = 6;
+inline constexpr std::uint32_t kCubeFaceCount = shader_limits::CUBE_FACE_COUNT;
 
 // Shadow vertex shader projects each vertex into light-space using one of the
 // ShadowUBO::lightViewProj matrices, picked via ShadowPushConstants::matrixIndex.
-//   [0..3]   directional cascades 0..3
-//   [4..]    spot lights, layout 4 + spotIndex
-//   [4+S..]  point lights, layout (4 + S) + 6 * cubeIndex + face
-// where S = kMaxSpotShadowCasters.
-inline constexpr int kShadowCascadeMatrixBase = 0;
-inline constexpr int kShadowSpotMatrixBase = 4;
-inline constexpr int kShadowPointMatrixBase = kShadowSpotMatrixBase + kMaxSpotShadowCasters;
-inline constexpr int kShadowTotalMatrixCount =
-    kShadowPointMatrixBase + static_cast<int>(kCubeFaceCount) * kMaxPointShadowCasters;
+//   [0..C-1]     directional cascades
+//   [C..]        spot lights, layout C + spotIndex
+//   [C+S..]      point lights, layout (C + S) + 6 * cubeIndex + face
+// where C = kShadowCascadeCount and S = kMaxSpotShadowCasters. The arithmetic itself is shared with
+// the shaders, not repeated here — see shaders/gpu_limits.glsl.
+inline constexpr int kShadowCascadeMatrixBase = shader_limits::SHADOW_CASCADE_MATRIX_BASE;
+inline constexpr int kShadowSpotMatrixBase = shader_limits::SHADOW_SPOT_MATRIX_BASE;
+inline constexpr int kShadowPointMatrixBase = shader_limits::SHADOW_POINT_MATRIX_BASE;
+inline constexpr int kShadowTotalMatrixCount = shader_limits::SHADOW_TOTAL_MATRIX_COUNT;
+
+// Which shadow-map families a frame recorded, packed into `LightUBO::shadowMapValidMask`. The
+// producer is `ShadowMapValidity::packedMask()` (graphics/shadow_map_validity.hpp); the consumer is
+// every sampling path in shader.frag. Bit values shared with the shader for the same reason the
+// sizes are: a bit that means one family on one side and another on the other is a silent misread.
+inline constexpr std::int32_t kShadowMapValidCascades = shader_limits::SHADOW_MAP_VALID_CASCADES;
+inline constexpr std::int32_t kShadowMapValidWorldOnly = shader_limits::SHADOW_MAP_VALID_WORLD_ONLY;
+inline constexpr std::int32_t kShadowMapValidSelf = shader_limits::SHADOW_MAP_VALID_SELF;
+inline constexpr std::int32_t kShadowMapValidSpot = shader_limits::SHADOW_MAP_VALID_SPOT;
+inline constexpr std::int32_t kShadowMapValidPoint = shader_limits::SHADOW_MAP_VALID_POINT;
+
+// The layout the comment above describes, asserted rather than trusted: these are the relations the
+// matrix table's users assume, and they must survive any future change to a family's capacity.
+static_assert(kShadowCascadeMatrixBase == 0);
+static_assert(kShadowSpotMatrixBase ==
+              kShadowCascadeMatrixBase + static_cast<int>(kShadowCascadeCount));
+static_assert(kShadowPointMatrixBase == kShadowSpotMatrixBase + kMaxSpotShadowCasters);
+static_assert(kShadowTotalMatrixCount ==
+              kShadowPointMatrixBase + static_cast<int>(kCubeFaceCount) * kMaxPointShadowCasters);
 
 // Bindless material textures: capacity of the global combined-image-sampler
 // array (forward set 2). Indexed directly by TextureHandle value, so it caps the
@@ -79,12 +121,12 @@ inline constexpr uint32_t kMaxMaterials = 256;
 // Particle system pool sizing. The GPU particle pool holds
 // kMaxParticleEmitters * kMaxParticlesPerEmitter particles; each active emitter
 // owns a contiguous slice (emitterIndex = particleIndex / kMaxParticlesPerEmitter).
-inline constexpr int kMaxParticleEmitters = 4;
+inline constexpr int kMaxParticleEmitters = shader_limits::MAX_PARTICLE_EMITTERS;
 inline constexpr int kMaxParticlesPerEmitter = 4096;
 
-// SSAO hemisphere kernel size. Mirrored by the kernel[] array in SsaoUBO and the
-// matching loop bound in ssao.frag — keep all three in lockstep. TAA denoises the
-// per-pixel rotation noise, so a modest count suffices.
-inline constexpr uint32_t kSsaoKernelSize = 16;
+// SSAO hemisphere kernel size — the SsaoUBO kernel[] length and ssao.frag's loop bound, which read
+// the same shared declaration rather than being "kept in lockstep". TAA denoises the per-pixel
+// rotation noise, so a modest count suffices.
+inline constexpr uint32_t kSsaoKernelSize = shader_limits::SSAO_KERNEL_SIZE;
 
 } // namespace fire_engine

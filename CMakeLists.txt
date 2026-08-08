@@ -104,6 +104,7 @@ add_library(fireengine SHARED
     src/graphics/shadow_lod_resolver.cpp
     src/graphics/shadow_caster_alpha.cpp
     src/graphics/shadow_bias.cpp
+    src/graphics/shadow_map_validity.cpp
     src/graphics/shadow_caster_deformation.cpp
     src/graphics/shadow_render_view.cpp
     src/graphics/shadow_diagnostics.cpp
@@ -178,7 +179,14 @@ add_library(fireengine SHARED
     src/scene/transform.cpp
 )
 
-target_include_directories(fireengine PUBLIC ${PROJECT_SOURCE_DIR}/include ${Stb_INCLUDE_DIR})
+# `shaders/` is on the C++ include path because a PUBLIC header needs it: graphics/gpu_limits.hpp
+# includes shaders/gpu_limits.glsl, the one file where the limits shared with GLSL are written.
+# BUILD_INTERFACE-only — nothing is installed, and a consumer of an installed tree would have no
+# shaders/ to point at.
+target_include_directories(fireengine PUBLIC
+    ${PROJECT_SOURCE_DIR}/include
+    $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/shaders>
+    ${Stb_INCLUDE_DIR})
 target_compile_features(fireengine PUBLIC cxx_std_23)
 target_compile_options(fireengine PRIVATE -Wall -Wextra -Wpedantic)
 if(FIRE_ENGINE_WARNINGS_AS_ERRORS)
@@ -291,6 +299,9 @@ endif()
 # any of them rebuilds every shader — includes are rare + shared, so this over-approximation is cheap
 # and keeps the SPV outputs correct.
 set(SHADER_INCLUDES
+    # Read by BOTH languages: the shaders include it directly, and the public C++ header
+    # graphics/gpu_limits.hpp includes it to re-export the same values under the engine's k-names.
+    ${PROJECT_SOURCE_DIR}/shaders/gpu_limits.glsl
     ${PROJECT_SOURCE_DIR}/shaders/vdpm_repair_classify.glsl
     ${PROJECT_SOURCE_DIR}/shaders/vdpm_apply_classify.glsl
     ${PROJECT_SOURCE_DIR}/shaders/light_ubo.glsl
@@ -435,6 +446,7 @@ add_executable(test_fire_engine
     tests/graphics/test_shadow_caster_deformation.cpp
     tests/graphics/test_shadow_caster_alpha.cpp
     tests/graphics/test_shadow_bias.cpp
+    tests/graphics/test_shadow_map_validity.cpp
     tests/graphics/test_shadow_render_view.cpp
     tests/graphics/test_texture.cpp
     tests/graphics/test_sampler_settings.cpp
@@ -509,6 +521,7 @@ add_custom_target(tests-full
   COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure -R layering_guards
   COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure -R shader_block_guards
     COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure -R shadow_bias_guard
+  COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure -R gpu_limits_guard
   DEPENDS test_fire_engine
   COMMENT "Running the full test suite, including [slow] tests"
 )
@@ -541,6 +554,17 @@ add_test(
   COMMAND ${CMAKE_COMMAND}
     -DSHADER_DIR=${PROJECT_SOURCE_DIR}/shaders
     -P ${PROJECT_SOURCE_DIR}/cmake/check_shadow_bias.cmake
+)
+
+# The limits shared by C++ and GLSL are declared once and read by both sides. A one-sided edit
+# compiles cleanly and then indexes the wrong region of a bound buffer — in range, so no validation
+# error — which is why this is a build-time check rather than a runtime one.
+add_test(
+  NAME gpu_limits_guard
+  COMMAND ${CMAKE_COMMAND}
+    -DSHADER_DIR=${PROJECT_SOURCE_DIR}/shaders
+    -DINCLUDE_DIR=${PROJECT_SOURCE_DIR}/include
+    -P ${PROJECT_SOURCE_DIR}/cmake/check_gpu_limits.cmake
 )
 
 find_program(CLANG_TIDY_EXE NAMES clang-tidy)

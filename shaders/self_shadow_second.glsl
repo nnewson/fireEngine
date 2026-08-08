@@ -10,13 +10,16 @@
 layout(binding = 4) uniform texture2DArray selfShadowFirstMapTex;
 layout(binding = 5) uniform sampler selfShadowDepthSampler;
 
+#include "gpu_limits.glsl"
+
 // True when this fragment is the SAME surface the first (light-facing) layer already recorded, so it
-// must not become the second depth. The slot bound mirrors kMaxSkinnedSelfShadowCasters
-// (graphics/gpu_limits.hpp): a fragment carrying a slot outside the array has no layer to compare
-// against, and rejecting it is the only answer that cannot sample someone else's caster.
+// must not become the second depth. The slot bound is the shared
+// MAX_SKINNED_SELF_SHADOW_CASTERS (re-exported to C++ as kMaxSkinnedSelfShadowCasters): a fragment
+// carrying a slot outside the array has no layer to compare against, and rejecting it is the only
+// answer that cannot sample someone else's caster.
 bool selfShadowSecondRejects()
 {
-    if (pc.selfShadowSlot < 0 || pc.selfShadowSlot >= 4) {
+    if (pc.selfShadowSlot < 0 || pc.selfShadowSlot >= MAX_SKINNED_SELF_SHADOW_CASTERS) {
         return true;
     }
     vec2 extent = vec2(textureSize(selfShadowFirstMapTex, 0).xy);

@@ -1,6 +1,8 @@
 #version 450
 
-const int SHADOW_TOTAL_MATRIX_COUNT = 32;
+// SHADOW_TOTAL_MATRIX_COUNT — the shared declaration graphics/gpu_limits.hpp re-exports as
+// kShadowTotalMatrixCount, which is what sizes the C++ ShadowUBO this block must match.
+#include "gpu_limits.glsl"
 
 layout(binding = 0) uniform ShadowUBO {
     mat4 model;
@@ -11,7 +13,7 @@ layout(binding = 0) uniform ShadowUBO {
 #include "shadow_push.glsl"
 
 layout(binding = 1) uniform SkinUBO {
-    mat4 joints[64];
+    mat4 joints[MAX_JOINTS];
 } skin;
 
 layout(binding = 2) uniform MorphUBO {
@@ -19,7 +21,7 @@ layout(binding = 2) uniform MorphUBO {
     int morphTargetCount;
     int vertexCount;
     int _pad0;
-    vec4 weights[2];
+    vec4 weights[MORPH_WEIGHT_VEC4_COUNT];
 } morph;
 
 layout(std430, binding = 3) readonly buffer MorphTargets {

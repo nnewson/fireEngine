@@ -19,13 +19,10 @@
 #error "define LIGHT_UBO_SET and LIGHT_UBO_BINDING before including light_ubo.glsl"
 #endif
 
-// Mirrors gpu_limits.hpp: kMaxLights, kMaxSpotShadowCasters, kMaxSkinnedSelfShadowCasters,
-// kMaxPointShadowCasters, kShadowCascadeCount.
-const int MAX_LIGHTS = 8;
-const int MAX_SPOT_SHADOW_CASTERS = 4;
-const int MAX_SKINNED_SELF_SHADOW_CASTERS = 4;
-const int MAX_POINT_SHADOW_CASTERS = 4;
-const int SHADOW_CASCADE_COUNT = 4;
+// MAX_LIGHTS, MAX_SPOT_SHADOW_CASTERS, MAX_SKINNED_SELF_SHADOW_CASTERS, MAX_POINT_SHADOW_CASTERS
+// and SHADOW_CASCADE_COUNT — the same declarations graphics/gpu_limits.hpp re-exports, not a
+// transcription of them.
+#include "gpu_limits.glsl"
 
 struct LightData {
     // .xyz = world position (point/spot), .w = type (0=dir, 1=point, 2=spot)
@@ -40,7 +37,7 @@ struct LightData {
 };
 
 layout(set = LIGHT_UBO_SET, binding = LIGHT_UBO_BINDING) uniform LightUBO {
-    mat4 cascadeViewProj[4];
+    mat4 cascadeViewProj[SHADOW_CASCADE_COUNT];
     mat4 spotViewProj[MAX_SPOT_SHADOW_CASTERS];
     // Per-skinned-object self-shadow matrices, indexed by ForwardPushConstants::selfShadowSlot.
     // Unused slots are identity, NOT zero — see selfShadowViewProjArray.
@@ -54,7 +51,8 @@ layout(set = LIGHT_UBO_SET, binding = LIGHT_UBO_BINDING) uniform LightUBO {
     // x = kSkyboxIntensity, y = kEnvironmentShadowStrength,
     // z = debug view (0=off, 1=normals, 2=NdotL, 3=shadow visibility,
     // 4=directional raw depth, 5=velocity, 6=SSAO, 7=LOD tint, 8=shadow-LOD tint),
-    // w = disable all shadow-map visibility lookups when > 0.5.
+    // w = RESERVED (0) — the old "disable shadow lookups" flag, replaced by shadowMapValidMask
+    // below, which suppresses the RECORDING as well and so cannot disagree with the pass.
     vec4 environmentParams;
     // x = cascade cross-fade fraction (kShadowCascadeBlendFraction). Uploaded, not a literal here:
     // the renderer expands each cascade's fitted slice to cover the previous cascade's blend band,
@@ -64,7 +62,10 @@ layout(set = LIGHT_UBO_SET, binding = LIGHT_UBO_BINDING) uniform LightUBO {
     // z/w reserved.
     vec4 cascadeParams;
     int  lightCount;
-    int  _pad0;
+    // Which shadow-map families were RECORDED this frame — SHADOW_MAP_VALID_* bits from
+    // gpu_limits.glsl. A cleared bit means that family's depth image was not rendered and is stale;
+    // its sampling path must return fully lit rather than read it. `--no-shadows` clears every bit.
+    int  shadowMapValidMask;
     int  _pad1;
     int  _pad2;
     LightData lights[MAX_LIGHTS];
