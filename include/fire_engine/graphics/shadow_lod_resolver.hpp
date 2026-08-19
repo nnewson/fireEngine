@@ -104,34 +104,40 @@ public:
     // are not visible here, because they are not yet true.
     [[nodiscard]] std::size_t historyLevel(const ShadowLodStateKey& key) const noexcept;
 
-    // Records that `group`'s pass actually DREW this caster for this view. Called once per recorded
-    // draw, after the filter accepted it and the resolution produced geometry.
+    // Records that `group`'s map HOLDS this caster's geometry at this resolution. Called once per
+    // caster the family's prepared work includes, after the filter accepted it and the resolution
+    // produced geometry.
     //
-    // Membership is stamped onto the caster's EXISTING frame entry — a draw the resolver never
+    // CONTENT, not "drew this frame" — the distinction the shadow cache introduced. A view whose
+    // map was reused rasterised nothing, yet its image holds exactly this caster at exactly this
+    // level (that equality is why it was reused), and a consumer asking what the map contains must
+    // get the same answer either way. Attributing content to rasterisation would blank the LOD tint
+    // on every cached view and make a reused map look like an absent one.
+    //
+    // Membership is stamped onto the caster's EXISTING frame entry — a caster the resolver never
     // resolved cannot be marked, and is rejected rather than inventing an entry with no decision in
     // it. Provenance and resolution are two fields of one record for exactly that reason.
     //
     // Why it is needed at all: a cascade and its world-only twin share one logical view and
-    // therefore one resolution — that is the point, it makes them agree — but they do NOT draw the
-    // same casters, since world-only exists to exclude skinned ones. Cascades record first, so a
-    // consumer reading the level alone would report one for a caster the world-only pass never
-    // offered: the same "one view's answer presented as another's" failure this arc exists to
-    // remove.
-    void noteDrawn(ShadowViewGroup group, const ShadowLodStateKey& key) noexcept;
+    // therefore one resolution — that is the point, it makes them agree — but they do NOT contain
+    // the same casters, since world-only exists to exclude skinned ones. A consumer reading the
+    // level alone would report one for a caster the world-only map never held: the same "one view's
+    // answer presented as another's" failure this arc exists to remove.
+    void noteContent(ShadowViewGroup group, const ShadowLodStateKey& key) noexcept;
 
-    // THE consumer's question: what `group`'s pass drew for this caster, or null if it drew nothing
-    // for it — culled, never offered, or drawn only by another family sharing this identity.
+    // THE consumer's question: what `group`'s map holds for this caster, or null if it holds
+    // nothing for it — culled, never offered, or held only by another family sharing this identity.
     //
-    // Combined on purpose. Asking "which level" and "did this pass draw it" separately is asking a
+    // Combined on purpose. Asking "which level" and "is it in this map" separately is asking a
     // caller to remember the second, and forgetting it is invisible: the level is present and
-    // plausible, just from another pass. This returns a level ONLY when this family drew it.
+    // plausible, just from another pass. This returns a level ONLY when this family's map holds it.
     [[nodiscard]] const ResolvedShadowDraw*
-    drawnResolution(ShadowViewGroup group, const ShadowLodStateKey& key) const noexcept;
+    contentResolution(ShadowViewGroup group, const ShadowLodStateKey& key) const noexcept;
 
     // The shared DECISION for `key`, regardless of which families drew it — the entry the cache
-    // hands back to every view with this identity. Use `drawnResolution` to attribute it to a pass;
-    // this exists for callers reasoning about the decision itself (and for the tests that pin the
-    // sharing). Null means "never resolved this frame", never "level 0".
+    // hands back to every view with this identity. Use `contentResolution` to attribute it to a
+    // pass; this exists for callers reasoning about the decision itself (and for the tests that pin
+    // the sharing). Null means "never resolved this frame", never "level 0".
     [[nodiscard]] const ResolvedShadowDraw*
     frameResolution(const ShadowLodStateKey& key) const noexcept;
 
@@ -164,17 +170,17 @@ private:
     // and re-deriving it costs a single frame of dead band on a caster that came back.
     static constexpr std::uint64_t kUnseenHistoryFrames = 120;
 
-    // ONE record per (caster, view) this frame: the decision, and which families acted on it.
+    // ONE record per (caster, view) this frame: the decision, and which families' maps HOLD it.
     //
-    // A second keyed container would let the two drift — provenance could exist for a caster with
-    // no decision, or outlive one — and every consumer would have to remember to consult both. As
-    // one entry, "drawn by this family" is a field of the decision, and marking a draw that was
-    // never resolved is impossible rather than merely wrong.
+    // A second keyed container would let the two drift — content could be attributed to a caster
+    // with no decision, or outlive one — and every consumer would have to remember to consult both.
+    // As one entry, "held by this family's map" is a field of the decision, and attributing content
+    // that was never resolved is impossible rather than merely wrong.
     struct FrameEntry
     {
         ResolvedShadowDraw resolved{};
         // A bit per ShadowViewGroup. Small and fixed — the group count is a compile-time constant.
-        std::uint32_t drawnGroups{0};
+        std::uint32_t contentGroups{0};
     };
 
     std::unordered_map<ShadowLodStateKey, FrameEntry> frameCache_{};

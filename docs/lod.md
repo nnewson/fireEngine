@@ -81,9 +81,13 @@ Object::writeForwardUniforms()            [per draw, per frame]
   `proj[1][1]`, and viewport height. It sets the chosen level's `indexBuffer`/`indexCount` on the
   `DrawCommand`, plus `lodLevel` (used only by the LOD-tint debug view). This is the FORWARD draw
   only. Since SH-03 a caster's *shadow* level is not chosen here at all: the shadow command carries a
-  `ShadowGeometryRequest` (LOD span, conservative world scale, caster id + generation) with no index
-  buffer, and each shadow view resolves its own level in its own shadow-map texels — see
-  [`shadowplans.md`](shadowplans.md) § SH-03 and `graphics/shadow_lod_resolver.hpp`. Two caster
+  `ShadowGeometryRequest` (LOD span, a `ShadowCasterPose` pairing the caster's world matrix with the
+  conservative world scale derived from it, caster id + generation) with no index buffer, and each
+  shadow view resolves its own level in its own shadow-map texels — see
+  [`shadowplans.md`](shadowplans.md) § SH-03 and `graphics/shadow_lod_resolver.hpp`. Since arc 2 #4
+  that resolution happens in the shadow pass's PREPARATION phase
+  (`graphics/shadow_pass_prepare.hpp`), before anything is recorded, because the same walk decides
+  whether the view's map can be reused at all. Two caster
   properties override that selection outright, and both are classified at this same seam: a caster
   that DEFORMS after the simplifier measured it (SH-04) and one whose coverage is an ALPHA CUTOUT
   (SH-05) resolve to the whole mesh, with `DeformableFallback` / `AlphaMaskedFallback` as the reason

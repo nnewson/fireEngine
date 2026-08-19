@@ -269,9 +269,12 @@ void drawShadowDiagnostics(const FrameStats& stats, RenderTunables& tunables)
             for (std::size_t slot = 0; slot < shadowViewSlotCount(group); ++slot)
             {
                 const ShadowViewStats& view = shadow.view(group, slot);
-                if (!view.touched())
+                if (!view.claimed())
                 {
-                    continue; // a slot nothing rasterised into costs nothing and says nothing
+                    continue; // a slot this frame's plan never named has nothing to report
+                    // NOT `!touched()`: a claimed row that recorded nothing is a real row with real
+                    // counters — a reused map, once caching lands — and hiding it here while the
+                    // recording log reports it would make the panel and the log disagree.
                 }
                 char slotLabel[48];
                 formatShadowSlotLabel(slotLabel, sizeof(slotLabel), group, slot);

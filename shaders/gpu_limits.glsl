@@ -56,18 +56,9 @@ const int MAX_POINT_SHADOW_CASTERS = 4;
 // Faces of a cube map.
 const int CUBE_FACE_COUNT = 6;
 
-// The shadow matrix table (ShadowUBO::lightViewProj), selected per draw by
-// ShadowPushConstants::matrixIndex:
-//   [0 .. C-1]        directional cascades
-//   [C .. C+S-1]      spot lights
-//   [C+S ..]          point lights, 6 * cubeIndex + face
-// The bases are DERIVED here rather than written out, so moving a family's capacity moves every
-// index that follows it in one edit.
-const int SHADOW_CASCADE_MATRIX_BASE = 0;
-const int SHADOW_SPOT_MATRIX_BASE = SHADOW_CASCADE_MATRIX_BASE + SHADOW_CASCADE_COUNT;
-const int SHADOW_POINT_MATRIX_BASE = SHADOW_SPOT_MATRIX_BASE + MAX_SPOT_SHADOW_CASTERS;
-const int SHADOW_TOTAL_MATRIX_COUNT =
-    SHADOW_POINT_MATRIX_BASE + CUBE_FACE_COUNT * MAX_POINT_SHADOW_CASTERS;
+// (The shadow matrix TABLE is gone. Every shadow path rasterises with `pc.lightViewProj`, the
+// matrix of the view being recorded, so there is no per-object array of every shadow transform and
+// no slot arithmetic — cascade/spot/point bases and a total count — to keep in step.)
 
 // Which shadow-map families were RECORDED this frame, packed as a bitmask in
 // LightUBO::shadowMapValidMask. Not a limit, but it lives here for the same reason the limits do:

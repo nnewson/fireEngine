@@ -72,7 +72,7 @@ ShadowGeometryRequest request(const std::vector<GeometryLod>& lods, ShadowCaster
         .lods = lods,
         .baseIndexBuffer = buffer(10),
         .baseIndexCount = 900,
-        .worldScale = 1.0f,
+        .pose = ShadowCasterPose::fromModel(Mat4::identity()),
         .casterId = caster,
         .generation = generation,
         .lodEnabled = true,
@@ -118,7 +118,7 @@ ShadowRenderViewSet populatedViews()
     // are passed once.
     const std::array<ShadowPointFace, kCubeFaceCount> cube{
         pointFace(0), pointFace(1), pointFace(2), pointFace(3), pointFace(4), pointFace(5)};
-    REQUIRE(views.setPointLight(0, light, somePointMetrics(),
+    REQUIRE(views.setPointLight(0, light, somePointMetrics(), 30.0f,
                                 std::span<const ShadowPointFace, kCubeFaceCount>{cube}));
     return views;
 }
@@ -451,7 +451,7 @@ TEST_CASE("ShadowLodResolver.AnUnsetWorldScaleForcesAFallback", "[ShadowLodResol
     resolver.beginFrame();
 
     auto unset = request(lods, static_cast<ShadowCasterId>(15));
-    unset.worldScale = ShadowGeometryRequest{}.worldScale; // i.e. never assigned
+    unset.pose = ShadowCasterPose{}; // i.e. never stated
     const ResolvedShadowDraw forced = resolver.resolve(
         unset, view(views, ShadowViewGroup::Cascade, 0), someBounds(), kBudget, kNoHysteresis);
     CHECK(forced.reason == ShadowLodReason::InvalidCaster);
@@ -460,7 +460,7 @@ TEST_CASE("ShadowLodResolver.AnUnsetWorldScaleForcesAFallback", "[ShadowLodResol
     // An explicitly computed zero still selects — it is a real answer about a real transform.
     resolver.beginFrame();
     auto singular = request(lods, static_cast<ShadowCasterId>(16));
-    singular.worldScale = 0.0f;
+    singular.pose = ShadowCasterPose::fromModel(Mat4::scale(Vec3{0.0f, 0.0f, 0.0f}));
     const ResolvedShadowDraw flattened = resolver.resolve(
         singular, view(views, ShadowViewGroup::Cascade, 0), someBounds(), kBudget, kNoHysteresis);
     CHECK(flattened.reason == ShadowLodReason::Selected);
@@ -469,10 +469,10 @@ TEST_CASE("ShadowLodResolver.AnUnsetWorldScaleForcesAFallback", "[ShadowLodResol
 
 TEST_CASE("ShadowLodResolver.FrameResolutionExposesTheSharedDecision", "[ShadowLodResolver]")
 {
-    // The DECISION, independent of which families acted on it — no `noteDrawn` here on purpose.
+    // The DECISION, independent of which families acted on it — no `noteContent` here on purpose.
     // This is the entry every view with that identity is handed, and the one a consumer reasoning
     // about the decision itself wants. Attribution is a separate question with a separate query
-    // (`drawnResolution`, covered below), because the shared decision alone cannot say which pass
+    // (`contentResolution`, covered below), because the shared decision alone cannot say which pass
     // drew what.
     //
     // What both share: it is the entry the pass drew from, never a fresh selection — one would see
@@ -536,31 +536,31 @@ TEST_CASE("ShadowLodResolver.ProvenanceIsPerFamilyEvenWhenTheResolutionIsShared"
     const ResolvedShadowDraw drawn =
         resolver.resolve(request(lods, skinned), view(views, ShadowViewGroup::Cascade, 0),
                          someBounds(), kBudget, kNoHysteresis);
-    resolver.noteDrawn(ShadowViewGroup::Cascade, key);
+    resolver.noteContent(ShadowViewGroup::Cascade, key);
 
     // The DECISION is shared — asking for it plainly still finds the level ...
     REQUIRE(resolver.frameResolution(key) != nullptr);
     CHECK(resolver.frameResolution(key)->level == drawn.level);
     // ... but attributing it to a pass is a different question, and the one consumers must ask.
-    REQUIRE(resolver.drawnResolution(ShadowViewGroup::Cascade, key) != nullptr);
-    CHECK(resolver.drawnResolution(ShadowViewGroup::Cascade, key)->level == drawn.level);
-    CHECK(resolver.drawnResolution(ShadowViewGroup::WorldOnly, key) == nullptr);
+    REQUIRE(resolver.contentResolution(ShadowViewGroup::Cascade, key) != nullptr);
+    CHECK(resolver.contentResolution(ShadowViewGroup::Cascade, key)->level == drawn.level);
+    CHECK(resolver.contentResolution(ShadowViewGroup::WorldOnly, key) == nullptr);
 
     // Once world-only does draw it, both attribute the same shared decision.
-    resolver.noteDrawn(ShadowViewGroup::WorldOnly, key);
-    REQUIRE(resolver.drawnResolution(ShadowViewGroup::WorldOnly, key) != nullptr);
-    CHECK(resolver.drawnResolution(ShadowViewGroup::WorldOnly, key)->level == drawn.level);
-    CHECK(resolver.drawnResolution(ShadowViewGroup::Cascade, key) != nullptr);
+    resolver.noteContent(ShadowViewGroup::WorldOnly, key);
+    REQUIRE(resolver.contentResolution(ShadowViewGroup::WorldOnly, key) != nullptr);
+    CHECK(resolver.contentResolution(ShadowViewGroup::WorldOnly, key)->level == drawn.level);
+    CHECK(resolver.contentResolution(ShadowViewGroup::Cascade, key) != nullptr);
 
     // A caster nobody drew has no attribution anywhere.
     const ShadowLodStateKey unseen{static_cast<ShadowCasterId>(21), ShadowCasterGeneration::First,
                                    ShadowLogicalViewId::cascade(0)};
-    CHECK(resolver.drawnResolution(ShadowViewGroup::Cascade, unseen) == nullptr);
+    CHECK(resolver.contentResolution(ShadowViewGroup::Cascade, unseen) == nullptr);
 
     // Provenance is per FRAME: a view that stops drawing a caster must stop attributing it.
     resolver.commitFrame();
     resolver.beginFrame();
-    CHECK(resolver.drawnResolution(ShadowViewGroup::Cascade, key) == nullptr);
+    CHECK(resolver.contentResolution(ShadowViewGroup::Cascade, key) == nullptr);
 }
 
 TEST_CASE("ShadowLodResolver.MarkingAnUnresolvedCasterDrawnChangesNothing", "[ShadowLodResolver]")
@@ -575,17 +575,17 @@ TEST_CASE("ShadowLodResolver.MarkingAnUnresolvedCasterDrawnChangesNothing", "[Sh
     const ShadowLodStateKey neverResolved{static_cast<ShadowCasterId>(22),
                                           ShadowCasterGeneration::First,
                                           ShadowLogicalViewId::cascade(0)};
-    resolver.noteDrawn(ShadowViewGroup::Cascade, neverResolved);
+    resolver.noteContent(ShadowViewGroup::Cascade, neverResolved);
     CHECK(resolver.frameCacheSize() == 0);
     CHECK(resolver.frameResolution(neverResolved) == nullptr);
-    CHECK(resolver.drawnResolution(ShadowViewGroup::Cascade, neverResolved) == nullptr);
+    CHECK(resolver.contentResolution(ShadowViewGroup::Cascade, neverResolved) == nullptr);
 
     // An unkeyable caster is in no store at all, so it likewise gains nothing.
     const ShadowLodStateKey unkeyable{ShadowCasterId::Invalid, ShadowCasterGeneration::First,
                                       ShadowLogicalViewId::cascade(0)};
-    resolver.noteDrawn(ShadowViewGroup::Cascade, unkeyable);
+    resolver.noteContent(ShadowViewGroup::Cascade, unkeyable);
     CHECK(resolver.frameCacheSize() == 0);
-    CHECK(resolver.drawnResolution(ShadowViewGroup::Cascade, unkeyable) == nullptr);
+    CHECK(resolver.contentResolution(ShadowViewGroup::Cascade, unkeyable) == nullptr);
 #endif
 }
 
@@ -623,15 +623,15 @@ TEST_CASE("ShadowLodResolver.OneCasterTintsDifferentlyPerFocusedView", "[ShadowL
         return ShadowLodStateKey{caster, ShadowCasterGeneration::First,
                                  ShadowLogicalViewId::cascade(cascade)};
     };
-    resolver.noteDrawn(ShadowViewGroup::Cascade, keyFor(0));
-    resolver.noteDrawn(ShadowViewGroup::Cascade, keyFor(1));
+    resolver.noteContent(ShadowViewGroup::Cascade, keyFor(0));
+    resolver.noteContent(ShadowViewGroup::Cascade, keyFor(1));
 
     // Read back through the TINT's query, per view: focusing one must not change what the other
     // reports. This is the SH-03 fix in the one place a person can see it.
     const auto tintLevelFor = [&](std::uint32_t cascade)
     {
         const ResolvedShadowDraw* r =
-            resolver.drawnResolution(ShadowViewGroup::Cascade, keyFor(cascade));
+            resolver.contentResolution(ShadowViewGroup::Cascade, keyFor(cascade));
         REQUIRE(r != nullptr);
         return r->level;
     };
@@ -947,7 +947,7 @@ TEST_CASE("ShadowLodResolver.ARequestThatOmitsDeformationDoesNotSelect", "[Shado
     req.lods = lods;
     req.baseIndexBuffer = buffer(10);
     req.baseIndexCount = 900;
-    req.worldScale = 1.0f;
+    req.pose = ShadowCasterPose::fromModel(Mat4::identity());
     req.casterId = static_cast<ShadowCasterId>(7);
 
     const ResolvedShadowDraw resolved =
@@ -1084,7 +1084,7 @@ TEST_CASE("ShadowLodResolver.ARequestThatOmitsTheAlphaModeDoesNotSelect", "[Shad
     req.lods = lods;
     req.baseIndexBuffer = buffer(10);
     req.baseIndexCount = 900;
-    req.worldScale = 1.0f;
+    req.pose = ShadowCasterPose::fromModel(Mat4::identity());
     req.casterId = static_cast<ShadowCasterId>(37);
     // Deformation stated, so this case isolates the ALPHA default rather than tripping SH-04's.
     req.deformation = ShadowCasterDeformation::Rigid;

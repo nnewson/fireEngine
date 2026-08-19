@@ -105,6 +105,8 @@ add_library(fireengine SHARED
     src/graphics/shadow_caster_alpha.cpp
     src/graphics/shadow_bias.cpp
     src/graphics/shadow_map_validity.cpp
+    src/graphics/shadow_pass_plan.cpp
+    src/graphics/shadow_pass_prepare.cpp
     src/graphics/shadow_caster_deformation.cpp
     src/graphics/shadow_render_view.cpp
     src/graphics/shadow_diagnostics.cpp
@@ -447,6 +449,8 @@ add_executable(test_fire_engine
     tests/graphics/test_shadow_caster_alpha.cpp
     tests/graphics/test_shadow_bias.cpp
     tests/graphics/test_shadow_map_validity.cpp
+    tests/graphics/test_shadow_pass_plan.cpp
+    tests/graphics/test_shadow_pass_prepare.cpp
     tests/graphics/test_shadow_render_view.cpp
     tests/graphics/test_texture.cpp
     tests/graphics/test_sampler_settings.cpp
@@ -522,6 +526,7 @@ add_custom_target(tests-full
   COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure -R shader_block_guards
     COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure -R shadow_bias_guard
   COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure -R gpu_limits_guard
+  COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure -R shadow_matrix_guard
   DEPENDS test_fire_engine
   COMMENT "Running the full test suite, including [slow] tests"
 )
@@ -565,6 +570,16 @@ add_test(
     -DSHADER_DIR=${PROJECT_SOURCE_DIR}/shaders
     -DINCLUDE_DIR=${PROJECT_SOURCE_DIR}/include
     -P ${PROJECT_SOURCE_DIR}/cmake/check_gpu_limits.cmake
+)
+
+# Arc 2 #4 step 1: the shadow transform reaches the GPU once, in the recorded view's push constants.
+# A reintroduced per-draw matrix table renders correctly on the day and silently detaches the shadow
+# cache's comparison from what the GPU actually rasterises with.
+add_test(
+  NAME shadow_matrix_guard
+  COMMAND ${CMAKE_COMMAND}
+    -DSHADER_DIR=${PROJECT_SOURCE_DIR}/shaders
+    -P ${PROJECT_SOURCE_DIR}/cmake/check_shadow_matrix.cmake
 )
 
 find_program(CLANG_TIDY_EXE NAMES clang-tidy)

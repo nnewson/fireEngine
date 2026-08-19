@@ -1,11 +1,9 @@
 #pragma once
 
-#include <array>
 #include <cstdint>
 #include <vector>
 
 #include <fire_engine/graphics/gpu_handle.hpp>
-#include <fire_engine/graphics/gpu_limits.hpp>
 #include <fire_engine/graphics/lod.hpp>
 #include <fire_engine/math/mat4.hpp>
 #include <fire_engine/math/vec3.hpp>
@@ -71,11 +69,6 @@ struct FrameInfo
     bool vdpmGpuBackend{false};
     std::vector<VdpmWorkRequest>* vdpmRequestSink{nullptr};
     PipelineHandle shadowPipeline{NullPipeline};
-    // Light-space view-projection matrices for every shadow caster — cascades,
-    // spot lights, and the six faces of each point light. Layout matches
-    // ShadowUBO::lightViewProj. Object::render copies the full array into the
-    // per-draw ShadowUBO; the shadow vertex shader picks one via push constant.
-    std::array<Mat4, kShadowTotalMatrixCount> shadowViewProjs{};
 };
 
 } // namespace fire_engine

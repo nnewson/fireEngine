@@ -18,6 +18,7 @@
 #include <fire_engine/graphics/shadow_caster_bounds_frame.hpp>
 #include <fire_engine/graphics/shadow_lod_resolver.hpp>
 #include <fire_engine/graphics/shadow_map_validity.hpp>
+#include <fire_engine/graphics/shadow_pass_prepare.hpp>
 #include <fire_engine/graphics/shadow_render_view.hpp>
 #include <fire_engine/math/mat4.hpp>
 #include <fire_engine/math/vec3.hpp>
@@ -291,17 +292,27 @@ private:
     // spot caster cap is hit.
     void assignSpotShadow(LightUBO& out, int packedSlot, const Lighting& light);
     // Registers the packed light as a point caster if there is room (advancing
-    // activePointCasters_ and pointCasters_) and populates its six cube-face
-    // slots in shadowViews_. No-op if the point caster cap is hit.
+    // activePointCasters_) and populates its six cube-face slots in shadowViews_ — including the
+    // light's position and effective range, which the faces store depth against. No-op if the point
+    // caster cap is hit.
     void assignPointShadow(LightUBO& out, int packedSlot, const Lighting& light);
     // Fills out.iblParams / out.shadowParams / out.environmentParams from the
     // engine-wide constants plus the debug-flag members.
     void writeIblAndDebugParams(LightUBO& out) const;
     void assignSelfShadowSlots(std::span<DrawCommand> drawCommands);
-    // Derives this frame's shadow-map validity from the COMPLETED view set and performs the single
-    // per-frame LightUBO upload. Must run after every view producer — cascades, punctual, self
-    // layers, and the world-only enablement that only `anySkinned` decides — because the mask it
-    // uploads and the families the shadow pass records are the same value.
+    // Builds this frame's shadow plan (arc 2 #4): what every physical shadow view will rasterise,
+    // and what each of them does. Must run after every view producer — cascades, punctual, self
+    // layers, and the world-only enablement that only `anySkinned` decides — and BEFORE
+    // `uploadFrameLighting`, because the mask that upload writes is derived from the finished plan.
+    //
+    // ELIGIBILITY first, from the completed set: a family that cannot be sampled is not prepared at
+    // all, since preparation resolves casters and stages hysteresis. CONFIRMATION second, from the
+    // plan that was actually built — a view that failed to prepare removes its family's bit even
+    // though the family was eligible.
+    void prepareShadowPlan(const DrawBuckets& buckets);
+    // Performs the single per-frame LightUBO upload, carrying the shadow-map validity
+    // `prepareShadowPlan` confirmed. The mask it uploads and the views the shadow pass records are
+    // the same plan.
     void uploadFrameLighting();
     // Reports which shadow families the completed ring slot recorded, with their raster counts and
     // GPU time. This is how "`--no-shadows` suppresses RECORDING" is checked: a frame that still
@@ -317,13 +328,16 @@ private:
     void updateFrameLighting(RenderableScene& scene, Vec3 cameraPosition, Vec3 cameraTarget);
     [[nodiscard]] const DrawBuckets& collectDrawCommands(RenderableScene& scene,
                                                          Vec3 cameraPosition, Vec3 cameraTarget);
-    void recordShadowPass(vk::CommandBuffer cmd, const DrawBuckets& buckets);
+    // Records the plan `prepareShadowPlan` built. Takes no buckets and no view set: since arc 2 #4
+    // the pass records from the plan alone.
+    void recordShadowPass(vk::CommandBuffer cmd);
     // SH-03 slice 5: colour the ShadowLod debug view by the level the FOCUSED shadow view chose.
     //
-    // Runs BETWEEN the shadow pass and the forward pass, which is the only window in which the
-    // answer exists: the levels are decided per view during shadow recording, and the forward
-    // draws' push constants are written afterwards. It patches this frame's forward buckets, so it
-    // must be called after recordShadowPass and before recordForwardPass / recordDepthPrepass.
+    // Runs during COLLECTION, right after the plan is prepared — which is when the answer starts to
+    // exist. The levels used to be decided during shadow recording, so the tint had to sit between
+    // the shadow pass and the forward pass; now preparation resolves them before anything is
+    // recorded, and the tint patches this frame's forward buckets while they are still being built.
+    // It must still run before recordForwardPass / recordDepthPrepass write their push constants.
     //
     // A no-op unless the ShadowLod view is active — the tint is the only consumer, and walking the
     // buckets to compute a value nothing reads would be pure cost.
@@ -505,9 +519,13 @@ private:
     // twice: it gates the families in `Shadows::recordPass` and it is uploaded in
     // `LightUBO::shadowMapValidMask` for the receiver. See graphics/shadow_map_validity.hpp.
     ShadowMapValidity shadowMapValidity_{};
+    // This frame's prepared shadow work (arc 2 #4): every view's transform and draws, and what each
+    // does. Built in collection from the completed view set, consumed by the pass, and the ONLY
+    // description of the shadow work that survives preparation — which is what lets the recorder
+    // hold no draw spans, no view set and no resolver.
+    ShadowFramePlan shadowPlan_{};
     int activeSpotCasters_{0};
     int activePointCasters_{0};
-    std::array<PointShadowCaster, kMaxPointShadowCasters> pointCasters_{};
     // Timeline-semaphore frame pacing. timelineValue_ is the last value signalled;
     // frameTimelineValue_[slot] is the value the last submit using that
     // frame-in-flight slot signalled (gate cmd-buffer / per-frame-UBO reuse);

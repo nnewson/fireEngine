@@ -313,22 +313,44 @@ struct EnvironmentPrefilterPushConstants
     float _pad2{0.0f};
 };
 
-// Shadow matrix layout (kShadowCascadeMatrixBase / kShadowSpotMatrixBase /
-// kShadowPointMatrixBase / kShadowTotalMatrixCount) lives in
-// graphics/gpu_limits.hpp — the graphics-side FrameInfo sizes an array to match
-// ShadowUBO::lightViewProj, so the count must be visible without including
-// render/.
+// PER-OBJECT ONLY. It used to carry a 32-matrix table of every shadow view in the frame, indexed
+// per draw by a push constant — 2 KB written into every shadow object's buffer and bound at every
+// draw, of which one matrix was read. The push block already carried a matrix for the self-shadow
+// path, so every path now uses THAT one: the view's matrix is a property of the view being
+// recorded, not a row a draw looks up.
+//
+// That also removed the last parallel authority on the shadow transform. A cached shadow map is
+// only reusable if the matrix it was rasterised with is the matrix being compared, and while the
+// table existed the comparison described one value and the GPU read another.
 struct ShadowUBO
 {
     alignas(16) Mat4 model;
-    alignas(16) Mat4 lightViewProj[kShadowTotalMatrixCount];
     alignas(4) int hasSkin{0};
 };
 
+// EXACT, like every other shader-visible block here. The array's removal changed this layout, and
+// "model comes before hasSkin, and the whole thing is small" would not catch `hasSkin` drifting off
+// the std140 offset the shader reads it from — the failure mode being a skinned caster rasterised
+// unskinned (or the reverse) with no error anywhere.
+static_assert(offsetof(ShadowUBO, model) == 0, "ShadowUBO std140 layout");
+static_assert(offsetof(ShadowUBO, hasSkin) == 64, "ShadowUBO std140 layout");
+static_assert(sizeof(ShadowUBO) == 80, "ShadowUBO std140 size (mat4 + int, rounded to 16)");
+static_assert(alignof(ShadowUBO) == 16, "std140 blocks are 16-byte aligned");
+// offsetof is only defined for standard-layout types, and the struct is memcpy'd into mapped GPU
+// memory by writeMapped — both properties are load-bearing, not incidental.
+static_assert(std::is_standard_layout_v<ShadowUBO>);
+static_assert(std::is_trivially_copyable_v<ShadowUBO>);
+
 struct ShadowPushConstants
 {
-    // Selects which lightViewProj[] matrix the vertex shader uses.
-    alignas(4) int matrixIndex{0};
+    // How this view's fragments produce their stored depth: 0 = projected hardware depth,
+    // 1 = the radial distance/range ratio a point face writes (`shaders/shadow_depth.glsl`).
+    //
+    // It was a matrix-table index, and the point path discriminated on "index >= the point base" —
+    // a depth mode inferred from where a matrix happened to live. Now it says what it means, and
+    // the value comes from `PreparedShadowView::depthMode()`, which derives it from the view's
+    // identity.
+    alignas(4) int radialDepth{0};
     // Per-skinned-object self-shadow layer for the dual-depth self pass.
     alignas(4) int selfShadowSlot{-1};
     // Normalized-depth gap required before a fragment counts as the second
@@ -339,12 +361,13 @@ struct ShadowPushConstants
     // surface is actually shaded with. Occupies what was explicit padding, so every offset around
     // it is unchanged. Read only by the masked fragment paths; the opaque ones ignore it.
     alignas(4) std::uint32_t materialIndex{0};
-    // Point shadow (matrixIndex >= kShadowPointMatrixBase): xyz = light
-    // world position, w = effective range. shadow_depth.glsl writes linear distance
-    // / range so the cube-array compare sampler agrees with the main shader.
-    // Zero for cascade/spot shadow passes.
+    // Point shadow (`radialDepth == 1`): xyz = light world position, w = effective range.
+    // shadow_depth.glsl writes linear distance / range so the cube-array compare sampler agrees
+    // with the main shader. Zero for every projected-depth pass.
     alignas(16) float lightPosRange[4]{};
-    // Used when matrixIndex < 0 for tightly-fit per-object self-shadow passes.
+    // THE matrix every shadow path rasterises with — cascade, world-only, spot, point face and both
+    // self-shadow layers alike. One value per recorded view, pushed with the rest of the view's
+    // constants.
     alignas(16) Mat4 lightViewProj{Mat4::identity()};
 };
 
@@ -352,7 +375,7 @@ struct ShadowPushConstants
 // constants are a raw byte range with no driver-side reflection, so a member reordered or resized
 // here silently reinterprets the shader's fields — a shifted materialIndex would index a different
 // bindless material and mask a caster against somebody else's texture.
-static_assert(offsetof(ShadowPushConstants, matrixIndex) == 0);
+static_assert(offsetof(ShadowPushConstants, radialDepth) == 0);
 static_assert(offsetof(ShadowPushConstants, selfShadowSlot) == 4);
 static_assert(offsetof(ShadowPushConstants, selfShadowDepthEpsilon) == 8);
 static_assert(offsetof(ShadowPushConstants, materialIndex) == 12);

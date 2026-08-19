@@ -217,20 +217,22 @@ void pushForwardObjectDescriptors(vk::CommandBuffer cmd, const Resources& resour
 }
 
 void pushShadowObjectDescriptors(vk::CommandBuffer cmd, const Resources& resources,
-                                 vk::PipelineLayout layout, const DrawCommand& dc)
+                                 vk::PipelineLayout layout, BufferHandle shadowUbo,
+                                 BufferHandle skinUbo, BufferHandle morphUbo,
+                                 BufferHandle morphSsbo)
 {
     // Shadow set 0 is a push-descriptor layout. Bindings 0..3 are per-object
     // vertex-stage buffers (ShadowUBO + skin/morph UBOs + morph SSBO); each was
     // created exactly sized, so WholeSize is correct. The shadow draw reuses the
-    // forward skin/morph/morphSsbo handles carried on the DrawCommand.
+    // forward skin/morph/morphSsbo handles the caster's prepared draw carried through.
     const vk::DescriptorBufferInfo shadowInfo{
-        .buffer = resources.vulkanBuffer(dc.shadowUbo), .offset = 0, .range = vk::WholeSize};
+        .buffer = resources.vulkanBuffer(shadowUbo), .offset = 0, .range = vk::WholeSize};
     const vk::DescriptorBufferInfo skinInfo{
-        .buffer = resources.vulkanBuffer(dc.skinUbo), .offset = 0, .range = vk::WholeSize};
+        .buffer = resources.vulkanBuffer(skinUbo), .offset = 0, .range = vk::WholeSize};
     const vk::DescriptorBufferInfo morphInfo{
-        .buffer = resources.vulkanBuffer(dc.morphUbo), .offset = 0, .range = vk::WholeSize};
+        .buffer = resources.vulkanBuffer(morphUbo), .offset = 0, .range = vk::WholeSize};
     const vk::DescriptorBufferInfo morphSsboInfo{
-        .buffer = resources.vulkanBuffer(dc.morphSsbo), .offset = 0, .range = vk::WholeSize};
+        .buffer = resources.vulkanBuffer(morphSsbo), .offset = 0, .range = vk::WholeSize};
 
     // Bindings 4/5 are the shared self-shadow first-depth image + sampler —
     // global resources (same for every shadow draw), only sampled by the second

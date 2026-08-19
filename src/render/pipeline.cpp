@@ -297,9 +297,9 @@ PipelineConfig Pipeline::shadowConfig()
     // pushed by pushShadowObjectDescriptors. selfShadowFirst/Second inherit this
     // (they copy shadowConfig).
     config.pushDescriptorSet0 = true;
-    // matrixIndex picks lightViewProj[] in the vertex stage. lightPosRange is
-    // consumed by the fragment shader's point-shadow branch (linear distance
-    // depth), so the push constant must be visible to both stages.
+    // The vertex stage rasterises with the block's lightViewProj — the recorded view's matrix — and
+    // the fragment stage reads radialDepth + lightPosRange for the point-face depth write, so the
+    // range must be visible to both stages.
     config.pushConstantRanges.emplace_back(vk::ShaderStageFlagBits::eVertex |
                                                vk::ShaderStageFlagBits::eFragment,
                                            0, static_cast<uint32_t>(sizeof(ShadowPushConstants)));

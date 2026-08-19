@@ -561,17 +561,21 @@ hash specialisation, so ordinary callers cannot accidentally manufacture a plaus
 Several constants in [`gpu_limits.hpp`](include/fire_engine/graphics/gpu_limits.hpp) and
 [`constants.hpp`](include/fire_engine/render/constants.hpp) encode relationships manually:
 
-- `kShadowSpotMatrixBase` is the literal `4` rather than
-  `kShadowCascadeMatrixBase + kShadowCascadeCount`;
+- ~~`kShadowSpotMatrixBase` is the literal `4` rather than
+  `kShadowCascadeMatrixBase + kShadowCascadeCount`~~ — **moot** (branch
+  `shadow-static-cascade-cache`): the shadow matrix TABLE is gone. The transform now reaches the GPU
+  once, in the recorded view's push constants, so there are no bases to derive and no table to index
+  the wrong row of; `shadow_matrix_guard` fails the build if one comes back;
 - cubemap mip counts repeat values derivable from their extents;
-- `kShadowTotalMatrixCount` depends on several signed and unsigned values with no range assertion;
+- ~~`kShadowTotalMatrixCount` depends on several signed and unsigned values with no range
+  assertion~~ — **moot**, same change: the constant no longer exists;
 - projection, shadow range, TAA sample count, and mip settings have no compile-time relational
   validation.
 
 Use C++23/standard-library derivation where possible, for example `std::bit_width(extent)` for a
 full power-of-two mip chain. Add `static_assert`s or a `consteval` validator for relationships such
-as positive near planes, far > near, non-zero TAA cycle, power-of-two extents, and non-overlapping
-shadow matrix ranges.
+as positive near planes, far > near, non-zero TAA cycle and power-of-two extents. (Non-overlapping
+shadow matrix ranges are no longer expressible — the table they indexed is gone.)
 
 Group defaults by domain (`CameraDefaults`, `ShadowDefaults`, `IblDefaults`, etc.) or at least put
 them in nested namespaces. The current global `k...` list is manageable today, but grouping would

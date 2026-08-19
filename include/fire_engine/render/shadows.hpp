@@ -1,13 +1,11 @@
 #pragma once
 
-#include <span>
-#include <vector>
+#include <cstddef>
 
-#include <fire_engine/graphics/draw_command.hpp>
-#include <fire_engine/graphics/shadow_lod_resolver.hpp>
-#include <fire_engine/graphics/shadow_map_validity.hpp>
-#include <fire_engine/graphics/shadow_render_view.hpp>
-#include <fire_engine/math/vec3.hpp>
+#include <fire_engine/graphics/shadow_caster_alpha.hpp>
+#include <fire_engine/graphics/shadow_diagnostics.hpp>
+#include <fire_engine/graphics/shadow_face_cull.hpp>
+#include <fire_engine/graphics/shadow_pass_plan.hpp>
 #include <fire_engine/render/constants.hpp>
 #include <fire_engine/render/gpu_profiler.hpp>
 #include <fire_engine/render/pipeline.hpp>
@@ -18,33 +16,15 @@ namespace fire_engine
 
 class Device;
 
-// Per-frame state for one active point shadow caster — the renderer hands one
-// of these to recordPass for every point light that earned a shadow slot, so
-// the shadow fragment shader can compute linear distance/range against the
-// light's world position.
-struct PointShadowCaster
-{
-    Vec3 worldPosition{};
-    float range{0.0f};
-};
+// (There is no `PointShadowCaster` any more. A point light's world position and effective range are
+// raster content of its six faces, so they live in the view set beside the matrices they belong to
+// — `ShadowRenderView::pointLightDepth()` — and reach the pass inside the prepared view. The array
+// that used to carry them beside the set was a second copy of a position the set already held, and
+// the pass found it by arithmetic on the face slot.)
 
-// SH-05: which faces one shadow family keeps. A property of the PASS, not of the pipeline: the
-// shadow pipelines declare cull mode dynamic, so this is set at record time and every family must
-// name its policy — there is no static fallback to inherit if one forgets.
-enum class ShadowFaceCull : std::uint8_t
-{
-    // Cascade / spot / point: the CASTER decides. Single-sided casters cull front faces (back faces
-    // carry the depth, which is what keeps receiver acne off); a double-sided material culls
-    // nothing, because front-culling a sheet authored face-on to the light discards the only faces
-    // it has and it casts no shadow at all.
-    PerCaster,
-    // Self-shadow FIRST layer: keep everything, so the first light-facing surface is captured
-    // whatever its winding. Was its own pipeline before SH-05 made cull mode dynamic.
-    AllFaces,
-    // Self-shadow SECOND layer: cull front faces so only back faces rasterise, which is what makes
-    // the dual-depth rejection well-founded rather than a coin-flip on marginal fragments.
-    BackFacesOnly,
-};
+// `ShadowFaceCull` and `shadowEffectiveCull` now live in `graphics/shadow_face_cull.hpp` — the
+// policy is Vulkan-free and the cache's content descriptor has to record the effective answer, so
+// the mapping cannot live behind a Vulkan type. This header keeps only the translation to Vulkan.
 
 // SH-05: one shadow family's two fragment paths. A draw picks between them by its caster's alpha
 // classification, so the pair travels together — a recording site that could be handed the opaque
@@ -64,30 +44,24 @@ struct ShadowPipelinePair
     }
 };
 
-// SH-05: the faces one draw keeps — the family's policy, resolved against the caster's own
-// sidedness for the families where the caster decides.
-//
-// Pure, and public for the same reason `forCaster` is: every shadow pipeline declares cull mode
-// dynamic, so this function IS the cull policy, and swapping two of its answers would silently
-// restore the defect the item fixed (a double-sided sheet front-culled into casting nothing) or
-// break the dual-depth self-shadow layer. Takes the caster's `doubleSided` flag rather than a
-// DrawCommand so the mapping can be exercised exhaustively without building a draw.
+// The Vulkan spelling of one effective cull answer. The POLICY decision is
+// `shadowEffectiveCull` (graphics/shadow_face_cull.hpp) and this is only its translation, so there
+// is one place that decides and one place that speaks Vulkan — the cache's content descriptor
+// records the same effective value this converts, rather than a parallel derivation of it.
+[[nodiscard]] constexpr vk::CullModeFlags shadowCullMode(ShadowEffectiveCull cull) noexcept
+{
+    return cull == ShadowEffectiveCull::None ? vk::CullModeFlagBits::eNone
+                                             : vk::CullModeFlagBits::eFront;
+}
+
+// Convenience for the recorder, which holds the family policy and the caster's sidedness: one call
+// instead of nesting the two. Pinned by tests/render/test_shadow_raster_policy.cpp, which is what
+// keeps a reversed answer from silently restoring the defect SH-05 fixed (a double-sided sheet
+// front-culled into casting nothing) or breaking the dual-depth self-shadow layer.
 [[nodiscard]] constexpr vk::CullModeFlags shadowCullMode(ShadowFaceCull policy,
                                                          bool casterIsDoubleSided) noexcept
 {
-    switch (policy)
-    {
-    case ShadowFaceCull::PerCaster:
-        // A double-sided caster culls NOTHING. Front-culling one authored face-on to the light
-        // discards the only faces it has, and it casts no shadow at all.
-        return casterIsDoubleSided ? vk::CullModeFlagBits::eNone : vk::CullModeFlagBits::eFront;
-    case ShadowFaceCull::AllFaces:
-        return vk::CullModeFlagBits::eNone;
-    case ShadowFaceCull::BackFacesOnly:
-        return vk::CullModeFlagBits::eFront;
-    }
-    // Unreachable for a valid policy; the switch is exhaustive over the enum.
-    return vk::CullModeFlagBits::eFront;
+    return shadowCullMode(shadowEffectiveCull(policy, casterIsDoubleSided));
 }
 
 class Shadows
@@ -112,50 +86,52 @@ public:
         return shadowPipelines_.opaque;
     }
 
-    // `views` is the frame's shadow view set and the ONLY source of each iteration's transform
-    // (SH-03): every iteration takes one mandatory ShadowRenderView and uses its matrix to cull,
-    // its projection descriptor to select a LOD, and its logical identity to key hysteresis. A
-    // physical slot the set reports inactive is not rasterised — there is no second opinion to
-    // consult, which is what makes "absent means inactive" true at the point of use.
+    // Records the frame's shadow work — and NOTHING ELSE decides what that work is (arc 2 #4).
     //
-    // `resolver` is MUTATED: each accepted caster is resolved through it (per-frame cache + staged
-    // hysteresis), so a caster's level is decided per VIEW rather than replayed from the camera.
-    // Resolution happens AFTER the per-view filter, so a caster this view rejects acquires no
-    // history against it. The caller commits or discards the staged history once the frame's fate
-    // is known.
+    // `plan` is the whole input. It carries every view's transform, extent, depth bias, depth mode
+    // and light, the draws each of its layers rasterises in order, and what each view DOES this
+    // frame. There is deliberately no draw span, no view set and no resolver here any more: the
+    // decisions were all made in `prepareShadowFrame`, and a recorder that could still re-filter or
+    // re-resolve would be a second answer to a question the cache has already answered. Whatever
+    // the comparison decided was the content is exactly what gets recorded, because it is the only
+    // description of the work that survives preparation.
     //
-    // `activeSelfShadowCasters` bounds the self-shadow slot loop (slots are assigned densely, and
-    // an unassigned slot's layers are never sampled — no fragment carries that slot index — so they
-    // need no clear).
+    // WHICH VIEWS RECORD is each entry's disposition. A view marked `Reused` rasterises nothing —
+    // its image already holds the right depth — and a family with nothing to record stamps no
+    // timestamp, so its GPU time reads zero rather than measuring an empty span. A family the plan
+    // never prepared (suppressed by `--no-shadows`, or fitted to no light) draws nothing, clears
+    // nothing and times nothing, and the receiver was told the same thing through
+    // `LightUBO::shadowMapValidMask`, which is derived from this same plan.
     //
-    // `validity` decides WHICH FAMILIES RECORD, and it is the same value the receiver read in
-    // `LightUBO::shadowMapValidMask`. A family whose bit is clear draws nothing, clears nothing and
-    // stamps no timestamp, so its diagnostic rows and its GPU time both stay at zero — that is the
-    // honest report, since the views were not rasterised. Re-enabling is safe in the same frame:
-    // this pass runs before anything samples a map, so the frame that turns a family back on
-    // re-renders it before its first read. What makes SKIPPING safe is the other half of the same
-    // value: the receiver is told the family is invalid and answers fully lit, rather than sampling
-    // depth left behind by whichever frame last rendered it.
+    // `stats` (SH-01) is MUTATED, but only with RASTER PASSES: preparation already claimed each row
+    // and observed every draw it walked. The identity is re-checked against the claim at every
+    // layer, so a recorder that rasterised view B into the row view A claimed is refused rather
+    // than reported under A's name.
     //
-    // `stats` (SH-01) is MUTATED: every iteration marks its view rasterised and observes every
-    // command it walks, so a view that renders nothing is still reported. Rows are keyed by
-    // PHYSICAL slot, which is stable across frames only while the dense light assignment is. The
-    // observed verdict is the FILTER's alone, which is what keeps `candidateDraws - drawnDraws`
-    // exactly the filter's yield.
-    //
-    // THROWS if an accepted caster resolves to no geometry — a corrupt unresolved command, which is
-    // neither skippable (the caster would vanish from one shadow map silently) nor reportable as a
-    // cull. Every recoverable case resolves to the whole mesh instead.
-    void recordPass(vk::CommandBuffer cmd, std::span<const DrawCommand> shadowDraws,
-                    std::span<const DrawCommand> worldOnlyShadowDraws,
-                    std::span<const DrawCommand> selfShadowDraws, int activeSelfShadowCasters,
-                    int activeSpotCasters, std::span<const PointShadowCaster> pointCasters,
-                    const ShadowRenderViewSet& views, ShadowLodResolver& resolver,
-                    float lodBudgetTexels, ShadowLodHysteresis hysteresis, bool cullingEnabled,
-                    ShadowMapValidity validity, ShadowFrameStats& stats,
+    // THROWS if a recorded view's row was never claimed or holds a different identity — a
+    // contradiction between the plan and the diagnostics, which is not a degraded frame.
+    void recordPass(vk::CommandBuffer cmd, const ShadowFramePlan& plan, ShadowFrameStats& stats,
                     const GpuProfiler& profiler, uint32_t frameIndex) const;
 
 private:
+    // Where one prepared layer rasterises: the depth image, the single-layer attachment view, the
+    // array layer its barriers target, and the fragment paths that write it.
+    //
+    // Resolved as ONE value from (family, layer kind) rather than four lookups at the call site.
+    // The self-shadow pair is why: its two layers differ in image AND in pipelines, and a call site
+    // free to pick them separately could bind the second layer's shaders to the first layer's image
+    // — which rasterises the dual-depth rejection into the map it is meant to be sampling, with
+    // every counter and timing still reading correctly.
+    struct LayerTarget
+    {
+        vk::Image image{};
+        vk::ImageView view{};
+        uint32_t layer{0};
+        ShadowPipelinePair pipelines{};
+    };
+    [[nodiscard]] LayerTarget layerTarget(ShadowViewGroup group, std::size_t slot,
+                                          ShadowLayerKind kind) const;
+
     Resources* resources_{nullptr};
     Pipeline shadowPipeline_;
     Pipeline shadowMaskedPipeline_;
