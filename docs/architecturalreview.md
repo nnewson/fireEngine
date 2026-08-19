@@ -376,7 +376,7 @@ exists; the tiered review inherited the filename.)*
 | 1 | ✅ Skip redundant world-CSM when no skinned casters *(branch `review-shadow-taa-fixes`)* | B | S | §2.2 |
 | 2 | ✅ Skip empty self-shadow slots *(same branch; implementation is simpler than proposed — unassigned slots are provably never sampled, so no clear-once/dirty bit is needed, they are skipped outright)* | B | S | §2.1 |
 | 3 | ✅ `static_assert(kMaxFramesInFlight == 2)` on the TAA history index *(same branch)* | A | XS | §2.4 |
-| 4 | Static-scene CSM caching (light+fit+caster epoch) | B | M | §2.1 |
+| 4 | Static-scene CSM caching (light+fit+caster epoch) — **in progress, branch `shadow-static-cascade-cache`**. The review's "coarse validity check" was rejected on inspection: light dir + snapped origin + a caster epoch explains a matrix without being one, and a wrong answer here is a silently wrong image. What landed instead is the exact content descriptor (`graphics/shadow_pass_plan.hpp`, structural comparison, no hash) and the PREPARATION phase that builds it (`graphics/shadow_pass_prepare.hpp`) — filtering, LOD resolution and diagnostics moved out of recording, so `Shadows::recordPass` now consumes the plan alone. Every view is still `Recorded` (no residency store yet), verified by a byte-identical per-view diagnostic dump across three scenes and all five families. The residency store + reuse is the remaining half. | B | M | §2.1 |
 | 5 | Compute pre-skinning pass (unify with cloth pattern) | B | L | §1.3 |
 | 6 | Batch image barriers into single `DependencyInfo`s | C | S | §1.2 |
 | 7 | Physics per-step scratch persistence | B | S | §3.1 |

@@ -10,8 +10,11 @@
 // Both stages see the whole range (the pipeline declares it vertex | fragment), so a stage that
 // reads only some fields still declares all of them.
 layout(push_constant) uniform ShadowPushConstants {
-    // Selects lightViewProj[] in the vertex stage; < 0 means "use pc.lightViewProj" (self-shadow).
-    int matrixIndex;
+    // How this view stores depth: 0 = projected hardware depth, 1 = the radial distance/range ratio
+    // a point face writes. It was an index into a per-object table of every shadow matrix in the
+    // frame, and the point path discriminated on "index >= the point base" — a depth mode inferred
+    // from where a matrix happened to live. The table is gone; this says what it means.
+    int radialDepth;
     // Per-skinned-object self-shadow layer for the dual-depth self pass.
     int selfShadowSlot;
     // Normalized-depth gap before a fragment counts as the second surface.
@@ -21,9 +24,10 @@ layout(push_constant) uniform ShadowPushConstants {
     // rather than a shadow-only copy of it. Read by the masked fragment path only; occupies what
     // used to be explicit padding, so every offset around it is unchanged.
     uint materialIndex;
-    // Point shadow (matrixIndex >= SHADOW_POINT_MATRIX_BASE): xyz = light world position,
-    // w = effective range. Zero for cascade/spot/self passes.
+    // Point shadow (radialDepth == 1): xyz = light world position, w = effective range. Zero for
+    // every projected-depth pass.
     vec4 lightPosRange;
-    // Used when matrixIndex < 0, for the tightly-fit per-object self-shadow views.
+    // THE matrix every shadow path rasterises with — cascade, world-only, spot, point face and both
+    // self-shadow layers. One value per recorded view.
     mat4 lightViewProj;
 } pc;

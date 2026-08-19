@@ -419,7 +419,7 @@ Likely branch: `shadow-per-view-discrete-lod`.
    thing the table exists to show — were being ellipsised to a single character.
 5. **Tint.** The ShadowLod debug view colours each mesh by the level ONE shadow view resolved for
    it — the panel's focused view, or cascade 0 by default, named in the overlay so the default is
-   never silent. The level is READ BACK through `ShadowLodResolver::drawnResolution(group, key)` —
+   never silent. The level is READ BACK through `ShadowLodResolver::contentResolution(group, key)` —
    what that FAMILY drew for this caster — never re-selected: a second selection would see a
    different history state and the picture would contradict the geometry it claims to describe. It
    is not `frameResolution(key)`, which returns the decision SHARED by every view with that
@@ -504,7 +504,8 @@ What landed:
   policy switch. Deliberately NOT expressed by passing `lodEnabled = false`, which would have
   reported `LodDisabled` and conflated a user's toggle with a safety fallback: the panel would then
   answer "why is this caster at full detail?" with somebody else's reason. It defaults to
-  `Deformable` on the same principle as `worldScale`'s NaN — a producer that forgets the field must
+  `Deformable` on the same principle as an unstated `ShadowCasterPose`'s NaN scale — a producer that
+  forgets the field must
   not receive the optimistic answer.
 - **`ShadowLodReason::DeformableFallback`**, resolving to the whole mesh with an **infinite**
   projected error. Not zero: zero would rank a deformable caster as the most accurate in the frame,
@@ -991,6 +992,18 @@ contracts from this work:
 - **Shadow caching:** a map's content signature includes the shadow view descriptor, stable draw
   ids, caster transform/deformation/material revisions, proxy identity, and every selected
   LOD/front generation. A camera epoch alone is insufficient.
+  **Consumed (arc 2 #4, preparation step).** The signature is `PreparedShadowView` /
+  `PreparedShadowDraw` (`graphics/shadow_pass_plan.hpp`), compared structurally rather than hashed,
+  and it is built by `prepareShadowFrame` (`graphics/shadow_pass_prepare.hpp`) — which is where this
+  plan's per-view LOD contract is now applied. **The selection moved:** filtering, resolution and
+  the SH-01 row claim + observations all happen during PREPARATION, before the pass records
+  anything, because deciding whether a map may be reused means knowing what would have been drawn
+  without drawing it. `Shadows::recordPass` consumes the resulting plan and holds no draw span, no
+  view set and no resolver. Two consequences for anything built on this plan's contracts: the
+  resolver's `noteContent` records what a map HOLDS rather than what was rasterised (a reused map
+  holds its casters without drawing them), and the ShadowLod tint reads that content during
+  collection instead of waiting for the shadow pass. Staging is unchanged — levels still commit
+  only after the frame is submitted.
 - **Compute pre-skinning:** expose the pre-deformed vertex buffer, exact deformed bounds, and a
   deformation revision through the shadow draw description. It can then replace the LOD0
   deformable fallback and stop rerunning skin/morph work in every pass.

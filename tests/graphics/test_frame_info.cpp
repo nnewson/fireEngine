@@ -56,35 +56,16 @@ TEST_CASE("FrameInfo.DefaultShadowPipelineIsNull", "[FrameInfo]")
     CHECK(info.shadowPipeline == NullPipeline);
 }
 
-TEST_CASE("FrameInfo.DefaultShadowViewProjsAreZero", "[FrameInfo]")
-{
-    FrameInfo info;
-    Mat4 zero;
-    for (const Mat4& m : info.shadowViewProjs)
-    {
-        CHECK(m == zero);
-    }
-}
+// `shadowViewProjs` is gone: FrameInfo carried every shadow matrix in the frame so that
+// Object::render could copy the table into each per-object ShadowUBO. Every shadow path now
+// rasterises with the matrix in its view's push constants, so there is no table to carry, copy or
+// index — and no second authority on the transform beside the view set.
 
 TEST_CASE("FrameInfo.AssignShadowPipelineRoundTrip", "[FrameInfo]")
 {
     FrameInfo info;
     info.shadowPipeline = PipelineHandle{7};
     CHECK(info.shadowPipeline == PipelineHandle{7});
-}
-
-TEST_CASE("FrameInfo.AssignShadowViewProjsRoundTrip", "[FrameInfo]")
-{
-    FrameInfo info;
-    Mat4 id = Mat4::identity();
-    for (Mat4& m : info.shadowViewProjs)
-    {
-        m = id;
-    }
-    for (const Mat4& m : info.shadowViewProjs)
-    {
-        CHECK(m == id);
-    }
 }
 
 // ---------------------------------------------------------------------------

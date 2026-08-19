@@ -119,8 +119,10 @@ bool ShadowRenderViewSet::store(ShadowViewGroup group, std::size_t slot,
         views_[shadowViewIndex(group, slot)].reset();
         return false;
     }
+    // Zero range: only a point face measures depth against a light, and `pointLightDepth()` refuses
+    // to report one for any other kind, so there is no value here to be read by mistake.
     views_[shadowViewIndex(group, slot)] =
-        ShadowRenderView{viewProj, projection, biasMetrics, logicalId};
+        ShadowRenderView{viewProj, projection, biasMetrics, logicalId, 0.0f};
     return true;
 }
 
@@ -168,7 +170,7 @@ bool ShadowRenderViewSet::setSpot(std::size_t slot, NodeId light, const Mat4& vi
 }
 
 bool ShadowRenderViewSet::setPointLight(
-    std::size_t lightSlot, NodeId light, const ShadowViewMetrics& biasMetrics,
+    std::size_t lightSlot, NodeId light, const ShadowViewMetrics& biasMetrics, float range,
     std::span<const ShadowPointFace, kCubeFaceCount> faces) noexcept
 {
     // ADDRESS first, before any flattening: `lightSlot * kCubeFaceCount + face` can wrap a huge
@@ -186,14 +188,27 @@ bool ShadowRenderViewSet::setPointLight(
     // the previous frame left, which is a shadow that is wrong only when the light is looked at
     // from one direction.
     const ShadowLogicalViewId identity = ShadowLogicalViewId::point(light, 0);
-    bool acceptable = identity.valid() && biasMetrics.kind() == ShadowViewMetricsKind::PointLight;
+    // The RANGE is checked as strictly as the matrices, because the stored depth is
+    // `distance / range`: a zero or non-finite one makes every texel of all six faces NaN or
+    // infinite, and the compare sampler then answers a shadow test with no meaning at all.
+    bool acceptable = identity.valid() && biasMetrics.kind() == ShadowViewMetricsKind::PointLight &&
+                      std::isfinite(range) && range > 0.0f;
+    // ONE LIGHT, SIX FACES. The descriptors are built from a single light's position, so a
+    // disagreement means the caller assembled the cube from more than one — and the pass would then
+    // measure half the cube's depth from the wrong origin while every matrix still looked fine.
+    // Exact comparison: the six values come from one `Vec3`, so anything but equality is a
+    // different light, not a rounding difference.
     for (const ShadowPointFace& face : faces)
     {
+        const Vec3& facePosition = face.projection.lightPosition();
+        const Vec3& firstPosition = faces.front().projection.lightPosition();
         acceptable = acceptable && face.projection.kind() == ShadowViewKind::Perspective &&
-                     allFinite(face.viewProj);
+                     allFinite(face.viewProj) && facePosition.x() == firstPosition.x() &&
+                     facePosition.y() == firstPosition.y() && facePosition.z() == firstPosition.z();
     }
-    assert(acceptable && "a point light's cube needs six perspective faces, finite matrices, a "
-                         "valid identity and PointLight metrics");
+    assert(acceptable && "a point light's cube needs six perspective faces about ONE light "
+                         "position, finite matrices, a positive range, a valid identity and "
+                         "PointLight metrics");
     if (!acceptable)
     {
         // Cleared, not left unwritten — see store(): whatever was there is a previous attempt's
@@ -213,7 +228,7 @@ bool ShadowRenderViewSet::setPointLight(
         // about the light" true of the type rather than of the caller.
         views_[shadowViewIndex(ShadowViewGroup::Point, shadowPointViewSlot(lightSlot, face))] =
             ShadowRenderView{faces[face].viewProj, faces[face].projection, biasMetrics,
-                             ShadowLogicalViewId::point(light, face)};
+                             ShadowLogicalViewId::point(light, face), range};
     }
     return true;
 }
@@ -255,44 +270,6 @@ std::size_t ShadowRenderViewSet::activeCount(ShadowViewGroup group) const noexce
         count += active(group, slot) ? 1 : 0;
     }
     return count;
-}
-
-std::array<Mat4, static_cast<std::size_t>(kShadowTotalMatrixCount)>
-shadowMatrixArray(const ShadowRenderViewSet& views) noexcept
-{
-    std::array<Mat4, static_cast<std::size_t>(kShadowTotalMatrixCount)> matrices;
-    matrices.fill(Mat4::identity());
-
-    for (std::size_t cascade = 0; cascade < shadowViewSlotCount(ShadowViewGroup::Cascade);
-         ++cascade)
-    {
-        const ShadowRenderView* view = views.find(ShadowViewGroup::Cascade, cascade);
-        // Cascades are mandatory: the directional pass always runs, so a missing one means the fit
-        // did not happen — unlike a punctual or self slot, which is legitimately inactive.
-        assert(view != nullptr && "every cascade must be populated before extraction");
-        if (view != nullptr)
-        {
-            matrices[static_cast<std::size_t>(kShadowCascadeMatrixBase) + cascade] =
-                view->viewProj();
-        }
-    }
-    for (std::size_t spot = 0; spot < shadowViewSlotCount(ShadowViewGroup::Spot); ++spot)
-    {
-        if (const ShadowRenderView* view = views.find(ShadowViewGroup::Spot, spot))
-        {
-            matrices[static_cast<std::size_t>(kShadowSpotMatrixBase) + spot] = view->viewProj();
-        }
-    }
-    for (std::size_t flat = 0; flat < shadowViewSlotCount(ShadowViewGroup::Point); ++flat)
-    {
-        if (const ShadowRenderView* view = views.find(ShadowViewGroup::Point, flat))
-        {
-            matrices[static_cast<std::size_t>(kShadowPointMatrixBase) + flat] = view->viewProj();
-        }
-    }
-    // World-only contributes nothing: its view IS the cascade's entry (an alias), so the cascade
-    // slot written above IS its matrix. There is no second value to reconcile.
-    return matrices;
 }
 
 std::array<Mat4, kShadowCascadeCount>

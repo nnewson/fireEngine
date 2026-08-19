@@ -97,6 +97,20 @@ private:
     ShadowViewMetricsKind kind_{ShadowViewMetricsKind::Orthographic};
 };
 
+// What a POINT face's stored depth is measured against: the two values the pass pushes as
+// `ShadowPushConstants::lightPosRange`, and which the forward compare sampler tests the same ratio
+// against.
+//
+// Not a consequence of the face's matrix. A point face overwrites `gl_FragDepth` with
+// `length(worldPos - position) / range` (`shaders/shadow_depth.glsl`), so two faces with identical
+// matrices store different depth once the light moves or its range changes — which makes these
+// raster CONTENT, and part of what decides whether a cached cube still holds the right pixels.
+struct ShadowPointLightDepth
+{
+    Vec3 position{};
+    float range{0.0f};
+};
+
 // One shadow view: the matrix the pass rasterises with, the projection descriptor LOD selection
 // reasons about, the fitted bias metrics the receiver converts with (SH-07), and the stable logical
 // identity hysteresis keys on (SH-03).
@@ -130,19 +144,39 @@ public:
     {
         return biasMetrics_;
     }
+    // The light a POINT face's radial depth is measured against, or nothing for every other family.
+    //
+    // Returned together and only for the family that has them, rather than exposed as two
+    // always-present fields: a cascade carries no light, and a zero position with a zero range is a
+    // value a caller could read and push. The POSITION comes from the face's own projection
+    // descriptor — the one `ShadowView::perspective` was built with, which is also what LOD
+    // selection measures depth from — so the pass and the selector cannot be looking at two
+    // different lights.
+    [[nodiscard]] std::optional<ShadowPointLightDepth> pointLightDepth() const noexcept
+    {
+        if (logicalId_.kind() != ShadowLogicalViewKind::Point)
+        {
+            return std::nullopt;
+        }
+        return ShadowPointLightDepth{projection_.lightPosition(), pointLightRange_};
+    }
 
 private:
     // Only the set constructs these, through its family writers, so no call site can assemble an
     // entry whose identity or projection kind contradicts the slot it lands in.
     friend class ShadowRenderViewSet;
 
+    // `pointLightRange` is POINT-ONLY depth data and zero everywhere else. It is a constructor
+    // argument rather than a later assignment for the reason the class is immutable at all: a range
+    // installed after the fact could be installed for the wrong face, or forgotten for one of six.
     ShadowRenderView(const Mat4& viewProj, const ShadowView& projection,
-                     const ShadowViewMetrics& biasMetrics,
-                     const ShadowLogicalViewId& logicalId) noexcept
+                     const ShadowViewMetrics& biasMetrics, const ShadowLogicalViewId& logicalId,
+                     float pointLightRange) noexcept
         : viewProj_{viewProj},
           projection_{projection},
           biasMetrics_{biasMetrics},
-          logicalId_{logicalId}
+          logicalId_{logicalId},
+          pointLightRange_{pointLightRange}
     {
     }
 
@@ -150,6 +184,7 @@ private:
     ShadowView projection_;
     ShadowViewMetrics biasMetrics_;
     ShadowLogicalViewId logicalId_;
+    float pointLightRange_{0.0f};
 };
 
 // The per-frame set of shadow views, addressed by PHYSICAL (group, slot) — the same addressing
@@ -231,9 +266,17 @@ public:
     // that fails, all six slots are cleared and the call returns false — a five-face cube is not a
     // usable caster, and the "all six or none" contract was previously only a comment in the
     // renderer.
+    //
+    // `range` is the EFFECTIVE range the faces were projected with (the far plane, including the
+    // infinite-range fallback), which is what the pass measures radial depth against. It lives here
+    // rather than in a parallel array beside the set because it is raster content: it reaches the
+    // shader, and a cached cube is only reusable if it is unchanged. It must be finite and
+    // positive, and ALL SIX faces must report the same light position — the six descriptors are
+    // built from one light, so a disagreement means the caller assembled the cube from more than
+    // one, and half a cube's depth would then be measured against the wrong origin.
     [[nodiscard]] bool
     setPointLight(std::size_t lightSlot, NodeId light, const ShadowViewMetrics& biasMetrics,
-                  std::span<const ShadowPointFace, kCubeFaceCount> faces) noexcept;
+                  float range, std::span<const ShadowPointFace, kCubeFaceCount> faces) noexcept;
 
     // The view at a physical slot, or null when the slot is inactive or out of range.
     [[nodiscard]] const ShadowRenderView* find(ShadowViewGroup group,
@@ -277,15 +320,9 @@ private:
 // The mapping is explicit per family, not a loop over all entries, because the destinations differ
 // in both layout and meaning: a generic copy would put a spot matrix in a point slot.
 
-// The ShadowUBO / push-constant matrix array: cascades at kShadowCascadeMatrixBase, spots at
-// kShadowSpotMatrixBase, point faces at kShadowPointMatrixBase + the flat slot. Inactive slots are
-// identity. Cascades are MANDATORY (the directional pass always runs) and their absence asserts;
-// punctual and self slots are legitimately inactive.
-//
-// World-only contributes no slot: it rasterises with its cascade's matrix, and its entry IS that
-// cascade's entry, so there is never a second value to reconcile.
-[[nodiscard]] std::array<Mat4, static_cast<std::size_t>(kShadowTotalMatrixCount)>
-shadowMatrixArray(const ShadowRenderViewSet& views) noexcept;
+// (There is no combined matrix array any more. Every shadow path rasterises with the matrix in its
+// view's push constants, taken from the entry the pass is recording, so nothing needs a table of
+// every view's transform — and nothing can index the wrong row of one.)
 
 // LightUBO::cascadeViewProj — the forward shader's directional lookup.
 [[nodiscard]] std::array<Mat4, kShadowCascadeCount>

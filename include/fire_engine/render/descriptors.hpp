@@ -194,12 +194,18 @@ void pushForwardObjectDescriptors(vk::CommandBuffer cmd, const Resources& resour
                                   vk::PipelineLayout layout, const DrawCommand& dc);
 
 // Pushes a shadow draw's per-object set 0 inline via core 1.4 push descriptors — no
-// allocated descriptor set. Bindings 0..3 are the per-object ShadowUBO + the
-// skin/morph UBOs + morph SSBO carried on the DrawCommand; bindings 4/5 are the
-// shared self-shadow first-depth image + sampler, read straight from Resources
-// (global, identical for every shadow draw). `layout` is the shadow pipeline
-// layout (set 0 is a push layout).
+// allocated descriptor set. Bindings 0..3 are the four per-object buffers passed here
+// (ShadowUBO + skin/morph UBOs + morph SSBO); bindings 4/5 are the shared self-shadow
+// first-depth image + sampler, read straight from Resources (global, identical for every
+// shadow draw). `layout` is the shadow pipeline layout (set 0 is a push layout).
+//
+// The four handles arrive as arguments rather than on a DrawCommand because the shadow pass no
+// longer records from commands: it records from a `PreparedShadowDraw`, which carries exactly these
+// four as its recording payload (arc 2 #4). They are per-frame-ring handles, which is why they are
+// deliberately not part of what the shadow cache compares.
 void pushShadowObjectDescriptors(vk::CommandBuffer cmd, const Resources& resources,
-                                 vk::PipelineLayout layout, const DrawCommand& dc);
+                                 vk::PipelineLayout layout, BufferHandle shadowUbo,
+                                 BufferHandle skinUbo, BufferHandle morphUbo,
+                                 BufferHandle morphSsbo);
 
 } // namespace fire_engine

@@ -86,8 +86,8 @@ ResolvedShadowDraw resolveShadowDraw(const ShadowGeometryRequest& request,
     }
 
     const ShadowLodSelection selection =
-        selectShadowLod(request.lods, projection, request.worldScale, worldBounds, budgetTexels,
-                        hysteresis, previousLevel);
+        selectShadowLod(request.lods, projection, request.pose.worldScale(), worldBounds,
+                        budgetTexels, hysteresis, previousLevel);
     // A forced fallback names LOD0, but LOD0 is `lods[0]`, whose buffers are the whole mesh —
     // resolve through the same path so a fallback and a deliberate LOD0 bind identical geometry.
     if (selection.level >= request.lods.size())
@@ -139,7 +139,7 @@ namespace
 {
 
 // One bit per family. Small and fixed — the group count is a compile-time constant — so the
-// membership of every family that drew a caster fits in one map entry.
+// membership of every family whose map holds a caster fits in one map entry.
 [[nodiscard]] std::uint32_t groupBit(ShadowViewGroup group) noexcept
 {
     const auto index = static_cast<std::size_t>(group);
@@ -149,7 +149,7 @@ namespace
 
 } // namespace
 
-void ShadowLodResolver::noteDrawn(ShadowViewGroup group, const ShadowLodStateKey& key) noexcept
+void ShadowLodResolver::noteContent(ShadowViewGroup group, const ShadowLodStateKey& key) noexcept
 {
     if (!key.valid())
     {
@@ -158,27 +158,30 @@ void ShadowLodResolver::noteDrawn(ShadowViewGroup group, const ShadowLodStateKey
         return;
     }
     const auto it = frameCache_.find(key);
-    // A draw can only be marked on a decision that exists. Reaching here without one means a pass
-    // drew a caster it never resolved, which the pass itself treats as terminal; creating an entry
-    // would manufacture provenance for a level nobody chose.
-    assert(it != frameCache_.end() && "a drawn shadow caster must have been resolved first");
+    // CONTENT CAN ONLY BE ATTRIBUTED TO AN EXISTING RESOLUTION — the precondition is about the
+    // decision, not about rasterisation. Reaching here without an entry means a family claimed to
+    // hold a caster it never resolved, which the caller treats as terminal; creating an entry would
+    // manufacture content at a level nobody chose. Nothing here requires that a draw was recorded:
+    // a reused map holds its casters without any draw this frame.
+    assert(it != frameCache_.end() &&
+           "a caster attributed to a family's map must have been resolved first");
     if (it == frameCache_.end())
     {
         return;
     }
-    it->second.drawnGroups |= groupBit(group);
+    it->second.contentGroups |= groupBit(group);
 }
 
 const ResolvedShadowDraw*
-ShadowLodResolver::drawnResolution(ShadowViewGroup group,
-                                   const ShadowLodStateKey& key) const noexcept
+ShadowLodResolver::contentResolution(ShadowViewGroup group,
+                                     const ShadowLodStateKey& key) const noexcept
 {
     if (!key.valid())
     {
         return nullptr;
     }
     const auto it = frameCache_.find(key);
-    if (it == frameCache_.end() || (it->second.drawnGroups & groupBit(group)) == 0U)
+    if (it == frameCache_.end() || (it->second.contentGroups & groupBit(group)) == 0U)
     {
         return nullptr;
     }
@@ -224,7 +227,7 @@ ResolvedShadowDraw ShadowLodResolver::resolve(const ShadowGeometryRequest& reque
 
     const ResolvedShadowDraw resolved = resolveShadowDraw(
         request, view.projection(), worldBounds, budgetTexels, hysteresis, historyLevel(key));
-    frameCache_.emplace(key, FrameEntry{.resolved = resolved, .drawnGroups = 0});
+    frameCache_.emplace(key, FrameEntry{.resolved = resolved, .contentGroups = 0});
     if (resolved.reason == ShadowLodReason::Selected)
     {
         // ONLY a selected level is evidence about where this caster sits relative to its budget.

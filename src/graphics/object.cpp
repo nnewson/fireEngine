@@ -95,9 +95,11 @@ Vec3 skinnedPosition(const Vertex& vertex, Vec3 position, std::span<const Mat4> 
 // caster is, how its transform scales object-space error into world space, and who it is for
 // hysteresis purposes.
 //
-// `worldScale` is the conservative sigma_max of the model's linear part — the same bound VDPM uses,
-// computed once per caster rather than once per view because it is a property of the transform
-// alone.
+// The POSE carries both halves of the transform: the matrix the shadow pass rasterises this caster
+// with, and the conservative sigma_max of its linear part — the same bound VDPM uses, computed once
+// per caster rather than once per view because it is a property of the transform alone. They are
+// one value so neither can be stated without the other (see `ShadowCasterPose`), and this `model`
+// is the same argument `writeShadowUniforms` puts into `ShadowUBO::model` one call earlier.
 [[nodiscard]]
 ShadowGeometryRequest makeShadowRequest(const Geometry& geometry, ShadowCasterId casterId,
                                         ShadowCasterGeneration generation, const Mat4& model,
@@ -107,7 +109,7 @@ ShadowGeometryRequest makeShadowRequest(const Geometry& geometry, ShadowCasterId
     return ShadowGeometryRequest{.lods = geometry.lods(),
                                  .baseIndexBuffer = geometry.indexBuffer(),
                                  .baseIndexCount = geometry.indexCount(),
-                                 .worldScale = largestSingularValue(linearPart(model)),
+                                 .pose = ShadowCasterPose::fromModel(model),
                                  .casterId = casterId,
                                  .generation = generation,
                                  .lodEnabled = lodEnabled,
@@ -272,19 +274,14 @@ void Object::createForwardBindings(Resources& resources, VdpmGpuRegistry* regist
 
 void Object::createShadowBindings(Resources& resources)
 {
-    // Per-object ShadowUBO (model + per-cascade lightViewProj[4] + hasSkin),
-    // pushed as shadow set-0 binding 0 per draw. The skin / morph / morphSsbo
-    // buffers allocated by createForwardBindings are reused for the shadow draw —
+    // Per-object ShadowUBO (model + hasSkin), pushed as shadow set-0 binding 0 per draw. The skin /
+    // morph / morphSsbo buffers allocated by createForwardBindings are reused for the shadow draw —
     // no duplicate uploads — and the shared self-shadow image+sampler (bindings
     // 4/5) are pushed from Resources by the shadow pass.
     for (auto& binding : bindings_)
     {
         ShadowUBO initialShadow{};
         initialShadow.model = Mat4::identity();
-        for (Mat4& m : initialShadow.lightViewProj)
-        {
-            m = Mat4::identity();
-        }
         auto shadowSet = resources.createMappedUniformBuffers(sizeof(ShadowUBO));
         for (int i = 0; i < kMaxFramesInFlight; ++i)
         {
@@ -717,15 +714,11 @@ void Object::writeForwardUniforms(const FrameInfo& frame, const Mat4& world,
 
 void Object::writeShadowUniforms(const FrameInfo& frame, const Mat4& world, bool hasSkin)
 {
-    // Shadow UBO (model + per-cascade lightViewProj[4] + hasSkin). The renderer
-    // buckets by pipeline so shadow draws replay inside the shadow pass and
-    // forward draws inside the forward pass.
+    // Shadow UBO: the object's world matrix and whether it skins, and nothing else. The light-space
+    // matrix belongs to the VIEW being recorded and arrives in the shadow pass' push constants, so
+    // there is no per-object copy of every shadow matrix in the frame any more.
     ShadowUBO shadowData{};
     shadowData.model = world;
-    for (std::size_t i = 0; i < frame.shadowViewProjs.size(); ++i)
-    {
-        shadowData.lightViewProj[i] = frame.shadowViewProjs[i];
-    }
     shadowData.hasSkin = hasSkin ? 1 : 0;
     for (auto& binding : bindings_)
     {

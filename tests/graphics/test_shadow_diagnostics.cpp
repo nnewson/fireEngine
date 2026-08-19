@@ -9,6 +9,20 @@
 
 using namespace fire_engine;
 
+namespace
+{
+
+// What the old single `beginRasterPass(identity)` did, now that engagement and raster-pass
+// accounting are separate calls: claim the row for a logical view AND count one rasterised layer.
+// Most cases below are about the identity rules, which are `claimView`'s; the ones that care about
+// the split assert on `claimed()` / `touched()` / `rasterPasses` directly.
+[[nodiscard]] bool engageRow(ShadowViewStats& row, ShadowLogicalViewId view) noexcept
+{
+    return row.claimView(view) && row.beginRasterPass(view);
+}
+
+} // namespace
+
 TEST_CASE("shadow view slots are a dense, collision-free flattening", "[ShadowDiagnostics]")
 {
     // Every (group, slot) must map to its own index, and the indices must exactly fill
@@ -68,7 +82,7 @@ TEST_CASE("candidate and drawn are counted independently", "[ShadowDiagnostics]"
     // Three casters offered to cascade 0; the middle one is frustum-rejected. SH-03 split the two
     // triangle counts: the first is FULL DETAIL (what the view was offered, known without
     // resolving), the second is what this view's resolution actually draws.
-    REQUIRE(cascade0.beginRasterPass(ShadowLogicalViewId::cascade(0)));
+    REQUIRE(engageRow(cascade0, ShadowLogicalViewId::cascade(0)));
     cascade0.observe(100, true, 40, 0, ShadowLodReason::Selected, true);
     // Rejected before resolution, so it has no resolved count, level or reason to contribute.
     cascade0.observe(50, false, 0, 0, ShadowLodReason::Count, true);
@@ -96,9 +110,9 @@ TEST_CASE("a twice-rasterised self-shadow view doubles cost but not selection",
     ShadowFrameStats stats;
     ShadowViewStats& self = stats.view(ShadowViewGroup::Self, 2);
 
-    REQUIRE(self.beginRasterPass(ShadowLogicalViewId::self(9)));
+    REQUIRE(engageRow(self, ShadowLogicalViewId::self(9)));
     self.observe(64, true, 30, 1, ShadowLodReason::Selected, true); // first layer: counts selection
-    REQUIRE(self.beginRasterPass(ShadowLogicalViewId::self(9)));
+    REQUIRE(engageRow(self, ShadowLogicalViewId::self(9)));
     self.observe(64, true, 30, 1, ShadowLodReason::Selected, false); // second layer: cost only
 
     CHECK(self.rasterPasses == 2);
@@ -117,7 +131,7 @@ TEST_CASE("a rasterised view with no candidates stays visible", "[ShadowDiagnost
     // the panel.
     ShadowFrameStats stats;
     ShadowViewStats& cascade2 = stats.view(ShadowViewGroup::Cascade, 2);
-    REQUIRE(cascade2.beginRasterPass(ShadowLogicalViewId::cascade(2)));
+    REQUIRE(engageRow(cascade2, ShadowLogicalViewId::cascade(2)));
 
     CHECK(cascade2.rasterPasses == 1);
     CHECK(cascade2.candidateDraws == 0);
@@ -133,7 +147,7 @@ TEST_CASE("drawn can never exceed candidate", "[ShadowDiagnostics]")
     // promised metric, and this is what makes the promise structural rather than conventional.
     ShadowFrameStats stats;
     ShadowViewStats& spot = stats.view(ShadowViewGroup::Spot, 1);
-    REQUIRE(spot.beginRasterPass(ShadowLogicalViewId::spot(static_cast<NodeId>(4))));
+    REQUIRE(engageRow(spot, ShadowLogicalViewId::spot(static_cast<NodeId>(4))));
     for (std::uint32_t i = 0; i < 5; ++i)
     {
         spot.observe(10, i % 2 == 0, 4, i, ShadowLodReason::Selected, true);
@@ -149,12 +163,11 @@ TEST_CASE("group and scene rollups sum their slots", "[ShadowDiagnostics]")
     ShadowFrameStats stats;
     for (const std::size_t slot : {std::size_t{0}, std::size_t{3}})
     {
-        REQUIRE(
-            stats.view(ShadowViewGroup::Cascade, slot)
-                .beginRasterPass(ShadowLogicalViewId::cascade(static_cast<std::uint32_t>(slot))));
+        REQUIRE(engageRow(stats.view(ShadowViewGroup::Cascade, slot),
+                          ShadowLogicalViewId::cascade(static_cast<std::uint32_t>(slot))));
     }
-    REQUIRE(stats.view(ShadowViewGroup::Point, shadowPointViewSlot(1, 4))
-                .beginRasterPass(ShadowLogicalViewId::point(static_cast<NodeId>(6), 4)));
+    REQUIRE(engageRow(stats.view(ShadowViewGroup::Point, shadowPointViewSlot(1, 4)),
+                      ShadowLogicalViewId::point(static_cast<NodeId>(6), 4)));
 
     stats.view(ShadowViewGroup::Cascade, 0)
         .observe(10, true, 10, 0, ShadowLodReason::Selected, true);
@@ -185,16 +198,16 @@ TEST_CASE("activeViewCount reports rasterised slots", "[ShadowDiagnostics]")
     ShadowFrameStats stats;
     CHECK(stats.activeViewCount(ShadowViewGroup::Spot) == 0);
 
-    REQUIRE(stats.view(ShadowViewGroup::Spot, 0)
-                .beginRasterPass(ShadowLogicalViewId::spot(static_cast<NodeId>(1))));
-    REQUIRE(stats.view(ShadowViewGroup::Spot, 2)
-                .beginRasterPass(ShadowLogicalViewId::spot(static_cast<NodeId>(2))));
+    REQUIRE(engageRow(stats.view(ShadowViewGroup::Spot, 0),
+                      ShadowLogicalViewId::spot(static_cast<NodeId>(1))));
+    REQUIRE(engageRow(stats.view(ShadowViewGroup::Spot, 2),
+                      ShadowLogicalViewId::spot(static_cast<NodeId>(2))));
     CHECK(stats.activeViewCount(ShadowViewGroup::Spot) == 2);
 
     // A view whose every candidate was culled is still ACTIVE — it was rasterised (cleared), and
     // hiding it would hide "this map ran and drew nothing", which is the interesting case.
-    REQUIRE(stats.view(ShadowViewGroup::Spot, 3)
-                .beginRasterPass(ShadowLogicalViewId::spot(static_cast<NodeId>(3))));
+    REQUIRE(engageRow(stats.view(ShadowViewGroup::Spot, 3),
+                      ShadowLogicalViewId::spot(static_cast<NodeId>(3))));
     stats.view(ShadowViewGroup::Spot, 3).observe(5, false, 0, 0, ShadowLodReason::Count, true);
     CHECK(stats.activeViewCount(ShadowViewGroup::Spot) == 3);
     CHECK(stats.view(ShadowViewGroup::Spot, 3).drawnDraws == 0);
@@ -209,8 +222,8 @@ TEST_CASE("LOD reasons are recorded per view, level 0 distinguishable from force
     ShadowFrameStats stats;
     ShadowViewStats& cascade = stats.view(ShadowViewGroup::Cascade, 0);
     ShadowViewStats& spot = stats.view(ShadowViewGroup::Spot, 0);
-    REQUIRE(cascade.beginRasterPass(ShadowLogicalViewId::cascade(0)));
-    REQUIRE(spot.beginRasterPass(ShadowLogicalViewId::spot(static_cast<NodeId>(5))));
+    REQUIRE(engageRow(cascade, ShadowLogicalViewId::cascade(0)));
+    REQUIRE(engageRow(spot, ShadowLogicalViewId::spot(static_cast<NodeId>(5))));
 
     cascade.observe(10, true, 10, 0, ShadowLodReason::Selected, true);    // level 0, within budget
     cascade.observe(10, true, 2, 2, ShadowLodReason::Selected, true);     // level 2
@@ -234,7 +247,7 @@ TEST_CASE("a focused view distinguishes 'ran and drew nothing' from 'never ran'"
     // has nothing measured at all, and reporting zeros for it would state that finding falsely.
     ShadowFrameStats stats;
     const auto lit = ShadowLogicalViewId::spot(static_cast<NodeId>(11));
-    REQUIRE(stats.view(ShadowViewGroup::Spot, 1).beginRasterPass(lit));
+    REQUIRE(engageRow(stats.view(ShadowViewGroup::Spot, 1), lit));
 
     const FocusedShadowView ran = stats.focused(
         ShadowViewFocus{.perView = true, .group = ShadowViewGroup::Spot, .view = lit});
@@ -261,32 +274,32 @@ TEST_CASE("one diagnostic row belongs to one logical view", "[ShadowDiagnostics]
     ShadowViewStats& slot = stats.view(ShadowViewGroup::Spot, 0);
     const auto first = ShadowLogicalViewId::spot(static_cast<NodeId>(31));
 
-    REQUIRE(slot.beginRasterPass(first));
+    REQUIRE(engageRow(slot, first));
     slot.observe(10, true, 10, 0, ShadowLodReason::Selected, true);
 
     // The SAME identity again is the normal case — a self-shadow slot's two depth layers — and is
     // accepted in every build.
-    CHECK(slot.beginRasterPass(first));
+    CHECK(engageRow(slot, first));
     CHECK(slot.rasterPasses == 2);
 
 #ifdef NDEBUG
     // Dev asserts at the contradiction (and the renderer's call site throws either way); this is
     // the release behaviour, which must leave the row exactly as it was.
     const auto second = ShadowLogicalViewId::spot(static_cast<NodeId>(32));
-    CHECK_FALSE(slot.beginRasterPass(second));
+    CHECK_FALSE(engageRow(slot, second));
     CHECK(slot.rasterPasses == 2);
     CHECK(slot.logicalId == first);
     CHECK(slot.drawnDraws == 1);
 
     // An invalid identity is refused before it can even count the pass.
-    CHECK_FALSE(slot.beginRasterPass(ShadowLogicalViewId{}));
+    CHECK_FALSE(engageRow(slot, ShadowLogicalViewId{}));
     CHECK(slot.rasterPasses == 2);
     CHECK(slot.logicalId == first);
 
     // On a fresh row an invalid identity leaves it untouched, rather than "rasterised but unnamed"
     // — a row nothing could ever select.
     ShadowViewStats& fresh = stats.view(ShadowViewGroup::Spot, 1);
-    CHECK_FALSE(fresh.beginRasterPass(ShadowLogicalViewId{}));
+    CHECK_FALSE(engageRow(fresh, ShadowLogicalViewId{}));
     CHECK_FALSE(fresh.touched());
 #endif
 }
@@ -306,8 +319,8 @@ TEST_CASE("a focus must pair its group with a compatible identity kind", "[Shado
     STATIC_REQUIRE(shadowViewKindFor(ShadowViewGroup::Count) == ShadowLogicalViewKind::Invalid);
 
     ShadowFrameStats stats;
-    REQUIRE(stats.view(ShadowViewGroup::Spot, 0)
-                .beginRasterPass(ShadowLogicalViewId::spot(static_cast<NodeId>(41))));
+    REQUIRE(engageRow(stats.view(ShadowViewGroup::Spot, 0),
+                      ShadowLogicalViewId::spot(static_cast<NodeId>(41))));
 
     const ShadowViewFocus mismatched{
         .perView = true, .group = ShadowViewGroup::Spot, .view = ShadowLogicalViewId::cascade(0)};
@@ -334,8 +347,7 @@ TEST_CASE("an unaddressable focus is a different state from an inactive view",
     // (structurally malformed — no frame can satisfy it, so re-select) versus a well-formed focus
     // simply "not present in this frame" (which says nothing about whether it returns).
     ShadowFrameStats stats;
-    REQUIRE(
-        stats.view(ShadowViewGroup::Cascade, 0).beginRasterPass(ShadowLogicalViewId::cascade(0)));
+    REQUIRE(engageRow(stats.view(ShadowViewGroup::Cascade, 0), ShadowLogicalViewId::cascade(0)));
 
     // The scene rollup names no view at all — and is not addressable, so the panel takes its own
     // branch rather than being handed one view's numbers.
@@ -365,8 +377,8 @@ TEST_CASE("focusing follows the view, not the slot's occupant", "[ShadowDiagnost
     const auto second = ShadowLogicalViewId::spot(static_cast<NodeId>(22));
 
     ShadowFrameStats before;
-    REQUIRE(before.view(ShadowViewGroup::Spot, 0).beginRasterPass(first));
-    REQUIRE(before.view(ShadowViewGroup::Spot, 1).beginRasterPass(second));
+    REQUIRE(engageRow(before.view(ShadowViewGroup::Spot, 0), first));
+    REQUIRE(engageRow(before.view(ShadowViewGroup::Spot, 1), second));
     before.view(ShadowViewGroup::Spot, 1).observe(30, true, 12, 1, ShadowLodReason::Selected, true);
 
     const ShadowViewFocus focus{.perView = true, .group = ShadowViewGroup::Spot, .view = second};
@@ -378,7 +390,7 @@ TEST_CASE("focusing follows the view, not the slot's occupant", "[ShadowDiagnost
     // Next frame the first light is gone, so `second` compacts down into slot 0 and draws
     // something different. The focus must follow the LIGHT.
     ShadowFrameStats after;
-    REQUIRE(after.view(ShadowViewGroup::Spot, 0).beginRasterPass(second));
+    REQUIRE(engageRow(after.view(ShadowViewGroup::Spot, 0), second));
     after.view(ShadowViewGroup::Spot, 0).observe(30, true, 7, 2, ShadowLodReason::Selected, true);
 
     const FocusedShadowView moved = after.focused(focus);
@@ -401,11 +413,11 @@ TEST_CASE("a cascade and its world-only twin share an identity but not a row",
     // and an identity alone could not tell them apart.
     ShadowFrameStats stats;
     const auto shared = ShadowLogicalViewId::cascade(2);
-    REQUIRE(stats.view(ShadowViewGroup::Cascade, 2).beginRasterPass(shared));
+    REQUIRE(engageRow(stats.view(ShadowViewGroup::Cascade, 2), shared));
     stats.view(ShadowViewGroup::Cascade, 2)
         .observe(50, true, 50, 0, ShadowLodReason::Selected, true);
-    REQUIRE(stats.view(ShadowViewGroup::WorldOnly, 2)
-                .beginRasterPass(ShadowLogicalViewId::worldOnly(2)));
+    REQUIRE(
+        engageRow(stats.view(ShadowViewGroup::WorldOnly, 2), ShadowLogicalViewId::worldOnly(2)));
     stats.view(ShadowViewGroup::WorldOnly, 2)
         .observe(20, true, 20, 0, ShadowLodReason::Selected, true);
 
@@ -513,8 +525,7 @@ TEST_CASE("every reason and group has a name", "[ShadowDiagnostics]")
 TEST_CASE("reset clears every counter", "[ShadowDiagnostics]")
 {
     ShadowFrameStats stats;
-    REQUIRE(
-        stats.view(ShadowViewGroup::Cascade, 1).beginRasterPass(ShadowLogicalViewId::cascade(1)));
+    REQUIRE(engageRow(stats.view(ShadowViewGroup::Cascade, 1), ShadowLogicalViewId::cascade(1)));
     stats.view(ShadowViewGroup::Cascade, 1)
         .observe(99, true, 40, 2, ShadowLodReason::Selected, true);
 
@@ -526,4 +537,99 @@ TEST_CASE("reset clears every counter", "[ShadowDiagnostics]")
     CHECK(stats.sceneTotal().lodReasons[static_cast<std::size_t>(ShadowLodReason::Selected)] == 0);
     CHECK(stats.sceneTotal().rasterPasses == 0);
     CHECK(stats.activeViewCount(ShadowViewGroup::Cascade) == 0);
+}
+
+TEST_CASE("claiming a view and rasterising a layer are separate facts", "[ShadowDiagnostics]")
+{
+    // The split the shadow cache needs. A view whose map is REUSED is claimed and observed while
+    // rasterising nothing, so a row forced to count a raster pass in order to be observable would
+    // report intended work as performed work — and reuse would be unobservable.
+    ShadowFrameStats stats;
+    ShadowViewStats& cascade = stats.view(ShadowViewGroup::Cascade, 1);
+
+    CHECK_FALSE(cascade.claimed());
+    CHECK_FALSE(cascade.touched());
+
+    const ShadowLogicalViewId view = ShadowLogicalViewId::cascade(1);
+    REQUIRE(cascade.claimView(view));
+    CHECK(cascade.claimed());
+    // Claimed, no raster pass recorded. That is all this state says on its own — it also describes
+    // a view that will be recorded later this frame, and (once caching lands) a recorder bug that
+    // omitted its work. Proving REUSE needs the plan's disposition, which the cache will record.
+    CHECK_FALSE(cascade.touched());
+    CHECK(cascade.rasterPasses == 0);
+
+    // Observation belongs to the CLAIM, not to a raster pass: the counters describe what the map
+    // holds, which is knowable before (and without) any recording.
+    cascade.observe(100, true, 40, 0, ShadowLodReason::Selected, true);
+    CHECK(cascade.candidateDraws == 1);
+    CHECK(cascade.drawnDraws == 1);
+    CHECK(cascade.rasterPasses == 0);
+
+    // And the recorder's call is what turns it into GPU work.
+    REQUIRE(cascade.beginRasterPass(view));
+    CHECK(cascade.touched());
+    CHECK(cascade.rasterPasses == 1);
+    REQUIRE(cascade.beginRasterPass(view)); // a second layer of the same view
+    CHECK(cascade.rasterPasses == 2);
+}
+
+TEST_CASE("a raster pass cannot be counted for an unclaimed or mismatched row",
+          "[ShadowDiagnostics]")
+{
+#ifdef NDEBUG
+    // Two refusals. GPU work attributed to NO view carries a cost with nothing to name it; work
+    // attributed to the WRONG view is worse, because the row stays plausible under the identity
+    // that claimed it. Dev builds assert at the source; this is the release contract.
+    ShadowFrameStats stats;
+    ShadowViewStats& unclaimed = stats.view(ShadowViewGroup::Spot, 0);
+    CHECK_FALSE(unclaimed.beginRasterPass(ShadowLogicalViewId::spot(static_cast<NodeId>(1))));
+    CHECK(unclaimed.rasterPasses == 0);
+    CHECK_FALSE(unclaimed.claimed());
+
+    // A claimed, B rasterises: refused, and the pass count stays at zero.
+    ShadowViewStats& row = stats.view(ShadowViewGroup::Spot, 1);
+    const ShadowLogicalViewId a = ShadowLogicalViewId::spot(static_cast<NodeId>(7));
+    const ShadowLogicalViewId b = ShadowLogicalViewId::spot(static_cast<NodeId>(8));
+    REQUIRE(row.claimView(a));
+    CHECK_FALSE(row.beginRasterPass(b));
+    CHECK(row.rasterPasses == 0);
+    // The claim is untouched — a rejected raster pass must not re-point the row at B.
+    CHECK(row.logicalId == a);
+    // And A can still record.
+    CHECK(row.beginRasterPass(a));
+    CHECK(row.rasterPasses == 1);
+#else
+    SUCCEED(
+        "Dev builds assert inside beginRasterPass; the release contract is tested under NDEBUG");
+#endif
+}
+
+TEST_CASE("a claimed view can be focused even with no raster pass", "[ShadowDiagnostics]")
+{
+    // PRESENCE IS THE CLAIM, not the work. A view whose map is reused records nothing, and keying
+    // focus off rasterisation would make the panel's selection — and the ShadowLod tint that
+    // follows it — vanish the moment a view became free. That is the case the cache exists to
+    // produce, so it must be the case focus handles.
+    ShadowFrameStats stats;
+    const ShadowLogicalViewId spot = ShadowLogicalViewId::spot(static_cast<NodeId>(11));
+    ShadowViewStats& row = stats.view(ShadowViewGroup::Spot, 2);
+    REQUIRE(row.claimView(spot));
+    row.observe(90, true, 30, 1, ShadowLodReason::Selected, true);
+    REQUIRE_FALSE(row.touched()); // claimed, no raster pass recorded
+
+    const FocusedShadowView found = stats.focused(
+        ShadowViewFocus{.perView = true, .group = ShadowViewGroup::Spot, .view = spot});
+    REQUIRE(found.stats != nullptr);
+    CHECK(found.slot == 2);
+    CHECK(found.stats->candidateDraws == 1);
+    CHECK(found.stats->rasterPasses == 0);
+
+    // An UNCLAIMED row is still absent: its identity is whatever the slot last held, possibly
+    // frames ago, so matching against it would resurrect a stale view.
+    const FocusedShadowView stale =
+        stats.focused(ShadowViewFocus{.perView = true,
+                                      .group = ShadowViewGroup::Spot,
+                                      .view = ShadowLogicalViewId::spot(static_cast<NodeId>(12))});
+    CHECK(stale.stats == nullptr);
 }

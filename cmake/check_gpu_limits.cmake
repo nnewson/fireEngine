@@ -1,12 +1,13 @@
 # Guard: the limits shared by C++ and GLSL are declared ONCE, in shaders/gpu_limits.glsl, and both
 # sides actually read them.
 #
-# These numbers size UBO arrays and index the shadow matrix table. A one-sided change — a shader
-# raising a caster count that the C++ struct still writes at the old size, or the reverse — compiles
-# cleanly in both languages and then reads the wrong region of a bound buffer: every index stays in
-# range, so there is no validation error and no crash, just a shadow matrix taken from another
-# family's slot. `SHADOW_TOTAL_MATRIX_COUNT = 32`, `SHADOW_POINT_MATRIX_BASE = 8` and the caster
-# counts were each hand-transcribed exactly that way before this guard existed.
+# These numbers size the arrays in blocks both languages bind. A one-sided change — a shader raising
+# a caster count that the C++ struct still writes at the old size, or the reverse — compiles cleanly
+# in both languages and then reads the wrong region of a bound buffer: every index stays in range, so
+# there is no validation error and no crash, just one light's matrix read from another's slot. The
+# caster counts, the cascade count and the SSAO kernel size were each hand-transcribed exactly that
+# way before this guard existed. (The shadow MATRIX-TABLE constants it also used to cover are gone:
+# every shadow path rasterises with its view's pushed matrix — see `shadow_matrix_guard`.)
 #
 # Two halves, and BOTH are needed. The GLSL half fails if a shader re-declares a shared name or
 # stops including the file. The C++ half fails if graphics/gpu_limits.hpp stops including the shared
@@ -46,10 +47,6 @@ set(shared_names
     MAX_SPOT_SHADOW_CASTERS
     MAX_POINT_SHADOW_CASTERS
     CUBE_FACE_COUNT
-    SHADOW_CASCADE_MATRIX_BASE
-    SHADOW_SPOT_MATRIX_BASE
-    SHADOW_POINT_MATRIX_BASE
-    SHADOW_TOTAL_MATRIX_COUNT
     SHADOW_MAP_VALID_CASCADES
     SHADOW_MAP_VALID_WORLD_ONLY
     SHADOW_MAP_VALID_SELF
@@ -67,10 +64,6 @@ set(cpp_names
     kMaxSpotShadowCasters
     kMaxPointShadowCasters
     kCubeFaceCount
-    kShadowCascadeMatrixBase
-    kShadowSpotMatrixBase
-    kShadowPointMatrixBase
-    kShadowTotalMatrixCount
     kShadowMapValidCascades
     kShadowMapValidWorldOnly
     kShadowMapValidSelf
@@ -100,8 +93,6 @@ set(consumers
     "light_ubo.glsl:MAX_SPOT_SHADOW_CASTERS:2"
     "light_ubo.glsl:MAX_SKINNED_SELF_SHADOW_CASTERS:2"
     "light_ubo.glsl:MAX_POINT_SHADOW_CASTERS:1"
-    "shadow.vert:SHADOW_TOTAL_MATRIX_COUNT:1"
-    "shadow_depth.glsl:SHADOW_POINT_MATRIX_BASE:1"
     "self_shadow_second.glsl:MAX_SKINNED_SELF_SHADOW_CASTERS:1"
     "shader.frag:SHADOW_CASCADE_COUNT:4" # cascade search init + bound, blend factor, debug divisor
     "shader.frag:MAX_SKINNED_SELF_SHADOW_CASTERS:1"

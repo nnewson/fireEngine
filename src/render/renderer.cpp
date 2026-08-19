@@ -700,19 +700,22 @@ void Renderer::assignPointShadow(LightUBO& out, int packedSlot, const Lighting& 
                                                             faceAt(3), faceAt(4), faceAt(5)};
     // Metrics are per LIGHT: a 90-degree face has tan(fov/2) == 1, so the axis scale is 2 / extent,
     // and the range is the light's own.
+    // The RANGE goes into the set with the faces. It is what the pass measures radial depth
+    // against, so it belongs beside the matrices rather than in an array the pass would have to
+    // find by arithmetic on a face slot — and the position it is measured from is already in each
+    // face's own projection descriptor, which the set checks agrees across all six.
     if (!shadowViews_.setPointLight(
             static_cast<std::size_t>(shadowIndex), light.nodeId,
             ShadowViewMetrics::pointLight(2.0f / static_cast<float>(kPointShadowMapExtent), far),
-            std::span<const ShadowPointFace, kCubeFaceCount>{faces}))
+            far, std::span<const ShadowPointFace, kCubeFaceCount>{faces}))
     {
         rejectedShadowView(std::format("point slot {}", shadowIndex));
     }
     ++activePointCasters_;
     out.lights[packedSlot].cone[2] = static_cast<float>(shadowIndex);
-    // Stash the effective range used for shadow projection so the shadow-pass
-    // push-constant and the main-shader compare value agree.
+    // The same effective range the faces were fitted with, so the main shader's compare value
+    // agrees with the ratio the shadow pass stored.
     out.lights[packedSlot].direction[3] = far;
-    pointCasters_[shadowIndex] = PointShadowCaster{light.worldPosition, far};
 }
 
 void Renderer::writeIblAndDebugParams(LightUBO& out) const
@@ -817,22 +820,64 @@ void Renderer::assignSelfShadowSlots(std::span<DrawCommand> drawCommands)
     // the mask it writes describes the families the pass will actually record.
 }
 
-void Renderer::uploadFrameLighting()
+void Renderer::prepareShadowPlan(const DrawBuckets& buckets)
 {
-    // The frame's map validity, decided ONCE from the completed view set — every producer has run:
-    // cascades and punctual views in updateFrameLighting, self layers in assignSelfShadowSlots,
-    // world-only last. Deriving it earlier would read a set that is still being written, and the
-    // two consumers (this upload and the pass's family gates) would then be answering different
-    // questions with the same name.
-    shadowMapValidity_ = shadowMapValidity(ShadowMapValidityInputs{
+    // ELIGIBILITY, from the COMPLETED view set — every producer has run: cascades and punctual
+    // views in updateFrameLighting, self layers in assignSelfShadowSlots, world-only last. Taken
+    // BEFORE preparation, because preparation resolves casters and stages hysteresis: a family that
+    // will neither record nor be sampled must not leave decisions behind for the commit to adopt,
+    // and asking the finished plan would be too late to prevent that.
+    //
+    // The expected counts travel with it. Confirming against the plan alone would lose what matters
+    // for the variable-size families: two active spots of which one prepared leaves a plausible
+    // "some slot is sampleable" while the other light samples whatever its map last held.
+    const ShadowFamilyEligibility eligibility{
         .shadowsDisabled = tunables_.noShadows,
         .primaryDirectionalLight = hasPrimaryDirectional_,
-        .activeCascadeViews = shadowViews_.activeCount(ShadowViewGroup::Cascade),
-        .activeWorldOnlyViews = shadowViews_.activeCount(ShadowViewGroup::WorldOnly),
-        .activeSelfViews = shadowViews_.activeCount(ShadowViewGroup::Self),
-        .activeSpotViews = shadowViews_.activeCount(ShadowViewGroup::Spot),
-        .activePointViews = shadowViews_.activeCount(ShadowViewGroup::Point),
-    });
+        .activeViews = {shadowViews_.activeCount(ShadowViewGroup::Cascade),
+                        shadowViews_.activeCount(ShadowViewGroup::WorldOnly),
+                        shadowViews_.activeCount(ShadowViewGroup::Self),
+                        shadowViews_.activeCount(ShadowViewGroup::Spot),
+                        shadowViews_.activeCount(ShadowViewGroup::Point)},
+    };
+
+    // The per-family raster parameters. They are CONTENT — the extent is the viewport the view is
+    // rasterised at and the biases are the depth-bias state — so they travel into the prepared view
+    // and are compared with the rest of it, rather than being read again at record time from
+    // constants the cache never saw.
+    ShadowPreparationInputs inputs{
+        .shadowDraws = buckets.shadow,
+        .worldOnlyShadowDraws = buckets.worldShadow,
+        .selfShadowDraws = buckets.selfShadow,
+        .lodBudgetTexels = tunables_.shadowLodPixelBudget,
+        .hysteresis = ShadowLodHysteresis{.coarsenRatio = tunables_.shadowLodCoarsenRatio},
+        .cullingEnabled = tunables_.cullingEnabled,
+    };
+    const auto family = [&](ShadowViewGroup group) -> ShadowFamilyRaster&
+    { return inputs.raster[static_cast<std::size_t>(group)]; };
+    family(ShadowViewGroup::Cascade) = {kShadowMapExtent, kDirectionalShadowRasterBiasConstant,
+                                        kDirectionalShadowRasterBiasSlope};
+    family(ShadowViewGroup::WorldOnly) = family(ShadowViewGroup::Cascade);
+    // The self-shadow layers carry NO raster bias: their dual-depth rejection compares two stored
+    // depths of the same surface, and biasing either one would move the gap the comparison is
+    // about.
+    family(ShadowViewGroup::Self) = {kSkinnedSelfShadowMapExtent, 0.0f, 0.0f};
+    family(ShadowViewGroup::Spot) = {kSpotShadowMapExtent, kPunctualShadowRasterBiasConstant,
+                                     kPunctualShadowRasterBiasSlope};
+    family(ShadowViewGroup::Point) = {kPointShadowMapExtent, kPunctualShadowRasterBiasConstant,
+                                      kPunctualShadowRasterBiasSlope};
+
+    prepareShadowFrame(inputs, shadowViews_, eligibility.eligible(), shadowLodResolver_,
+                       shadowStatsRing_[currentFrame_], shadowPlan_);
+
+    // CONFIRMATION, from the plan that was actually built and judged against the eligibility that
+    // authorised it. This is what the receiver is told, and what the pass records — one value, one
+    // derivation, as it has been since the validity mask replaced the family-by-family guesses.
+    shadowMapValidity_ = shadowMapValidityFromPlan(shadowPlan_, eligibility);
+}
+
+void Renderer::uploadFrameLighting()
+{
     lightData_.shadowMapValidMask = shadowMapValidity_.packedMask();
     // Into the frame ring beside the counters it explains: the diagnostics publish a slot a
     // ring-cycle later, and a report pairing this frame's decision with that frame's raster counts
@@ -1131,10 +1176,6 @@ const Renderer::DrawBuckets& Renderer::collectDrawCommands(RenderableScene& scen
 
     const auto extent = swapchain_.extent();
     const AlphaPipelines pipelines{forwardOpaqueHandle_, forwardBlendHandle_};
-    // The shader-facing matrix array, derived from the view set rather than kept beside it.
-    // `FrameInfo` holds its own copy (the field is an array, not a span), and the shadow pass
-    // derives another from the same set when it records — the set stays the only stored authority.
-    const auto shadowMatrices = shadowMatrixArray(shadowViews_);
     const FrameInfo frame{.currentFrame = currentFrame_,
                           .viewportWidth = extent.width,
                           .viewportHeight = extent.height,
@@ -1152,8 +1193,7 @@ const Renderer::DrawBuckets& Renderer::collectDrawCommands(RenderableScene& scen
                           .lodMode = tunables_.lodMode,
                           .vdpmGpuBackend = vdpmGpuActive,
                           .vdpmRequestSink = vdpmGpuActive ? &vdpmRequestScratch_ : nullptr,
-                          .shadowPipeline = shadows_.pipelineHandle(),
-                          .shadowViewProjs = shadowMatrices};
+                          .shadowPipeline = shadows_.pipelineHandle()};
 
     // Coarse pre-cull frustums: the camera plus every ACTIVE shadow view. The union is a superset
     // of what buildDrawBuckets / shadows_ keep per pass, so a node dropped by all of them is never
@@ -1229,8 +1269,26 @@ const Renderer::DrawBuckets& Renderer::collectDrawCommands(RenderableScene& scen
         }
     }
 
-    // The view set is complete: derive this frame's map validity and upload the lighting block.
+    // SH-06 evidence, on the frames that sample it: where every caster sits relative to every
+    // cascade. It reads the caster bucket, so it belongs HERE beside the buckets rather than in the
+    // recording phase — the pass itself no longer sees a draw command.
+    if (logShadowPlacementThisFrame_)
+    {
+        logShadowCasterPlacement(drawBucketsScratch_.shadow);
+    }
+
+    // The view set is complete: turn the frame's casters into the shadow plan (which resolves every
+    // view's LOD and decides what each view does), then upload the lighting block carrying the
+    // validity that plan confirmed.
+    prepareShadowPlan(drawBucketsScratch_);
     uploadFrameLighting();
+
+    // Both consume what preparation just decided. The pending --shadow-focus is honoured first,
+    // against the fully populated view set, so the tint can be asked for a view that exists; the
+    // tint then patches the forward buckets with the levels the shadow views chose. Neither has to
+    // wait for the shadow pass any more — the levels exist as soon as the plan does.
+    resolveShadowFocusRequest();
+    applyShadowLodTint(drawBucketsScratch_);
 
     // GPU-driven VDPM (Stage B5b): distil the request sink down to the fronts that are actually
     // camera-visible this frame, and (B5b-2) resolve each visible forward draw's buffers to the GPU
@@ -1336,28 +1394,14 @@ void Renderer::logShadowCasterPlacement(std::span<const DrawCommand> shadowDraws
     }
 }
 
-void Renderer::recordShadowPass(vk::CommandBuffer cmd, const DrawBuckets& buckets)
+void Renderer::recordShadowPass(vk::CommandBuffer cmd)
 {
-    if (logShadowPlacementThisFrame_)
-    {
-        logShadowCasterPlacement(buckets.shadow);
-    }
-    std::span<const PointShadowCaster> pointCasterSpan{
-        pointCasters_.data(), static_cast<std::size_t>(activePointCasters_)};
-    // Self-shadow slots are assigned densely (assignSelfShadowSlots), so the
-    // scratch map's size is the number of slots the pass must render.
-    // WHICH FAMILIES RECORD is `shadowMapValidity_`, the same value the receiver was told about in
-    // `LightUBO::shadowMapValidMask` — including the world-only decision, which used to be re-read
-    // from the set here. `anySkinned` was only ever the request; the set's whole-family answer is
-    // what the validity law consumes, so the pass and the shader cannot disagree about which maps
-    // this frame's depth belongs to.
-    shadows_.recordPass(cmd, buckets.shadow, buckets.worldShadow, buckets.selfShadow,
-                        static_cast<int>(selfShadowSlotsScratch_.size()), activeSpotCasters_,
-                        pointCasterSpan, shadowViews_, shadowLodResolver_,
-                        tunables_.shadowLodPixelBudget,
-                        ShadowLodHysteresis{.coarsenRatio = tunables_.shadowLodCoarsenRatio},
-                        tunables_.cullingEnabled, shadowMapValidity_,
-                        shadowStatsRing_[currentFrame_], profiler_, currentFrame_);
+    // THE PLAN IS THE WHOLE INPUT (arc 2 #4). Which views record, what each rasterises with, and
+    // which draws each of its layers walks were all decided in `prepareShadowPlan` — the pass gets
+    // no draw spans, no view set and no resolver, so there is nothing left here that could reach a
+    // different answer than the one `LightUBO::shadowMapValidMask` already told the receiver.
+    shadows_.recordPass(cmd, shadowPlan_, shadowStatsRing_[currentFrame_], profiler_,
+                        currentFrame_);
 }
 
 // What the shadow pass actually RECORDED, per family — the observable half of the validity
@@ -1407,6 +1451,57 @@ void Renderer::logShadowRecordingSample() const
                familyLine(ShadowViewGroup::Point, recorded.point),
                recorded.none() ? " | no family recorded" : "",
                stats_.gpuValid() ? "" : " | timings unavailable on this device");
+
+    // PER ROW, and deliberately every counter rather than the pass count alone. Restructuring how
+    // the pass is fed — moving the filter and the LOD resolution out of recording and into a
+    // preparation phase — must not change what the frame decides or how much it draws, and a
+    // reference image cannot show a DUPLICATED observation: two walks of one caster produce the
+    // same pixels with twice the candidates. Self-shadow is the sharp case, since one selection is
+    // observed while two depth layers rasterise. GPU milliseconds are excluded on purpose — they
+    // vary run to run and would make an otherwise byte-comparable report useless as evidence.
+    for (std::size_t g = 0; g < kShadowViewGroupCount; ++g)
+    {
+        const auto group = static_cast<ShadowViewGroup>(g);
+        for (std::size_t slot = 0; slot < shadowViewSlotCount(group); ++slot)
+        {
+            const ShadowViewStats& row = stats_.shadow.view(group, slot);
+            if (!row.claimed())
+            {
+                continue; // a slot this frame's plan never named has nothing to report
+            }
+            // NOT "has passes or candidates". Every CLAIMED view reports, including one with
+            // neither: an empty map that was rendered is a finding, and once maps can be reused an
+            // untouched claimed row is the normal case — filtering on work would hide exactly the
+            // views the cache is about.
+            std::string histogram;
+            for (std::size_t bin = 0; bin < kShadowLodBinCount; ++bin)
+            {
+                histogram += std::format("{}{}", bin == 0 ? "" : ",", row.lodHistogram[bin]);
+            }
+            std::string reasons;
+            for (std::size_t reason = 0; reason < kShadowLodReasonCount; ++reason)
+            {
+                if (row.lodReasons[reason] != 0)
+                {
+                    reasons += std::format("{}{}={}", reasons.empty() ? "" : ",",
+                                           toString(static_cast<ShadowLodReason>(reason)),
+                                           row.lodReasons[reason]);
+                }
+            }
+            // The LOGICAL identity, not just the physical slot. Spot, point and self slots are
+            // reassigned densely in gather order every frame, so a restructure could put the wrong
+            // view in a slot while every counter printed here stayed identical. Including the
+            // identity makes the baseline cover the plan's identity-to-slot mapping as well as its
+            // accounting.
+            log::debug(log::category::render,
+                       "shadow row {}[{}] id={}:{}/face{}: passes={} cand={}/{}tri "
+                       "drawn={}/{}tri levels=[{}] reasons=[{}]",
+                       toString(group), slot, static_cast<int>(row.logicalId.kind()),
+                       row.logicalId.id(), row.logicalId.face(), row.rasterPasses,
+                       row.candidateDraws, row.candidateTriangles, row.drawnDraws,
+                       row.drawnTriangles, histogram, reasons.empty() ? "none" : reasons);
+        }
+    }
 }
 
 void Renderer::resolveShadowFocusRequest()
@@ -1473,7 +1568,7 @@ void Renderer::applyShadowLodTint(DrawBuckets& buckets) const
             // selection: a second selection sees different history state, and the picture would
             // contradict the geometry it claims to describe.
             if (const ResolvedShadowDraw* resolved =
-                    shadowLodResolver_.drawnResolution(tintGroup, key))
+                    shadowLodResolver_.contentResolution(tintGroup, key))
             {
                 dc.shadowLodLevel = static_cast<std::uint32_t>(resolved->level);
             }
@@ -1764,14 +1859,12 @@ void Renderer::drawFrame(Window& display, RenderableScene& scene, float dt)
     // boundaries inside recordPass, and an enclosing timer would overlap them (and would then have
     // to be excluded from the measured-pass sum to avoid double-counting, like the VDPM stage
     // rows).
-    recordShadowPass(cmd, buckets);
+    recordShadowPass(cmd);
 
-    // The levels the shadow views just chose are the tint's subject matter, and the forward draws
-    // that carry them into the shader have not been recorded yet — this is the one window where
-    // both are true. The pending --shadow-focus is honoured first, against the fully populated view
-    // set, so the tint below already follows the requested view on the very first frame.
-    resolveShadowFocusRequest();
-    applyShadowLodTint(drawBucketsScratch_);
+    // (The --shadow-focus resolution and the ShadowLod tint used to sit here, in the one window
+    // where the levels existed and the forward draws had not been recorded yet. Preparation decides
+    // the levels before anything is recorded now, so both moved into collection beside the plan
+    // that produces their subject matter.)
 
     // GPU-driven VDPM (Stage B5b-2): the VDPM compute (recorded above, after collection) wrote each
     // visible front's emitted index stream (scatter) + indirect command (finalize). The depth

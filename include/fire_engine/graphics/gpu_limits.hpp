@@ -64,23 +64,16 @@ inline constexpr uint32_t kShadowCascadeCount = shader_limits::SHADOW_CASCADE_CO
 inline constexpr int kMaxSpotShadowCasters = shader_limits::MAX_SPOT_SHADOW_CASTERS;
 inline constexpr int kMaxPointShadowCasters = shader_limits::MAX_POINT_SHADOW_CASTERS;
 
-// Faces of a cube map — ONE authority, because this value participates in four separate things:
-// logical-view key validation, shadow matrix indexing, image layer indexing, and the flat
-// point-view slot arithmetic. Two definitions drifting apart would corrupt all of them at once,
-// and quietly: every index would still be in range, just pointing at the wrong face.
+// Faces of a cube map — ONE authority, because this value participates in three separate things:
+// logical-view key validation, image layer indexing, and the flat point-view slot arithmetic. Two
+// definitions drifting apart would corrupt all of them at once, and quietly: every index would
+// still be in range, just pointing at the wrong face.
 inline constexpr std::uint32_t kCubeFaceCount = shader_limits::CUBE_FACE_COUNT;
 
-// Shadow vertex shader projects each vertex into light-space using one of the
-// ShadowUBO::lightViewProj matrices, picked via ShadowPushConstants::matrixIndex.
-//   [0..C-1]     directional cascades
-//   [C..]        spot lights, layout C + spotIndex
-//   [C+S..]      point lights, layout (C + S) + 6 * cubeIndex + face
-// where C = kShadowCascadeCount and S = kMaxSpotShadowCasters. The arithmetic itself is shared with
-// the shaders, not repeated here — see shaders/gpu_limits.glsl.
-inline constexpr int kShadowCascadeMatrixBase = shader_limits::SHADOW_CASCADE_MATRIX_BASE;
-inline constexpr int kShadowSpotMatrixBase = shader_limits::SHADOW_SPOT_MATRIX_BASE;
-inline constexpr int kShadowPointMatrixBase = shader_limits::SHADOW_POINT_MATRIX_BASE;
-inline constexpr int kShadowTotalMatrixCount = shader_limits::SHADOW_TOTAL_MATRIX_COUNT;
+// (The shadow MATRIX-TABLE layout — cascade/spot/point bases and a total count — is gone. It sized
+// `ShadowUBO::lightViewProj[]`, a copy of every shadow matrix in the frame carried by every shadow
+// draw so a push constant could select one row. Each path now rasterises with `pc.lightViewProj`
+// from the view being recorded, so no slot arithmetic exists to keep in step.)
 
 // Which shadow-map families a frame recorded, packed into `LightUBO::shadowMapValidMask`. The
 // producer is `ShadowMapValidity::packedMask()` (graphics/shadow_map_validity.hpp); the consumer is
@@ -91,15 +84,6 @@ inline constexpr std::int32_t kShadowMapValidWorldOnly = shader_limits::SHADOW_M
 inline constexpr std::int32_t kShadowMapValidSelf = shader_limits::SHADOW_MAP_VALID_SELF;
 inline constexpr std::int32_t kShadowMapValidSpot = shader_limits::SHADOW_MAP_VALID_SPOT;
 inline constexpr std::int32_t kShadowMapValidPoint = shader_limits::SHADOW_MAP_VALID_POINT;
-
-// The layout the comment above describes, asserted rather than trusted: these are the relations the
-// matrix table's users assume, and they must survive any future change to a family's capacity.
-static_assert(kShadowCascadeMatrixBase == 0);
-static_assert(kShadowSpotMatrixBase ==
-              kShadowCascadeMatrixBase + static_cast<int>(kShadowCascadeCount));
-static_assert(kShadowPointMatrixBase == kShadowSpotMatrixBase + kMaxSpotShadowCasters);
-static_assert(kShadowTotalMatrixCount ==
-              kShadowPointMatrixBase + static_cast<int>(kCubeFaceCount) * kMaxPointShadowCasters);
 
 // Bindless material textures: capacity of the global combined-image-sampler
 // array (forward set 2). Indexed directly by TextureHandle value, so it caps the

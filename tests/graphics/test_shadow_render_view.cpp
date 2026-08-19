@@ -28,6 +28,11 @@ namespace
     return ShadowViewMetrics::pointLight(0.004f, 25.0f);
 }
 
+// The effective range a point cube's faces store depth against. Any positive finite value will do
+// for the fixtures that only care that the cube was accepted; the tests that care about the value
+// itself pass their own.
+constexpr float kPointRange = 25.0f;
+
 Mat4 markedMatrix(float mark)
 {
     Mat4 m = Mat4::identity();
@@ -109,7 +114,8 @@ TEST_CASE("ShadowRenderViewSet.EachWriterStampsItsOwnSlotsIdentity", "[ShadowRen
     REQUIRE(views.setCascade(2, markedMatrix(3.0f), someOrtho(), someOrthoMetrics()));
     REQUIRE(views.setSelf(1, 77, markedMatrix(20.0f), someOrtho(), someOrthoMetrics()));
     REQUIRE(views.setSpot(3, light, markedMatrix(30.0f), somePerspective(), someSpotMetrics()));
-    REQUIRE(views.setPointLight(1, light, somePointMetrics(), cubeSpan(someCube(40.0f))));
+    REQUIRE(
+        views.setPointLight(1, light, somePointMetrics(), kPointRange, cubeSpan(someCube(40.0f))));
 
     REQUIRE(views.find(ShadowViewGroup::Cascade, 2) != nullptr);
     CHECK(views.find(ShadowViewGroup::Cascade, 2)->logicalId() == ShadowLogicalViewId::cascade(2));
@@ -136,11 +142,69 @@ TEST_CASE("ShadowRenderViewSet.WritersRejectTheWrongProjectionKind", "[ShadowRen
     const auto orthoFace = ShadowPointFace{markedMatrix(4.0f), someOrtho()};
     const std::array<ShadowPointFace, kCubeFaceCount> orthoCube{orthoFace, orthoFace, orthoFace,
                                                                 orthoFace, orthoFace, orthoFace};
-    CHECK_FALSE(views.setPointLight(0, light, somePointMetrics(), cubeSpan(orthoCube)));
+    CHECK_FALSE(
+        views.setPointLight(0, light, somePointMetrics(), kPointRange, cubeSpan(orthoCube)));
 
     CHECK(views.activeCount(ShadowViewGroup::Cascade) == 0);
     CHECK(views.activeCount(ShadowViewGroup::Self) == 0);
     CHECK(views.activeCount(ShadowViewGroup::Spot) == 0);
+    CHECK(views.activeCount(ShadowViewGroup::Point) == 0);
+#endif
+}
+
+TEST_CASE("ShadowRenderViewSet.PointFacesCarryTheLightTheirDepthIsMeasuredAgainst",
+          "[ShadowRenderView]")
+{
+    // A point face stores `distance / range` rather than projected depth, so the light's position
+    // and its effective range are shader inputs — raster content, not consequences of the matrix.
+    // They live on the view because a cached cube is only reusable while they are unchanged, and
+    // the position comes from the face's own projection descriptor, which is also what LOD
+    // selection measures depth from.
+    ShadowRenderViewSet views;
+    const auto light = static_cast<NodeId>(12);
+    REQUIRE(views.setPointLight(0, light, somePointMetrics(), 42.0f, cubeSpan(someCube(1.0f))));
+
+    const ShadowRenderView* face = views.find(ShadowViewGroup::Point, shadowPointViewSlot(0, 2));
+    REQUIRE(face != nullptr);
+    const std::optional<ShadowPointLightDepth> depth = face->pointLightDepth();
+    REQUIRE(depth.has_value());
+    CHECK(depth->range == 42.0f);
+    CHECK(depth->position.x() == face->projection().lightPosition().x());
+    CHECK(depth->position.y() == face->projection().lightPosition().y());
+    CHECK(depth->position.z() == face->projection().lightPosition().z());
+
+    // Nothing else has one. A cascade carries no light at all, and a zero position with a zero
+    // range is a value a caller could read and push — so the answer is absence, not zeroes.
+    REQUIRE(views.setCascade(0, markedMatrix(1.0f), someOrtho(), someOrthoMetrics()));
+    REQUIRE(views.setSpot(0, light, markedMatrix(2.0f), somePerspective(), someSpotMetrics()));
+    CHECK_FALSE(views.find(ShadowViewGroup::Cascade, 0)->pointLightDepth().has_value());
+    CHECK_FALSE(views.find(ShadowViewGroup::Spot, 0)->pointLightDepth().has_value());
+}
+
+TEST_CASE("ShadowRenderViewSet.APointCubeNeedsOneLightAndAUsableRange", "[ShadowRenderView]")
+{
+    // Both halves of the stored ratio are checked as strictly as the matrices. A zero or non-finite
+    // range makes every texel of all six faces meaningless; six faces about DIFFERENT positions
+    // mean the caller assembled the cube from more than one light, and half of it would then be
+    // measured from the wrong origin while every matrix still looked fine. Dev asserts; these
+    // expectations describe the release behaviour.
+#ifdef NDEBUG
+    ShadowRenderViewSet views;
+    const auto light = static_cast<NodeId>(13);
+
+    CHECK_FALSE(views.setPointLight(0, light, somePointMetrics(), 0.0f, cubeSpan(someCube(1.0f))));
+    CHECK_FALSE(views.setPointLight(0, light, somePointMetrics(),
+                                    std::numeric_limits<float>::infinity(),
+                                    cubeSpan(someCube(1.0f))));
+    CHECK(views.activeCount(ShadowViewGroup::Point) == 0);
+
+    // Five faces about one light and a sixth about another.
+    std::array<ShadowPointFace, kCubeFaceCount> mixed = someCube(1.0f);
+    mixed[4] = ShadowPointFace{markedMatrix(9.0f), ShadowView::perspective(Vec3{40.0f, 0.0f, 0.0f},
+                                                                           Vec3{0.0f, 0.0f, 1.0f},
+                                                                           1.5708f, 512, 0.05f)};
+    CHECK_FALSE(views.setPointLight(0, light, somePointMetrics(), kPointRange, cubeSpan(mixed)));
+    // ALL SIX cleared, not five installed: a cube is accepted or refused whole.
     CHECK(views.activeCount(ShadowViewGroup::Point) == 0);
 #endif
 }
@@ -157,8 +221,8 @@ TEST_CASE("ShadowRenderViewSet.WritersRejectAnUnkeyableIdentity", "[ShadowRender
                               someSpotMetrics()));
     // A face index out of range is no longer expressible — `setPointLight` takes a fixed span of
     // six — so what is left to reject here is the light's own identity.
-    CHECK_FALSE(
-        views.setPointLight(0, NodeId::Invalid, somePointMetrics(), cubeSpan(someCube(3.0f))));
+    CHECK_FALSE(views.setPointLight(0, NodeId::Invalid, somePointMetrics(), kPointRange,
+                                    cubeSpan(someCube(3.0f))));
 
     CHECK(views.activeCount(ShadowViewGroup::Self) == 0);
     CHECK(views.activeCount(ShadowViewGroup::Spot) == 0);
@@ -295,7 +359,7 @@ TEST_CASE("ShadowRenderViewSet.PointFacesOccupyDistinctFlatSlotsWithDistinctForw
     };
     const std::array<ShadowPointFace, kCubeFaceCount> cube{at(0), at(1), at(2),
                                                            at(3), at(4), at(5)};
-    REQUIRE(views.setPointLight(lightSlot, light, somePointMetrics(), cubeSpan(cube)));
+    REQUIRE(views.setPointLight(lightSlot, light, somePointMetrics(), kPointRange, cubeSpan(cube)));
 
     CHECK(views.activeCount(ShadowViewGroup::Point) == kCubeFaceCount);
     for (std::uint8_t face = 0; face < kCubeFaceCount; ++face)
@@ -330,9 +394,10 @@ TEST_CASE("ShadowRenderViewSet.PointLightSlotIsValidatedBeforeFlattening", "[Sha
     STATIC_REQUIRE(kCubeFaceCount % 2 == 0);        // what makes the product wrap to zero
     REQUIRE(shadowPointViewSlot(wrapping, 1) == 1); // it really does land on light 0, face 1
 
-    REQUIRE(views.setPointLight(0, real, somePointMetrics(), cubeSpan(someCube(11.0f))));
-    CHECK_FALSE(
-        views.setPointLight(wrapping, impostor, somePointMetrics(), cubeSpan(someCube(99.0f))));
+    REQUIRE(
+        views.setPointLight(0, real, somePointMetrics(), kPointRange, cubeSpan(someCube(11.0f))));
+    CHECK_FALSE(views.setPointLight(wrapping, impostor, somePointMetrics(), kPointRange,
+                                    cubeSpan(someCube(99.0f))));
 
     const ShadowRenderView* view = views.find(ShadowViewGroup::Point, shadowPointViewSlot(0, 1));
     REQUIRE(view != nullptr);
@@ -417,12 +482,12 @@ TEST_CASE("ShadowRenderViewSet.ARejectedReplacementClearsTheSlotItAddressed", "[
     // the wrapping point slot, which is rejected before it can be flattened onto a live face. Both
     // families are seeded first, so each rejection has a live entry it could have damaged.
     REQUIRE(views.setCascade(1, markedMatrix(8.0f), someOrtho(), someOrthoMetrics()));
-    REQUIRE(views.setPointLight(0, static_cast<NodeId>(5), somePointMetrics(),
+    REQUIRE(views.setPointLight(0, static_cast<NodeId>(5), somePointMetrics(), kPointRange,
                                 cubeSpan(someCube(5.0f))));
     constexpr std::size_t wrapping = std::size_t{1}
                                      << (std::numeric_limits<std::size_t>::digits - 1);
     CHECK_FALSE(views.setPointLight(wrapping, static_cast<NodeId>(6), somePointMetrics(),
-                                    cubeSpan(someCube(6.0f))));
+                                    kPointRange, cubeSpan(someCube(6.0f))));
     CHECK_FALSE(
         views.setCascade(kShadowCascadeCount, markedMatrix(7.0f), someOrtho(), someOrthoMetrics()));
 
@@ -464,44 +529,11 @@ ShadowRenderViewSet withAllCascades()
 }
 } // namespace
 
-TEST_CASE("ShadowRenderView.MatrixArrayPlacesEachFamilyAtItsOwnBase", "[ShadowRenderView]")
-{
-    ShadowRenderViewSet views = withAllCascades();
-    const auto light = static_cast<NodeId>(4);
-    REQUIRE(views.setSpot(2, light, markedMatrix(50.0f), somePerspective(), someSpotMetrics()));
-    REQUIRE(views.setPointLight(1, light, somePointMetrics(), cubeSpan(someCube(103.0f))));
-
-    const auto matrices = shadowMatrixArray(views);
-
-    CHECK(matrices[static_cast<std::size_t>(kShadowCascadeMatrixBase) + 1][0, 3] == 2.0f);
-    CHECK(matrices[static_cast<std::size_t>(kShadowSpotMatrixBase) + 2][0, 3] == 50.0f);
-    // someCube marks face f with seed + f, so light 1's face 3 carries 106 — checking a face other
-    // than 0 is the point: the flat slot must be the light's base plus the face, not the light's.
-    CHECK(matrices[static_cast<std::size_t>(kShadowPointMatrixBase) + shadowPointViewSlot(1, 3)]
-                  [0, 3] == 106.0f);
-    // Inactive slots are identity, not stale content from another family.
-    CHECK(matrices[static_cast<std::size_t>(kShadowSpotMatrixBase)][0, 3] == 0.0f);
-    CHECK(matrices[static_cast<std::size_t>(kShadowPointMatrixBase)][0, 3] == 0.0f);
-}
-
-TEST_CASE("ShadowRenderView.WorldOnlyWritesNoShaderSlot", "[ShadowRenderView]")
-{
-    // World-only rasterises with its cascade's matrix, so enabling it must change nothing in the
-    // shader array.
-    ShadowRenderViewSet withWorld = withAllCascades();
-    for (std::uint32_t cascade = 0; cascade < kShadowCascadeCount; ++cascade)
-    {
-        REQUIRE(withWorld.enableWorldOnly(cascade));
-    }
-    const auto withWorldOnly = shadowMatrixArray(withWorld);
-    const auto withoutWorldOnly = shadowMatrixArray(withAllCascades());
-
-    for (std::size_t i = 0; i < withWorldOnly.size(); ++i)
-    {
-        CAPTURE(i);
-        CHECK(withWorldOnly[i][0, 3] == withoutWorldOnly[i][0, 3]);
-    }
-}
+// The combined matrix ARRAY is gone (arc 2 #4 step 1). It existed to fill
+// `ShadowUBO::lightViewProj[32]`, which every shadow draw carried so a push constant could index
+// one row; every path now rasterises with `pc.lightViewProj`, taken from the view being recorded.
+// The per-family LightUBO extractors below are unaffected — those feed the RECEIVER, which still
+// needs each family's matrices to project a fragment into light space.
 
 TEST_CASE("ShadowRenderView.LightUboArraysExtractTheirOwnFamily", "[ShadowRenderView]")
 {
@@ -590,7 +622,8 @@ TEST_CASE("ShadowRenderViewSet.WritersRejectMetricsOfTheWrongKind", "[ShadowRend
     CHECK_FALSE(views.setCascade(0, markedMatrix(1.0f), someOrtho(), someSpotMetrics()));
     CHECK_FALSE(views.setSelf(0, 5, markedMatrix(2.0f), someOrtho(), somePointMetrics()));
     CHECK_FALSE(views.setSpot(0, light, markedMatrix(3.0f), somePerspective(), someOrthoMetrics()));
-    CHECK_FALSE(views.setPointLight(0, light, someSpotMetrics(), cubeSpan(someCube(4.0f))));
+    CHECK_FALSE(
+        views.setPointLight(0, light, someSpotMetrics(), kPointRange, cubeSpan(someCube(4.0f))));
 
     CHECK(views.activeCount(ShadowViewGroup::Cascade) == 0);
     CHECK(views.activeCount(ShadowViewGroup::Self) == 0);
@@ -607,7 +640,7 @@ TEST_CASE("ShadowRenderViewSet.APointCubeCarriesOneMetricForTheWholeLight", "[Sh
     ShadowRenderViewSet views;
     const auto light = static_cast<NodeId>(21);
     const auto metrics = ShadowViewMetrics::pointLight(0.008f, 40.0f);
-    REQUIRE(views.setPointLight(2, light, metrics, cubeSpan(someCube(7.0f))));
+    REQUIRE(views.setPointLight(2, light, metrics, kPointRange, cubeSpan(someCube(7.0f))));
 
     for (std::uint8_t face = 0; face < kCubeFaceCount; ++face)
     {
@@ -628,14 +661,15 @@ TEST_CASE("ShadowRenderViewSet.ARejectedCubeLeavesNoFaceBehind", "[ShadowRenderV
 #ifdef NDEBUG
     ShadowRenderViewSet views;
     const auto light = static_cast<NodeId>(33);
-    REQUIRE(views.setPointLight(0, light, somePointMetrics(), cubeSpan(someCube(10.0f))));
+    REQUIRE(
+        views.setPointLight(0, light, somePointMetrics(), kPointRange, cubeSpan(someCube(10.0f))));
     REQUIRE(views.activeCount(ShadowViewGroup::Point) == kCubeFaceCount);
 
     // One bad face rejects the whole cube AND clears the previously good one.
     auto cube = someCube(20.0f);
     cube[4] =
         ShadowPointFace{markedMatrix(std::numeric_limits<float>::quiet_NaN()), somePerspective()};
-    CHECK_FALSE(views.setPointLight(0, light, somePointMetrics(), cubeSpan(cube)));
+    CHECK_FALSE(views.setPointLight(0, light, somePointMetrics(), kPointRange, cubeSpan(cube)));
     CHECK(views.activeCount(ShadowViewGroup::Point) == 0);
 #endif
 }
@@ -653,7 +687,7 @@ TEST_CASE("ShadowRenderView.BiasMetricArraysFollowTheirFamilies", "[ShadowRender
                           ShadowViewMetrics::orthographic(0.125f, 4.0f)));
     REQUIRE(views.setSpot(3, light, markedMatrix(3.0f), somePerspective(),
                           ShadowViewMetrics::spot(0.01f, 0.2f, 30.0f)));
-    REQUIRE(views.setPointLight(1, light, ShadowViewMetrics::pointLight(0.02f, 10.0f),
+    REQUIRE(views.setPointLight(1, light, ShadowViewMetrics::pointLight(0.02f, 10.0f), kPointRange,
                                 cubeSpan(someCube(4.0f))));
 
     const auto cascades = cascadeBiasMetricsArray(views);

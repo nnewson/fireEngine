@@ -7,6 +7,8 @@
 #include <fire_engine/graphics/gpu_handle.hpp>
 #include <fire_engine/graphics/lod.hpp>
 #include <fire_engine/graphics/shadow_identity.hpp>
+#include <fire_engine/math/mat4.hpp>
+#include <fire_engine/math/singular_value.hpp>
 
 namespace fire_engine
 {
@@ -51,6 +53,61 @@ enum class ShadowCasterAlpha : std::uint8_t
     Masked,
 };
 
+// The caster's world transform and the error scale DERIVED from it, as ONE constructed value.
+//
+// Two representations of one transform, so they are not two fields. The matrix is what the shadow
+// pass rasterises with (it is written into `ShadowUBO::model`, and the cache compares it to decide
+// whether a map still holds the right pixels); `worldScale` is its conservative sigma_max, which
+// carries an object-space deviation into world space. Nothing may set one without the other: a
+// pose with a stale scale would select levels for a transform the GPU is not using, and a pose with
+// a stale matrix would compare a caster that has moved as unchanged.
+//
+// STATED-NESS IS EXPLICIT, and that is the point of the class. A defaulted `Mat4` is a real matrix
+// — zero, or identity depending on the type's default — so a producer that filled every other field
+// and forgot this one would hand the comparison a constant transform while the GPU rasterised the
+// object's actual one, and every frame would compare equal: a shadow map reused forever for a
+// caster that is moving. `stated()` distinguishes "no pose was supplied" (a producer bug, terminal
+// where it is consumed) from "a pose was supplied and is degenerate" (a non-finite transform from a
+// broken animation, which the selector already survives as InvalidCaster).
+class ShadowCasterPose
+{
+public:
+    // NOT STATED. Present so a request can be default-constructed at all; never a usable pose.
+    ShadowCasterPose() = default;
+
+    // The only way to state one. Derives the scale here rather than accepting it, so the two can
+    // never describe different transforms.
+    [[nodiscard]] static ShadowCasterPose fromModel(const Mat4& model) noexcept
+    {
+        ShadowCasterPose pose{};
+        pose.model_ = model;
+        pose.worldScale_ = largestSingularValue(linearPart(model));
+        pose.stated_ = true;
+        return pose;
+    }
+
+    [[nodiscard]] bool stated() const noexcept
+    {
+        return stated_;
+    }
+    // The matrix the shadow pass rasterises this caster with.
+    [[nodiscard]] const Mat4& model() const noexcept
+    {
+        return model_;
+    }
+    // Conservative sigma_max of the model's linear part. NaN on an unstated pose, which the
+    // selector reports as InvalidCaster rather than silently treating as "no error".
+    [[nodiscard]] float worldScale() const noexcept
+    {
+        return worldScale_;
+    }
+
+private:
+    Mat4 model_{};
+    float worldScale_{std::numeric_limits<float>::quiet_NaN()};
+    bool stated_{false};
+};
+
 // SH-03: a shadow caster described but NOT yet resolved to geometry.
 //
 // The whole point of the seam. A shadow command used to arrive with an index buffer already chosen
@@ -71,15 +128,17 @@ struct ShadowGeometryRequest
     // exist at all.
     BufferHandle baseIndexBuffer{NullBuffer};
     std::uint32_t baseIndexCount{0};
-    // Conservative sigma_max of the model transform's linear part: the factor that carries an
-    // object-space deviation into world space. Computed once per caster, not per view.
+    // WHERE the caster is, and the scale that carries its object-space deviation into world space —
+    // one value, because they are one transform (see `ShadowCasterPose`). Read by selection (the
+    // scale) and by shadow-map caching (the matrix), which is why it must not be possible to supply
+    // one without the other.
     //
-    // Defaults to NaN, NOT to 0 or 1. Zero is a legitimate value — a singular transform really does
-    // flatten every deviation to nothing — so a producer that filled every other field and forgot
-    // this one would silently claim its caster has zero error and take the coarsest level in every
-    // view. NaN forces InvalidCaster instead, while an explicitly computed zero still selects
-    // normally.
-    float worldScale{std::numeric_limits<float>::quiet_NaN()};
+    // Unstated by default, and an unstated pose carries a NaN scale, NOT 0 or 1. Zero is a
+    // legitimate value — a singular transform really does flatten every deviation to nothing — so a
+    // producer that forgot this field would otherwise claim its caster has zero error and take the
+    // coarsest level in every view. NaN forces InvalidCaster instead, while an explicitly computed
+    // zero still selects normally.
+    ShadowCasterPose pose{};
     // Identity for hysteresis. The generation is part of the key so a reloaded or replaced shadow
     // geometry cannot inherit the previous chain's dead band.
     ShadowCasterId casterId{ShadowCasterId::Invalid};
@@ -104,6 +163,12 @@ struct ShadowGeometryRequest
 
     // A request that can actually be resolved into a draw. False means the producer left it
     // unfilled — which must not silently become "full detail".
+    //
+    // The POSE is deliberately NOT part of this. A caster with no stated pose is still drawable —
+    // the whole mesh, reported as InvalidCaster, which is the same degraded answer a non-finite
+    // transform from a broken animation gets, and that path has to keep working. What an unstated
+    // pose breaks is the shadow CACHE (a default matrix compares equal forever), and that is
+    // checked where preparation builds the comparison, terminally.
     [[nodiscard]] bool valid() const noexcept
     {
         return baseIndexBuffer != NullBuffer && baseIndexCount > 0 &&

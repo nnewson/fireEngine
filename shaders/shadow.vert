@@ -1,12 +1,13 @@
 #version 450
 
-// SHADOW_TOTAL_MATRIX_COUNT — the shared declaration graphics/gpu_limits.hpp re-exports as
-// kShadowTotalMatrixCount, which is what sizes the C++ ShadowUBO this block must match.
+// MAX_JOINTS and MORPH_WEIGHT_VEC4_COUNT for the skin and morph blocks below.
 #include "gpu_limits.glsl"
 
+// PER-OBJECT ONLY. This block used to carry every shadow matrix in the frame — 32 of them, 2 KB,
+// pushed at every shadow draw so a push constant could index one row. The view's matrix now arrives
+// in the push block (`pc.lightViewProj`), which already carried one for the self-shadow path.
 layout(binding = 0) uniform ShadowUBO {
     mat4 model;
-    mat4 lightViewProj[SHADOW_TOTAL_MATRIX_COUNT];
     int hasSkin;
 } shadow;
 
@@ -77,6 +78,8 @@ void main() {
     worldPos = wp.xyz;
     uv0 = inTexCoord;
     uv1 = inTexCoord1;
-    mat4 lightMatrix = pc.matrixIndex < 0 ? pc.lightViewProj : shadow.lightViewProj[pc.matrixIndex];
-    gl_Position = lightMatrix * wp;
+    // ONE matrix, from the push block, for every family. There is no per-object table to index into
+    // any more: the transform belongs to the view being recorded, and a draw that could select a
+    // different row was a second authority on what this pass rasterises with.
+    gl_Position = pc.lightViewProj * wp;
 }

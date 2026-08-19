@@ -81,11 +81,43 @@ The eight small/XS items landed on `review-shadow-taa-fixes` + `review-xs-cleanu
 the five the review prioritised, then five a later coverage audit found had no action item. In the
 review's priority order:
 
-- **#4 [B/M] Static-scene CSM caching** (§2.1) — the renderer currently re-records every shadow pass
-  every frame. Needs the lightweight **epoch** idea from §5.1 (scene-transform / light / caster-set
-  epochs) so individual passes can skip without a frame-graph rewrite. **Consumes SH-01's
-  diagnostics and SH-03's per-view LOD contract** — a map's content signature must include the
-  shadow view descriptor and every selected LOD/front generation, not just a camera epoch
+- **#4 [B/M] Static-scene CSM caching** (§2.1) — **in progress on `shadow-static-cascade-cache`.**
+  The §5.1 epoch idea was rejected once the comparison was written out: an epoch explains a matrix
+  without being one, and the failure mode is a silently wrong image (shadows from a frame that no
+  longer exists), so the descriptor is exact and structurally compared, never hashed.
+  **Landed on the branch:** the content descriptor and disposition law
+  (`graphics/shadow_pass_plan.hpp`), and the PREPARATION phase that builds it
+  (`graphics/shadow_pass_prepare.hpp`) — filtering, per-view LOD resolution and the SH-01 row
+  claim/observations all moved out of recording, leaving `Shadows::recordPass` consuming the plan
+  and nothing else. Two parallel authorities went with it: the shadow transform (now one push
+  constant per recorded view, guarded by `shadow_matrix_guard`) and the point light's
+  position + range (now in the view set, not a renderer-side array).
+  **Remaining:** the per-slot residency store, committed only after submit, and the reuse it
+  enables — every view is still `Recorded`, which is what let the restructure be verified as
+  decision-identical. Then #15 below, which is the same mechanism.
+
+  **Sequenced after arc 4** (see below) — the reuse stage adds conditional release behaviour, and the
+  job that exercises it should be in place first.
+
+  **The gate for that stage is agreed, and it is NOT the byte-identical row dump** — that gate
+  worked precisely because nothing changed, and reuse changes what the recorder does. The claim to
+  prove is: *on the second identical frame, every active CACHEABLE view is reused and every
+  deformable view is still recorded* — "every view is reused" is false for any self-shadow scene
+  under the current deformation law, and a gate asserting it would be failed by correct code. Three
+  layers of evidence:
+  1. **Headless two-frame test.** First preparation records; a simulated post-submit commit installs
+     residency; the second identical preparation reuses the cacheable views. Also: an abandoned
+     frame commits nothing, and image recreation invalidates residency.
+  2. **Mixed-content test.** Rigid views reuse while deformable views record in the same frame, and
+     the confirmed validity stays set for both — `Reused` is sampleable, so a family that is half
+     reused is fully valid.
+  3. **Real-GPU gate**, as a local Vulkan script rather than a mocked command buffer: a mock would
+     test a second implementation of recording, while the real gate proves a reused view receives no
+     barrier, no clear and no draw *and* that its existing depth still shades correctly. On a static
+     `--no-taa` scene: the reused-frame capture matches the cold recorded reference; cacheable rows
+     keep identical candidate/drawn/LOD observations while reporting ZERO raster passes; a fully
+     reused family stamps no timestamps; validation stays VUID-free.
+  Contracts consumed: SH-01's diagnostics and SH-03's per-view LOD contract
   ([`shadowplans.md`](shadowplans.md) § Interaction).
 - **#5 [B/L] Compute pre-skinning pass** (§1.3) — skinning/morphing re-runs in every pass's vertex
   shader (~11× per skinned vertex per frame). `SoftBodySystem` already proves the compute pattern
@@ -161,6 +193,34 @@ and 2 low. Sequenced:
    immutable config, parser/output state into a `.cpp` with precedence tests.
 
 Further tiers of this review are expected to follow the [`review-order.md`](review-order.md) tiers.
+
+---
+
+## Arc 4 — Release-contract CI job
+
+**Trigger: after `shadow-static-cascade-cache` lands, and BEFORE arc 2 #4's residency/reuse work.** Its own branch. The order is deliberate: the reuse stage adds more conditional release behaviour to a set of checks nothing currently executes, so the job that proves those checks run should exist first.
+
+Rejection tests guarded by `#ifdef NDEBUG` — the release behaviour of every writer that asserts in
+Dev and returns `false` under `NDEBUG` — **never run**. Both presets build `Dev`, locally and in CI,
+so those blocks compile to nothing on every machine that has ever checked them. The gap was found
+while adding `setPointLight`'s new range / one-light validation: a one-off local Release build was
+needed to prove the new checks fire at all.
+
+**Death tests are not the fix.** They prove the Dev assertion fires; they say nothing about whether
+the `NDEBUG` fallback returns `false` (or throws) correctly, which is the half that ships.
+
+The job:
+
+- Tag the conditional cases `[release-contract]`.
+- Configure a genuine Release build with warnings-as-errors.
+- Build the real library and test executable.
+- Run `test_fire_engine "[release-contract]"` explicitly.
+- Include a **sentinel assertion that `NDEBUG` is defined**, so a misconfigured job cannot pass by
+  selecting zero relevant cases.
+
+**Linux only, and deliberately not the whole suite.** These rejection semantics are
+platform-independent, and running all tests under Release would mix this contract with the
+optimisation-sensitive physics goldens.
 
 ---
 

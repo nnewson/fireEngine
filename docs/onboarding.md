@@ -928,21 +928,50 @@ the same change — most have a test or guard that will catch you, but not all.
   directions: no shader may declare a shared name, each consumer must use the name rather than a
   literal, and each `k`-constant must be defined *as* the shared declaration.
 - **A shadow family's recording and its uploaded validity are one value** (`ShadowMapValidity`).
-  `Renderer::uploadFrameLighting` derives it once, from the COMPLETED view set — every producer has
-  run, including the world-only enablement that only `anySkinned` decides — then gates
-  `Shadows::recordPass` with it and uploads its packed form as `LightUBO::shadowMapValidMask`. If
+  `Renderer::prepareShadowPlan` applies it TWICE, in a fixed order, from the COMPLETED view set —
+  every producer has run, including the world-only enablement that only `anySkinned` decides. First
+  as ELIGIBILITY (`ShadowFamilyEligibility::eligible()`), which decides what may be PREPARED at all:
+  preparation resolves casters and stages hysteresis, so a family that will be neither recorded nor
+  sampled must not be resolved, and deriving the answer from the finished plan would be too late to
+  prevent that. Then as CONFIRMATION (`shadowMapValidityFromPlan`), from the plan that was actually
+  built and judged against the counts eligibility expected — a view that failed to prepare clears
+  its family's bit even though the family was eligible — and THAT is what
+  `uploadFrameLighting` puts in `LightUBO::shadowMapValidMask` and what the pass records. If
   you add a shadow family, or a new place that decides whether a family renders, route it through
   that value: a family skipped without the bit leaves the receiver sampling a depth image this frame
   never wrote, and nothing in the pipeline will complain. Every sampling path in `shader.frag` asks
   its bit first (the guard pins that too), including the raw-depth debug view, which has no valid
   `lights[0]` to read when the cascade family is invalid.
+- **The shadow pass DECIDES in preparation and RECORDS from the plan — never both** (arc 2 #4).
+  `prepareShadowFrame` (`graphics/shadow_pass_prepare.hpp`) turns the frame's casters and the
+  completed view set into a `ShadowFramePlan`: it filters, resolves each caster's LOD per view,
+  claims the SH-01 diagnostic row, observes every draw it walks, and records what each view will
+  rasterise as `PreparedShadowView` / `PreparedShadowDraw`. `Shadows::recordPass` then takes that
+  plan and NOTHING else — no draw spans, no view set, no resolver. The reason is the cache this
+  builds toward: reusing a shadow map means knowing what would have been drawn without drawing it,
+  so a recorder that still resolved as it went could not answer the question. If you add anything
+  the pass rasterises with, add it to the prepared view or draw — a value read at record time that
+  the comparison never saw is a map kept when it should have been re-rendered. Two rules travel with
+  this: the model matrix in `PreparedShadowDraw` must be the SAME value written into
+  `ShadowUBO::model` (both come from `ShadowCasterPose`, whose matrix and derived `worldScale` are
+  one constructed value so they cannot drift), and the per-frame-ring buffer handles are carried for
+  recording but EXCLUDED from the comparison, since identical content alternates handles every
+  frame.
+- **A caster that deforms poisons its view's reuse, and a diagnostic row is claimed once per frame.**
+  `PreparedShadowDraw::deformable` (from SH-04's classification) makes a draw compare unequal to
+  everything including itself, because skinning rewrites vertices with no revision any compared
+  field can see. And `ShadowViewStats::claimView` is preparation's (once per view, naming the
+  logical identity it describes) while `beginRasterPass` is the recorder's (once per depth image,
+  CHECKING that claim). They stopped coinciding the moment maps could be reused: a reused view is
+  claimed and observed while rasterising nothing, so a row forced to claim a raster pass in order to
+  be observed would report intended work as performed work.
 - **A shadow caster that deforms after the simplifier measured it may not select a level** (SH-04).
   The deviation channel is measured on the mesh as authored — bind pose, base weights, the vertex
   buffer at build time — so for skinned, morph-capable or storage-vertex geometry it describes a mesh
   that is never drawn, and skinning can amplify the displacement without bound. Classification lives
   in `graphics/shadow_caster_deformation.hpp` and rides on `ShadowGeometryRequest::deformation`,
-  which defaults to `Deformable` (the safe answer, like `worldScale`'s NaN — a producer that forgets
-  the field must not get the optimistic one). The resolver answers with
+  which defaults to `Deformable` (the safe answer, like an unstated `ShadowCasterPose`'s NaN scale — a
+  producer that forgets the field must not get the optimistic one). The resolver answers with
   `ShadowLodReason::DeformableFallback`, full detail, and an INFINITE projected error, and stages no
   hysteresis history. Do not express this by passing `lodEnabled = false`: that reports
   `LodDisabled`, which is a user's toggle, and the panel would then explain a safety fallback with
@@ -1174,9 +1203,12 @@ the same change — most have a test or guard that will catch you, but not all.
   Renderer and REFUSE to start on anything unusable rather than falling back to the constant: a
   calibration input that silently becomes the default produces a sweep row that reads like a
   measurement of the value you asked for. Re-derive both values with `tools/shadow_lod_sweep.sh`.
-- **The ShadowLod tint reads back through `drawnResolution(group, key)`** (SH-03 slice 5).
-  `Renderer::applyShadowLodTint` runs between `recordShadowPass` and the forward pass — the only
-  window where the per-view levels exist and the forward push constants have not been written yet.
+- **The ShadowLod tint reads back through `contentResolution(group, key)`** (SH-03 slice 5; it was
+  `drawnResolution` until arc 2 #4 separated "this map HOLDS the caster" from "this frame rasterised
+  it" — a reused map holds its casters without drawing them).
+  `Renderer::applyShadowLodTint` runs in COLLECTION, right after `prepareShadowPlan` — the levels
+  exist as soon as the plan does, and the forward push constants have not been written yet. (It sat
+  between `recordShadowPass` and the forward pass while recording was what resolved them.)
   It asks ONE question of the focused view's family: what did that pass draw for this caster.
   `frameResolution(key)` is deliberately not the tint's query — it returns the SHARED decision, and
   a cascade and its world-only twin share one by design while drawing different casters (world-only
@@ -1195,7 +1227,7 @@ the same change — most have a test or guard that will catch you, but not all.
   indexed by enum order and sized to `Key::Count`, so a count mismatch fails to compile — but a
   *reordering* silently maps the wrong physical key. Keep both in the same order.
 - **GPU array sizes ↔ shader array sizes.** `graphics/gpu_limits.hpp` (`kMaxLights`, `kMaxJoints`,
-  `kMaxMorphTargets`, shadow caster caps, `kShadowTotalMatrixCount`) must equal the array sizes
+  `kMaxMorphTargets`, shadow caster caps) must equal the array sizes
   declared in the shaders that consume those UBOs.
 - **Progressive LOD cuts ↔ VIPM morph targets.** `Geometry::load()` must build runtime LOD index
   buffers and VIPM morph data from the same `ProgressiveMesh`. `ProgressiveLod::collapseCount` is
@@ -1291,7 +1323,7 @@ the same change — most have a test or guard that will catch you, but not all.
 - Collision broadphase: `src/collision/dynamic_aabb_tree_broad_phase.cpp` (default), `src/collision/sweep_and_prune_broad_phase.cpp` (alternative), behind `collision/broad_phase.hpp`
 - Narrowphase: `src/collision/narrow_phase.cpp`
 - Mesh component: `src/scene/mesh.cpp`
-- Shadow-LOD selection model (SH-02): `include/fire_engine/graphics/shadow_view.hpp` + `src/graphics/shadow_view.cpp` — Vulkan-free view descriptors, texel projection, and `selectShadowLod`, with the per-cut shadow-deviation channel behind it in the simplifier (see [`lod.md`](lod.md) § The shadow-deviation channel). Pure and headless. SH-03 threaded it into the renderer: `graphics/shadow_lod_resolver.hpp` + `src/graphics/shadow_lod_resolver.cpp` resolve an unresolved caster per shadow view (a frame cache and a staged hysteresis history, both keyed on the full `(ShadowCasterId, generation, ShadowLogicalViewId)` — the LOGICAL view, not the physical slot, so the passes that must agree share one decision), the budget + coarsening ratio come from `render/constants.hpp`, and `kShadowLodBias` is retired.
+- Shadow-LOD selection model (SH-02): `include/fire_engine/graphics/shadow_view.hpp` + `src/graphics/shadow_view.cpp` — Vulkan-free view descriptors, texel projection, and `selectShadowLod`, with the per-cut shadow-deviation channel behind it in the simplifier (see [`lod.md`](lod.md) § The shadow-deviation channel). Pure and headless. SH-03 threaded it into the renderer: `graphics/shadow_lod_resolver.hpp` + `src/graphics/shadow_lod_resolver.cpp` resolve an unresolved caster per shadow view (a frame cache and a staged hysteresis history, both keyed on the full `(ShadowCasterId, generation, ShadowLogicalViewId)` — the LOGICAL view, not the physical slot, so the passes that must agree share one decision), the budget + coarsening ratio come from `render/constants.hpp`, and `kShadowLodBias` is retired. Since arc 2 #4 that resolution happens during PREPARATION (`graphics/shadow_pass_prepare.hpp`), which builds the frame's `ShadowFramePlan` — read those two beside the resolver, because "which level did this view pick" and "may this view's map be reused" are now answered by the same walk.
 - Draw command generation + LOD selection: `src/graphics/object.cpp`
 - Mesh LOD / simplifier: `include/fire_engine/graphics/lod.hpp`, `src/graphics/mesh_simplifier.cpp`
 - GPU resource registry: `src/render/resources.cpp`

@@ -217,33 +217,53 @@ struct ShadowViewStats
     // sum of several unrelated decisions with no way to tell which view forced what. Subject to the
     // same `countSelection` rule as the histogram.
     std::array<std::uint64_t, kShadowLodReasonCount> lodReasons{};
-    // WHICH logical view these counters describe, recorded when the view is marked rasterised.
+    // WHICH logical view these counters describe, recorded when the plan claims the row.
     //
     // A physical slot is not an identity: spot, point and self assignments are compacted in
     // scene-gather order every frame, so slot 1 can be a different light next frame. Rows are still
     // addressed by slot (that is what the renderer rasterises), but anything that must refer to the
     // SAME view across frames — a panel selection, and from slice 5 the tint — has to key on this.
-    // Invalid only on a view that never rasterised.
+    // Invalid only on a view this frame's plan never CLAIMED — which is not the same as one that
+    // never rasterised: a claimed view may legitimately record nothing.
     ShadowLogicalViewId logicalId{};
 
-    // Marks this view rasterised, and states WHICH view it is. The identity is required rather than
-    // optional: it is the only chance to record it, and a row that cannot say what it describes
-    // cannot be selected reliably later.
+    // ENGAGES this row and states WHICH view it is — the identity, and nothing about work. Called
+    // when the frame's plan claims this slot, which happens whether or not anything is recorded
+    // into it: a view whose map is REUSED is claimed and observed while rasterising nothing, and a
+    // row forced to claim a raster pass in order to be observed at all would report intended work
+    // as performed work.
+    //
+    // The identity is required rather than optional: this is the only chance to record it, and a
+    // row that cannot say what it describes cannot be selected reliably later.
     //
     // Returns false and changes NOTHING when the identity is invalid, or when this row already
-    // holds a different one. A row is one logical view's counters: two identities rasterising into
-    // the same physical slot in one frame would merge their draws, triangles and level
-    // distributions and then label the total as whichever came second — a plausible row describing
-    // no real view. Repeating the SAME identity is the normal case (a self-shadow slot's two depth
-    // layers). The caller must treat a false return as terminal; the counters are unusable evidence
-    // either way, and the renderer knows which view it was trying to record.
+    // holds a different one. A row is one logical view's counters: two identities claiming the same
+    // physical slot in one frame would merge their draws, triangles and level distributions and
+    // then label the total as whichever came second — a plausible row describing no real view.
+    // Repeating the SAME identity is the normal case (a self-shadow slot's two depth layers). The
+    // caller must treat a false return as terminal; the counters are unusable evidence either way,
+    // and the renderer knows which view it was trying to prepare.
+    [[nodiscard]] bool claimView(ShadowLogicalViewId view) noexcept;
+    // One rasterised layer of this view. Called by the RECORDER, once per depth image it actually
+    // brackets — so `rasterPasses` counts GPU work and only GPU work.
+    //
+    // The identity is passed again and CHECKED, never re-claimed. Once claiming moves to
+    // preparation, "some view claimed this row" stops being enough: the recorder could rasterise
+    // view B into the row view A claimed, and every counter would still read plausibly under A's
+    // name. This is the recorder's half of the agreement `claimView` enforces among producers.
+    //
+    // Returns false and counts NOTHING if the row was never claimed or holds a different identity.
+    // Terminal at the caller, for the same reason a merged row is.
     [[nodiscard]] bool beginRasterPass(ShadowLogicalViewId view) noexcept;
     // THE FOUR OBSERVATION RULES. Every per-view number in the panel is only readable because these
     // hold together; each one exists because breaking it produced a plausible-looking wrong answer:
     //
-    //  1. A view that was RASTERISED reports, even with nothing to draw. `beginRasterPass` runs
-    //     before the span is walked, so an empty-but-rendered map — a real cost, and evidence a map
-    //     is being rendered for no reason — is visible instead of vanishing.
+    //  1. A CLAIMED view reports, even with nothing to draw and even with nothing recorded.
+    //     `claimView` runs before the caster set is walked, so an empty map — a real cost when it
+    //     is rendered, and evidence a map is being kept for no reason — is visible instead of
+    //     vanishing. Observation is per prepared LAYER: a self-shadow view's two depth layers each
+    //     walk the set, which is why its candidate count is two per caster while its level
+    //     distribution counts one (rule 4).
     //  2. ONE observation per walked draw, carrying the filter's verdict. A separate
     //     add-candidate/add-drawn pair would let a caller record an accepted draw that was never
     //     offered, and `drawn <= candidate` would stop being structural.
@@ -260,7 +280,19 @@ struct ShadowViewStats
     // rejected draw was never resolved and has no level or reason to report.
     void observe(std::uint64_t fullDetailTriangles, bool accepted, std::uint64_t resolvedTriangles,
                  std::uint32_t lodLevel, ShadowLodReason reason, bool countSelection) noexcept;
-    // Rasterised at all this frame — independent of whether anything was drawn into it.
+    // CLAIMED this frame — the row describes a view the plan named. Independent of whether anything
+    // was recorded into it (a reused map claims and observes without rasterising) and of whether
+    // anything was drawn.
+    [[nodiscard]] bool claimed() const noexcept
+    {
+        return logicalId.valid();
+    }
+    // Rasterised at all this frame — a question about RECORDED WORK, which is what timing and the
+    // "did this map cost anything" questions want. `claimed() && !touched()` says only that no
+    // raster pass was recorded; WHY is the plan's disposition (a reused map, a view still to be
+    // recorded, or a recorder that omitted its work), and this cannot distinguish them.
+    // `!claimed()` is a slot this frame's plan never named — and that, not this, is what "absent"
+    // means.
     [[nodiscard]] bool touched() const noexcept
     {
         return rasterPasses != 0;

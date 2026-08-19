@@ -389,7 +389,9 @@ TEST_CASE("UBO.ForwardPushConstantsDefaultsToNoSelfShadowSlot", "[UBO]")
 TEST_CASE("UBO.ShadowPushConstantsCanCarryInlineLightMatrix", "[UBO]")
 {
     ShadowPushConstants pc{};
-    CHECK(pc.matrixIndex == 0);
+    // Default is PROJECTED depth: the radial ratio is the point family's special case, and a
+    // default that opted into it would make every unset view write distance/range.
+    CHECK(pc.radialDepth == 0);
     CHECK(pc.selfShadowSlot == -1);
     CHECK(pc.selfShadowDepthEpsilon ==
           Catch::Approx(fire_engine::kSkinnedSelfShadowDepthEpsilon).margin(1e-5f));
@@ -421,10 +423,15 @@ TEST_CASE("UBO.ShadowUBOHasSkinCanBeSet", "[UBO]")
 
 TEST_CASE("UBO.ShadowUBOFieldOrder", "[UBO]")
 {
-    static_assert(offsetof(ShadowUBO, model) < offsetof(ShadowUBO, lightViewProj),
-                  "model must precede lightViewProj to match shader layout");
-    static_assert(offsetof(ShadowUBO, lightViewProj) < offsetof(ShadowUBO, hasSkin),
-                  "lightViewProj must precede hasSkin to match shader layout");
+    // The block is now just the object's world matrix and its skin flag: the 32-matrix table that
+    // used to sit between them is gone, and with it every object's copy of every shadow matrix in
+    // the frame. Anything that still needs a light-space transform reads it from the push block.
+    //
+    // The EXACT offsets live beside the type in ubo.hpp, where they fail the build rather than a
+    // test run; this pins the same values from the consumer's side.
+    static_assert(offsetof(ShadowUBO, model) == 0);
+    static_assert(offsetof(ShadowUBO, hasSkin) == 64);
+    static_assert(sizeof(ShadowUBO) == 80);
     SUCCEED();
 }
 
@@ -432,7 +439,5 @@ TEST_CASE("UBO.ShadowUBOMatricesAligned16", "[UBO]")
 {
     static_assert(offsetof(ShadowUBO, model) % 16 == 0,
                   "model must be 16-byte aligned for std140 mat4");
-    static_assert(offsetof(ShadowUBO, lightViewProj) % 16 == 0,
-                  "lightViewProj must be 16-byte aligned for std140 mat4");
     SUCCEED();
 }

@@ -56,25 +56,41 @@ std::string_view toString(ShadowViewGroup group) noexcept
     return "unknown";
 }
 
-bool ShadowViewStats::beginRasterPass(ShadowLogicalViewId view) noexcept
+bool ShadowViewStats::claimView(ShadowLogicalViewId view) noexcept
 {
-    // VALIDATE FIRST, mutate second. Counting the pass before checking would leave a row that
-    // rejected the identity still claiming to have rasterised it.
-    assert(view.valid() && "a rasterised shadow view must say which logical view it is");
+    // VALIDATE FIRST, mutate second. Engaging the row before checking would leave a row that
+    // rejected the identity still claiming to describe it.
+    assert(view.valid() && "a claimed shadow view must say which logical view it is");
     if (!view.valid())
     {
         return false;
     }
-    // An engaged row belongs to ONE logical view. The self-shadow families legitimately begin twice
+    // A claimed row belongs to ONE logical view. The self-shadow family legitimately claims twice
     // with the same identity (two depth layers, one view); a DIFFERENT identity arriving at the
     // same physical slot would merge two views' counters under one name.
-    assert((!touched() || logicalId == view) &&
+    assert((!claimed() || logicalId == view) &&
            "two logical views cannot share one diagnostic row in a frame");
-    if (touched() && !(logicalId == view))
+    if (claimed() && !(logicalId == view))
     {
         return false;
     }
     logicalId = view;
+    return true;
+}
+
+bool ShadowViewStats::beginRasterPass(ShadowLogicalViewId view) noexcept
+{
+    // A recorded layer belongs to a view the plan claimed, and to THAT view. Counting a pass for an
+    // unclaimed row attributes GPU work to nothing; counting one for a different identity
+    // attributes it to the wrong view, which is worse — the row stays plausible. Checked, never
+    // claimed: the recorder is not a producer of identity.
+    assert(claimed() && "a rasterised layer must belong to a claimed view");
+    assert((!claimed() || logicalId == view) &&
+           "the recorder is rasterising a different view than the one that claimed this row");
+    if (!claimed() || !(logicalId == view))
+    {
+        return false;
+    }
     ++rasterPasses;
     return true;
 }
@@ -83,13 +99,15 @@ void ShadowViewStats::observe(std::uint64_t fullDetailTriangles, bool accepted,
                               std::uint64_t resolvedTriangles, std::uint32_t lodLevel,
                               ShadowLodReason reason, bool countSelection) noexcept
 {
-    // A draw can only be observed for a view the pass is rasterising. Debug trips at the source;
-    // release repairs the count to 1 rather than leaving a view that holds draws yet reports
-    // inactive — an inconsistency that would read as a diagnostics bug in the panel.
-    assert(rasterPasses != 0 && "observe() before beginRasterPass() for this view");
-    if (rasterPasses == 0)
+    // A caster can only be observed for a view the plan CLAIMED — not for one that rasterised.
+    // Requiring a raster pass here would force preparation to claim GPU work it has not done, which
+    // is precisely what makes a reused map unobservable: it is claimed and observed while recording
+    // nothing. Debug trips at the source; release drops the observation rather than inventing an
+    // identity for it, since a row with counters and no name describes no view.
+    assert(claimed() && "observe() before claimView() for this view");
+    if (!claimed())
     {
-        rasterPasses = 1;
+        return;
     }
     ++candidateDraws;
     candidateTriangles += fullDetailTriangles;
@@ -341,9 +359,12 @@ FocusedShadowView ShadowFrameStats::focused(ShadowViewFocus focus) const noexcep
     for (std::size_t slot = 0; slot < shadowViewSlotCount(focus.group); ++slot)
     {
         const ShadowViewStats& stats = views[base + slot];
-        // `touched()` first: an untouched row's identity is stale by definition — it is whatever
-        // the slot last described, possibly frames ago.
-        if (stats.touched() && stats.logicalId == focus.view)
+        // `claimed()` first, NOT `touched()`: presence is whether this frame's plan named the row,
+        // and a view whose map was reused is present while recording nothing. Keying on rasterised
+        // work would make a focused view vanish the moment it became free — the case the cache
+        // exists to produce. An UNCLAIMED row's identity is stale by definition (whatever the slot
+        // last described, possibly frames ago), which is why the check is needed at all.
+        if (stats.claimed() && stats.logicalId == focus.view)
         {
             return FocusedShadowView{.stats = &stats, .slot = slot};
         }
