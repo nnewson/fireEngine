@@ -127,7 +127,8 @@ TEST_CASE("ShadowRenderViewSet.EachWriterStampsItsOwnSlotsIdentity", "[ShadowRen
     CHECK(face->logicalId() == ShadowLogicalViewId::point(light, 4));
 }
 
-TEST_CASE("ShadowRenderViewSet.WritersRejectTheWrongProjectionKind", "[ShadowRenderView]")
+TEST_CASE("ShadowRenderViewSet.WritersRejectTheWrongProjectionKind",
+          "[ShadowRenderView][release-contract]")
 {
     // A perspective descriptor in a cascade slot (or an orthographic one on a point face) is not
     // merely wrong, it is meaningless — and would be read back as authoritative. Dev asserts; these
@@ -181,7 +182,8 @@ TEST_CASE("ShadowRenderViewSet.PointFacesCarryTheLightTheirDepthIsMeasuredAgains
     CHECK_FALSE(views.find(ShadowViewGroup::Spot, 0)->pointLightDepth().has_value());
 }
 
-TEST_CASE("ShadowRenderViewSet.APointCubeNeedsOneLightAndAUsableRange", "[ShadowRenderView]")
+TEST_CASE("ShadowRenderViewSet.APointCubeNeedsOneLightAndAUsableRange",
+          "[ShadowRenderView][release-contract]")
 {
     // Both halves of the stored ratio are checked as strictly as the matrices. A zero or non-finite
     // range makes every texel of all six faces meaningless; six faces about DIFFERENT positions
@@ -209,7 +211,8 @@ TEST_CASE("ShadowRenderViewSet.APointCubeNeedsOneLightAndAUsableRange", "[Shadow
 #endif
 }
 
-TEST_CASE("ShadowRenderViewSet.WritersRejectAnUnkeyableIdentity", "[ShadowRenderView]")
+TEST_CASE("ShadowRenderViewSet.WritersRejectAnUnkeyableIdentity",
+          "[ShadowRenderView][release-contract]")
 {
     // An engaged entry must always be keyable: hysteresis keys on the identity, so an invalid one
     // would leave the view rendering but its history unreachable.
@@ -252,7 +255,7 @@ TEST_CASE("ShadowRenderViewSet.AbsentMeansInactiveAndEngagedInvalidIsDifferent",
 }
 
 TEST_CASE("ShadowRenderViewSet.OutOfRangeAccessIsNullAndOutOfRangeWritesAreDropped",
-          "[ShadowRenderView]")
+          "[ShadowRenderView][release-contract]")
 {
     // Never clamped into a neighbouring valid slot: that would bill one view's matrix to another
     // and render wrongly instead of failing.
@@ -332,7 +335,8 @@ TEST_CASE("ShadowRenderViewSet.WorldOnlyFollowsACascadeRefitAfterEnabling", "[Sh
     CHECK(worldOnly->projection().worldUnitsPerTexel() == 0.5f);
 }
 
-TEST_CASE("ShadowRenderViewSet.WorldOnlyCannotOutliveOrPrecedeItsCascade", "[ShadowRenderView]")
+TEST_CASE("ShadowRenderViewSet.WorldOnlyCannotOutliveOrPrecedeItsCascade",
+          "[ShadowRenderView][release-contract]")
 {
 #ifdef NDEBUG
     ShadowRenderViewSet views;
@@ -378,7 +382,8 @@ TEST_CASE("ShadowRenderViewSet.PointFacesOccupyDistinctFlatSlotsWithDistinctForw
     CHECK_FALSE(views.active(ShadowViewGroup::Point, shadowPointViewSlot(lightSlot + 1, 0)));
 }
 
-TEST_CASE("ShadowRenderViewSet.PointLightSlotIsValidatedBeforeFlattening", "[ShadowRenderView]")
+TEST_CASE("ShadowRenderViewSet.PointLightSlotIsValidatedBeforeFlattening",
+          "[ShadowRenderView][release-contract]")
 {
     // `lightSlot * kCubeFaceCount + face` is unsigned arithmetic, so a large enough slot WRAPS back
     // into the valid range: with an even face count, the top bit times 6 is 0 modulo the word.
@@ -411,7 +416,8 @@ TEST_CASE("ShadowRenderViewSet.PointLightSlotIsValidatedBeforeFlattening", "[Sha
 #endif
 }
 
-TEST_CASE("ShadowRenderViewSet.ANonFiniteRenderMatrixIsNotAView", "[ShadowRenderView]")
+TEST_CASE("ShadowRenderViewSet.ANonFiniteRenderMatrixIsNotAView",
+          "[ShadowRenderView][release-contract]")
 {
     // The asymmetry that matters. An invalid PROJECTION is a reportable state: the view rasterises
     // and selection says InvalidView. A non-finite MATRIX is not a view at all — it is what the
@@ -447,7 +453,8 @@ TEST_CASE("ShadowRenderViewSet.ANonFiniteRenderMatrixIsNotAView", "[ShadowRender
 #endif
 }
 
-TEST_CASE("ShadowRenderViewSet.ARejectedReplacementClearsTheSlotItAddressed", "[ShadowRenderView]")
+TEST_CASE("ShadowRenderViewSet.ARejectedReplacementClearsTheSlotItAddressed",
+          "[ShadowRenderView][release-contract]")
 {
     // Rejecting a write is only half the job. A producer that ATTEMPTED to describe this view and
     // failed has invalidated whatever was there: keeping the previous entry would rasterise the
@@ -609,7 +616,8 @@ TEST_CASE("ShadowViewMetrics.ADegenerateFitPacksNoConversionRatherThanAnInfinity
     CHECK(ShadowViewMetrics::pointLight(0.004f, 0.0f).packed()[1] == Catch::Approx(0.0f));
 }
 
-TEST_CASE("ShadowRenderViewSet.WritersRejectMetricsOfTheWrongKind", "[ShadowRenderView]")
+TEST_CASE("ShadowRenderViewSet.WritersRejectMetricsOfTheWrongKind",
+          "[ShadowRenderView][release-contract]")
 {
     // The three packings share a shape, so a mismatch is not caught by anything downstream: the
     // receiver would simply read a spot's near plane as a cascade's depth conversion and produce a
@@ -653,7 +661,8 @@ TEST_CASE("ShadowRenderViewSet.APointCubeCarriesOneMetricForTheWholeLight", "[Sh
     }
 }
 
-TEST_CASE("ShadowRenderViewSet.ARejectedCubeLeavesNoFaceBehind", "[ShadowRenderView]")
+TEST_CASE("ShadowRenderViewSet.ARejectedCubeLeavesNoFaceBehind",
+          "[ShadowRenderView][release-contract]")
 {
     // "All six faces or none" is now the writer's contract rather than a comment in the renderer. A
     // five-face cube is not a usable caster: the missing face would sample whatever the previous

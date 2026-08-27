@@ -310,7 +310,9 @@ Or from the build directory:
 ctest --test-dir build --output-on-failure
 ```
 
-Run the full Catch2 suite, including `[slow]` tests, plus the graphics-layer include guard:
+Run the full Catch2 suite, including `[slow]` tests, plus the build-time guards (graphics-layer
+includes, shared shader blocks, the shadow bias law, the shared GPU limits, the per-view shadow
+matrix, and the `[release-contract]` tags):
 
 ```bash
 cmake --build --preset full
@@ -340,13 +342,19 @@ cmake --build build --target run-clang-tidy   # if clang-tidy is installed
 `cmake --build build --target run-clang-tidy --parallel <jobs>` or
 `CMAKE_BUILD_PARALLEL_LEVEL` to cap local CPU/memory use.
 
-CI (GitHub Actions, all `FIRE_ENGINE_WARNINGS_AS_ERRORS=ON`) runs four parallel jobs:
+CI (GitHub Actions, all `FIRE_ENGINE_WARNINGS_AS_ERRORS=ON`) runs five parallel jobs:
 
 - **`clang-format`** and **`clang-tidy`** — platform-independent lint gates, run once (Ubuntu).
 - **`build-test-linux`** — build + `tests-full` on Ubuntu (validates the **Linux/x86_64**
   determinism golden).
 - **`build-test-macos`** — build + `tests-full` on macOS/arm64 (validates the **macOS/arm64**
   golden). Like Linux, it gets Vulkan + GLFW + `glslc` from vcpkg — the runner only adds `ninja`.
+- **`release-contract`** — the only job that builds `Release`. Every other job builds `Dev`, so the
+  suite's `#ifdef NDEBUG` bodies (what a writer returns once its assertion is compiled away)
+  vanish; this one builds `test_fire_engine` from the `vcpkg-release` preset and runs
+  `test_fire_engine "[release-contract]"`. Ubuntu only — that behaviour does not vary by platform —
+  and deliberately not the whole Release suite, which would drag in the optimisation-sensitive
+  physics goldens.
 
 Each platform's `Determinism.GoldenHash` golden is now enforced by its own job — see
 [`docs/collision.md`](docs/collision.md) and CLAUDE.md § Testing.
@@ -360,7 +368,8 @@ tools/ci/run-local-macos.sh all   # macOS, native (no container)
 
 The **Docker** runner copies the working tree into an Ubuntu 24.04 container, keeps Linux
 build/vcpkg state in Docker volumes, and accepts `format`, `configure`, `build`, `tidy`, `test`,
-`all`, or `shell` to isolate a stage. It defaults to `linux/amd64` to match GitHub Actions; set
+`release-contract`, `all`, or `shell` to isolate a stage (`all` includes the Release contract on
+Linux; the macOS runner has no such stage, by design). It defaults to `linux/amd64` to match GitHub Actions; set
 `DOCKER_PLATFORM=linux/arm64` for a faster native Apple Silicon check. The **native macOS** runner
 takes the same stages and runs them directly on your host toolchain (it installs nothing — Vulkan,
 GLFW, and `glslc` all come from vcpkg, so it just needs your existing vcpkg + compiler + `ninja`).

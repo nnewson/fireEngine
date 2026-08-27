@@ -177,23 +177,48 @@ Reference class: `include/fire_engine/graphics/image.hpp`.
 
 Catch2 (v3, `Catch2::Catch2WithMain`). Single binary `test_fire_engine`. CTest registers
 `test_fire_engine` as the fast `~[slow]` entry, so plain `ctest` and `ctest --preset fast`
-stay fast. The `tests-full` target runs the all-tags Catch2 binary plus the four build-time guards —
-graphics-layer includes, shared shader blocks, the shadow bias law, and the shared GPU limits; from
-the source root use `cmake --build --preset full`. Test files mirror
+stay fast. The `tests-full` target runs the all-tags Catch2 binary plus the six build-time guards —
+graphics-layer includes, shared shader blocks, the shadow bias law, the shared GPU limits, the
+per-view shadow matrix, and the `[release-contract]` tags; from the source root use
+`cmake --build --preset full`. Test files mirror
 source paths. Shared helpers/traits live in `tests/support/`. Test assets in `tests/assets/`
 → copied to `build/test_assets/`.
 
 Graphics-layer tests run without a GPU (opaque handles).
 
-**CI has four parallel jobs** (GitHub Actions, all `FIRE_ENGINE_WARNINGS_AS_ERRORS=ON`): `clang-format`
-+ `clang-tidy` (platform-independent lint, run once on Ubuntu) and `build-test-linux` +
-`build-test-macos` (build + `tests-full` on Ubuntu and macOS/arm64). Each build job validates *its*
-platform's determinism golden. The build/test/lint stage bodies are shared across the Docker replica
-and the native macOS replica via `tools/ci/ci-stages.sh` — edit stages there, not in each script.
+**CI has five parallel jobs** (GitHub Actions, all `FIRE_ENGINE_WARNINGS_AS_ERRORS=ON`): `clang-format`
++ `clang-tidy` (platform-independent lint, run once on Ubuntu), `build-test-linux` +
+`build-test-macos` (build + `tests-full` on Ubuntu and macOS/arm64), and `release-contract` (below).
+Each build job validates *its* platform's determinism golden. The build/test/lint stage bodies are
+shared across the Docker replica and the native macOS replica via `tools/ci/ci-stages.sh` — edit
+stages there, not in each script, and the GitHub `release-contract` job sources that file rather
+than restating its commands.
 
-**Local CI parity.** `tools/ci/run-local-ci.sh [format|configure|build|tidy|test|all|shell]`
-reproduces the **Linux** checks (Ubuntu 24.04) in Docker; `tools/ci/run-local-macos.sh
-[format|configure|build|tidy|test|all]` runs the same stages **natively on macOS** (no container —
+**A test whose body is `#ifdef NDEBUG` is tagged `[release-contract]`.** Every preset here builds
+`Dev`, so those bodies — the release half of a writer that asserts in Dev and returns `false` under
+`NDEBUG` — compile to nothing: the cases run, pass, and assert nothing at all. The Linux-only
+`release-contract` job is the only place they are real code (`cmake --preset vcpkg-release`, build
+`test_fire_engine`, run `test_fire_engine "[release-contract]"`; locally,
+`tools/ci/run-local-ci.sh release-contract`). Two things keep the job honest, and both must survive
+any edit to it: Catch2 exits non-zero when a spec matches nothing, so a renamed tag fails rather
+than passing quietly; and `tests/release_contract.cpp` holds a HIDDEN (`[.]`) sentinel case in the
+same selection that fails unless `NDEBUG` is defined, so the job cannot pass by building `Dev` by
+mistake. The `[.]` is what keeps it out of the Dev suites — `ctest` (`~[slow]`) and `tests-full` (no
+filter) are both default runs, which exclude hidden cases, while an explicit tag selection includes
+them. **Only tag a case that actually has an `#ifdef NDEBUG` in it**: the tag means "this asserts
+something a Dev build cannot see". Both halves of that rule are enforced by the
+`release_contract_guard` CTest case (`cmake/check_release_contract.cmake`), which fails on a
+conditional case that is untagged — the silent failure, since nothing else would ever run it as real
+code — on a tagged case with no conditional, on a missing sentinel, and on the tag vanishing
+altogether; so the convention no longer depends on the next person knowing it. The `vcpkg-release`
+preset builds into `build-release/` and points `VCPKG_INSTALLED_DIR` back at
+`build/vcpkg_installed`, so it reuses the ports the Dev tree and the CI cache already hold instead
+of building a second copy of every one.
+
+**Local CI parity.** `tools/ci/run-local-ci.sh [format|configure|build|tidy|test|release-contract|all|shell]`
+reproduces the **Linux** checks (Ubuntu 24.04) in Docker — its `all` includes the Release contract;
+`tools/ci/run-local-macos.sh [format|configure|build|tidy|test|all]` runs the same stages
+**natively on macOS**, minus that one (it is platform-independent, so one job proves it) (no container —
 uses your existing vcpkg + C++ toolchain, installs nothing; Vulkan/GLFW/glslc all come from vcpkg). The Docker runner copies the
 working tree into volumes (host artifacts untouched), defaults to `linux/amd64` to match CI
 (`DOCKER_PLATFORM=linux/arm64` is faster but off-platform). Run the relevant one before committing
