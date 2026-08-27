@@ -264,7 +264,7 @@ TEST_CASE("a focused view distinguishes 'ran and drew nothing' from 'never ran'"
     CHECK_FALSE(stats.focused(absent).found());
 }
 
-TEST_CASE("one diagnostic row belongs to one logical view", "[ShadowDiagnostics]")
+TEST_CASE("one diagnostic row belongs to one logical view", "[ShadowDiagnostics][release-contract]")
 {
     // Slots are reused across frames, but WITHIN a frame a row is one view's counters. Two
     // identities landing on one slot would sum two views' draws, triangles and level distributions
@@ -575,7 +575,7 @@ TEST_CASE("claiming a view and rasterising a layer are separate facts", "[Shadow
 }
 
 TEST_CASE("a raster pass cannot be counted for an unclaimed or mismatched row",
-          "[ShadowDiagnostics]")
+          "[ShadowDiagnostics][release-contract]")
 {
 #ifdef NDEBUG
     // Two refusals. GPU work attributed to NO view carries a cost with nothing to name it; work

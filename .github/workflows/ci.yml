@@ -77,6 +77,62 @@ jobs:
       - name: clang-tidy
         run: cmake --build build --target run-clang-tidy
 
+  # -------- Release contract (Linux only) --------
+  #
+  # Every other job builds `Dev`, so the suite's `#ifdef NDEBUG` bodies compile to nothing: the
+  # cases run, pass, and assert precisely nothing. This job is the only place they are real code.
+  # Linux alone, because what they assert — what a writer returns once NDEBUG removes its
+  # assertion — does not vary by platform.
+  #
+  # It runs the SHARED stage body rather than restating the commands, so the Docker replica
+  # (`tools/ci/run-local-ci.sh release-contract`) and this job cannot drift.
+
+  release-contract:
+    name: release contract (Linux)
+    runs-on: ubuntu-latest
+    env:
+      VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system packages
+        run: |
+          sudo apt-get update
+          # See the clang-tidy job above for why autotools are here: glfw3 3.5.1's `pthread-stubs`
+          # dependency is autotools-only on Linux.
+          sudo apt-get install -y ninja-build cmake libvulkan-dev \
+            xorg-dev libxinerama-dev libxcursor-dev libglu1-mesa-dev pkg-config \
+            autoconf autoconf-archive automake libtool
+
+      - name: Checkout vcpkg
+        uses: actions/checkout@v4
+        with:
+          repository: microsoft/vcpkg
+          path: vcpkg
+
+      - name: Bootstrap vcpkg
+        run: ./vcpkg/bootstrap-vcpkg.sh
+
+      # The same cache path as the Dev jobs, which is the point: the vcpkg-release preset points
+      # VCPKG_INSTALLED_DIR back at build/vcpkg_installed, so this job reuses those ports instead
+      # of building a second copy of every one of them under build-release/.
+      - name: Cache vcpkg packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            build/vcpkg_installed
+            vcpkg/downloads
+            vcpkg/buildtrees
+            vcpkg/packages
+          key: ${{ runner.os }}-vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json') }}
+          restore-keys: |
+            ${{ runner.os }}-vcpkg-
+
+      - name: Release contract
+        run: |
+          . tools/ci/ci-stages.sh
+          ci_release_contract
+
   # -------- Per-platform build + test (each validates its own determinism golden) --------
 
   build-test-linux:

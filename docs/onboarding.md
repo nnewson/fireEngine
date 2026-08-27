@@ -1357,6 +1357,31 @@ cmake --build --preset full                    # all Catch2 tests + layering gua
 cmake --build build --target tests-full        # build-dir equivalent
 ```
 
+**Some tests do not run in any of the above, and that is deliberate.** A case whose body is
+`#ifdef NDEBUG` asserts RELEASE behaviour — what a writer returns once `NDEBUG` has compiled its
+assertion away, which is the half that ships. Every preset here builds `Dev`, so those bodies are
+empty: the cases run, pass, and assert nothing. They are tagged `[release-contract]` and run by one
+Linux CI job, reproducible locally as:
+
+```bash
+cmake --preset vcpkg-release                   # Release into build-release/, shared vcpkg tree
+cmake --build --preset release-contract        # test_fire_engine only
+./build-release/test_fire_engine "[release-contract]"
+tools/ci/run-local-ci.sh release-contract      # or the whole thing in Docker
+```
+
+The selection contains a HIDDEN sentinel case (`tests/release_contract.cpp`) that fails unless
+`NDEBUG` is defined, so running the tag against a Dev build reports the mistake instead of passing
+vacuously. Hidden (`[.]`) is also why the sentinel never fires in the Dev suites above: they are
+default runs, which exclude hidden cases.
+
+When you add a case with an `#ifdef NDEBUG` body, tag it — and `release_contract_guard` (part of
+`tests-full`) fails if you don't. An untagged conditional case is not a weaker check but no check at
+all: nothing selects it in Release, so its guarded body never becomes real code anywhere, and it
+passes every suite while asserting nothing. The guard also rejects the tag on a case with no
+conditional (it would run identically in both configurations, padding the job's selection with work
+the Dev suites already do), and fails if the sentinel or the tag itself disappears.
+
 Graphics-layer tests run headless because the layer only stores opaque handles — keep it that way
 so the suite stays GPU-free. Test files mirror their source path (`src/foo/bar.cpp` →
 `tests/foo/test_bar.cpp`). Shared Catch2 helpers and compile-time test traits live in

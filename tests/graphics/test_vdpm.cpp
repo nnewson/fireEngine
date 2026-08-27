@@ -1502,7 +1502,7 @@ TEST_CASE("shadowDeviationForCut: takes the maximum over the EXACT prefix, not t
 }
 
 TEST_CASE("shadowDeviationForCut: a negative or NaN radius in the prefix yields infinity",
-          "[MeshSimplifier]")
+          "[MeshSimplifier][release-contract]")
 {
     // A deviation is a magnitude, so these are invalid data, not cheap collapses. std::max would
     // swallow both (NaN loses every comparison; a negative simply loses), leaving a plausible small

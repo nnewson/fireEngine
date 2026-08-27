@@ -289,7 +289,8 @@ TEST_CASE("ShadowLodResolver.AGenerationChangeMissesTheOldHistory", "[ShadowLodR
           kNoPreviousShadowLod);
 }
 
-TEST_CASE("ShadowLodResolver.AnInvalidKeyNeverEntersEitherStore", "[ShadowLodResolver]")
+TEST_CASE("ShadowLodResolver.AnInvalidKeyNeverEntersEitherStore",
+          "[ShadowLodResolver][release-contract]")
 {
     // A caster with no identity still has to draw — leaving a hole in a shadow map would be worse
     // than the producer bug — but it must not be cached (it would collide with every other
@@ -402,7 +403,7 @@ TEST_CASE("ShadowLodResolver.AnInvalidViewStillDraws", "[ShadowLodResolver]")
 }
 
 TEST_CASE("ShadowLodResolver.AMalformedCoarserLevelFallsBackInsteadOfBindingNothing",
-          "[ShadowLodResolver]")
+          "[ShadowLodResolver][release-contract]")
 {
     // The selector reasons about ERRORS; nothing upstream promises the level's CARRIERS. A half-
     // failed build can leave a coarser level with a null buffer or a zero count, and selecting it
@@ -563,7 +564,8 @@ TEST_CASE("ShadowLodResolver.ProvenanceIsPerFamilyEvenWhenTheResolutionIsShared"
     CHECK(resolver.contentResolution(ShadowViewGroup::Cascade, key) == nullptr);
 }
 
-TEST_CASE("ShadowLodResolver.MarkingAnUnresolvedCasterDrawnChangesNothing", "[ShadowLodResolver]")
+TEST_CASE("ShadowLodResolver.MarkingAnUnresolvedCasterDrawnChangesNothing",
+          "[ShadowLodResolver][release-contract]")
 {
     // Provenance is a FIELD of a decision, not a record of its own: marking a caster the resolver
     // never resolved would manufacture attribution for a level nobody chose. (The shadow pass
@@ -869,7 +871,7 @@ TEST_CASE("ShadowLodResolver.ADeformableCasterCannotSelectBelowFullDetail", "[Sh
 }
 
 TEST_CASE("ShadowLodResolver.DeformationOutranksTheChainButNotTheUserOrAProducerBug",
-          "[ShadowLodResolver]")
+          "[ShadowLodResolver][release-contract]")
 {
     const auto lods = chain();
     ShadowRenderViewSet views = populatedViews();

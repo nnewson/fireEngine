@@ -10,9 +10,15 @@ mode="${1:-all}"
 
 sync_source()
 {
+    # Every build tree is excluded, and for two reasons at once: a host CMakeCache names host
+    # ABSOLUTE paths, so copying one in makes the container's configure fail outright ("the source
+    # /work/fireEngine/CMakeLists.txt does not match the source /Users/... used to generate
+    # cache"); and each of these is a mounted volume, which `--delete` would otherwise empty on
+    # every run.
     rsync -a --delete \
         --exclude /.git \
         --exclude /build \
+        --exclude /build-release \
         --exclude /vcpkg \
         --exclude /vcpkg_installed \
         /repo/ /work/fireEngine/

@@ -96,9 +96,6 @@ review's priority order:
   enables — every view is still `Recorded`, which is what let the restructure be verified as
   decision-identical. Then #15 below, which is the same mechanism.
 
-  **Sequenced after arc 4** (see below) — the reuse stage adds conditional release behaviour, and the
-  job that exercises it should be in place first.
-
   **The gate for that stage is agreed, and it is NOT the byte-identical row dump** — that gate
   worked precisely because nothing changed, and reuse changes what the recorder does. The claim to
   prove is: *on the second identical frame, every active CACHEABLE view is reused and every
@@ -193,34 +190,6 @@ and 2 low. Sequenced:
    immutable config, parser/output state into a `.cpp` with precedence tests.
 
 Further tiers of this review are expected to follow the [`review-order.md`](review-order.md) tiers.
-
----
-
-## Arc 4 — Release-contract CI job
-
-**Trigger: after `shadow-static-cascade-cache` lands, and BEFORE arc 2 #4's residency/reuse work.** Its own branch. The order is deliberate: the reuse stage adds more conditional release behaviour to a set of checks nothing currently executes, so the job that proves those checks run should exist first.
-
-Rejection tests guarded by `#ifdef NDEBUG` — the release behaviour of every writer that asserts in
-Dev and returns `false` under `NDEBUG` — **never run**. Both presets build `Dev`, locally and in CI,
-so those blocks compile to nothing on every machine that has ever checked them. The gap was found
-while adding `setPointLight`'s new range / one-light validation: a one-off local Release build was
-needed to prove the new checks fire at all.
-
-**Death tests are not the fix.** They prove the Dev assertion fires; they say nothing about whether
-the `NDEBUG` fallback returns `false` (or throws) correctly, which is the half that ships.
-
-The job:
-
-- Tag the conditional cases `[release-contract]`.
-- Configure a genuine Release build with warnings-as-errors.
-- Build the real library and test executable.
-- Run `test_fire_engine "[release-contract]"` explicitly.
-- Include a **sentinel assertion that `NDEBUG` is defined**, so a misconfigured job cannot pass by
-  selecting zero relevant cases.
-
-**Linux only, and deliberately not the whole suite.** These rejection semantics are
-platform-independent, and running all tests under Release would mix this contract with the
-optimisation-sensitive physics goldens.
 
 ---
 

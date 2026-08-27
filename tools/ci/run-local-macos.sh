@@ -7,7 +7,10 @@ set -euo pipefail
 # MoltenVK, glfw, a shader compiler (glslc or glslangValidator), and vcpkg via VCPKG_ROOT. It does
 # NOT install anything.
 #
-# Stages mirror run-local-ci.sh: format | configure | build | tidy | test | all.
+# Stages mirror run-local-ci.sh: format | configure | build | tidy | test | all. The one exception
+# is `release-contract`, which is Linux-only ON PURPOSE — those cases assert what a writer returns
+# once NDEBUG removes its assertion, which does not vary by platform, so a second job would spend
+# runner minutes to re-prove it. `all` here therefore stays "every gate macOS owns".
 #
 # Note: clang-tidy on macOS uses Apple's clang-tidy, which can differ from the Linux one the CI /
 # Docker replica runs — treat the macos `tidy` stage as advisory; Linux is the source of truth.

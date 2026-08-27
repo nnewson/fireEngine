@@ -10,6 +10,17 @@
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
         "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
       }
+    },
+    {
+      "name": "vcpkg-release",
+      "inherits": "vcpkg",
+      "displayName": "Release — the [release-contract] gate",
+      "description": "A genuine Release build (NDEBUG defined), which is the only configuration in which the suite's #ifdef NDEBUG bodies are real code. VCPKG_INSTALLED_DIR deliberately points back at build/vcpkg_installed: vcpkg would otherwise install a second copy of every port under build-release/, which no CI cache populates and which takes as long as the ports themselves. Its own binaryDir so it never disturbs the Dev tree that ctest, tests-full and compile_commands.json all live in.",
+      "binaryDir": "${sourceDir}/build-release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "VCPKG_INSTALLED_DIR": "${sourceDir}/build/vcpkg_installed"
+      }
     }
   ],
   "buildPresets": [
@@ -22,6 +33,13 @@
       "configurePreset": "vcpkg",
       "targets": [
         "tests-full"
+      ]
+    },
+    {
+      "name": "release-contract",
+      "configurePreset": "vcpkg-release",
+      "targets": [
+        "test_fire_engine"
       ]
     }
   ],

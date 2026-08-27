@@ -384,6 +384,9 @@ endif()
 enable_testing()
 
 add_executable(test_fire_engine
+    # The build-configuration sentinel for the [release-contract] gate — it mirrors no source
+    # file, because its subject is how this binary was compiled.
+    tests/release_contract.cpp
     tests/collision/test_aabb.cpp
     tests/collision/test_geometry.cpp
     tests/collision/test_sweep_and_prune_broad_phase.cpp
@@ -527,6 +530,7 @@ add_custom_target(tests-full
     COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure -R shadow_bias_guard
   COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure -R gpu_limits_guard
   COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure -R shadow_matrix_guard
+  COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure -R release_contract_guard
   DEPENDS test_fire_engine
   COMMENT "Running the full test suite, including [slow] tests"
 )
@@ -580,6 +584,17 @@ add_test(
   COMMAND ${CMAKE_COMMAND}
     -DSHADER_DIR=${PROJECT_SOURCE_DIR}/shaders
     -P ${PROJECT_SOURCE_DIR}/cmake/check_shadow_matrix.cmake
+)
+
+# Every NDEBUG-conditional test case carries `[release-contract]`, which is the only thing that
+# selects it. An untagged one is not a weaker check but no check at all — every preset here builds
+# Dev, so its guarded body compiles to nothing and it passes each suite while asserting nothing —
+# and forgetting the tag is silent by construction, which is the gap this closes.
+add_test(
+  NAME release_contract_guard
+  COMMAND ${CMAKE_COMMAND}
+    -DTESTS_DIR=${PROJECT_SOURCE_DIR}/tests
+    -P ${PROJECT_SOURCE_DIR}/cmake/check_release_contract.cmake
 )
 
 find_program(CLANG_TIDY_EXE NAMES clang-tidy)
