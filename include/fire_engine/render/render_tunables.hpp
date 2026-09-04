@@ -100,6 +100,17 @@ struct RenderTunables
     // triggers at `budget`. Live for the same reason the budget is — SH-03's calibration sweeps
     // both, and the two interact (a wider band hides a budget that is slightly too tight).
     float shadowLodCoarsenRatio{kShadowLodCoarsenRatio};
+    // Arc 2 #4: reuse a shadow view's depth image when this frame's prepared content is identical
+    // to what the image already holds. On by default — the whole point of the item — and live
+    // because it is the A/B for it: switched off, every active view records exactly as it did
+    // before the cache existed, so a suspected stale shadow can be confirmed or cleared in one
+    // keystroke instead of a rebuild.
+    //
+    // SCHEDULING, NOT PIXELS. It decides whether work is skipped, never what that work draws, so it
+    // is deliberately NOT part of the content descriptor: a frame recorded with reuse off must be
+    // reusable by a later frame with it back on. Recording still commits residency, so re-enabling
+    // picks up from the newest content rather than from whatever was resident before the toggle.
+    bool shadowResidencyReuseEnabled{true};
     // Which shadow view the diagnostics panel is interrogating (SH-03 slice 4), keyed by LOGICAL
     // identity rather than physical slot. Defaults to the scene rollup.
     //

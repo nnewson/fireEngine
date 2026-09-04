@@ -257,6 +257,14 @@ struct ApplicationArgs
             args.debug.taa = false;
             continue;
         }
+        if (arg == "--no-shadow-reuse")
+        {
+            // Arc 2 #4's A/B: every shadow view records, even one whose image already holds
+            // identical content. From the FIRST frame, which is what separates this from the
+            // overlay checkbox — a run whose early frames reused is not a forced-record baseline.
+            args.debug.shadowResidencyReuse = false;
+            continue;
+        }
         if (arg == "--overlay")
         {
             args.debug.overlayVisible = true;

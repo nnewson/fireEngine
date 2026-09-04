@@ -1,6 +1,8 @@
 #include "fire_engine/graphics/shadow_pass_plan.hpp"
 
 #include <algorithm>
+#include <type_traits>
+#include <utility>
 
 namespace fire_engine
 {
@@ -165,20 +167,6 @@ bool PreparedShadowLayer::sameContent(const PreparedShadowLayer& other) const no
                               { return lhs.sameContent(rhs); });
 }
 
-std::string_view toString(ShadowViewDisposition disposition) noexcept
-{
-    switch (disposition)
-    {
-    case ShadowViewDisposition::Invalid:
-        return "invalid";
-    case ShadowViewDisposition::Reused:
-        return "reused";
-    case ShadowViewDisposition::Recorded:
-        return "recorded";
-    }
-    return "unknown";
-}
-
 namespace
 {
 
@@ -293,6 +281,26 @@ const PreparedShadowView* ShadowFramePlan::view(ShadowViewGroup group,
     return entry.view.valid() ? &entry.view : nullptr;
 }
 
+std::optional<PreparedShadowView> ShadowFramePlan::takeRecorded(ShadowViewGroup group,
+                                                                std::size_t slot) noexcept
+{
+    if (static_cast<std::size_t>(group) >= kShadowViewGroupCount ||
+        slot >= shadowViewSlotCount(group))
+    {
+        return std::nullopt;
+    }
+    Entry& entry = entries_[shadowViewIndex(group, slot)];
+    // RECORDED ONLY. A reused view did not touch its image, so its prepared work must not replace
+    // the record of what that image holds; an invalid slot rasterised nothing at all.
+    if (entry.disposition != ShadowViewDisposition::Recorded)
+    {
+        return std::nullopt;
+    }
+    std::optional<PreparedShadowView> taken{std::move(entry.view)};
+    entry = Entry{};
+    return taken;
+}
+
 ShadowViewDisposition ShadowFramePlan::disposition(ShadowViewGroup group,
                                                    std::size_t slot) const noexcept
 {
@@ -404,12 +412,21 @@ ShadowMapValidity shadowMapValidityFromPlan(const ShadowFramePlan& plan,
     return validity;
 }
 
-ShadowViewDisposition shadowViewDisposition(bool active, const PreparedShadowView& prepared,
+ShadowViewDisposition shadowViewDisposition(bool active, ShadowReusePolicy reuse,
+                                            const PreparedShadowView& prepared,
                                             const ShadowViewResidency& resident) noexcept
 {
     if (!active)
     {
         return ShadowViewDisposition::Invalid;
+    }
+    // The toggle is asked AFTER engagement and before anything about content: a view nothing
+    // vouches for stays Invalid whatever the policy says (there is no work to schedule), while a
+    // view that would have been reused simply records instead. Nothing else changes — the same
+    // draws, the same order, the same commit afterwards.
+    if (reuse == ShadowReusePolicy::Disabled)
+    {
+        return ShadowViewDisposition::Recorded;
     }
     // FIRST USE. Image creation transitions every layer to the sampler's read-only layout but
     // leaves the depth contents undefined, so "already in the right layout" is not "already holds
@@ -432,6 +449,49 @@ ShadowViewDisposition shadowViewDisposition(bool active, const PreparedShadowVie
     }
     return prepared.sameContent(*residentContent) ? ShadowViewDisposition::Reused
                                                   : ShadowViewDisposition::Recorded;
+}
+
+const ShadowViewResidency& ShadowResidencyStore::at(ShadowViewGroup group,
+                                                    std::size_t slot) const noexcept
+{
+    // "Nothing resident" is a real state every entry starts in, so an out-of-range address is
+    // answered with it rather than with a separate failure the law would have to learn about. The
+    // consequence is a re-record, which is the safe direction.
+    static const ShadowViewResidency kNothingResident{};
+    if (static_cast<std::size_t>(group) >= kShadowViewGroupCount ||
+        slot >= shadowViewSlotCount(group))
+    {
+        return kNothingResident;
+    }
+    return entries_[shadowViewIndex(group, slot)];
+}
+
+void ShadowResidencyStore::commit(ShadowFramePlan& plan) noexcept
+{
+    // The whole reason adoption is a move: this runs after `submitFrame`, so an allocation
+    // failure here would throw out of a frame the GPU is already executing — and the throw would
+    // leave residency describing the frame BEFORE this one while the images hold this one's depth,
+    // which is precisely the "shadows from a frame that is gone" failure the type exists to
+    // prevent. A moved prepared view allocates nothing, and these assertions are what keep that
+    // true if someone gives it a member whose move can throw.
+    static_assert(
+        std::is_nothrow_move_constructible_v<PreparedShadowView>,
+        "residency is adopted after the submit, so moving a prepared view must not throw");
+    static_assert(
+        std::is_nothrow_move_assignable_v<PreparedShadowView>,
+        "residency is adopted after the submit, so moving a prepared view must not throw");
+
+    for (std::size_t g = 0; g < kShadowViewGroupCount; ++g)
+    {
+        const auto group = static_cast<ShadowViewGroup>(g);
+        for (std::size_t slot = 0; slot < shadowViewSlotCount(group); ++slot)
+        {
+            if (auto recorded = plan.takeRecorded(group, slot); recorded.has_value())
+            {
+                entries_[shadowViewIndex(group, slot)].commit(std::move(*recorded));
+            }
+        }
+    }
 }
 
 } // namespace fire_engine

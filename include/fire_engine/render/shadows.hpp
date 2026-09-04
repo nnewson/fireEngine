@@ -113,6 +113,33 @@ public:
     void recordPass(vk::CommandBuffer cmd, const ShadowFramePlan& plan, ShadowFrameStats& stats,
                     const GpuProfiler& profiler, uint32_t frameIndex) const;
 
+    // What each shadow image HOLDS, for `prepareShadowFrame` to compare this frame's work against.
+    //
+    // It lives here because the images do: a record of GPU content belongs beside the content it
+    // describes, not in the frame state that is reset every frame. That is also the whole
+    // invalidation story, and why there is no `invalidate()` to forget to call — recreating the
+    // images means reconstructing the object that owns both them and this. Should in-place
+    // recreation ever arrive, the targets and this store move into one private aggregate together,
+    // so replacing them stays a single act.
+    [[nodiscard]] const ShadowResidencyStore& residency() const noexcept
+    {
+        return residency_;
+    }
+
+    // Adopt what this frame RECORDED, CONSUMING it from the plan. Call after the queue has accepted
+    // the work and not before: a frame abandoned after preparation (a lost swapchain, a throw) must
+    // leave no record claiming an image holds pixels nothing ever drew — the same boundary the
+    // SH-03 hysteresis commit sits on. Which entries are adopted is the store's own law (`Recorded`
+    // only), not this call site's.
+    //
+    // `noexcept` is deliberate and load-bearing: on the far side of a submit there is no good
+    // answer to a failed allocation, so adoption moves the prepared views out of the plan rather
+    // than copying them. The plan is reset by the next preparation, so consuming it costs nothing.
+    void commitResidency(ShadowFramePlan& plan) noexcept
+    {
+        residency_.commit(plan);
+    }
+
 private:
     // Where one prepared layer rasterises: the depth image, the single-layer attachment view, the
     // array layer its barriers target, and the fragment paths that write it.
@@ -147,6 +174,8 @@ private:
     TextureHandle selfShadowMapHandle_{NullTexture};
     TextureHandle spotShadowMapHandle_{NullTexture};
     TextureHandle pointShadowMapHandle_{NullTexture};
+    // Beside the handles above, deliberately: this is the record of what those images contain.
+    ShadowResidencyStore residency_{};
 };
 
 } // namespace fire_engine

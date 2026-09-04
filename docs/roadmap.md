@@ -81,41 +81,15 @@ The eight small/XS items landed on `review-shadow-taa-fixes` + `review-xs-cleanu
 the five the review prioritised, then five a later coverage audit found had no action item. In the
 review's priority order:
 
-- **#4 [B/M] Static-scene CSM caching** (§2.1) — **in progress on `shadow-static-cascade-cache`.**
-  The §5.1 epoch idea was rejected once the comparison was written out: an epoch explains a matrix
-  without being one, and the failure mode is a silently wrong image (shadows from a frame that no
-  longer exists), so the descriptor is exact and structurally compared, never hashed.
-  **Landed on the branch:** the content descriptor and disposition law
-  (`graphics/shadow_pass_plan.hpp`), and the PREPARATION phase that builds it
-  (`graphics/shadow_pass_prepare.hpp`) — filtering, per-view LOD resolution and the SH-01 row
-  claim/observations all moved out of recording, leaving `Shadows::recordPass` consuming the plan
-  and nothing else. Two parallel authorities went with it: the shadow transform (now one push
-  constant per recorded view, guarded by `shadow_matrix_guard`) and the point light's
-  position + range (now in the view set, not a renderer-side array).
-  **Remaining:** the per-slot residency store, committed only after submit, and the reuse it
-  enables — every view is still `Recorded`, which is what let the restructure be verified as
-  decision-identical. Then #15 below, which is the same mechanism.
-
-  **The gate for that stage is agreed, and it is NOT the byte-identical row dump** — that gate
-  worked precisely because nothing changed, and reuse changes what the recorder does. The claim to
-  prove is: *on the second identical frame, every active CACHEABLE view is reused and every
-  deformable view is still recorded* — "every view is reused" is false for any self-shadow scene
-  under the current deformation law, and a gate asserting it would be failed by correct code. Three
-  layers of evidence:
-  1. **Headless two-frame test.** First preparation records; a simulated post-submit commit installs
-     residency; the second identical preparation reuses the cacheable views. Also: an abandoned
-     frame commits nothing, and image recreation invalidates residency.
-  2. **Mixed-content test.** Rigid views reuse while deformable views record in the same frame, and
-     the confirmed validity stays set for both — `Reused` is sampleable, so a family that is half
-     reused is fully valid.
-  3. **Real-GPU gate**, as a local Vulkan script rather than a mocked command buffer: a mock would
-     test a second implementation of recording, while the real gate proves a reused view receives no
-     barrier, no clear and no draw *and* that its existing depth still shades correctly. On a static
-     `--no-taa` scene: the reused-frame capture matches the cold recorded reference; cacheable rows
-     keep identical candidate/drawn/LOD observations while reporting ZERO raster passes; a fully
-     reused family stamps no timestamps; validation stays VUID-free.
-  Contracts consumed: SH-01's diagnostics and SH-03's per-view LOD contract
-  ([`shadowplans.md`](shadowplans.md) § Interaction).
+- **#15 [B/C, M] Punctual-shadow change detection** (§2.3) — **next, and now mostly verification.**
+  Arc 2 #4 landed the whole mechanism on `shadow-residency-reuse` and it is family-agnostic: a
+  static point light's six faces already reuse today, which is what the gate scene measures. What
+  this item still owes is the evidence and the follow-through — a scene with a light that MOVES
+  (proving the faces re-record on the frame the light's position or range changes, since both are in
+  the content descriptor), a spot equivalent, and a decision about per-face granularity: the cube is
+  compared per face, but slot assignment is per-light, so a light entering or leaving reshuffles
+  slots and invalidates its neighbours' residency by identity. Worth measuring before assuming it
+  matters. (Per-face frustum filtering already exists and is correct.)
 - **#5 [B/L] Compute pre-skinning pass** (§1.3) — skinning/morphing re-runs in every pass's vertex
   shader (~11× per skinned vertex per frame). `SoftBodySystem` already proves the compute pattern
   in-engine. The one genuinely architectural piece here; it also retires SH-04's deformable
@@ -133,10 +107,6 @@ items here. All five are genuinely lower-value than the above — three are cond
 in the review's own words — and are recorded so the arc is scoped honestly, not because each is
 worth doing:
 
-- **#15 [B/C, M] Punctual-shadow change detection** (§2.3) — spot and point casters re-render every
-  face every frame even when the light and the geometry in range are static; a point light is
-  6 × 1024² per frame. Same epoch/dirty-bit mechanism as #4, so do them together. (Per-face frustum
-  filtering already exists and is correct — this is about skipping the re-render entirely.)
 - **#16 [C, XS] `hash_combine`-style mix for the mesh-triangle warm-start key** (§3.3) —
   `in.key ^= subKey * 0x9E3779B97F4A7C15ULL` (`physics_world.cpp`) is a decent mix, but XOR over the
   pair key admits collisions across (pair, triangle) combinations. The consequence is only a wrong

@@ -95,6 +95,22 @@ bool ShadowViewStats::beginRasterPass(ShadowLogicalViewId view) noexcept
     return true;
 }
 
+bool ShadowViewStats::noteDisposition(ShadowLogicalViewId view,
+                                      ShadowViewDisposition value) noexcept
+{
+    // Same agreement as `beginRasterPass`, for the same reason: a row is one logical view's report,
+    // and a schedule filed under the wrong name reads exactly like a correct one.
+    assert(claimed() && "a disposition must belong to a claimed view");
+    assert((!claimed() || logicalId == view) &&
+           "the disposition being recorded belongs to a different view than claimed this row");
+    if (!claimed() || !(logicalId == view))
+    {
+        return false;
+    }
+    disposition = value;
+    return true;
+}
+
 void ShadowViewStats::observe(std::uint64_t fullDetailTriangles, bool accepted,
                               std::uint64_t resolvedTriangles, std::uint32_t lodLevel,
                               ShadowLodReason reason, bool countSelection) noexcept

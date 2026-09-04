@@ -7,6 +7,7 @@
 
 #include <fire_engine/graphics/gpu_limits.hpp>
 #include <fire_engine/graphics/shadow_identity.hpp>
+#include <fire_engine/graphics/shadow_view_disposition.hpp>
 
 namespace fire_engine
 {
@@ -226,6 +227,12 @@ struct ShadowViewStats
     // Invalid only on a view this frame's plan never CLAIMED — which is not the same as one that
     // never rasterised: a claimed view may legitimately record nothing.
     ShadowLogicalViewId logicalId{};
+    // What the plan decided this view would DO — recorded alongside the identity so the panel can
+    // tell apart two rows that look identical in every counter: one that recorded an empty map and
+    // one that reused an empty map it recorded earlier. Both report zero draws; only the first
+    // spent a clear and two layout transitions on the GPU, and only the second is the cache
+    // working. `Invalid` on a row the plan never claimed.
+    ShadowViewDisposition disposition{ShadowViewDisposition::Invalid};
 
     // ENGAGES this row and states WHICH view it is — the identity, and nothing about work. Called
     // when the frame's plan claims this slot, which happens whether or not anything is recorded
@@ -255,6 +262,15 @@ struct ShadowViewStats
     // Returns false and counts NOTHING if the row was never claimed or holds a different identity.
     // Terminal at the caller, for the same reason a merged row is.
     [[nodiscard]] bool beginRasterPass(ShadowLogicalViewId view) noexcept;
+    // What this view will do, from the plan that decided it. Called by PREPARATION once the
+    // disposition exists — after the draws are built, since the comparison needs them.
+    //
+    // The identity is CHECKED against the claim, never re-claimed, exactly as `beginRasterPass`
+    // checks it: a disposition recorded under another view's name would label one view's work with
+    // another's schedule. Returns false and changes nothing when the row was never claimed or holds
+    // a different identity; terminal at the caller, like its neighbours.
+    [[nodiscard]] bool noteDisposition(ShadowLogicalViewId view,
+                                       ShadowViewDisposition value) noexcept;
     // THE FOUR OBSERVATION RULES. Every per-view number in the panel is only readable because these
     // hold together; each one exists because breaking it produced a plausible-looking wrong answer:
     //

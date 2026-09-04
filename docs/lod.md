@@ -87,7 +87,11 @@ Object::writeForwardUniforms()            [per draw, per frame]
   [`shadowplans.md`](shadowplans.md) § SH-03 and `graphics/shadow_lod_resolver.hpp`. Since arc 2 #4
   that resolution happens in the shadow pass's PREPARATION phase
   (`graphics/shadow_pass_prepare.hpp`), before anything is recorded, because the same walk decides
-  whether the view's map can be reused at all. Two caster
+  whether the view's map can be reused at all. **A reused view is still resolved in full** — the
+  comparison that decides reuse needs the resolved carrier, so shadow LOD selection costs the same
+  whether or not the map is re-rendered, and the resolver's hysteresis advances for reused views
+  exactly as it does for recorded ones. What reuse saves is GPU raster, never selection. Two
+  caster
   properties override that selection outright, and both are classified at this same seam: a caster
   that DEFORMS after the simplifier measured it (SH-04) and one whose coverage is an ALPHA CUTOUT
   (SH-05) resolve to the whole mesh, with `DeformableFallback` / `AlphaMaskedFallback` as the reason

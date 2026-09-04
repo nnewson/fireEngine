@@ -56,6 +56,10 @@ TEST_CASE("ApplicationArgs.EmptyArgsUseDefaults", "[ApplicationArgs]")
     CHECK(args.debug.view == DebugView::None);
     CHECK_FALSE(args.debug.noShadows);
     CHECK(args.debug.taa);
+    // ON by default (arc 2 #4). Pinned here because the acceptance baseline is defined by its
+    // absence: if the default ever flipped, every "forced record" measurement would silently become
+    // a measurement of reuse and still look like a valid run.
+    CHECK(args.debug.shadowResidencyReuse);
     CHECK_FALSE(args.debug.overlayVisible);
     CHECK_FALSE(args.addFloor);
     CHECK_FALSE(args.addParticles);
@@ -503,4 +507,34 @@ TEST_CASE("ApplicationArgs.RepeatedCaptureFlagsTakeTheLastValue", "[ApplicationA
 
     CHECK(args.debug.capturePath == "second.png");
     CHECK(args.debug.captureFrame == 9);
+}
+
+TEST_CASE("ApplicationArgs.NoShadowReuseForcesEveryShadowViewToRecord", "[ApplicationArgs]")
+{
+    // The A/B switch for the shadow-residency cache. It has to work from the FIRST frame — a run
+    // whose early frames reused is not a forced-record baseline — which is why it is a flag and not
+    // only an overlay checkbox.
+    const auto parsed = parseArgs({"fireEngineApp", "--no-shadow-reuse"});
+    CHECK_FALSE(parsed.args.debug.shadowResidencyReuse);
+    // Nothing else moves with it: reuse is scheduling, and the flag must not quietly imply a
+    // shadow-LOD or TAA change that would make the two halves of an A/B differ in a second way.
+    CHECK(parsed.args.debug.taa);
+    CHECK_FALSE(parsed.args.debug.noShadows);
+}
+
+TEST_CASE("ApplicationArgs.NoShadowReuseCoexistsWithPositionalArguments", "[ApplicationArgs]")
+{
+    // The measurement commands in docs/acceptance-testing.md pass the flag alongside a scene and a
+    // skybox, in that order and in the other: a flag that swallowed a positional (or was swallowed
+    // by one) would silently load a different scene than the baseline it is being compared with.
+    const auto leading = parseArgs({"fireEngineApp", "--no-shadow-reuse", "scene.gltf", "sky.hdr"});
+    CHECK_FALSE(leading.args.debug.shadowResidencyReuse);
+    CHECK(leading.args.scenePath == "scene.gltf");
+    CHECK(leading.args.skyboxPath == "sky.hdr");
+
+    const auto trailing =
+        parseArgs({"fireEngineApp", "scene.gltf", "sky.hdr", "--no-shadow-reuse"});
+    CHECK_FALSE(trailing.args.debug.shadowResidencyReuse);
+    CHECK(trailing.args.scenePath == "scene.gltf");
+    CHECK(trailing.args.skyboxPath == "sky.hdr");
 }

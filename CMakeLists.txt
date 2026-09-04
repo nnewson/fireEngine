@@ -109,6 +109,7 @@ add_library(fireengine SHARED
     src/graphics/shadow_pass_prepare.cpp
     src/graphics/shadow_caster_deformation.cpp
     src/graphics/shadow_render_view.cpp
+    src/graphics/shadow_view_disposition.cpp
     src/graphics/shadow_diagnostics.cpp
     src/graphics/shadow_view.cpp
     src/graphics/vipm.cpp

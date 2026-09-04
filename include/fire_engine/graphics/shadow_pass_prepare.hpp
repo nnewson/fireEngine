@@ -70,6 +70,11 @@ struct ShadowPreparationInputs
     // When false no frustum is built, and every family's filter passes everything through — the
     // `--no-cull` path, which must produce the same IMAGE with more draws.
     bool cullingEnabled{true};
+    // Arc 2 #4's A/B (`RenderTunables::shadowResidencyReuseEnabled`). False makes every engaged
+    // view record even when its image already holds identical content — the pass as it behaved
+    // before the cache existed. Preparation is unchanged either way: the same filtering, the same
+    // resolution, the same observations, and the same commit afterwards.
+    bool residencyReuseEnabled{true};
 
     // Indexed by ShadowViewGroup.
     std::array<ShadowFamilyRaster, kShadowViewGroupCount> raster{};
@@ -92,8 +97,15 @@ struct ShadowPreparationInputs
 // a producer bug, and both ways of continuing are worse than stopping: dropping the view leaves a
 // shadow map holding another frame's content with nothing to say so, and degrading through it
 // produces counters that read like a measurement and are not.
+// `residency` is what each physical view's depth image currently HOLDS (`render/shadows.cpp` owns
+// it, beside the images). It is the other operand of the disposition law: a view whose prepared
+// content matches what its image already holds is `Reused` and rasterises nothing. An empty store —
+// a first frame, or images that have just been created — makes every view record, which is the
+// conservative direction: a needless re-render costs one frame's raster, while a wrong reuse shows
+// shadows from a frame that no longer exists.
 void prepareShadowFrame(const ShadowPreparationInputs& inputs, const ShadowRenderViewSet& views,
-                        ShadowMapValidity eligible, ShadowLodResolver& resolver,
-                        ShadowFrameStats& stats, ShadowFramePlan& plan);
+                        ShadowMapValidity eligible, const ShadowResidencyStore& residency,
+                        ShadowLodResolver& resolver, ShadowFrameStats& stats,
+                        ShadowFramePlan& plan);
 
 } // namespace fire_engine
