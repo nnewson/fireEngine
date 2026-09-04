@@ -1004,6 +1004,40 @@ contracts from this work:
   holds its casters without drawing them), and the ShadowLod tint reads that content during
   collection instead of waiting for the shadow pass. Staging is unchanged — levels still commit
   only after the frame is submitted.
+
+  **Reuse itself landed next (`shadow-residency-reuse`).** `ShadowResidencyStore` records what each
+  physical view's depth image HOLDS; preparation compares this frame's prepared content against it
+  and marks each view `Reused` or `Recorded`; `Shadows::recordPass` skips a reused view entirely —
+  no barrier, no clear, no draw — and a family that records nothing opens no timing span. Four
+  things about it are contracts rather than implementation details, and anything built on this plan
+  should treat them as such:
+
+  1. **The store is owned by `Shadows`, beside the images it describes.** There is no `invalidate()`
+     to forget: recreating the images means reconstructing the object that owns both. If in-place
+     recreation ever arrives, the targets and the store move into one private aggregate together.
+  2. **Adoption happens between the SUBMIT and the PRESENT, and cannot throw.** Submission is the
+     moment the GPU owns the work; presentation is a separate act that can fail (raii `presentKHR`
+     throws on `eErrorOutOfDateKHR`). A resize that threw past the commit would leave the store
+     describing the previous frame while the images held this one's depth — a stale map arriving
+     through the error path. Adoption therefore MOVES the recorded views out of the plan
+     (`ShadowFramePlan::takeRecorded`) rather than copying them, and is `noexcept`.
+  3. **Only a `Recorded` view commits; an `Invalid` slot keeps what it had.** A reused view never
+     touched its image, and an unengaged one did not overwrite it, so its record is still true.
+  4. **`Reused` is sampleable.** A family that is half reused is fully valid, and the receiver is
+     told exactly what it was told when the frame rasterised.
+
+  **Measured** on `assets/shadow_residency/ShadowResidencyTest.gltf` (one static point light, six
+  cube faces, camera parked, macOS/arm64 + MoltenVK): forced-record holds the point family at a
+  median **0.264 ms** per frame (29 warm samples, 0.164–0.312), while reuse issues **no timing span
+  at all** — every sample reads `recorded=0 reused=6 passes=0`. The reused frame, the cold recorded
+  frame and a same-state forced-record frame are byte-identical captures. The A/B switch is
+  `--no-shadow-reuse` (overlay: "Reuse unchanged shadow views"); the runbook is
+  [`acceptance-testing.md`](acceptance-testing.md) § Shadow-residency gate scene.
+
+  **What this does NOT buy: CPU preparation.** A reused view is filtered, resolved and observed in
+  full — the comparison cannot be made without the work that produces its operand. The saving is
+  GPU raster only, which is also why the honest headline case is a static PUNCTUAL light rather than
+  the cascades: a cascade's matrix moves with the camera, so a moving camera re-records it.
 - **Compute pre-skinning:** expose the pre-deformed vertex buffer, exact deformed bounds, and a
   deformation revision through the shadow draw description. It can then replace the LOD0
   deformable fallback and stop rerunning skin/morph work in every pass.

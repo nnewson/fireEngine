@@ -263,7 +263,7 @@ void Shadows::recordPass(vk::CommandBuffer cmd, const ShadowFramePlan& plan,
                          uint32_t frameIndex) const
 {
     // Nothing to record at all — `--no-shadows`, a scene with no light any family is fitted to, or
-    // (once the residency store lands) a frame in which every view's map was reused. Returning here
+    // a frame in which every view's map was reused. Returning here
     // is what makes that OBSERVABLE: no draws, no clears, no timestamps, so every shadow row in the
     // diagnostics and every shadow group in the GPU timings reads zero.
     if (plan.recordsNothing())

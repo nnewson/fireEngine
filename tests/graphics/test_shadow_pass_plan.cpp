@@ -76,7 +76,8 @@ TEST_CASE("identical prepared content reuses the resident map", "[ShadowPassPlan
 {
     const PreparedShadowView prepared = viewWith(rigidDraw());
     const ShadowViewResidency resident = residentFrom(prepared);
-    CHECK(shadowViewDisposition(true, prepared, resident) == ShadowViewDisposition::Reused);
+    CHECK(shadowViewDisposition(true, ShadowReusePolicy::Enabled, prepared, resident) ==
+          ShadowViewDisposition::Reused);
     CHECK(shadowViewSampleable(ShadowViewDisposition::Reused));
     CHECK_FALSE(shadowViewRecords(ShadowViewDisposition::Reused));
 }
@@ -87,7 +88,8 @@ TEST_CASE("an inactive view is invalid whatever its image holds", "[ShadowPassPl
     const ShadowViewResidency resident = residentFrom(prepared);
     // The view set is the authority on engagement (SH-03). Content that matches is irrelevant if
     // nothing this frame vouches for the matrix behind it.
-    const ShadowViewDisposition disposition = shadowViewDisposition(false, prepared, resident);
+    const ShadowViewDisposition disposition =
+        shadowViewDisposition(false, ShadowReusePolicy::Enabled, prepared, resident);
     CHECK(disposition == ShadowViewDisposition::Invalid);
     CHECK_FALSE(shadowViewSampleable(disposition));
     CHECK_FALSE(shadowViewRecords(disposition));
@@ -101,14 +103,22 @@ TEST_CASE("first use must record even with matching content", "[ShadowPassPlan]"
     const ShadowViewResidency empty{};
     CHECK_FALSE(empty.hasContent());
     CHECK(empty.content() == nullptr);
-    CHECK(shadowViewDisposition(true, prepared, empty) == ShadowViewDisposition::Recorded);
+    CHECK(shadowViewDisposition(true, ShadowReusePolicy::Enabled, prepared, empty) ==
+          ShadowViewDisposition::Recorded);
 
-    // And once it IS committed, the same prepared work reuses — then `invalidate()` (an image
-    // recreated under it) takes it back to recording.
-    ShadowViewResidency resident = residentFrom(prepared);
-    CHECK(shadowViewDisposition(true, prepared, resident) == ShadowViewDisposition::Reused);
-    resident.invalidate();
-    CHECK(shadowViewDisposition(true, prepared, resident) == ShadowViewDisposition::Recorded);
+    // And once it IS committed, the same prepared work reuses.
+    const ShadowViewResidency resident = residentFrom(prepared);
+    CHECK(shadowViewDisposition(true, ShadowReusePolicy::Enabled, prepared, resident) ==
+          ShadowViewDisposition::Reused);
+
+    // RECREATION is modelled the only way the engine can express it: a fresh store, because the
+    // store lives with the images and is rebuilt when they are. There is no invalidate() to call —
+    // a hook would be a second way for the record and the images to disagree, and the reason this
+    // type has none is that the disagreement is what produces a wrong picture.
+    const ShadowResidencyStore recreated{};
+    CHECK(shadowViewDisposition(true, ShadowReusePolicy::Enabled, prepared,
+                                recreated.at(ShadowViewGroup::Cascade, 1)) ==
+          ShadowViewDisposition::Recorded);
 }
 
 TEST_CASE("a point face's light position and range are part of its content", "[ShadowPassPlan]")
@@ -118,18 +128,18 @@ TEST_CASE("a point face's light position and range are part of its content", "[S
     // moves or re-ranges with an unchanged matrix changes every texel, so an equal viewProj is not
     // enough to reuse.
     const PreparedShadowView resident = pointFaceWith(rigidDraw());
-    CHECK(shadowViewDisposition(true, pointFaceWith(rigidDraw()), residentFrom(resident)) ==
-          ShadowViewDisposition::Reused);
+    CHECK(shadowViewDisposition(true, ShadowReusePolicy::Enabled, pointFaceWith(rigidDraw()),
+                                residentFrom(resident)) == ShadowViewDisposition::Reused);
 
     const PreparedShadowView moved = pointFaceWith(rigidDraw(), Vec3{2.0f, 3.0f, 4.01f});
     CHECK(moved.viewProj() == resident.viewProj()); // the hole this closes: matrices agree
-    CHECK(shadowViewDisposition(true, moved, residentFrom(resident)) ==
+    CHECK(shadowViewDisposition(true, ShadowReusePolicy::Enabled, moved, residentFrom(resident)) ==
           ShadowViewDisposition::Recorded);
 
     const PreparedShadowView reranged = pointFaceWith(rigidDraw(), Vec3{2.0f, 3.0f, 4.0f}, 26.0f);
     CHECK(reranged.viewProj() == resident.viewProj());
-    CHECK(shadowViewDisposition(true, reranged, residentFrom(resident)) ==
-          ShadowViewDisposition::Recorded);
+    CHECK(shadowViewDisposition(true, ShadowReusePolicy::Enabled, reranged,
+                                residentFrom(resident)) == ShadowViewDisposition::Recorded);
 }
 
 TEST_CASE("the depth mode follows the identity and cannot be set against it", "[ShadowPassPlan]")
@@ -162,7 +172,8 @@ TEST_CASE("a projected view carries no light to compare", "[ShadowPassPlan]")
     const PreparedShadowView view = cascadeView();
     CHECK(view.lightRange() == 0.0f);
     CHECK(view.lightPosition().x() == 0.0f);
-    CHECK(shadowViewDisposition(true, viewWith(rigidDraw()), residentFrom(viewWith(rigidDraw()))) ==
+    CHECK(shadowViewDisposition(true, ShadowReusePolicy::Enabled, viewWith(rigidDraw()),
+                                residentFrom(viewWith(rigidDraw()))) ==
           ShadowViewDisposition::Reused);
 }
 
@@ -174,8 +185,8 @@ TEST_CASE("a moved caster records even though its buffers and bounds are unchang
     const PreparedShadowView resident = viewWith(rigidDraw());
     PreparedShadowDraw moved = rigidDraw();
     moved.model = translation(1.5f);
-    CHECK(shadowViewDisposition(true, viewWith(moved), residentFrom(resident)) ==
-          ShadowViewDisposition::Recorded);
+    CHECK(shadowViewDisposition(true, ShadowReusePolicy::Enabled, viewWith(moved),
+                                residentFrom(resident)) == ShadowViewDisposition::Recorded);
 }
 
 TEST_CASE("a re-fitted view records — the matrix is compared, not the fit that explains it",
@@ -185,8 +196,8 @@ TEST_CASE("a re-fitted view records — the matrix is compared, not the fit that
     PreparedShadowView refitted = PreparedShadowView::projected(
         ShadowLogicalViewId::cascade(1), translation(4.5f), 2048, 0.0f, 2.0f);
     REQUIRE(refitted.addDraw(rigidDraw()));
-    CHECK(shadowViewDisposition(true, refitted, residentFrom(resident)) ==
-          ShadowViewDisposition::Recorded);
+    CHECK(shadowViewDisposition(true, ShadowReusePolicy::Enabled, refitted,
+                                residentFrom(resident)) == ShadowViewDisposition::Recorded);
 }
 
 TEST_CASE("a swapped LOD carrier records even at the same level", "[ShadowPassPlan]")
@@ -196,13 +207,13 @@ TEST_CASE("a swapped LOD carrier records even at the same level", "[ShadowPassPl
     const PreparedShadowView resident = viewWith(rigidDraw());
     PreparedShadowDraw swapped = rigidDraw();
     swapped.indexBuffer = static_cast<BufferHandle>(99);
-    CHECK(shadowViewDisposition(true, viewWith(swapped), residentFrom(resident)) ==
-          ShadowViewDisposition::Recorded);
+    CHECK(shadowViewDisposition(true, ShadowReusePolicy::Enabled, viewWith(swapped),
+                                residentFrom(resident)) == ShadowViewDisposition::Recorded);
 
     PreparedShadowDraw coarser = rigidDraw();
     coarser.indexCount = 150;
-    CHECK(shadowViewDisposition(true, viewWith(coarser), residentFrom(resident)) ==
-          ShadowViewDisposition::Recorded);
+    CHECK(shadowViewDisposition(true, ShadowReusePolicy::Enabled, viewWith(coarser),
+                                residentFrom(resident)) == ShadowViewDisposition::Recorded);
 }
 
 TEST_CASE("the level and reason are diagnostics and do not force a re-record", "[ShadowPassPlan]")
@@ -213,8 +224,8 @@ TEST_CASE("the level and reason are diagnostics and do not force a re-record", "
     PreparedShadowDraw relabelled = rigidDraw();
     relabelled.level = 2;
     relabelled.reason = ShadowLodReason::SingleLevel;
-    CHECK(shadowViewDisposition(true, viewWith(relabelled), residentFrom(resident)) ==
-          ShadowViewDisposition::Reused);
+    CHECK(shadowViewDisposition(true, ShadowReusePolicy::Enabled, viewWith(relabelled),
+                                residentFrom(resident)) == ShadowViewDisposition::Reused);
 }
 
 TEST_CASE("every pixel-producing field forces a re-record when it changes", "[ShadowPassPlan]")
@@ -222,8 +233,8 @@ TEST_CASE("every pixel-producing field forces a re-record when it changes", "[Sh
     const PreparedShadowView resident = viewWith(rigidDraw());
     const auto records = [&](const PreparedShadowDraw& draw)
     {
-        return shadowViewDisposition(true, viewWith(draw), residentFrom(resident)) ==
-               ShadowViewDisposition::Recorded;
+        return shadowViewDisposition(true, ShadowReusePolicy::Enabled, viewWith(draw),
+                                     residentFrom(resident)) == ShadowViewDisposition::Recorded;
     };
 
     PreparedShadowDraw d = rigidDraw();
@@ -260,12 +271,13 @@ TEST_CASE("the material index is content for a masked caster only", "[ShadowPass
     masked.alpha = ShadowCasterAlpha::Masked;
     PreparedShadowDraw maskedOther = masked;
     maskedOther.materialIndex = masked.materialIndex + 1;
-    CHECK(shadowViewDisposition(true, viewWith(maskedOther), residentFrom(viewWith(masked))) ==
-          ShadowViewDisposition::Recorded);
+    CHECK(shadowViewDisposition(true, ShadowReusePolicy::Enabled, viewWith(maskedOther),
+                                residentFrom(viewWith(masked))) == ShadowViewDisposition::Recorded);
 
     PreparedShadowDraw opaqueOther = rigidDraw();
     opaqueOther.materialIndex = rigidDraw().materialIndex + 1;
-    CHECK(shadowViewDisposition(true, viewWith(opaqueOther), residentFrom(viewWith(rigidDraw()))) ==
+    CHECK(shadowViewDisposition(true, ShadowReusePolicy::Enabled, viewWith(opaqueOther),
+                                residentFrom(viewWith(rigidDraw()))) ==
           ShadowViewDisposition::Reused);
 }
 
@@ -274,8 +286,8 @@ TEST_CASE("per-view raster state changes force a re-record", "[ShadowPassPlan]")
     const PreparedShadowView resident = viewWith(rigidDraw());
     const auto records = [&](const PreparedShadowView& view)
     {
-        return shadowViewDisposition(true, view, residentFrom(resident)) ==
-               ShadowViewDisposition::Recorded;
+        return shadowViewDisposition(true, ShadowReusePolicy::Enabled, view,
+                                     residentFrom(resident)) == ShadowViewDisposition::Recorded;
     };
 
     const auto cascadeVariant =
@@ -309,12 +321,12 @@ TEST_CASE("a deformable caster poisons the whole view, in both directions", "[Sh
 
     const PreparedShadowView withDeformable = viewWith(deforming);
     CHECK_FALSE(withDeformable.cacheable());
-    CHECK(shadowViewDisposition(true, withDeformable, residentFrom(withDeformable)) ==
-          ShadowViewDisposition::Recorded);
+    CHECK(shadowViewDisposition(true, ShadowReusePolicy::Enabled, withDeformable,
+                                residentFrom(withDeformable)) == ShadowViewDisposition::Recorded);
 
     // Prepared is rigid now, but the resident content was captured with a deformable in the set.
-    CHECK(shadowViewDisposition(true, viewWith(rigidDraw()), residentFrom(withDeformable)) ==
-          ShadowViewDisposition::Recorded);
+    CHECK(shadowViewDisposition(true, ShadowReusePolicy::Enabled, viewWith(rigidDraw()),
+                                residentFrom(withDeformable)) == ShadowViewDisposition::Recorded);
 
     CHECK(viewWith(rigidDraw()).cacheable());
 }
@@ -327,19 +339,20 @@ TEST_CASE("a changed draw set forces a re-record", "[ShadowPassPlan]")
     PreparedShadowDraw second = rigidDraw();
     second.casterId = kOtherCaster;
     REQUIRE(extra.addDraw(second));
-    CHECK(shadowViewDisposition(true, extra, residentFrom(resident)) ==
+    CHECK(shadowViewDisposition(true, ShadowReusePolicy::Enabled, extra, residentFrom(resident)) ==
           ShadowViewDisposition::Recorded);
 
     // Same view, no draws: a caster that left the frame.
     const PreparedShadowView empty = cascadeView();
-    CHECK(shadowViewDisposition(true, empty, residentFrom(resident)) ==
+    CHECK(shadowViewDisposition(true, ShadowReusePolicy::Enabled, empty, residentFrom(resident)) ==
           ShadowViewDisposition::Recorded);
 
     // An empty view is cacheable and reusable against empty resident content: a cleared map that
     // stays cleared is a legitimate answer, and it is the case that makes an unchanged empty
     // cascade free rather than a clear plus two barriers every frame.
     CHECK(empty.cacheable());
-    CHECK(shadowViewDisposition(true, empty, residentFrom(empty)) == ShadowViewDisposition::Reused);
+    CHECK(shadowViewDisposition(true, ShadowReusePolicy::Enabled, empty, residentFrom(empty)) ==
+          ShadowViewDisposition::Reused);
 }
 
 TEST_CASE("draw order is compared, conservatively", "[ShadowPassPlan]")
@@ -356,8 +369,8 @@ TEST_CASE("draw order is compared, conservatively", "[ShadowPassPlan]")
     PreparedShadowView backwards = viewWith(second);
     REQUIRE(backwards.addDraw(first));
 
-    CHECK(shadowViewDisposition(true, backwards, residentFrom(forwards)) ==
-          ShadowViewDisposition::Recorded);
+    CHECK(shadowViewDisposition(true, ShadowReusePolicy::Enabled, backwards,
+                                residentFrom(forwards)) == ShadowViewDisposition::Recorded);
 }
 
 TEST_CASE("disposition names are distinct and non-empty", "[ShadowPassPlan]")
@@ -459,9 +472,11 @@ TEST_CASE("both self-shadow layers are content", "[ShadowPassPlan]")
 
     const PreparedShadowView resident = selfView(ShadowEffectiveCull::FrontFaces);
     CHECK(resident.layers().size() == 2);
-    CHECK(shadowViewDisposition(true, selfView(ShadowEffectiveCull::FrontFaces),
+    CHECK(shadowViewDisposition(true, ShadowReusePolicy::Enabled,
+                                selfView(ShadowEffectiveCull::FrontFaces),
                                 residentFrom(resident)) == ShadowViewDisposition::Reused);
-    CHECK(shadowViewDisposition(true, selfView(ShadowEffectiveCull::None),
+    CHECK(shadowViewDisposition(true, ShadowReusePolicy::Enabled,
+                                selfView(ShadowEffectiveCull::None),
                                 residentFrom(resident)) == ShadowViewDisposition::Recorded);
 }
 
@@ -648,4 +663,230 @@ TEST_CASE("a suppressed frame confirms nothing", "[ShadowPassPlan]")
     const ShadowFramePlan empty{};
     CHECK(shadowMapValidityFromPlan(empty, suppressed).none());
     CHECK(empty.recordsNothing());
+}
+
+// --- The residency store: what the images HOLD, between frames -------------------------------
+
+namespace
+{
+
+// A cascade view whose identity MATCHES the slot it will be added at — the plan refuses any other
+// pairing, and residency is addressed by that same physical slot.
+PreparedShadowView cascadeViewAt(std::size_t slot, const PreparedShadowDraw& draw)
+{
+    PreparedShadowView view = PreparedShadowView::projected(
+        ShadowLogicalViewId::cascade(static_cast<std::uint32_t>(slot)), translation(4.0f), 2048,
+        0.0f, 2.0f);
+    REQUIRE(view.addDraw(draw));
+    return view;
+}
+
+PreparedShadowView spotViewWith(std::size_t slot, std::uint64_t lightId,
+                                const PreparedShadowDraw& draw)
+{
+    PreparedShadowView view = spotView(slot, lightId);
+    REQUIRE(view.addDraw(draw));
+    return view;
+}
+
+} // namespace
+
+TEST_CASE("an empty store records everything, because an image holds no answer yet",
+          "[ShadowPassPlan]")
+{
+    const ShadowResidencyStore store{};
+    // Creation transitions a depth image's layout but writes no depth, so "nothing resident" is the
+    // honest starting state and the law's answer to it is to draw.
+    CHECK_FALSE(store.at(ShadowViewGroup::Cascade, 0).hasContent());
+    CHECK(shadowViewDisposition(true, ShadowReusePolicy::Enabled, cascadeViewAt(0, rigidDraw()),
+                                store.at(ShadowViewGroup::Cascade, 0)) ==
+          ShadowViewDisposition::Recorded);
+}
+
+TEST_CASE("committing a recorded frame is what makes the next identical one reuse",
+          "[ShadowPassPlan]")
+{
+    ShadowResidencyStore store{};
+    ShadowFramePlan plan{};
+    REQUIRE(plan.add(ShadowViewGroup::Cascade, 2, cascadeViewAt(2, rigidDraw()),
+                     ShadowViewDisposition::Recorded));
+    store.commit(plan);
+
+    REQUIRE(store.at(ShadowViewGroup::Cascade, 2).hasContent());
+    // The SECOND frame's identical preparation, judged against what the first one left behind.
+    CHECK(shadowViewDisposition(true, ShadowReusePolicy::Enabled, cascadeViewAt(2, rigidDraw()),
+                                store.at(ShadowViewGroup::Cascade, 2)) ==
+          ShadowViewDisposition::Reused);
+    // Per slot, not per family: nothing was committed for any other cascade, so each still draws.
+    CHECK_FALSE(store.at(ShadowViewGroup::Cascade, 1).hasContent());
+}
+
+TEST_CASE("a moved caster is not the content that was committed", "[ShadowPassPlan]")
+{
+    ShadowResidencyStore store{};
+    ShadowFramePlan plan{};
+    REQUIRE(plan.add(ShadowViewGroup::Cascade, 0, cascadeViewAt(0, rigidDraw()),
+                     ShadowViewDisposition::Recorded));
+    store.commit(plan);
+
+    PreparedShadowDraw moved = rigidDraw();
+    moved.model = translation(9.0f);
+    CHECK(shadowViewDisposition(true, ShadowReusePolicy::Enabled, cascadeViewAt(0, moved),
+                                store.at(ShadowViewGroup::Cascade, 0)) ==
+          ShadowViewDisposition::Recorded);
+}
+
+TEST_CASE("only a recorded view commits, so residency keeps describing the recording",
+          "[ShadowPassPlan]")
+{
+    ShadowResidencyStore store{};
+
+    // Frame 1 RECORDS a caster resolved at level 1.
+    ShadowFramePlan first{};
+    REQUIRE(first.add(ShadowViewGroup::Cascade, 0, cascadeViewAt(0, rigidDraw()),
+                      ShadowViewDisposition::Recorded));
+    store.commit(first);
+    REQUIRE(store.at(ShadowViewGroup::Cascade, 0).content() != nullptr);
+    REQUIRE(store.at(ShadowViewGroup::Cascade, 0).content()->draws().front().level == 1);
+
+    // Frame 2 REUSES it. The prepared view is identical in every compared field — that is why it
+    // was reused — but its diagnostic fields describe a decision this image's pixels never saw.
+    // Committing it would leave the record describing a frame that wrote nothing.
+    PreparedShadowDraw reResolved = rigidDraw();
+    reResolved.level = 3;
+    reResolved.reason = ShadowLodReason::SingleLevel;
+    ShadowFramePlan second{};
+    REQUIRE(second.add(ShadowViewGroup::Cascade, 0, cascadeViewAt(0, reResolved),
+                       ShadowViewDisposition::Reused));
+    store.commit(second);
+
+    REQUIRE(store.at(ShadowViewGroup::Cascade, 0).content() != nullptr);
+    CHECK(store.at(ShadowViewGroup::Cascade, 0).content()->draws().front().level == 1);
+}
+
+TEST_CASE("an inactive slot keeps its residency, because nothing overwrote its image",
+          "[ShadowPassPlan]")
+{
+    ShadowResidencyStore store{};
+    ShadowFramePlan first{};
+    REQUIRE(first.add(ShadowViewGroup::Spot, 0, spotViewWith(0, 61, rigidDraw()),
+                      ShadowViewDisposition::Recorded));
+    store.commit(first);
+    REQUIRE(store.at(ShadowViewGroup::Spot, 0).hasContent());
+
+    // The light goes away for a frame: the slot is claimed Invalid, nothing records, and the depth
+    // image is not touched. Clearing the record here would force a re-render of content the image
+    // demonstrably still holds.
+    ShadowFramePlan second{};
+    REQUIRE(second.add(ShadowViewGroup::Spot, 0, spotViewWith(0, 61, rigidDraw()),
+                       ShadowViewDisposition::Invalid));
+    store.commit(second);
+
+    CHECK(store.at(ShadowViewGroup::Spot, 0).hasContent());
+}
+
+TEST_CASE("an out-of-range address holds nothing rather than a neighbour's content",
+          "[ShadowPassPlan]")
+{
+    ShadowResidencyStore store{};
+    ShadowFramePlan plan{};
+    const std::size_t last = shadowViewSlotCount(ShadowViewGroup::Cascade) - 1;
+    REQUIRE(plan.add(ShadowViewGroup::Cascade, last, cascadeViewAt(last, rigidDraw()),
+                     ShadowViewDisposition::Recorded));
+    store.commit(plan);
+
+    // Never clamped into the last valid slot: that would answer one view's question with another
+    // view's image, and the answer would be "reuse".
+    CHECK_FALSE(store.at(ShadowViewGroup::Cascade, last + 1).hasContent());
+    CHECK_FALSE(store.at(ShadowViewGroup::Count, 0).hasContent());
+    CHECK(shadowViewDisposition(true, ShadowReusePolicy::Enabled, cascadeViewAt(last, rigidDraw()),
+                                store.at(ShadowViewGroup::Cascade, last + 1)) ==
+          ShadowViewDisposition::Recorded);
+}
+
+// --- the reuse toggle: scheduling, not pixels ---------------------------------------------------
+
+TEST_CASE("reuse disabled records content that would otherwise have been reused",
+          "[ShadowPassPlan]")
+{
+    const PreparedShadowView prepared = viewWith(rigidDraw());
+    const ShadowViewResidency resident = residentFrom(prepared);
+
+    // The SAME content and the SAME residency, differing only in the policy. That is the whole
+    // claim: the toggle changes whether identical content is re-rasterised, never what it is.
+    CHECK(shadowViewDisposition(true, ShadowReusePolicy::Enabled, prepared, resident) ==
+          ShadowViewDisposition::Reused);
+    CHECK(shadowViewDisposition(true, ShadowReusePolicy::Disabled, prepared, resident) ==
+          ShadowViewDisposition::Recorded);
+}
+
+TEST_CASE("reuse disabled does not make an inactive view render", "[ShadowPassPlan]")
+{
+    // Invalid outranks the toggle. A view nothing this frame vouches for has no work to schedule,
+    // so "record everything" must not conjure a rasterisation of a matrix the set disowned — which
+    // would also claim a row and stamp a timing for a view that does not exist.
+    const PreparedShadowView prepared = viewWith(rigidDraw());
+    const ShadowViewResidency resident = residentFrom(prepared);
+    CHECK(shadowViewDisposition(false, ShadowReusePolicy::Disabled, prepared, resident) ==
+          ShadowViewDisposition::Invalid);
+    CHECK(shadowViewDisposition(false, ShadowReusePolicy::Disabled, prepared,
+                                ShadowViewResidency{}) == ShadowViewDisposition::Invalid);
+}
+
+TEST_CASE("a frame recorded with reuse disabled still leaves usable residency", "[ShadowPassPlan]")
+{
+    // Recording commits either way, so flipping the toggle back on picks up from the NEWEST content
+    // rather than from whatever was resident when it was switched off. Without this the A/B would
+    // be misleading in the direction that matters: the first frame after re-enabling would reuse a
+    // map some earlier frame recorded.
+    ShadowResidencyStore store{};
+    ShadowFramePlan plan{};
+    PreparedShadowDraw moved = rigidDraw();
+    moved.model = translation(5.0f);
+    REQUIRE(plan.add(ShadowViewGroup::Cascade, 0, cascadeViewAt(0, moved),
+                     ShadowViewDisposition::Recorded));
+    store.commit(plan);
+
+    CHECK(shadowViewDisposition(true, ShadowReusePolicy::Enabled, cascadeViewAt(0, moved),
+                                store.at(ShadowViewGroup::Cascade, 0)) ==
+          ShadowViewDisposition::Reused);
+}
+
+TEST_CASE("adoption consumes the recording it adopts", "[ShadowPassPlan]")
+{
+    // The plan hands its recorded content OVER rather than lending it: adoption runs after the
+    // submit, where a copy could throw and there would be nothing useful to do about it. What the
+    // entry must not become is a moved-from husk that still reads as `Recorded` content.
+    ShadowResidencyStore store{};
+    ShadowFramePlan plan{};
+    REQUIRE(plan.add(ShadowViewGroup::Cascade, 0, cascadeViewAt(0, rigidDraw()),
+                     ShadowViewDisposition::Recorded));
+    store.commit(plan);
+
+    CHECK(store.at(ShadowViewGroup::Cascade, 0).hasContent());
+    CHECK(plan.view(ShadowViewGroup::Cascade, 0) == nullptr);
+    CHECK(plan.disposition(ShadowViewGroup::Cascade, 0) == ShadowViewDisposition::Invalid);
+    // The slot is free again, which is what "the entry is cleared" has to mean for a type whose
+    // whole discipline is one claim per slot.
+    CHECK(plan.add(ShadowViewGroup::Cascade, 0, cascadeViewAt(0, rigidDraw()),
+                   ShadowViewDisposition::Recorded));
+}
+
+TEST_CASE("only a recorded slot can be taken", "[ShadowPassPlan]")
+{
+    ShadowFramePlan plan{};
+    REQUIRE(plan.add(ShadowViewGroup::Cascade, 0, cascadeViewAt(0, rigidDraw()),
+                     ShadowViewDisposition::Reused));
+    REQUIRE(plan.add(ShadowViewGroup::Cascade, 1, cascadeViewAt(1, rigidDraw()),
+                     ShadowViewDisposition::Invalid));
+    CHECK_FALSE(plan.takeRecorded(ShadowViewGroup::Cascade, 0).has_value());
+    CHECK_FALSE(plan.takeRecorded(ShadowViewGroup::Cascade, 1).has_value());
+    // A reused entry is left INTACT: the frame is still describing it, and only the recorded ones
+    // are being handed over.
+    CHECK(plan.view(ShadowViewGroup::Cascade, 0) != nullptr);
+    CHECK(plan.disposition(ShadowViewGroup::Cascade, 0) == ShadowViewDisposition::Reused);
+    // And an address that names no slot answers "nothing", rather than reaching into a neighbour.
+    CHECK_FALSE(
+        plan.takeRecorded(ShadowViewGroup::Cascade, shadowViewSlotCount(ShadowViewGroup::Cascade))
+            .has_value());
 }

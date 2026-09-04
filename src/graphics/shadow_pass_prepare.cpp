@@ -213,17 +213,10 @@ struct ShadowDrawFilter
 } // namespace
 
 void prepareShadowFrame(const ShadowPreparationInputs& inputs, const ShadowRenderViewSet& views,
-                        ShadowMapValidity eligible, ShadowLodResolver& resolver,
-                        ShadowFrameStats& stats, ShadowFramePlan& plan)
+                        ShadowMapValidity eligible, const ShadowResidencyStore& residency,
+                        ShadowLodResolver& resolver, ShadowFrameStats& stats, ShadowFramePlan& plan)
 {
     plan.reset();
-
-    // NOTHING IS RESIDENT YET. The residency store arrives with the reuse half of this item; until
-    // then every view is a first use, which the law answers with `Recorded`. Consulting the law
-    // rather than writing `Recorded` here is deliberate: the disposition of a view is one decision
-    // with one home, and a hard-coded answer at the only call site would have to be found and
-    // removed later — exactly the kind of second authority this arc exists to retire.
-    const ShadowViewResidency noResidency{};
 
     // Family order matches the order the pass records in. That is DETERMINISM, not correctness — a
     // reversal would not change a single resolved level. A cascade and its world-only twin share
@@ -351,9 +344,22 @@ void prepareShadowFrame(const ShadowPreparationInputs& inputs, const ShadowRende
             }
 
             // The view is ACTIVE by construction — the set said so above — so the law's remaining
-            // questions are the cache's own: is there resident content, and does it match.
+            // questions are the cache's own: is there resident content, and does it match. Note
+            // this is asked AFTER every draw has been resolved and noted: preparation costs the
+            // same whether the answer is reuse or not, because the answer cannot be known without
+            // the work that produces it.
             const ShadowViewDisposition disposition =
-                shadowViewDisposition(true, prepared, noResidency);
+                shadowViewDisposition(true,
+                                      inputs.residencyReuseEnabled ? ShadowReusePolicy::Enabled
+                                                                   : ShadowReusePolicy::Disabled,
+                                      prepared, residency.at(group, slot));
+            // The ROW records what was decided, so the panel can tell "recorded an empty map" from
+            // "reused the empty map it recorded earlier" — two rows that are otherwise identical in
+            // every counter, one of which is GPU work and the other the cache doing its job.
+            if (!viewStats.noteDisposition(view->logicalId(), disposition))
+            {
+                contradictoryShadowViewRow(toString(group), slot);
+            }
             if (!plan.add(group, slot, std::move(prepared), disposition))
             {
                 unpreparableShadowView(toString(group), slot);

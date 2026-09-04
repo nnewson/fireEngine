@@ -134,6 +134,10 @@ struct Prepared
     ShadowFramePlan plan{};
     ShadowFrameStats stats{};
     ShadowLodResolver resolver{};
+    // What the depth images hold. Empty here is a first frame: every view records. A test that
+    // wants a SECOND frame commits this one first, which is exactly what the renderer does after a
+    // successful submit.
+    ShadowResidencyStore residency{};
 };
 
 // Runs a preparation over the standard view set. Returned by value so each test owns its own
@@ -143,7 +147,7 @@ void prepare(Prepared& out, const ShadowPreparationInputs& inputs, const ShadowR
              ShadowMapValidity eligible)
 {
     out.resolver.beginFrame();
-    prepareShadowFrame(inputs, views, eligible, out.resolver, out.stats, out.plan);
+    prepareShadowFrame(inputs, views, eligible, out.residency, out.resolver, out.stats, out.plan);
 }
 
 [[nodiscard]] ShadowPreparationInputs inputsFor(std::span<const DrawCommand> shadowDraws,
@@ -170,9 +174,9 @@ void prepare(Prepared& out, const ShadowPreparationInputs& inputs, const ShadowR
 
 TEST_CASE("every active view is recorded while nothing is resident", "[ShadowPassPrepare]")
 {
-    // The reuse half of the item has no residency store yet, so every view is a first use — and a
-    // first use RECORDS whatever its prepared content looks like, because image creation
-    // transitions the layout but leaves the depth undefined.
+    // An EMPTY residency store is a first frame: every view is a first use, and a first use
+    // RECORDS whatever its prepared content looks like, because image creation transitions the
+    // layout but leaves the depth undefined.
     const std::vector<DrawCommand> draws{nearCaster()};
     const ShadowRenderViewSet views = populatedViews();
     Prepared out{};
@@ -439,6 +443,211 @@ TEST_CASE("a caster with no stated pose stops the frame", "[ShadowPassPrepare]")
     const ShadowRenderViewSet views = populatedViews();
     Prepared out{};
     out.resolver.beginFrame();
-    CHECK_THROWS(prepareShadowFrame(inputsFor(draws), views, allFamilies(), out.resolver, out.stats,
-                                    out.plan));
+    CHECK_THROWS(prepareShadowFrame(inputsFor(draws), views, allFamilies(), out.residency,
+                                    out.resolver, out.stats, out.plan));
+}
+
+// --- reuse: the second frame, judged against what the first one left in the images ---------------
+
+namespace
+{
+
+// The renderer's frame boundary, in the order it happens there: the frame reached the queue, so its
+// staged LOD decisions AND the content it recorded are both adopted, and the next frame's counters
+// start clean (the real one moves to another ring slot).
+void submitFrame(Prepared& out)
+{
+    out.resolver.commitFrame();
+    out.residency.commit(out.plan);
+    out.stats.reset();
+}
+
+// Every physical slot the plan holds an entry for, with its disposition — enough to assert about a
+// whole frame rather than a hand-picked view, which is what "every cacheable view reused" needs.
+[[nodiscard]] bool everySlotIs(const ShadowFramePlan& plan, ShadowViewGroup group,
+                               ShadowViewDisposition expected)
+{
+    for (std::size_t slot = 0; slot < shadowViewSlotCount(group); ++slot)
+    {
+        const ShadowViewDisposition actual = plan.disposition(group, slot);
+        if (actual == ShadowViewDisposition::Invalid)
+        {
+            continue; // not engaged this frame; the view set, not the cache, decided that
+        }
+        if (actual != expected)
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+// What the receiver is told, derived the way the renderer derives it: eligibility from the view
+// SET, confirmation from the finished plan.
+[[nodiscard]] ShadowMapValidity confirmedFor(const ShadowFramePlan& plan,
+                                             const ShadowRenderViewSet& views)
+{
+    const ShadowFamilyEligibility eligibility{
+        .shadowsDisabled = false,
+        .primaryDirectionalLight = true,
+        .activeViews = {views.activeCount(ShadowViewGroup::Cascade),
+                        views.activeCount(ShadowViewGroup::WorldOnly),
+                        views.activeCount(ShadowViewGroup::Self),
+                        views.activeCount(ShadowViewGroup::Spot),
+                        views.activeCount(ShadowViewGroup::Point)},
+    };
+    return shadowMapValidityFromPlan(plan, eligibility);
+}
+
+} // namespace
+
+TEST_CASE("the second identical frame reuses every cacheable view", "[ShadowPassPrepare]")
+{
+    const std::vector<DrawCommand> draws{nearCaster()};
+    const ShadowRenderViewSet views = populatedViews();
+    Prepared out{};
+
+    // FRAME 1. Nothing is resident, so every engaged view records — including the world-only view,
+    // which has no draws at all: it still clears its image, and that clear is content.
+    prepare(out, inputsFor(draws), views, allFamilies());
+    for (const ShadowViewGroup group : {ShadowViewGroup::Cascade, ShadowViewGroup::WorldOnly,
+                                        ShadowViewGroup::Spot, ShadowViewGroup::Point})
+    {
+        CHECK(everySlotIs(out.plan, group, ShadowViewDisposition::Recorded));
+    }
+    CHECK_FALSE(out.plan.recordsNothing());
+    const ShadowMapValidity recordedValidity = confirmedFor(out.plan, views);
+
+    submitFrame(out);
+
+    // FRAME 2, same scene, same camera. The comparison finds every input unchanged.
+    prepare(out, inputsFor(draws), views, allFamilies());
+    for (const ShadowViewGroup group : {ShadowViewGroup::Cascade, ShadowViewGroup::WorldOnly,
+                                        ShadowViewGroup::Spot, ShadowViewGroup::Point})
+    {
+        CHECK(everySlotIs(out.plan, group, ShadowViewDisposition::Reused));
+        // Reused is SAMPLEABLE: the family is fully valid while doing no GPU work at all.
+        CHECK(out.plan.sampleableCount(group) > 0);
+        CHECK_FALSE(out.plan.records(group));
+    }
+    CHECK(out.plan.recordsNothing());
+    CHECK(out.plan.pointCubesWhole());
+    // And the receiver is told EXACTLY what it was told when the frame rasterised — the half that
+    // matters, since a frame doing no shadow work at all must still shade with shadows. Reuse is
+    // sampleable, so confirmation cannot tell the two frames apart.
+    CHECK(confirmedFor(out.plan, views) == recordedValidity);
+    // Not vacuous: the fixture engages one cascade of four, so the cascade family is legitimately
+    // unconfirmed, and `spot` is what keeps the comparison above from being two empty masks.
+    CHECK(recordedValidity.spot);
+}
+
+TEST_CASE("a frame that never reached the queue leaves nothing resident", "[ShadowPassPrepare]")
+{
+    const std::vector<DrawCommand> draws{nearCaster()};
+    const ShadowRenderViewSet views = populatedViews();
+    Prepared out{};
+
+    prepare(out, inputsFor(draws), views, allFamilies());
+    // The frame is ABANDONED — a lost swapchain, a throw before submit. Nothing is committed, so
+    // the images hold whatever they held before, and the next frame must draw rather than trust a
+    // record of pixels the GPU was never given.
+    out.stats.reset();
+    prepare(out, inputsFor(draws), views, allFamilies());
+    CHECK(everySlotIs(out.plan, ShadowViewGroup::Cascade, ShadowViewDisposition::Recorded));
+    CHECK_FALSE(out.plan.recordsNothing());
+}
+
+TEST_CASE("a moved caster re-records only the families that see it", "[ShadowPassPrepare]")
+{
+    std::vector<DrawCommand> draws{nearCaster()};
+    const ShadowRenderViewSet views = populatedViews();
+    Prepared out{};
+    prepare(out, inputsFor(draws), views, allFamilies());
+    submitFrame(out);
+
+    // The caster moves. Its model matrix is content for every family that draws it, so all of them
+    // re-record — but the world-only view, which this caster never entered, still reuses.
+    draws[0].shadowRequest.pose =
+        ShadowCasterPose::fromModel(Mat4::translate(Vec3{0.1f, 0.0f, 0.0f}));
+    prepare(out, inputsFor(draws), views, allFamilies());
+    CHECK(everySlotIs(out.plan, ShadowViewGroup::Cascade, ShadowViewDisposition::Recorded));
+    CHECK(everySlotIs(out.plan, ShadowViewGroup::Spot, ShadowViewDisposition::Recorded));
+    CHECK(everySlotIs(out.plan, ShadowViewGroup::WorldOnly, ShadowViewDisposition::Reused));
+}
+
+TEST_CASE("rigid views reuse in the same frame a deformable one records", "[ShadowPassPrepare]")
+{
+    // The claim that matters for a mixed scene, and the reason "every view is reused" would be the
+    // WRONG gate: a skinned self-shadow caster rewrites its vertices with nothing in the descriptor
+    // able to see it, so its view can never be cached — while the rigid families around it are
+    // reused in the same frame, and both are sampleable.
+    const std::vector<DrawCommand> rigid{nearCaster(1)};
+    std::vector<DrawCommand> self{
+        caster(2, boundsAt(Vec3{0.0f, 0.0f, 0.0f}), ShadowCasterDeformation::Deformable)};
+    self[0].selfShadowSlot = 0;
+    const ShadowRenderViewSet views = populatedViews();
+    Prepared out{};
+
+    prepare(out, inputsFor(rigid, {}, self), views, allFamilies());
+    submitFrame(out);
+    prepare(out, inputsFor(rigid, {}, self), views, allFamilies());
+
+    CHECK(everySlotIs(out.plan, ShadowViewGroup::Cascade, ShadowViewDisposition::Reused));
+    CHECK(everySlotIs(out.plan, ShadowViewGroup::Spot, ShadowViewDisposition::Reused));
+    CHECK(everySlotIs(out.plan, ShadowViewGroup::Self, ShadowViewDisposition::Recorded));
+    // Half the frame does GPU work; all of it is sampleable.
+    CHECK(out.plan.records(ShadowViewGroup::Self));
+    CHECK_FALSE(out.plan.records(ShadowViewGroup::Cascade));
+    CHECK(out.plan.sampleableCount(ShadowViewGroup::Self) == 1);
+    CHECK(out.plan.sampleableCount(ShadowViewGroup::Cascade) > 0);
+}
+
+TEST_CASE("the reuse toggle records what would have been reused, and says so in the row",
+          "[ShadowPassPrepare]")
+{
+    const std::vector<DrawCommand> draws{nearCaster()};
+    const ShadowRenderViewSet views = populatedViews();
+    Prepared out{};
+    prepare(out, inputsFor(draws), views, allFamilies());
+    submitFrame(out);
+
+    // Reuse OFF: the same scene, the same residency, and every engaged view records — the pass as
+    // it behaved before the cache existed, which is what makes this an honest A/B.
+    ShadowPreparationInputs noReuse = inputsFor(draws);
+    noReuse.residencyReuseEnabled = false;
+    prepare(out, noReuse, views, allFamilies());
+    CHECK(everySlotIs(out.plan, ShadowViewGroup::Cascade, ShadowViewDisposition::Recorded));
+    CHECK(everySlotIs(out.plan, ShadowViewGroup::Point, ShadowViewDisposition::Recorded));
+    // The ROW carries the decision, so the panel shows a re-render rather than leaving a reader to
+    // infer one from a raster count the recorder has not produced yet.
+    CHECK(out.stats.view(ShadowViewGroup::Cascade, 0).disposition ==
+          ShadowViewDisposition::Recorded);
+
+    // And back on: the frame just recorded committed as usual, so this reuses the NEWEST content.
+    submitFrame(out);
+    prepare(out, inputsFor(draws), views, allFamilies());
+    CHECK(everySlotIs(out.plan, ShadowViewGroup::Cascade, ShadowViewDisposition::Reused));
+    const ShadowViewStats& row = out.stats.view(ShadowViewGroup::Cascade, 0);
+    CHECK(row.disposition == ShadowViewDisposition::Reused);
+    // A reused row is CLAIMED and OBSERVED while rasterising nothing: the counters still describe
+    // the geometry the map holds, and the raster passes stay with the recorder, which never runs.
+    CHECK(row.rasterPasses == 0);
+    CHECK(row.candidateDraws > 0);
+    CHECK(row.logicalId.valid());
+}
+
+TEST_CASE("a view that never engaged reports no disposition at all", "[ShadowPassPrepare]")
+{
+    // `Invalid` on a row the plan never claimed is what separates "reused, drew nothing" from
+    // "was not there" — the distinction the whole row exists to preserve.
+    const std::vector<DrawCommand> draws{nearCaster()};
+    const ShadowRenderViewSet views = populatedViews();
+    Prepared out{};
+    prepare(out, inputsFor(draws), views, allFamilies());
+
+    const std::size_t unusedSpot = shadowViewSlotCount(ShadowViewGroup::Spot) - 1;
+    CHECK(out.stats.view(ShadowViewGroup::Spot, unusedSpot).disposition ==
+          ShadowViewDisposition::Invalid);
+    CHECK(out.plan.disposition(ShadowViewGroup::Spot, unusedSpot) ==
+          ShadowViewDisposition::Invalid);
 }

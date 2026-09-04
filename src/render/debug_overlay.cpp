@@ -30,7 +30,7 @@ namespace
 // which is what the focus identifies and what the ShadowLod tint needs. Worth revisiting if reading
 // a family's mix on its own turns out to be the common question.
 bool shadowStatsRow(const char* label, const ShadowViewStats& stats, const char* timing,
-                    bool focusable = false, bool focused = false)
+                    bool focusable = false, bool focused = false, bool rollup = false)
 {
     ImGui::TableNextRow();
     ImGui::TableNextColumn();
@@ -45,6 +45,12 @@ bool shadowStatsRow(const char* label, const ShadowViewStats& stats, const char*
     }
     ImGui::TableNextColumn();
     ImGui::Text("%llu", static_cast<unsigned long long>(stats.rasterPasses));
+    ImGui::TableNextColumn();
+    // WHAT THE VIEW DID, which zero raster passes alone cannot say: a reused map and a view that
+    // never engaged both rasterise nothing, and since arc 2 #4 the first is the normal, healthy
+    // case. Rollup rows have no single schedule (a family can be half reused), so they print an em
+    // dash rather than a state they do not have.
+    ImGui::TextUnformatted(rollup ? "—" : toString(stats.disposition).data());
     ImGui::TableNextColumn();
     ImGui::Text("%llu / %llu", static_cast<unsigned long long>(stats.drawnDraws),
                 static_cast<unsigned long long>(stats.candidateDraws));
@@ -224,7 +230,7 @@ void drawShadowDiagnostics(const FrameStats& stats, RenderTunables& tunables)
         ImGui::EndTable();
     }
 
-    constexpr int kColumns = 5 + static_cast<int>(kShadowLodBinCount);
+    constexpr int kColumns = 6 + static_cast<int>(kShadowLodBinCount);
     if (ImGui::BeginTable("shadowviews", kColumns,
                           ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_RowBg |
                               ImGuiTableFlags_BordersInnerV))
@@ -234,6 +240,7 @@ void drawShadowDiagnostics(const FrameStats& stats, RenderTunables& tunables)
         // distribution, which is the one thing this table exists to show, was unreadable.
         ImGui::TableSetupColumn("View", ImGuiTableColumnFlags_WidthStretch, 2.8f);
         ImGui::TableSetupColumn("Pass", ImGuiTableColumnFlags_WidthStretch, 0.55f);
+        ImGui::TableSetupColumn("State", ImGuiTableColumnFlags_WidthStretch, 1.0f);
         ImGui::TableSetupColumn("Draws d/c", ImGuiTableColumnFlags_WidthStretch, 1.35f);
         ImGui::TableSetupColumn("Tris d/c", ImGuiTableColumnFlags_WidthStretch, 2.3f);
         ImGui::TableSetupColumn("L0", ImGuiTableColumnFlags_WidthStretch, 0.5f);
@@ -264,7 +271,8 @@ void drawShadowDiagnostics(const FrameStats& stats, RenderTunables& tunables)
             const std::string_view name = toString(group);
             std::snprintf(groupLabel, sizeof(groupLabel), "%.*s", static_cast<int>(name.size()),
                           name.data());
-            shadowStatsRow(groupLabel, total, total.touched() ? timing : "idle");
+            shadowStatsRow(groupLabel, total, total.touched() ? timing : "idle",
+                           /*focusable=*/false, /*focused=*/false, /*rollup=*/true);
 
             for (std::size_t slot = 0; slot < shadowViewSlotCount(group); ++slot)
             {
@@ -309,7 +317,7 @@ void drawShadowDiagnostics(const FrameStats& stats, RenderTunables& tunables)
             std::snprintf(totalTiming, sizeof(totalTiming), "%.3f", static_cast<double>(shadowMs));
         }
         if (shadowStatsRow("Scene total", sceneTotal, totalTiming, /*focusable=*/true,
-                           !tunables.shadowViewFocus.perView))
+                           !tunables.shadowViewFocus.perView, /*rollup=*/true))
         {
             tunables.shadowViewFocus = ShadowViewFocus{}; // back to the rollup
         }
@@ -517,6 +525,12 @@ void DebugOverlay::buildUi(const FrameStats& stats, RenderTunables& tunables)
         ImGui::SliderFloat("Shadow coarsen ratio", &tunables.shadowLodCoarsenRatio, 0.25f, 1.0f,
                            "%.2f");
         ImGui::EndDisabled();
+        // Arc 2 #4's A/B, and NOT gated on the shadow-LOD switch above: reuse is about whether a
+        // view rasterises at all, which is a different question from which level it would pick.
+        // Off, every active view records exactly as it did before the cache existed — so a shadow
+        // that looks wrong can be confirmed as stale, or cleared, without a rebuild.
+        ImGui::Checkbox("Reuse unchanged shadow views##shadowreuse",
+                        &tunables.shadowResidencyReuseEnabled);
         if (stats.trianglesGpuPending)
         {
             ImGui::Text("Triangles drawn: pending GPU readback");

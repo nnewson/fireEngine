@@ -57,6 +57,12 @@ struct RendererDebug
     // Disables every shadow-map visibility lookup (cascade, spot, point) in
     // the forward shader. Surfaces look fully lit by direct lighting.
     bool noShadows{false};
+    // Shadow-map reuse (arc 2 #4). When false (--no-shadow-reuse) every engaged shadow view
+    // records even when its depth image already holds identical content — the pass as it behaved
+    // before the residency cache, and the "before" half of the A/B for it. Starting the run with
+    // it off is what a measurement needs: the overlay checkbox exists too, but a mid-run flip
+    // cannot produce comparable frames from the first one.
+    bool shadowResidencyReuse{true};
     // Temporal anti-aliasing. When false (--no-taa) the projection jitter and
     // the resolve pass are both skipped, reverting to the raw aliased image —
     // the A/B reference for confirming TAA is doing the work.
@@ -390,7 +396,11 @@ private:
     {
         return !capturePath_.empty();
     }
-    void submitAndPresent(Window& display, vk::CommandBuffer cmd, uint32_t imageIndex);
+    // Split on purpose — see the definition in renderer.cpp. Submission is the moment the GPU
+    // owns the frame's work; presentation is a separate act that can throw. Anything recording
+    // what the GPU now owns (the shadow-LOD dead band, shadow residency) commits BETWEEN them.
+    void submitFrame(vk::CommandBuffer cmd, uint32_t imageIndex);
+    void presentFrame(Window& display, uint32_t imageIndex);
     void recordSkybox(Vec3 cameraPosition, Vec3 cameraTarget,
                       std::vector<DrawCommand>& drawCommands);
     void logShadowCasterPlacement(std::span<const DrawCommand> shadowDraws) const;

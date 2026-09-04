@@ -957,6 +957,29 @@ the same change — most have a test or guard that will catch you, but not all.
   one constructed value so they cannot drift), and the per-frame-ring buffer handles are carried for
   recording but EXCLUDED from the comparison, since identical content alternates handles every
   frame.
+- **What an image HOLDS is committed only after the submit, and only for a view that recorded.**
+  `ShadowResidencyStore` (`graphics/shadow_pass_plan.hpp`) is the other operand of the disposition
+  law: preparation compares this frame's prepared content against it, and a view whose content
+  matches rasterises nothing. It is owned by `Shadows`, beside the depth images it is a record of —
+  which is the entire invalidation story, and why there is no `invalidate()` for anyone to forget:
+  recreating the images means reconstructing the object holding both. If in-place recreation ever
+  arrives, move the targets and the store into one private aggregate so replacing them stays a
+  single act. `Renderer::drawFrame` commits it beside `shadowLodResolver_.commitFrame()`, **after
+  `submitFrame` and before `presentFrame`** — which is why those are two functions: submission is
+  the moment the GPU owns the work, while presentation can throw (raii `presentKHR` does exactly
+  that on an out-of-date swapchain), so committing after it would let a resize skip the commit for a
+  frame whose depth was already being rasterised and leave the store describing the previous one.
+  Content adopted by a frame abandoned BEFORE the submit would claim an image holds pixels the GPU
+  never drew — the same rule read from the other end. Two rules live inside the store rather than at that call site — only a
+  `Recorded` view commits (a `Reused` view never touched its image, and its prepared work differs in
+  the diagnostic fields, so committing it would leave the record describing a frame that wrote
+  nothing), and an `Invalid` slot keeps what it had (nothing recorded means nothing overwrote the
+  image, so clearing it would force a re-render of content the image still holds). Adoption is a
+  MOVE (`ShadowFramePlan::takeRecorded`) and the whole path is `noexcept`: after the submit there is
+  no useful response to a failed allocation, and a throw there would leave residency describing the
+  previous frame while the images hold this one's depth. `RenderTunables::shadowResidencyReuseEnabled`
+  turns reuse off for an A/B — it is scheduling, not content, so it stays out of the descriptor and
+  a frame recorded with it off is reusable as soon as it is back on.
 - **A caster that deforms poisons its view's reuse, and a diagnostic row is claimed once per frame.**
   `PreparedShadowDraw::deformable` (from SH-04's classification) makes a draw compare unequal to
   everything including itself, because skinning rewrites vertices with no revision any compared

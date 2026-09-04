@@ -296,6 +296,7 @@ Renderer::Renderer(const Window& window, std::string environmentPath, RendererDe
     // below), so the GPU path is the default; --vdpm-gpu / --no-vdpm-gpu force it explicitly.
     tunables_.vdpmGpuBackend = debug.vdpmGpuBackend.value_or(VdpmScan::deviceSupported(device_));
     tunables_.noShadows = debug.noShadows;
+    tunables_.shadowResidencyReuseEnabled = debug.shadowResidencyReuse;
     tunables_.debugDrawAabbs = debug.physicsDebug;
     tunables_.debugDrawColliders = debug.physicsDebug;
     tunables_.debugDrawContacts = debug.physicsDebug;
@@ -852,6 +853,7 @@ void Renderer::prepareShadowPlan(const DrawBuckets& buckets)
         .lodBudgetTexels = tunables_.shadowLodPixelBudget,
         .hysteresis = ShadowLodHysteresis{.coarsenRatio = tunables_.shadowLodCoarsenRatio},
         .cullingEnabled = tunables_.cullingEnabled,
+        .residencyReuseEnabled = tunables_.shadowResidencyReuseEnabled,
     };
     const auto family = [&](ShadowViewGroup group) -> ShadowFamilyRaster&
     { return inputs.raster[static_cast<std::size_t>(group)]; };
@@ -867,8 +869,10 @@ void Renderer::prepareShadowPlan(const DrawBuckets& buckets)
     family(ShadowViewGroup::Point) = {kPointShadowMapExtent, kPunctualShadowRasterBiasConstant,
                                       kPunctualShadowRasterBiasSlope};
 
-    prepareShadowFrame(inputs, shadowViews_, eligibility.eligible(), shadowLodResolver_,
-                       shadowStatsRing_[currentFrame_], shadowPlan_);
+    // The residency store comes from `Shadows`, which owns the depth images it is a record of. It
+    // is read-only here: what this frame recorded is adopted after the submit, not now.
+    prepareShadowFrame(inputs, shadowViews_, eligibility.eligible(), shadows_.residency(),
+                       shadowLodResolver_, shadowStatsRing_[currentFrame_], shadowPlan_);
 
     // CONFIRMATION, from the plan that was actually built and judged against the eligibility that
     // authorised it. This is what the receiver is told, and what the pass records — one value, one
@@ -1436,11 +1440,36 @@ void Renderer::logShadowRecordingSample() const
     const auto familyLine = [&](ShadowViewGroup group, bool valid) -> std::string
     {
         const ShadowViewStats totals = stats_.shadow.groupTotal(group);
+        // The DISPOSITIONS behind the counters (arc 2 #4). A family can be part reused and part
+        // recorded, so a single word for the family would be a summary of two different answers.
+        std::size_t recorded = 0;
+        std::size_t reused = 0;
+        for (std::size_t slot = 0; slot < shadowViewSlotCount(group); ++slot)
+        {
+            switch (stats_.shadow.view(group, slot).disposition)
+            {
+            case ShadowViewDisposition::Recorded:
+                ++recorded;
+                break;
+            case ShadowViewDisposition::Reused:
+                ++reused;
+                break;
+            case ShadowViewDisposition::Invalid:
+                break;
+            }
+        }
+        // A family that records nothing OPENS NO TIMING SPAN, so its resolved time is not a
+        // measurement of zero — it is the absence of one. Printing "0.000ms" for it would be the
+        // single most misreadable number in a shadow-cache measurement, since "the reuse made it
+        // free" and "nothing was measured" would look identical.
         const ProfilePass pass = shadowProfilePass(group);
-        const float ms =
-            pass == ProfilePass::Count ? 0.0f : stats_.passMs[static_cast<std::size_t>(pass)];
-        return std::format("{} {} passes={} {:.3f}ms", toString(group),
-                           valid ? "recorded" : "skipped", totals.rasterPasses, ms);
+        const bool measured = recorded > 0 && pass != ProfilePass::Count && stats_.gpuValid();
+        const std::string timing =
+            measured ? std::format("{:.3f}ms", stats_.passMs[static_cast<std::size_t>(pass)])
+                     : std::string{recorded > 0 ? "unmeasured" : "no span issued"};
+        return std::format("{} {} recorded={} reused={} passes={} {}", toString(group),
+                           valid ? "sampleable" : "skipped", recorded, reused, totals.rasterPasses,
+                           timing);
     };
 
     log::debug(log::category::render, "shadow recording: {} | {} | {} | {} | {}{}{}",
@@ -1946,14 +1975,22 @@ void Renderer::drawFrame(Window& display, RenderableScene& scene, float dt)
     transitionSwapchainToPresent(cmd, *imageIndex, capturingThisFrame);
 
     cmd.end();
-    submitAndPresent(display, cmd, *imageIndex);
-    // IMMEDIATELY after the submit, and before anything that can fail. The contract is "the GPU has
-    // the work", not "the rest of the frame went well": the shadow-LOD dead band (SH-03) describes
-    // geometry that was submitted, and `writeCapture()` below throws on an I/O failure, which would
-    // otherwise discard a frame's worth of legitimately earned hysteresis. Levels are STAGED until
-    // this line, so a frame abandoned before it (a lost swapchain, an early return) leaves none
-    // behind — the next beginFrame drops them.
+    submitFrame(cmd, *imageIndex);
+    // BETWEEN THE SUBMIT AND THE PRESENT, which is the whole point of the split above. The contract
+    // for both commits below is "the GPU has the work" — and presentation is not part of that
+    // contract: it can throw (an out-of-date swapchain does exactly that), and a frame whose depth
+    // is already being rasterised must not lose its record on the way out.
+    //
+    // The shadow-LOD dead band (SH-03) describes geometry that was submitted; levels are STAGED
+    // until this line, so a frame abandoned BEFORE the submit leaves none behind.
     shadowLodResolver_.commitFrame();
+    // And what the images HOLD is now what this frame rasterised into them. Same boundary, same
+    // reason, plus one of its own: residency is the record that lets a later frame skip drawing, so
+    // a missed commit after a real image write is unsafe in the direction that produces a wrong
+    // picture rather than a slow one. Only `Recorded` views are adopted — the store's own law.
+    // `noexcept`, so nothing here can fail before the present below is even attempted.
+    shadows_.commitResidency(shadowPlan_);
+    presentFrame(display, *imageIndex);
     // Published with THIS frame's counters, in the same ring slot, so the churn a reader sees sits
     // beside the draws and levels it describes rather than beside a completed frame's.
     const ShadowLodTransitions movement = shadowLodResolver_.lastCommitMovement();
@@ -2164,7 +2201,7 @@ CaptureFormat Renderer::resolveCaptureFormat(vk::Format format)
 
 void Renderer::recordCaptureCopy(vk::CommandBuffer cmd, uint32_t imageIndex)
 {
-    // Snapshot the geometry AND the format now, with the copy. submitAndPresent may recreate
+    // Snapshot the geometry AND the format now, with the copy. presentFrame may recreate
     // the swapchain (a resize, or an out-of-date present) before writeCapture runs, and the
     // buffer would then be decoded against an extent and format the pixels in it never had.
     captureExtent_ = swapchain_.extent();
@@ -2230,7 +2267,20 @@ void Renderer::writeCapture()
               extent.width, extent.height, capturePath_);
 }
 
-void Renderer::submitAndPresent(Window& display, vk::CommandBuffer cmd, uint32_t imageIndex)
+// SUBMISSION and PRESENTATION are separate acts, and the split is load-bearing rather than tidy.
+//
+// Once `submit2` returns, the GPU owns the work: those shadow images WILL be written whatever
+// happens next. Presentation is a different question that can fail — vulkan-hpp's raii `presentKHR`
+// THROWS on `eErrorOutOfDateKHR` (only `eSuboptimalKHR` is a success code without
+// `VULKAN_HPP_HANDLE_ERROR_OUT_OF_DATE_AS_SUCCESS`), and `recreateSwapchain` can throw too. With
+// the two fused, a resize at exactly the wrong moment threw past the residency commit while the
+// frame's depth was already being rasterised: the store would still describe the PREVIOUS frame's
+// content, and a later frame preparing that same content would reuse an image holding something
+// else. That is the one failure mode this whole item exists to prevent, arriving through the error
+// path instead of the happy one.
+//
+// So the caller commits what the GPU now owns BETWEEN these two calls.
+void Renderer::submitFrame(vk::CommandBuffer cmd, uint32_t imageIndex)
 {
     auto imageAvail = frame_.imageAvailable(currentFrame_);
     auto renderDone = frame_.renderFinished(imageIndex);
@@ -2266,7 +2316,11 @@ void Renderer::submitAndPresent(Window& display, vk::CommandBuffer cmd, uint32_t
     device_.graphicsQueue().submit2(si);
     frameTimelineValue_[currentFrame_] = signalValue;
     imageTimelineValue_[imageIndex] = signalValue;
+}
 
+void Renderer::presentFrame(Window& display, uint32_t imageIndex)
+{
+    auto renderDone = frame_.renderFinished(imageIndex);
     auto swapchain = swapchain_.swapchain();
     vk::PresentInfoKHR pi{
         .waitSemaphoreCount = 1,

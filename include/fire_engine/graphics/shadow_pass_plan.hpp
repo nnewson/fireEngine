@@ -16,6 +16,7 @@
 #include <fire_engine/graphics/shadow_identity.hpp>
 #include <fire_engine/graphics/shadow_lod_resolver.hpp>
 #include <fire_engine/graphics/shadow_map_validity.hpp>
+#include <fire_engine/graphics/shadow_view_disposition.hpp>
 #include <fire_engine/math/mat4.hpp>
 
 // What a shadow view will RASTERISE this frame, described exactly enough to decide whether last
@@ -298,35 +299,6 @@ private:
     std::size_t layerCount_{0};
 };
 
-// What a view does this frame. Three states, and deliberately NOT folded into `ShadowMapValidity` —
-// that type answers the shader's question ("is this map safe to sample"), which stays Boolean. This
-// answers the pass's question, which is a different one: a CSM with two cascades recorded and two
-// reused is entirely valid and half the work.
-enum class ShadowViewDisposition : std::uint8_t
-{
-    // Not engaged this frame, or engaged with nothing sampleable behind it. Nothing to record and
-    // nothing to sample.
-    Invalid,
-    // Resident content matches; the image already holds the right depth. Records nothing.
-    Reused,
-    // Records this frame, either because the content changed or because it can never be cached.
-    Recorded,
-};
-
-[[nodiscard]] std::string_view toString(ShadowViewDisposition disposition) noexcept;
-
-// The two derived questions. Everything downstream asks one of these rather than testing the
-// enumerator, so "reused counts as sampleable" is stated once.
-[[nodiscard]] constexpr bool shadowViewSampleable(ShadowViewDisposition disposition) noexcept
-{
-    return disposition == ShadowViewDisposition::Reused ||
-           disposition == ShadowViewDisposition::Recorded;
-}
-[[nodiscard]] constexpr bool shadowViewRecords(ShadowViewDisposition disposition) noexcept
-{
-    return disposition == ShadowViewDisposition::Recorded;
-}
-
 // One physical view slot's committed content — what its depth image actually holds.
 //
 // COMMITTED is the load-bearing word. A frame that prepared content and then never submitted (an
@@ -361,13 +333,12 @@ public:
     {
         content_ = std::move(content);
     }
-    // Forget it: the image was recreated or destroyed (a resize, a device loss), so whatever it
-    // held is gone. The owner of the images must call this, or a reuse would sample a fresh
-    // allocation's undefined depth.
-    void invalidate() noexcept
-    {
-        content_.reset();
-    }
+    // There is deliberately NO `invalidate()`. An image that is recreated takes its record with it,
+    // because `ShadowResidencyStore` lives inside `Shadows` alongside the images themselves —
+    // reconstruction IS the invalidation, so there is nothing for a caller to remember to call and
+    // no window in which a store can disagree with the images it describes. If in-place recreation
+    // ever arrives, the targets and the store move into one private aggregate together rather than
+    // this hook coming back.
 
 private:
     std::optional<PreparedShadowView> content_{};
@@ -378,7 +349,7 @@ private:
 // `active` is the view set's answer (SH-03): a slot the set reports inactive is Invalid regardless
 // of what its image holds, because nothing this frame vouches for the matrix behind it.
 [[nodiscard]] ShadowViewDisposition
-shadowViewDisposition(bool active, const PreparedShadowView& prepared,
+shadowViewDisposition(bool active, ShadowReusePolicy reuse, const PreparedShadowView& prepared,
                       const ShadowViewResidency& resident) noexcept;
 
 // One frame's prepared work for every physical shadow view, plus what each will do.
@@ -474,6 +445,20 @@ public:
     // depends on which way the receiver faces.
     [[nodiscard]] bool pointCubesWhole() const noexcept;
 
+    // Hands this slot's RECORDED content over to residency, emptying the entry.
+    //
+    // A move, not a copy, and that is a correctness property rather than an optimisation: adoption
+    // happens AFTER the queue has accepted the frame, where a throwing allocation would abandon
+    // work the GPU is already executing. Moving a prepared view allocates nothing (the static
+    // asserts in the .cpp pin that), so the post-submit path cannot fail.
+    //
+    // Empty for any other disposition, so the store's "Recorded only" rule is expressed once more
+    // in the type that owns the content. The entry is CLEARED rather than left holding a moved-from
+    // view: the plan is reset at the start of the next preparation, and until then it should say
+    // the content is gone instead of describing a husk.
+    [[nodiscard]] std::optional<PreparedShadowView> takeRecorded(ShadowViewGroup group,
+                                                                 std::size_t slot) noexcept;
+
 private:
     struct Entry
     {
@@ -485,6 +470,44 @@ private:
         bool claimed{false};
     };
     std::array<Entry, kShadowViewCount> entries_{};
+};
+
+// What every physical shadow view's depth image HOLDS — the frame-to-frame half of the cache, and
+// the other operand of `shadowViewDisposition`.
+//
+// OWNED BY THE IMAGES' OWNER (`render/shadows.cpp`), never by the frame. A plan describes one
+// frame's intent and is reset at the start of the next; this describes durable GPU content, so it
+// lives beside the images it is a record of. That is also the whole invalidation story: there is no
+// `invalidate()` to forget to call, because recreating the images means reconstructing the object
+// that holds both them and this.
+//
+// Indexed by the same physical `(group, slot)` as the plan, the view set and the diagnostics, so a
+// row, a timing, a plan entry and a residency entry all name one view.
+class ShadowResidencyStore
+{
+public:
+    // What this slot's image holds. An out-of-range address answers "nothing resident", which the
+    // law turns into `Recorded` — the conservative direction: a spurious re-render costs a frame's
+    // raster, while a spurious reuse shows shadows from a frame that is gone.
+    [[nodiscard]] const ShadowViewResidency& at(ShadowViewGroup group,
+                                                std::size_t slot) const noexcept;
+
+    // Adopt what the frame actually recorded, CONSUMING it. Call AFTER the queue has accepted the
+    // work: content committed by a frame that was abandoned would claim an image holds pixels
+    // nothing ever drew. `noexcept`, because this runs on the far side of the submit — see
+    // `ShadowFramePlan::takeRecorded`.
+    //
+    // RECORDED ONLY, and the filter lives here rather than at the call site so there is one place
+    // that decides. A `Reused` view did not touch its image; committing its prepared work would
+    // replace the record of what the image holds with a description of a frame that never wrote to
+    // it — equal in every compared field, by construction, but no longer the recording that made
+    // the depth. An `Invalid` slot is left alone for the same reason read the other way: nothing
+    // recorded, so nothing overwrote the image, so the existing record is still true — clearing it
+    // would force a re-record of content the image still holds.
+    void commit(ShadowFramePlan& plan) noexcept;
+
+private:
+    std::array<ShadowViewResidency, kShadowViewCount> entries_{};
 };
 
 } // namespace fire_engine

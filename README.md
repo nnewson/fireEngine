@@ -405,10 +405,23 @@ FE_LOG=render:debug ./fireEngineApp
 
 Current categories are `app`, `general`, `gltf`, `physics`, `ragdoll`, and `render`.
 
-`render:debug` also prints a periodic **shadow recording** line — per family, whether it was recorded
-or skipped, its raster passes and its GPU milliseconds — which is how `--no-shadows` is checked: it
-suppresses the *recording*, not only the sampling, so every family must read `skipped passes=0
-0.000ms`. A frame that still rendered into maps nobody samples would look identical on screen.
+`render:debug` also prints a periodic **shadow recording** line — per family, whether it was
+sampleable or skipped, how many of its views recorded and how many reused their existing depth
+image, its raster passes, and its GPU milliseconds — which is how `--no-shadows` is checked: it
+suppresses the *recording*, not only the sampling, so every family must read `skipped recorded=0
+reused=0 passes=0`. A frame that still rendered into maps nobody samples would look identical on
+screen.
+
+A family that records nothing prints **`no span issued`** rather than `0.000ms`, and the distinction
+is the point: a reused shadow map opens no timing span at all, so a zero there would be the absence
+of a measurement dressed as one.
+
+**Shadow-map reuse** (on by default) skips re-rendering a shadow view whose content is unchanged —
+the same casters, the same transforms, the same resolved geometry, the same light. Turn it off with
+`--no-shadow-reuse`, or with the overlay's **"Reuse unchanged shadow views"** checkbox, to get the
+"before" half of an A/B: every engaged view then records exactly as it did before the cache existed.
+Start the run with the flag when measuring — a mid-run flip leaves the early frames reused, so the
+baseline is not comparable from frame one.
 
 ## Dependencies
 
