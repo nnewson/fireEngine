@@ -1034,6 +1034,38 @@ contracts from this work:
   `--no-shadow-reuse` (overlay: "Reuse unchanged shadow views"); the runbook is
   [`acceptance-testing.md`](acceptance-testing.md) § Shadow-residency gate scene.
 
+  **Punctual change detection (arc 2 #15) is the same mechanism, verified rather than built.** The
+  audit that item owed is done, and its result is a boundary worth stating once: every shadow
+  SAMPLING input — `spotViewProj`, `cascadeViewProj`, `selfShadowViewProj` and all four
+  `*BiasMetrics` arrays — is copied wholesale from the completed view SET every frame,
+  unconditionally, never from the plan and never gated on whether a family recorded. Every RASTER
+  input is in the content descriptor. Nothing sits outside both, which is why a reused map cannot go
+  stale through a sampling parameter. (Shadow draws are also VDPM-free by construction — `object.cpp`
+  clears the indirect handle and the GPU front — so a per-frame GPU-emitted index buffer, whose
+  handle repeats while its contents change, can never enter the descriptor.)
+
+  The punctual specifics are pinned headlessly: a RANGE-only change re-records all six faces (every
+  matrix identical, every texel different — the case a transform-only descriptor would miss); a
+  moving light re-records all six, because its position is an input to the radial depth each face
+  stores; a cube inherited by another light re-records all six rather than lighting one light with
+  its predecessor's shadows; and metrics-only changes reuse, on both the spot and point paths.
+
+  **Per-face granularity is where the punctual saving actually lives, and it is caster-driven.**
+  A cube is compared face by face, but a light's own movement invalidates every face by the content
+  law, so only a CASTER can change one face and not another. Measured on
+  `ShadowResidencyCasterMotionTest` (one rigid caster moving inside a single face, 15 warm samples):
+  the point family holds `recorded=1 reused=5` at a median **0.007 ms**, against **0.141 ms** forced
+  on the same scene — about twenty times less for an identical image. The light-motion scene is the
+  ceiling: `recorded=6 reused=0`, 0.172 ms, which is what punctual reuse cannot save.
+
+  **Slot churn is correct and deliberately un-optimised.** Punctual slots are assigned per frame in
+  gather order, so a light leaving compacts the ones after it and every inherited slot re-records a
+  whole cube it could in principle have kept. That is SAFE — identity is part of the comparison, and
+  the tests above pin it — and its cost is currently unreachable: the scene graph has no runtime
+  light removal or enable/disable path, and `gatherLights()` walks a stable node order, so churn
+  frequency in production is zero. Revisit only when runtime scene mutation or a light enable toggle
+  arrives; until then a stable-slot-assignment scheme would be machinery guarding against nothing.
+
   **What this does NOT buy: CPU preparation.** A reused view is filtered, resolved and observed in
   full — the comparison cannot be made without the work that produces its operand. The saving is
   GPU raster only, which is also why the honest headline case is a static PUNCTUAL light rather than

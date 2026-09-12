@@ -81,32 +81,21 @@ The eight small/XS items landed on `review-shadow-taa-fixes` + `review-xs-cleanu
 the five the review prioritised, then five a later coverage audit found had no action item. In the
 review's priority order:
 
-- **#15 [B/C, M] Punctual-shadow change detection** (§2.3) — **next, and now mostly verification.**
-  Arc 2 #4 landed the whole mechanism on `shadow-residency-reuse` and it is family-agnostic: a
-  static point light's six faces already reuse today, which is what the gate scene measures. What
-  this item still owes is the evidence and the follow-through — a scene with a light that MOVES
-  (proving the faces re-record on the frame the light's position or range changes, since both are in
-  the content descriptor), a spot equivalent, and a decision about per-face granularity: the cube is
-  compared per face, but slot assignment is per-light, so a light entering or leaving reshuffles
-  slots and invalidates its neighbours' residency by identity. Worth measuring before assuming it
-  matters. (Per-face frustum filtering already exists and is correct.)
-- **#5 [B/L] Compute pre-skinning pass** (§1.3) — skinning/morphing re-runs in every pass's vertex
-  shader (~11× per skinned vertex per frame). `SoftBodySystem` already proves the compute pattern
-  in-engine. The one genuinely architectural piece here; it also retires SH-04's deformable
-  full-detail fallback by exposing pre-deformed vertices + exact deformed bounds + a deformation
-  revision.
-- **#7 [B/S] Physics per-step scratch persistence** (§3.1) — remove the per-step heap allocation in
-  the solver hot path. Golden-neutral if done as pure allocation reuse.
-- **#10 [B/S] Front-to-back sort of the opaque bucket** (§1.1) — improves depth-prepass rejection.
-- **#6 [C/S] Batch image barriers into single `DependencyInfo`s** (§1.2) — compounds on MoltenVK
-  (§5.2); coordinate with SH-* so barrier grouping doesn't change per-view LOD decisions.
+- **#15 ✅ Punctual-shadow change detection** (§2.3) — verified on `shadow-punctual-change-detection`
+  and closed with **no engine change**, which was the honest outcome: arc 2 #4's mechanism is
+  family-agnostic and already covered the punctual families. What the branch added is the evidence —
+  an audit showing every shadow sampling input is re-uploaded from the view set each frame while
+  every raster input is in the content descriptor (so nothing sits outside both), eight headless
+  cases pinning the punctual specifics (range-only change, moving light, slot inheritance for both
+  spot and cube, metrics-are-not-content on both), and two motion scenes measuring the payoff:
+  `recorded=1 reused=5` at 0.007 ms against 0.141 ms forced, for an identical image. Detail in
+  [`shadowplans.md`](shadowplans.md) § Interaction; runbook in
+  [`acceptance-testing.md`](acceptance-testing.md).
 
-**Added by a coverage audit** (2026-07-26). The review's §6 table was a *prioritised* list, not an
-exhaustive one: five actionable findings in its body had no row. They are now rows 15–19 there and
-items here. All five are genuinely lower-value than the above — three are conditional or watch-items
-in the review's own words — and are recorded so the arc is scoped honestly, not because each is
-worth doing:
-
+  **Parked, not done:** slot churn. A light leaving compacts punctual slots and every inherited slot
+  re-records a whole cube. Correct today (identity is compared) and unreachable in production (no
+  runtime light removal or enable/disable path, stable gather order), so a stable-assignment scheme
+  would guard against nothing. **Trigger: runtime scene mutation, or a light enable/disable toggle.**
 - **#16 [C, XS] `hash_combine`-style mix for the mesh-triangle warm-start key** (§3.3) —
   `in.key ^= subKey * 0x9E3779B97F4A7C15ULL` (`physics_world.cpp`) is a decent mix, but XOR over the
   pair key admits collisions across (pair, triangle) combinations. The consequence is only a wrong
