@@ -98,11 +98,24 @@ def scaled(axis, distance):
     return tuple(component * distance for component in axis)
 
 
-def build():
+def build(motion=None):
+    """The room, the light and the six casters.
+
+    `motion` selects which of the three scenes this is: `None` for the static gate,
+    `"caster"` for one caster moving inside a single cube face, `"light"` for the light
+    itself moving. They are separate FILES rather than phases of one animation, and
+    deliberately: the diagnostic evidence is a per-family count (`recorded=1 reused=5`
+    against `recorded=6 reused=0`), and a scene that changed regime part-way would make
+    every aggregate a mixture of two answers with no way to say which frame is which.
+    """
     s = Scene(GENERATOR)
 
+    # Node indices are captured as they are created — `Scene` hands one back from every
+    # builder — because the animation channels below address nodes by index.
+    index = {}
+
     # The light first, so it is light 0 and the scene's only one.
-    s.add_node(
+    index["PointLight"] = s.add_node(
         "PointLight",
         light=s.light(
             "Point",
@@ -121,7 +134,7 @@ def build():
         colour = FLOOR_COLOUR if name == "NegY" else WALL_COLOUR
         s.box(f"Wall{name}", wall_half_extent(axis), wall_centre, colour)
         # One occluder per face, on the axis between the light and that wall.
-        s.box(
+        index[f"Caster{name}"] = s.box(
             f"Caster{name}",
             (CASTER_HALF, CASTER_HALF, CASTER_HALF),
             scaled(axis, CASTER_DISTANCE),
@@ -129,10 +142,41 @@ def build():
         )
 
     s.camera(CAMERA_EYE, CAMERA_TARGET)
+
+    if motion == "caster":
+        # CONTINUOUS, and confined to ONE face. Radial motion along the +X axis keeps the
+        # caster inside the +X face's 90-degree frustum for the whole loop while changing
+        # what that face stores every frame — so the steady state is `recorded=1 reused=5`,
+        # which is the per-face granularity this item is about, stated as a number.
+        #
+        # Continuous rather than a single hop: the diagnostic sample is periodic, and a
+        # one-off transition can fall between two samples and read as a scene that never
+        # changed.
+        near = CASTER_DISTANCE - 0.8
+        far = CASTER_DISTANCE + 0.8
+        s.animation(
+            "CasterInOneFace",
+            [
+                (index["CasterPosX"], "translation", [0.0, 2.0, 4.0],
+                 [(near, 0.0, 0.0), (far, 0.0, 0.0), (near, 0.0, 0.0)], "LINEAR"),
+            ],
+        )
+    elif motion == "light":
+        # The light itself moves, so every face's stored depth changes: its position is an
+        # input to the radial ratio each of the six faces writes, not merely to the matrices.
+        # Steady state is therefore `recorded=6 reused=0` — the honest ceiling for what
+        # punctual reuse can save when the light is the thing in motion.
+        s.animation(
+            "LightSweep",
+            [
+                (index["PointLight"], "translation", [0.0, 2.5, 5.0],
+                 [(-1.0, 0.0, 0.0), (1.0, 0.0, 0.0), (-1.0, 0.0, 0.0)], "LINEAR"),
+            ],
+        )
     return s
 
 
-def validate(doc):
+def validate(doc, motion=None):
     """Structural checks, because this scene's whole value is what it does NOT contain.
 
     A later edit that adds a sun, or animates a caster to make a screenshot livelier, would
@@ -148,7 +192,18 @@ def validate(doc):
 
     # Temporal or deforming content would change the content descriptor every frame, so a
     # reused view could never happen and the gate would fail for the wrong reason.
-    assert not doc.get("animations"), "the residency gate scene must not animate"
+    if motion is None:
+        assert not doc.get("animations"), "the static gate scene must not animate"
+    else:
+        # Exactly ONE animated node, and the right one. A second channel would mix two
+        # regimes into one family count and make `recorded=N` unreadable.
+        animations = doc.get("animations", [])
+        assert len(animations) == 1, f"expected one animation, found {len(animations)}"
+        channels = animations[0]["channels"]
+        assert len(channels) == 1, f"expected one animated node, found {len(channels)}"
+        animated = doc["nodes"][channels[0]["target"]["node"]]["name"]
+        expected = "CasterPosX" if motion == "caster" else "PointLight"
+        assert animated == expected, f"{motion} scene animates '{animated}', not '{expected}'"
     assert not doc.get("skins"), "the residency gate scene must not contain skinned casters"
     for mesh in doc["meshes"]:
         for primitive in mesh["primitives"]:
@@ -189,12 +244,16 @@ def validate(doc):
 
 
 def main():
-    scene = build()
-    doc = scene.to_gltf()
-    validate(doc)
-    out = Path(__file__).resolve().parent / "ShadowResidencyTest.gltf"
-    write_gltf(out, doc)
-    print(f"wrote {out}")
+    here = Path(__file__).resolve().parent
+    for motion, name in ((None, "ShadowResidencyTest.gltf"),
+                         ("caster", "ShadowResidencyCasterMotionTest.gltf"),
+                         ("light", "ShadowResidencyLightMotionTest.gltf")):
+        scene = build(motion)
+        doc = scene.to_gltf()
+        validate(doc, motion)
+        out = here / name
+        write_gltf(out, doc)
+        print(f"wrote {out}")
 
 
 if __name__ == "__main__":

@@ -1,5 +1,7 @@
 #include <fire_engine/graphics/shadow_pass_prepare.hpp>
 
+#include <fire_engine/graphics/frustum.hpp>
+
 #include <catch2/catch_test_macros.hpp>
 
 using namespace fire_engine;
@@ -650,4 +652,257 @@ TEST_CASE("a view that never engaged reports no disposition at all", "[ShadowPas
           ShadowViewDisposition::Invalid);
     CHECK(out.plan.disposition(ShadowViewGroup::Spot, unusedSpot) ==
           ShadowViewDisposition::Invalid);
+}
+
+// --- punctual change detection (arc 2 #15) -------------------------------------------------------
+//
+// The mechanism is arc 2 #4's and is family-agnostic; what these pin is that it actually HOLDS for
+// the punctual families, whose lights are the ones that move independently of the camera. Each case
+// below is a way a stale punctual map could survive a change nobody compared.
+
+namespace
+{
+
+// The fixture's cube, rebuilt around a light that may have moved or re-ranged. Both halves are
+// SHADER INPUTS for a point face — the stored depth is `length(worldPos - lightPos) / range` — so
+// each must be able to force a re-record on its own.
+[[nodiscard]] ShadowRenderViewSet pointCubeAt(Vec3 position, float range, float faceMark = 0.0f)
+{
+    ShadowRenderViewSet views = populatedViews();
+    const std::array<Vec3, kCubeFaceCount> forwards{Vec3{1, 0, 0},  Vec3{-1, 0, 0}, Vec3{0, 1, 0},
+                                                    Vec3{0, -1, 0}, Vec3{0, 0, 1},  Vec3{0, 0, -1}};
+    const auto face = [&](std::uint8_t f)
+    { return ShadowPointFace{markedMatrix(faceMark), somePerspective(forwards[f], position)}; };
+    const std::array<ShadowPointFace, kCubeFaceCount> cube{face(0), face(1), face(2),
+                                                           face(3), face(4), face(5)};
+    REQUIRE(views.setPointLight(0, kLight, ShadowViewMetrics::pointLight(0.004f, range), range,
+                                std::span<const ShadowPointFace, kCubeFaceCount>{cube}));
+    return views;
+}
+
+// A cube whose faces carry REAL projection matrices, so each face's frustum admits only what that
+// face can see. The shared fixture deliberately uses one marked matrix for all six — fine for the
+// accounting rules it was built for, useless here, because six identical frusta admit every caster
+// to every face and "only this face re-recorded" would pass without meaning anything.
+[[nodiscard]] ShadowRenderViewSet pointCubeWithRealFaces(Vec3 position, float range)
+{
+    ShadowRenderViewSet views = populatedViews();
+    const std::array<Vec3, kCubeFaceCount> forwards{Vec3{1, 0, 0},  Vec3{-1, 0, 0}, Vec3{0, 1, 0},
+                                                    Vec3{0, -1, 0}, Vec3{0, 0, 1},  Vec3{0, 0, -1}};
+    const auto face = [&](std::uint8_t f)
+    {
+        // 90 degrees, square aspect — a cube face exactly. `up` must not be parallel to forward,
+        // which is why the ±Y faces take a different one.
+        const Vec3 forward = forwards[f];
+        const Vec3 up = (f == 2 || f == 3) ? Vec3{0.0f, 0.0f, 1.0f} : Vec3{0.0f, 1.0f, 0.0f};
+        const Mat4 viewProj = Mat4::perspective(1.5708f, 1.0f, 0.1f, range) *
+                              Mat4::lookAt(position, position + forward, up);
+        return ShadowPointFace{viewProj, somePerspective(forward, position)};
+    };
+    const std::array<ShadowPointFace, kCubeFaceCount> cube{face(0), face(1), face(2),
+                                                           face(3), face(4), face(5)};
+    REQUIRE(views.setPointLight(0, kLight, ShadowViewMetrics::pointLight(0.004f, range), range,
+                                std::span<const ShadowPointFace, kCubeFaceCount>{cube}));
+    return views;
+}
+
+} // namespace
+
+TEST_CASE("a point light that only changes RANGE re-records every face", "[ShadowPassPrepare]")
+{
+    // The sharpest of the punctual cases, and the one a matrix-only descriptor would fail. Range
+    // does not appear in a face's projection at all: every matrix here is identical across the two
+    // frames, and every texel of all six faces still changes, because the stored value is a RATIO
+    // against that range. A cache comparing only what it could see in the transform would keep six
+    // maps whose depths are now measured against a different denominator.
+    const std::vector<DrawCommand> draws{nearCaster()};
+    Prepared out{};
+    prepare(out, inputsFor(draws), pointCubeAt(kPointPosition, kPointRange), allFamilies());
+    submitFrame(out);
+
+    prepare(out, inputsFor(draws), pointCubeAt(kPointPosition, kPointRange * 2.0f), allFamilies());
+    CHECK(everySlotIs(out.plan, ShadowViewGroup::Point, ShadowViewDisposition::Recorded));
+    // And nothing else was disturbed: the cascades and the spot saw no change and still reuse.
+    CHECK(everySlotIs(out.plan, ShadowViewGroup::Cascade, ShadowViewDisposition::Reused));
+    CHECK(everySlotIs(out.plan, ShadowViewGroup::Spot, ShadowViewDisposition::Reused));
+}
+
+TEST_CASE("a point light that moves re-records every face", "[ShadowPassPrepare]")
+{
+    const std::vector<DrawCommand> draws{nearCaster()};
+    Prepared out{};
+    prepare(out, inputsFor(draws), pointCubeAt(kPointPosition, kPointRange), allFamilies());
+    submitFrame(out);
+
+    // A cube is one light's map: moving the light changes what every face stores, so a partial
+    // re-record would leave a light lit from two different positions depending on receiver facing.
+    prepare(out, inputsFor(draws),
+            pointCubeAt(kPointPosition + Vec3{0.75f, 0.0f, 0.0f}, kPointRange), allFamilies());
+    CHECK(everySlotIs(out.plan, ShadowViewGroup::Point, ShadowViewDisposition::Recorded));
+    CHECK(out.plan.pointCubesWhole());
+}
+
+TEST_CASE("a caster confined to one face re-records that face alone", "[ShadowPassPrepare]")
+{
+    // Per-FACE granularity is the saving this item is about, and CASTERS are the only thing that
+    // can exercise it. Not because of how a cube is installed — a light that moves invalidates all
+    // six faces through the CONTENT LAW, since its position is an input to the radial depth every
+    // face stores — but because a caster is the only input that can differ BETWEEN faces. (Atomic
+    // installation is a separate rule: it guarantees a cube is whole, not that it is invalid.) A
+    // caster only one face can see is where five sixths of the cube stays resident.
+    const Vec3 onAxis = kPointPosition + Vec3{9.0f, 0.0f, 0.0f};
+    std::vector<DrawCommand> draws{caster(2, boundsAt(onAxis))};
+    Prepared out{};
+    prepare(out, inputsFor(draws), pointCubeWithRealFaces(kPointPosition, kPointRange),
+            allFamilies());
+
+    // The premise, checked rather than assumed: exactly one face offers this caster. Six identical
+    // frusta would make the assertions below vacuous, and that is precisely what the shared fixture
+    // has (one marked matrix per face) — hence the real-matrix cube.
+    // DRAWN, not candidate: every face is OFFERED every caster (that is what a candidate is), and
+    // the per-face frustum is what decides which of them actually rasterise it. Counting candidates
+    // here would report six faces seeing it and make the assertions below vacuous.
+    std::size_t facesDrawingIt = 0;
+    for (std::size_t slot = 0; slot < kCubeFaceCount; ++slot)
+    {
+        facesDrawingIt += out.stats.view(ShadowViewGroup::Point, slot).drawnDraws > 0 ? 1 : 0;
+    }
+    REQUIRE(facesDrawingIt == 1);
+    REQUIRE(out.stats.view(ShadowViewGroup::Point, 0).drawnDraws == 1);
+    submitFrame(out);
+
+    // Move it along the same axis: only the +X face's content changed.
+    draws[0].shadowRequest.pose =
+        ShadowCasterPose::fromModel(Mat4::translate(onAxis + Vec3{0.4f, 0.0f, 0.0f}));
+    draws[0].shadowBounds = boundsAt(onAxis + Vec3{0.4f, 0.0f, 0.0f});
+    prepare(out, inputsFor(draws), pointCubeWithRealFaces(kPointPosition, kPointRange),
+            allFamilies());
+
+    CHECK(out.plan.disposition(ShadowViewGroup::Point, 0) == ShadowViewDisposition::Recorded);
+    for (std::size_t slot = 1; slot < kCubeFaceCount; ++slot)
+    {
+        CHECK(out.plan.disposition(ShadowViewGroup::Point, slot) == ShadowViewDisposition::Reused);
+    }
+    // Five sixths reused is still a WHOLE cube to the receiver: reuse is sampleable, so the light
+    // is not half-shadowed while one face catches up.
+    CHECK(out.plan.pointCubesWhole());
+    CHECK(out.plan.sampleableCount(ShadowViewGroup::Point) == kCubeFaceCount);
+}
+
+TEST_CASE("a spot light that moves re-records its view", "[ShadowPassPrepare]")
+{
+    const std::vector<DrawCommand> draws{nearCaster()};
+    Prepared out{};
+    prepare(out, inputsFor(draws), populatedViews(), allFamilies());
+    submitFrame(out);
+
+    ShadowRenderViewSet moved = populatedViews();
+    REQUIRE(moved.setSpot(0, kLight, markedMatrix(0.25f),
+                          somePerspective(Vec3{0.0f, 0.0f, -1.0f}, Vec3{0.0f, 0.0f, 5.0f}),
+                          ShadowViewMetrics::spot(0.002f, 0.1f, 50.0f)));
+    prepare(out, inputsFor(draws), moved, allFamilies());
+    CHECK(out.plan.disposition(ShadowViewGroup::Spot, 0) == ShadowViewDisposition::Recorded);
+    CHECK(everySlotIs(out.plan, ShadowViewGroup::Point, ShadowViewDisposition::Reused));
+}
+
+TEST_CASE("a slot inherited by a different light records rather than reusing",
+          "[ShadowPassPrepare]")
+{
+    // Punctual slots are assigned per frame in gather order, so a light leaving the scene COMPACTS
+    // the ones after it. The residency in slot 0 then describes a map rendered for a light that no
+    // longer occupies it. Identity is what saves this — content is compared including the logical
+    // view id — and the failure it prevents is the worst kind: one light lit by another's shadows,
+    // with every counter and timing still plausible.
+    const std::vector<DrawCommand> draws{nearCaster()};
+    constexpr auto kOtherLight = static_cast<NodeId>(77);
+    Prepared out{};
+    prepare(out, inputsFor(draws), populatedViews(), allFamilies());
+    submitFrame(out);
+
+    ShadowRenderViewSet inherited = populatedViews();
+    // The SAME matrix, metrics and slot — only the light differs, which is exactly the case a
+    // slot-keyed cache would call a hit.
+    REQUIRE(inherited.setSpot(0, kOtherLight, markedMatrix(0.0f),
+                              somePerspective(Vec3{0.0f, 0.0f, -1.0f}, Vec3{0.0f, 0.0f, 5.0f}),
+                              ShadowViewMetrics::spot(0.002f, 0.1f, 50.0f)));
+    prepare(out, inputsFor(draws), inherited, allFamilies());
+    CHECK(out.plan.disposition(ShadowViewGroup::Spot, 0) == ShadowViewDisposition::Recorded);
+}
+
+TEST_CASE("bias metrics are sampling inputs, not content", "[ShadowPassPrepare]")
+{
+    // The boundary this whole cache depends on. Metrics never reach the shadow rasteriser — they
+    // are uploaded to LightUBO every frame from the view SET and read by the RECEIVER — so a
+    // metrics change must not re-render a map whose depth is identical. If this ever starts
+    // failing, something has moved a sampling parameter into the raster path, and the fix is there
+    // rather than here.
+    const std::vector<DrawCommand> draws{nearCaster()};
+    Prepared out{};
+    prepare(out, inputsFor(draws), populatedViews(), allFamilies());
+    submitFrame(out);
+
+    ShadowRenderViewSet rebiased = populatedViews();
+    REQUIRE(rebiased.setSpot(0, kLight, markedMatrix(0.0f),
+                             somePerspective(Vec3{0.0f, 0.0f, -1.0f}, Vec3{0.0f, 0.0f, 5.0f}),
+                             ShadowViewMetrics::spot(0.03f, 0.2f, 90.0f)));
+    prepare(out, inputsFor(draws), rebiased, allFamilies());
+    CHECK(out.plan.disposition(ShadowViewGroup::Spot, 0) == ShadowViewDisposition::Reused);
+}
+
+TEST_CASE("a point cube inherited by another light records all six faces", "[ShadowPassPrepare]")
+{
+    // The cube's version of slot inheritance, and it needs its own case rather than trusting the
+    // spot one: a cube is SIX residency entries, so a law that held for a single view could still
+    // leave five faces of a departed light's map in place while one re-rendered — a light lit
+    // correctly from one direction and by its predecessor from the other five.
+    const std::vector<DrawCommand> draws{nearCaster()};
+    constexpr auto kOtherLight = static_cast<NodeId>(78);
+    Prepared out{};
+    prepare(out, inputsFor(draws), pointCubeAt(kPointPosition, kPointRange), allFamilies());
+    submitFrame(out);
+
+    // Same position, same range, same matrices, same slots — only the light's identity differs,
+    // which is what a compaction after a light leaves the scene produces.
+    ShadowRenderViewSet inherited = populatedViews();
+    const std::array<Vec3, kCubeFaceCount> forwards{Vec3{1, 0, 0},  Vec3{-1, 0, 0}, Vec3{0, 1, 0},
+                                                    Vec3{0, -1, 0}, Vec3{0, 0, 1},  Vec3{0, 0, -1}};
+    const auto face = [&](std::uint8_t f)
+    { return ShadowPointFace{markedMatrix(0.0f), somePerspective(forwards[f], kPointPosition)}; };
+    const std::array<ShadowPointFace, kCubeFaceCount> cube{face(0), face(1), face(2),
+                                                           face(3), face(4), face(5)};
+    REQUIRE(inherited.setPointLight(0, kOtherLight,
+                                    ShadowViewMetrics::pointLight(0.004f, kPointRange), kPointRange,
+                                    std::span<const ShadowPointFace, kCubeFaceCount>{cube}));
+
+    prepare(out, inputsFor(draws), inherited, allFamilies());
+    CHECK(everySlotIs(out.plan, ShadowViewGroup::Point, ShadowViewDisposition::Recorded));
+    CHECK(out.plan.pointCubesWhole());
+}
+
+TEST_CASE("point bias metrics are sampling inputs, not content", "[ShadowPassPrepare]")
+{
+    // The point family's version of the boundary, and the distinction it draws is finer than the
+    // spot one: a point light's RANGE is content (it is the denominator of the stored ratio) while
+    // the metrics DERIVED from that range are sampling. Changing the metrics alone must therefore
+    // reuse all six faces — a cube that re-rendered because the receiver's bias inputs moved would
+    // be doing the work this item exists to avoid, and doing it six times over.
+    const std::vector<DrawCommand> draws{nearCaster()};
+    Prepared out{};
+    prepare(out, inputsFor(draws), pointCubeAt(kPointPosition, kPointRange), allFamilies());
+    submitFrame(out);
+
+    ShadowRenderViewSet rebiased = populatedViews();
+    const std::array<Vec3, kCubeFaceCount> forwards{Vec3{1, 0, 0},  Vec3{-1, 0, 0}, Vec3{0, 1, 0},
+                                                    Vec3{0, -1, 0}, Vec3{0, 0, 1},  Vec3{0, 0, -1}};
+    const auto face = [&](std::uint8_t f)
+    { return ShadowPointFace{markedMatrix(0.0f), somePerspective(forwards[f], kPointPosition)}; };
+    const std::array<ShadowPointFace, kCubeFaceCount> cube{face(0), face(1), face(2),
+                                                           face(3), face(4), face(5)};
+    // A different texel scale in the metrics; the RANGE the faces store against is unchanged.
+    REQUIRE(rebiased.setPointLight(0, kLight, ShadowViewMetrics::pointLight(0.05f, kPointRange),
+                                   kPointRange,
+                                   std::span<const ShadowPointFace, kCubeFaceCount>{cube}));
+
+    prepare(out, inputsFor(draws), rebiased, allFamilies());
+    CHECK(everySlotIs(out.plan, ShadowViewGroup::Point, ShadowViewDisposition::Reused));
 }

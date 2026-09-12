@@ -591,6 +591,49 @@ Look at the image as well as the hash. The two large hard-edged rectangles on th
 cast shadows; if a run ever produces an image with a shadow in the wrong place rather than a
 different hash, that is a stale map and `--no-shadow-reuse` will confirm it in one run.
 
+### 4. Per-face granularity — the punctual payoff (arc 2 #15)
+
+The static gate above proves reuse happens; these two scenes prove what it is WORTH when something
+is actually moving, which is the case a shipping scene is in. They are separate files rather than
+phases of one animation on purpose: the evidence is a per-family count, and a scene that changed
+regime part-way would make every aggregate a mixture of two answers.
+
+```bash
+# One rigid caster moving INSIDE a single cube face; the light and the other five casters are static.
+FE_LOG=render:debug ./fireEngineApp --no-taa \
+    shadow_residency/ShadowResidencyCasterMotionTest.gltf nightbox.hdr
+```
+
+Steady state must be **`point sampleable recorded=1 reused=5 passes=1`**. One face's content changed,
+so one face re-rendered; the other five are still resident and still sampleable. Then the same scene
+with the cache off:
+
+```bash
+FE_LOG=render:debug ./fireEngineApp --no-taa --no-shadow-reuse \
+    shadow_residency/ShadowResidencyCasterMotionTest.gltf nightbox.hdr
+```
+
+`recorded=6 reused=0 passes=6`. Measured here (macOS/arm64, MoltenVK, 15 warm samples each):
+**0.007 ms** median for the point family with reuse (0.004–0.022) against **0.141 ms** forced
+(0.124–0.192) — the same scene, the same image, a factor of about twenty, and a direct measurement
+of per-face granularity rather than of reuse in general.
+
+```bash
+# The light itself moving — the ceiling on what punctual reuse can save.
+FE_LOG=render:debug ./fireEngineApp --no-taa \
+    shadow_residency/ShadowResidencyLightMotionTest.gltf nightbox.hdr
+```
+
+Expect **`recorded=6 reused=0`** (measured: 0.172 ms median, 9 samples) even with reuse enabled,
+and that is correct rather than a failure:
+a point light's position is an input to the radial depth EVERY face stores, so a light that moves
+invalidates its whole cube. A run that showed anything less would mean a face had kept depth measured
+against a position the light has left.
+
+**No reference screenshot for either motion scene.** An animated frame has no reproducible timestamp,
+so a capture proves nothing; the State column, the family counters and the timing comparison are the
+evidence.
+
 ### 4. Vulkan validation stays clean
 
 Add `--require-validation` to any of the above. A reused view is skipped **entirely** — no barrier,
