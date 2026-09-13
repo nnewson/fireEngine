@@ -4,6 +4,7 @@
 
 #include <fire_engine/math/constants.hpp>
 #include <fire_engine/math/mat4.hpp>
+#include <fire_engine/math/scalar.hpp>
 #include <fire_engine/math/vec3.hpp>
 
 namespace fire_engine
@@ -101,15 +102,32 @@ public:
         return *this == rhs;
     }
 
+    // Approximate equality, component by component, through the ONE scalar authority
+    // (`math/scalar.hpp`), and in its three forms — no argument means both defaults, an explicit
+    // tolerance means ABSOLUTE ONLY (so `approxEqual(rhs, 1e-9f)` rejects anything further apart
+    // than 1e-9, exactly as it always did), and both arguments mean both terms. An invalid
+    // tolerance — negative, NaN or infinite — makes the comparison FALSE rather than being
+    // reinterpreted. NaNs compare unequal now, which is the defect this replaced.
     [[nodiscard]]
-    constexpr bool approxEqual(const Quaternion& rhs, float eps = float_epsilon) const noexcept
+    constexpr bool approxEqual(const Quaternion& rhs, float eps, float relativeEps) const noexcept
     {
-        const float dx = x_ - rhs.x_;
-        const float dy = y_ - rhs.y_;
-        const float dz = z_ - rhs.z_;
-        const float dw = w_ - rhs.w_;
-        return dx <= eps && dx >= -eps && dy <= eps && dy >= -eps && dz <= eps && dz >= -eps &&
-               dw <= eps && dw >= -eps;
+        return almostEqual(x_, rhs.x_, eps, relativeEps) &&
+               almostEqual(y_, rhs.y_, eps, relativeEps) &&
+               almostEqual(z_, rhs.z_, eps, relativeEps) &&
+               almostEqual(w_, rhs.w_, eps, relativeEps);
+    }
+
+    [[nodiscard]]
+    constexpr bool approxEqual(const Quaternion& rhs, float eps) const noexcept
+    {
+        // ABSOLUTE ONLY — a stated tolerance is the whole answer.
+        return approxEqual(rhs, eps, 0.0f);
+    }
+
+    [[nodiscard]]
+    constexpr bool approxEqual(const Quaternion& rhs) const noexcept
+    {
+        return approxEqual(rhs, float_epsilon, float_relative_epsilon);
     }
 
     [[nodiscard]]

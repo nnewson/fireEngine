@@ -4,6 +4,7 @@
 #include <cstddef>
 
 #include <fire_engine/math/constants.hpp>
+#include <fire_engine/math/scalar.hpp>
 
 namespace fire_engine
 {
@@ -158,18 +159,36 @@ public:
         return self() == rhs;
     }
 
+    // Approximate equality, component by component, through the ONE scalar authority
+    // (`math/scalar.hpp`), and in its three forms — no argument means both defaults, an explicit
+    // tolerance means ABSOLUTE ONLY (so `approxEqual(rhs, 1e-9f)` rejects anything further apart
+    // than 1e-9, exactly as it always did), and both arguments mean both terms. An invalid
+    // tolerance — negative, NaN or infinite — makes the comparison FALSE rather than being
+    // reinterpreted. NaNs compare unequal now, which is the defect this replaced.
     [[nodiscard]]
-    constexpr bool approxEqual(const Derived& rhs, float eps = float_epsilon) const noexcept
+    constexpr bool approxEqual(const Derived& rhs, float eps, float relativeEps) const noexcept
     {
         for (std::size_t i = 0; i < N; ++i)
         {
-            const float diff = data_[i] - rhs.data_[i];
-            if (diff > eps || diff < -eps)
+            if (!almostEqual(data_[i], rhs.data_[i], eps, relativeEps))
             {
                 return false;
             }
         }
         return true;
+    }
+
+    [[nodiscard]]
+    constexpr bool approxEqual(const Derived& rhs, float eps) const noexcept
+    {
+        // ABSOLUTE ONLY — a stated tolerance is the whole answer.
+        return approxEqual(rhs, eps, 0.0f);
+    }
+
+    [[nodiscard]]
+    constexpr bool approxEqual(const Derived& rhs) const noexcept
+    {
+        return approxEqual(rhs, float_epsilon, float_relative_epsilon);
     }
 
 protected:
