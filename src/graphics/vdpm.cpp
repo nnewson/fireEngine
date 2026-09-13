@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <optional>
 #include <stdexcept>
 #include <vector>
 
@@ -455,20 +456,55 @@ VdpmViewParams makeVdpmViewParams(const Mat4& world, const Vec3& cameraPos, floa
     // The cone predicate runs in OBJECT space (sign of dot(normal, viewDir) is
     // transform-invariant), so the camera is inverse-transformed once. A near-singular world has no
     // reliable inverse — the cone is then unusable (never cull, treat every split as a potential
-    // silhouette). The conditioning test |det|/σ_max³ ∈ [0,1] is a pure SHAPE measure
-    // (scale-invariant), unlike an absolute |det| which would wrongly reject a tiny-but-uniform
-    // instance. A reflection's determinant sign folds into the cone facing.
-    const float det = linear.determinant();
-    const float sigmaMax = worldLengthScale;
-    const bool coneUsable = std::abs(det) > 1e-6f * sigmaMax * sigmaMax * sigmaMax;
+    // silhouette).
+    //
+    // ONE DECISION, and it is the inverse itself. This used to ask a scale-invariant conditioning
+    // question here (|det| > 1e-6·σ_max³) and then call an inverse that applied its own ABSOLUTE
+    // threshold, so a tiny uniform instance passed the local test and got a zero matrix back from
+    // the inverse: `coneUsable` said yes while `cameraObj` was nonsense. `tryInverse` is now
+    // scale-invariant itself, so asking it IS the conditioning test, and there is no second opinion
+    // to disagree with.
+    // VDPM'S OWN THRESHOLD, and EXACTLY the one it always had — consolidating the decision must not
+    // change the policy, in either direction.
+    //
+    // The old predicate was |det| > 1e-6·σ_max³, a pure shape measure. `tryInverse` normalises by
+    // the largest absolute COMPONENT, so its threshold is on |det|/maxComponent³. Passing a
+    // constant would have shifted the policy by up to (σ_max/maxComponent)³ ∈ [1, 27]: 1e-6 admits
+    // matrices up to 27× closer to singular than before, and a blanket 27e-6 REJECTS ones the old
+    // test accepted (diag(1, 1, 1e-5) among them). Neither is "the same decision, consolidated".
+    //
+    // Scaling the tolerance by that exact ratio reproduces the original inequality:
+    //   |det|/maxC³ > 1e-6·σ_max³/maxC³   ⟺   |det| > 1e-6·σ_max³
+    // so one call now answers what two used to, with the same answer.
+    double maxComponent = 0.0;
+    for (int row = 0; row < 3; ++row)
+    {
+        for (int col = 0; col < 3; ++col)
+        {
+            maxComponent = std::max(maxComponent, std::abs(static_cast<double>(linear[row, col])));
+        }
+    }
+    // A zero matrix has no ratio to compute and no inverse either; `tryInverse` refuses it on its
+    // own, so the default tolerance is a placeholder rather than a policy in that case.
+    const double shapeRatio =
+        maxComponent > 0.0 ? static_cast<double>(worldLengthScale) / maxComponent : 1.0;
+    const auto coneTolerance = static_cast<float>(1.0e-6 * shapeRatio * shapeRatio * shapeRatio);
+    const std::optional<Mat3> linearInverse = linear.tryInverse(coneTolerance);
+    const bool coneUsable = linearInverse.has_value();
     const Vec3 worldTranslation{world[0, 3], world[1, 3], world[2, 3]};
+
+    // The sign comes from a DOUBLE determinant, and that is not a detail. A reflected instance with
+    // a tiny uniform scale has a perfectly usable inverse and a determinant that underflows float
+    // to -0.0f — which compares `>= 0.0f` as true, so the facing sign says "winding preserved" for
+    // a transform that reverses it, and the cone then culls the visible side.
+    const double det = linear.determinant();
 
     VdpmViewParams p;
     p.worldLinear = linear;
     p.worldTranslationMinusCamera = worldTranslation - cameraPos;
-    p.cameraObj = coneUsable ? linear.inverse() * (cameraPos - worldTranslation) : Vec3{};
+    p.cameraObj = coneUsable ? *linearInverse * (cameraPos - worldTranslation) : Vec3{};
     p.worldLengthScale = worldLengthScale;
-    p.facingSign = det >= 0.0f ? 1.0f : -1.0f;
+    p.facingSign = det >= 0.0 ? 1.0f : -1.0f;
     p.projScaleY = projScaleY;
     p.halfViewport = viewportHeight * 0.5f;
     p.silhouetteBoost = silhouetteBoost;

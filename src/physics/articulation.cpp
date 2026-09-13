@@ -29,7 +29,9 @@ namespace
     }
     else if (nd == 3)
     {
-        r = d.inverse();
+        // Positive definite by construction (D = SᵀU for a spherical joint), so a failure here is a
+        // corrupt factorization rather than a case to fall back from — see `invertInvariant`.
+        r = physics_detail::invertInvariant(d, "spherical joint D block");
     }
     return r;
 }

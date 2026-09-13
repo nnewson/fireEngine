@@ -9,6 +9,7 @@
 // The authored numbers here are the shared source of truth with
 // assets/physics_demos/generate.py — keep the two in sync when a demo changes.
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdint>
@@ -433,9 +434,49 @@ TEST_CASE("Demos.Sleep.StackSleepsThenWakesOnImpact", "[Demos][slow]")
     }
     CHECK(anyAwake);
 
-    // Clean end state: the disturbance damps out and everything — stack and striker —
-    // comes to rest and sleeps on the floor.
-    step(world, 450); // -> step 600
+    // Clean end state: the disturbance damps out and everything — stack and striker — comes to rest
+    // and sleeps on the floor.
+    //
+    // HOW LONG that takes is asserted, not just that it happens by some generous deadline. An
+    // endpoint check at step 600 passed on macOS while a change had tripled the settle time, and
+    // only failed on Linux because its trajectory was slower still: the tier-0 robust-norm work
+    // normalised through two divisions instead of one, costing an ulp per component, and friction
+    // directions that no longer cancel kept feeding the contact solver. Settle went 169 -> 425 here
+    // and 167 -> 1309 on Linux. A deadline generous enough never to flake is also generous enough
+    // to hide that, so the step count itself is the evidence.
+    //
+    // The bound is measured, not chosen for comfort: healthy runs settle at ABSOLUTE step 167
+    // (macOS/arm64) and 172 (Linux/x86_64), so 260 leaves better than 50% headroom over the slower
+    // platform while sitting far below the 425 that a real regression produced. Widen it only with
+    // a measurement that says the engine legitimately got slower, and never to make a red test
+    // green.
+    //
+    // COUNTED IN ABSOLUTE STEPS, deliberately. Every number above and in the commit history is an
+    // absolute step index, and a loop counting from the impact window would silently mean something
+    // else: 260 iterations starting after step 150 is a bound of 410, which the 300-step regression
+    // this test exists to catch would pass comfortably.
+    constexpr int kImpactWindowEnd = 150; // the 90 + 60 stepped above
+    constexpr int kSettleByStep = 260;
+    int settledAtStep = -1;
+    for (int absoluteStep = kImpactWindowEnd + 1; absoluteStep <= kSettleByStep; ++absoluteStep)
+    {
+        step(world, 1);
+        const bool islandAsleep =
+            std::ranges::all_of(stack, [&](PhysicsBodyHandle h) { return world.sleeping(h); }) &&
+            world.sleeping(striker);
+        if (islandAsleep)
+        {
+            settledAtStep = absoluteStep;
+            break;
+        }
+    }
+    INFO("the whole island slept at absolute step " << settledAtStep << " (budget " << kSettleByStep
+                                                    << ")");
+    CHECK(settledAtStep > 0);
+
+    // And it STAYS asleep — a body that wakes itself again has not come to rest, it is oscillating
+    // around the threshold.
+    step(world, 120);
     for (const PhysicsBodyHandle h : stack)
     {
         CHECK(world.sleeping(h));

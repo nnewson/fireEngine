@@ -9,6 +9,8 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
+#include <limits>
+
 using fire_engine::Mat4;
 using fire_engine::Vec3;
 using fire_engine::Vec4;
@@ -189,13 +191,25 @@ TEST_CASE("Mat4Equality.ZeroMatrices", "[Mat4Equality]")
     CHECK(a == b);
 }
 
-TEST_CASE("Mat4Equality.BitwiseEqualMatchesOperator", "[Mat4Equality]")
+TEST_CASE("Mat4Equality.EqualityIsExactNotBitwise", "[Mat4Equality]")
 {
     Mat4 a = Mat4::identity();
     Mat4 b = Mat4::identity();
     Mat4 c = Mat4::scale(Vec3{2.0f, 1.0f, 1.0f});
-    CHECK(a.bitwiseEqual(b));
-    CHECK_FALSE(a.bitwiseEqual(c));
+    CHECK(a == b);
+    CHECK_FALSE(a == c);
+    // Exact component equality, not bitwise: -0.0f equals +0.0f though the bits differ, and a NaN
+    // equals nothing though its bits are identical to themselves. `bitwiseEqual()` claimed the
+    // latter semantics and delivered the former, so it is gone.
+    Mat4 signedZero = Mat4::identity();
+    signedZero[0, 3] = -0.0f;
+    Mat4 plusZero = Mat4::identity();
+    plusZero[0, 3] = 0.0f;
+    CHECK(signedZero == plusZero);
+
+    Mat4 withNaN = Mat4::identity();
+    withNaN[1, 1] = std::numeric_limits<float>::quiet_NaN();
+    CHECK_FALSE(withNaN == withNaN);
 }
 
 TEST_CASE("Mat4Equality.ApproxEqualWithinTolerance", "[Mat4Equality]")

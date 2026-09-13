@@ -3,6 +3,7 @@
 #include <cmath>
 
 #include <fire_engine/math/constants.hpp>
+#include <fire_engine/math/scalar.hpp>
 #include <fire_engine/math/vec3.hpp>
 #include <fire_engine/math/vec4.hpp>
 #include <fire_engine/math/view_basis.hpp>
@@ -94,8 +95,11 @@ public:
         return Vec3{r.x(), r.y(), r.z()};
     }
 
-    // Strict bit-for-bit equality. Two matrices that differ by a single ULP
-    // compare not-equal — use approxEqual when you want tolerance.
+    // EXACT component-wise IEEE equality — not bitwise, despite what this used to claim. Two
+    // differences matter and both are the float `==` operator's, not ours: `-0.0f` equals `+0.0f`
+    // though their bit patterns differ, and a NaN equals nothing at all though its bit pattern is
+    // identical to itself. Use `approxEqual` when you want tolerance; if a determinism diagnostic
+    // ever needs REAL bit comparison, it has to say so with `std::bit_cast`.
     [[nodiscard]]
     constexpr bool operator==(const Mat4& rhs) const noexcept
     {
@@ -109,24 +113,36 @@ public:
         return true;
     }
 
+    // Approximate equality, component by component, through the ONE scalar authority
+    // (`math/scalar.hpp`), and in its three forms — no argument means both defaults, an explicit
+    // tolerance means ABSOLUTE ONLY (so `approxEqual(rhs, 1e-9f)` rejects anything further apart
+    // than 1e-9, exactly as it always did), and both arguments mean both terms. An invalid
+    // tolerance — negative, NaN or infinite — makes the comparison FALSE rather than being
+    // reinterpreted. NaNs compare unequal now, which is the defect this replaced.
     [[nodiscard]]
-    constexpr bool bitwiseEqual(const Mat4& rhs) const noexcept
-    {
-        return *this == rhs;
-    }
-
-    [[nodiscard]]
-    constexpr bool approxEqual(const Mat4& rhs, float eps = float_epsilon) const noexcept
+    constexpr bool approxEqual(const Mat4& rhs, float eps, float relativeEps) const noexcept
     {
         for (int i = 0; i < 16; ++i)
         {
-            const float diff = m_[i] - rhs.m_[i];
-            if (diff > eps || diff < -eps)
+            if (!almostEqual(m_[i], rhs.m_[i], eps, relativeEps))
             {
                 return false;
             }
         }
         return true;
+    }
+
+    [[nodiscard]]
+    constexpr bool approxEqual(const Mat4& rhs, float eps) const noexcept
+    {
+        // ABSOLUTE ONLY — a stated tolerance is the whole answer.
+        return approxEqual(rhs, eps, 0.0f);
+    }
+
+    [[nodiscard]]
+    constexpr bool approxEqual(const Mat4& rhs) const noexcept
+    {
+        return approxEqual(rhs, float_epsilon, float_relative_epsilon);
     }
 
     [[nodiscard]]

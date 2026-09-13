@@ -410,6 +410,7 @@ add_executable(test_fire_engine
     tests/physics/test_physics_handle.cpp
     tests/physics/test_physics_determinism.cpp
     tests/physics/test_demos.cpp
+    tests/math/test_scalar.cpp
     tests/math/test_mat3.cpp
     tests/math/test_singular_value.cpp
     tests/math/test_mat4.cpp

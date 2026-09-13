@@ -84,13 +84,17 @@ Start here because these classes are small, heavily tested, and used everywhere.
 - `Vec2`, `Vec3`, `Vec4`: numeric vector types with constexpr arithmetic and component
   accessors. `Vec3` also provides operations used by lighting, transforms, normals, and
   physics response. `magnitude()` / `normalise()` call `std::sqrt` and are intentionally
-  *not* `constexpr` (sqrt only became constexpr in C++26). `operator==` is strict bit
-  equality — use `approxEqual(rhs, eps)` for tolerance-based comparison (or `bitwiseEqual`
-  if you want to name the bit-identity intent explicitly). Vec3 ↔ Vec4 conversion is
-  `explicit` in both directions to prevent silent w-component loss/gain.
+  *not* `constexpr` (sqrt only became constexpr in C++26). `operator==` is **exact
+  component-wise IEEE equality — not bitwise**: `-0.0f` equals `+0.0f` though their bits
+  differ, and a NaN equals nothing though its bits are identical to itself. Use
+  `approxEqual(rhs, eps)` for tolerance-based comparison. (There was a `bitwiseEqual` that
+  simply called `operator==`; it claimed semantics it did not have and is gone. If you ever
+  need real bit identity, say so with `std::bit_cast` at the point that needs it.)
+  Vec3 ↔ Vec4 conversion is `explicit` in both directions to prevent silent w-component
+  loss/gain.
 - `Mat4`: column-major transform/projection matrix type. Look at translation, rotation,
   scale, perspective, and look-at helpers. Renderer, scene traversal, skinning, and physics
-  transforms all depend on this behaving predictably. Same `approxEqual` / `bitwiseEqual`
+  transforms all depend on this behaving predictably. Same `operator==` / `approxEqual`
   convention as the vector types.
 - `Quaternion`: runtime rotation representation for scene transforms. glTF rotations round
   trip better through quaternions than Euler angles. Animation uses SLERP for rotation
@@ -957,6 +961,38 @@ the same change — most have a test or guard that will catch you, but not all.
   one constructed value so they cannot drift), and the per-frame-ring buffer handles are carried for
   recording but EXCLUDED from the comparison, since identical content alternates handles every
   frame.
+- **Every approximate comparison goes through `almostEqual`, and every norm has a scaled fallback.**
+  `math/scalar.hpp` is the one place that decides whether two floats are close: `a == b` first (so
+  equal infinities pass), non-finite operands unequal (so a NaN is never equal to anything, itself
+  included), then absolute and relative tolerances in `double`. The types' `approxEqual` delegate;
+  none of them re-implements the test. Three overloads, because an explicit tolerance must not be
+  loosened by an implicit one — no argument means both defaults, ONE argument is absolute only, two
+  are both stated — and an invalid tolerance (negative, NaN, infinite) makes the comparison false
+  rather than being reinterpreted as a policy.
+
+  `magnitude()` and `normalise()` compute `sqrt(dot(v, v))` FIRST and fall back to a scaled form
+  whenever that sum is not finite and NORMAL — zero, SUBNORMAL, infinite or NaN — which is exactly
+  when the naive computation had no accurate answer (components above ~1.8e19 square to infinity;
+  below ~1e-22 they flush to zero; and in between, a subnormal sum is finite and positive while
+  carrying only a couple of significant bits, which is how `(3e-23, 3e-23, 0)` answered 24.8% high).
+  Two
+  consequences to preserve if you touch this. Ordinary vectors take the arithmetic the engine always
+  used, BIT FOR BIT, so the physics goldens do not move for a change about extreme values. And the
+  fallback normalises through ONE division wherever the length is representable: dividing twice
+  (by the largest component, then by a scaled norm) costs an ulp per component, which delayed a
+  settling box stack from step 169 to 425 here and 1309 on Linux against a 600-step budget.
+
+  Three answers from `normalise`, and the middle one is the one people get wrong: a non-finite input
+  yields NaNs (**visibly invalid**), a magnitude below `float_normalise_cutoff` yields the zero
+  vector or the identity rotation (degenerate, as documented), and anything else is normalised —
+  including a vector whose LENGTH is unrepresentable but whose direction is ordinary. Laundering an
+  invalid input into the degenerate answer is what makes a corrupt orientation surface three seconds
+  later somewhere unrelated.
+
+  If you do change the arithmetic here, check `ReplayIsBitIdentical` and `FreeFallMatchesClosedForm`
+  before re-baselining any golden: those separate "last-bit arithmetic changed" from "the physics
+  changed", and a settle-time probe separates both from "the solver now takes three times as long to
+  come to rest".
 - **What an image HOLDS is committed only after the submit, and only for a view that recorded.**
   `ShadowResidencyStore` (`graphics/shadow_pass_plan.hpp`) is the other operand of the disposition
   law: preparation compares this frame's prepared content against it, and a view whose content

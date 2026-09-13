@@ -690,6 +690,63 @@ TEST_CASE(
     CHECK(p.worldLengthScale < 10.01f); // and tight — the bound is exact for this symmetric case
 }
 
+TEST_CASE("makeVdpmViewParams: a tiny reflected instance keeps its facing sign", "[vdpm]")
+{
+    // Two defects meet in this one transform, and both used to produce a plausible cone.
+    //
+    // FIRST, the inverse. A uniform scale of 1e-16 is perfectly conditioned, but its determinant is
+    // 1e-48. The old `Mat3::inverse()` applied an ABSOLUTE threshold (|det| <= 1e-12) and returned
+    // the zero matrix, while this function's own scale-invariant predicate said the cone WAS usable
+    // — so `coneUsable` was true and `cameraObj` was the zero vector times a camera offset. Two
+    // invertibility decisions, disagreeing. There is one now, and it is `tryInverse` itself.
+    //
+    // SECOND, the sign. A reflection reverses winding, which the cone folds into `facingSign`. In
+    // float that determinant underflows to -0.0f, which is not less than zero, so the sign reads
+    // +1 — the cone then culls the side that should be visible. The determinant is computed in
+    // double for exactly this reason.
+    Mat4 world = Mat4::identity();
+    world[0, 0] = 1.0e-16f;
+    world[1, 1] = -1.0e-16f; // the reflection
+    world[2, 2] = 1.0e-16f;
+
+    const VdpmViewParams p =
+        makeVdpmViewParams(world, Vec3{0, 0, 10}, 1.0f, 1000.0f, 0.0f, false, 1.0f, 1.0f, 1.0f);
+
+    CHECK(p.coneUsable); // well conditioned, however small
+    CHECK(p.facingSign == -1.0f);
+    // And the object-space camera is a real inverse-transformed point rather than the zero vector
+    // the old path handed back: at this scale the camera is astronomically far away in object
+    // space, which is what a 1e-16 transform means.
+    CHECK(p.cameraObj.magnitude() > 1.0e10f);
+
+    // The CONDITIONING POLICY is VDPM's own, and is EXACTLY the one the consolidation replaced:
+    // |det| > 1e-6·σ_max³. For diag(1, 1, z) the determinant is z and σ_max is 1, so the predicate
+    // reduces to z > 1e-6 — reproduced rather than approximated, because the cone's failure mode is
+    // culling geometry from the side that should be visible and its cost when disabled is only
+    // refinement work.
+    Mat4 conditioned = Mat4::identity();
+    conditioned[2, 2] = 1.0e-5f; // accepted before the consolidation, and still accepted
+    const VdpmViewParams loose = makeVdpmViewParams(conditioned, Vec3{0, 0, 10}, 1.0f, 1000.0f,
+                                                    0.0f, false, 1.0f, 1.0f, 1.0f);
+    CHECK(loose.coneUsable);
+    // Rejected before, and still rejected — `tryInverse`'s own 1e-9 default would have taken this,
+    // which is the silent relaxation the explicit tolerance exists to prevent.
+    conditioned[2, 2] = 1.0e-7f;
+    const VdpmViewParams tight = makeVdpmViewParams(conditioned, Vec3{0, 0, 10}, 1.0f, 1000.0f,
+                                                    0.0f, false, 1.0f, 1.0f, 1.0f);
+    CHECK_FALSE(tight.coneUsable);
+    CHECK(tight.cameraObj == Vec3{}); // and an unusable cone reports no object-space camera at all
+
+    // The unreflected twin differs ONLY in the sign, which is the point: conditioning and
+    // orientation are separate questions about the same matrix.
+    Mat4 unreflected = world;
+    unreflected[1, 1] = 1.0e-16f;
+    const VdpmViewParams q = makeVdpmViewParams(unreflected, Vec3{0, 0, 10}, 1.0f, 1000.0f, 0.0f,
+                                                false, 1.0f, 1.0f, 1.0f);
+    CHECK(q.coneUsable);
+    CHECK(q.facingSign == 1.0f);
+}
+
 TEST_CASE("refineForView: a singular world transform never back-face-culls", "[vdpm]")
 {
     // A degenerate (zero-scale) world has no reliable inverse, so the cone is unusable:
