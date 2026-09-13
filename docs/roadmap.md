@@ -22,7 +22,7 @@ the open items so they can't fork:
 
 | Doc | What it is | Status of its items |
 |---|---|---|
-| [`codereview.md`](codereview.md) | Rolling **tiered static review**, following the [`review-order.md`](review-order.md) tiers (Tier 0 math, 18 Jul 2026; Tier 1 handles/limits/tunables, 19 Jul 2026). Further tiers expected. | **All open** — arc 3 below |
+| [`codereview.md`](codereview.md) | Rolling **tiered static review**, following the [`review-order.md`](review-order.md) tiers (Tier 0 math, 18 Jul 2026; Tier 1 handles/limits/tunables, 19 Jul 2026). Further tiers expected. | Tier 0's correctness foundation is cleared (findings 1, 2, 4, 5 — see its § Phase 1 resolution); everything else open — arc 3 below |
 | [`architecturalreview.md`](architecturalreview.md) | One-shot **architectural review** (25 Jul 2026) of rendering, shadows/AA, physics, simplifier/VDPM. Audited 26 Jul so every finding now maps to a §6 row or an explicit "informational" tag. **Retire it once reviewed** — arc 2 below is self-contained. | 8 of 19 landed; the rest is arc 2 |
 | [`shadowplans.md`](shadowplans.md) | The **shadow-LOD improvement plan** (SH-01…SH-09) spun out of the architectural review's §2. | Milestones 0–2 landed (SH-01…SH-03, SH-05…SH-07, SH-04's deformation half); what remains is the follow-ups those left, plus evidence-gated SH-08/SH-09 — arc 1 |
 
@@ -124,13 +124,18 @@ Handled as a unit the way CR-01…26 was, one branch per phase. Findings map to 
 **Tier 0 — math & value types.** 3 high (`Mat3::inverse()` rejects valid small transforms;
 `approxEqual()` accepts NaNs as equal; rotation quaternions don't enforce their invariant), 5 medium
 (non-robust norms, "bitwise equality" isn't bitwise, affine/projective mixed, hidden projection
-conventions, duplicated conversion authority) + a standardisation list. Sequenced by the doc:
-1. **Correctness foundation** — NaN/tiny-matrix regression tests, shared scalar comparison, robust
-   scaled norms, scale-aware `Mat3::tryInverse()` + caller migration, fix/remove the bitwise API.
-2. **Rotation redesign** — `UnitQuaternion`/`Rotation3`, one quaternion→matrix authority, migrate
-   transform/animation/render/physics users. *(Touches physics orientation ⇒ expect a determinism
-   golden re-baseline on BOTH platforms — see CLAUDE.md § Testing.)*
-3. **Transform & API redesign** — `Affine3` + direct TRS, split affine point/vector/normal from
+conventions, duplicated conversion authority) + a standardisation list. **Open here: the rotation
+invariant, affine/projective separation, projection conventions and the conversion authority** — the
+correctness foundation is done and its detail lives in [`codereview.md`](codereview.md), not in this
+index. Sequenced by the doc:
+1. **Rotation redesign** — `UnitQuaternion`/`Rotation3`, one quaternion→matrix authority, migrate
+   transform/animation/render/physics users. *(Touches physics orientation, so the goldens MAY move
+   — and "may" is the word. Do not pre-authorise a re-baseline: if a hash moves, identify the first
+   changed operation, confirm `ReplayIsBitIdentical` still holds, check the settle bound in
+   `Demos.Sleep`, and only then decide whether the new trajectory follows necessarily from enforcing
+   the rotation invariant. Phase 1 expected its goldens to move too, and the change that moved them
+   turned out to be a regression.)*
+2. **Transform & API redesign** — `Affine3` + direct TRS, split affine point/vector/normal from
    projective, explicit projection conventions, standardise the access/operator surface.
 
 **Tier 1 — handles, limits, tunables.** 3 high open (texture generations not enforced on

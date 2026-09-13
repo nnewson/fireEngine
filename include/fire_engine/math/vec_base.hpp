@@ -155,7 +155,7 @@ public:
     }
 
     // Normalised through the same fast path, for the same reasons: while the sum of squares is
-    // finite and positive, this is exactly the division the engine did before — one rounding per
+    // finite and NORMAL, this is exactly the division the engine did before — one rounding per
     // component, bit-identical results. Rounding twice instead (dividing by the largest component
     // and then by a scaled norm) costs an ulp per component, which sounds like nothing and delayed
     // a settling box stack from step 169 to 425 on macOS and 1309 on Linux against a 600-step
@@ -247,8 +247,10 @@ public:
     }
 
 protected:
-    // THE ROBUST PATH, reached only when the sum of squares was zero, infinite or NaN — i.e. when
-    // the naive computation had no answer to give. Kept out of line from the hot path above.
+    // THE ROBUST PATH, reached whenever the sum of squares was not finite and NORMAL — zero,
+    // subnormal, infinite or NaN — i.e. whenever the naive computation had no accurate answer to
+    // give. Subnormal belongs in that list: such a sum is finite and positive and has already lost
+    // most of its precision. Kept out of line from the hot path above.
     [[nodiscard]] float scaledMagnitude() const noexcept
     {
         float largest = 0.0f;

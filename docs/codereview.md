@@ -261,6 +261,59 @@ property/invariant tests for:
 The existing `Mat3` tests particularly need expansion: inversion is a critical operation, but the
 current suite does not cover scale invariance or the absolute-determinant failure above.
 
+### Phase 1 resolution — ✅ landed (`math-correctness-foundation`, five commits)
+
+Findings 1, 2, 4 and 5 are cleared. Finding 3 (the rotation invariant) and findings 6–8 belong to
+phases 2–3 and remain open.
+
+1. **One comparison authority** (finding 2). `math/scalar.hpp`'s `almostEqual` is the only thing that
+   decides whether two floats are close: `a == b` first (equal infinities pass), any remaining
+   non-finite operand unequal (a NaN is never equal to anything, itself included), then absolute and
+   relative tolerances in `double` so the difference itself cannot overflow. Every type's
+   `approxEqual` delegates. THREE OVERLOADS, because an explicit tolerance must not be loosened by
+   an implicit one — none means both defaults, one is absolute only, two are both stated. Invalid
+   tolerances (negative, NaN, infinite) return false rather than being reinterpreted, and the check
+   precedes the `a == b` shortcut so equal operands cannot hide a bad constant.
+2. **`Mat3::tryInverse()`** (finding 1). Scale-invariant, `double` intermediates, `std::optional`
+   instead of a zero-matrix sentinel that was both a value and an error report. It refuses an
+   invalid tolerance before examining the matrix (`magnitude > tolerance` is TRUE for a zero
+   determinant against a negative threshold — a singular matrix accepted, then divided by its own
+   zero), and refuses an inverse `float` cannot represent (a `1e-39` uniform scale is perfectly
+   conditioned and its inverse is `1e39`, so an engaged optional would have held infinities). The
+   three physics invariant sites use a physics-local fail-fast helper — assert, then a logged reason
+   and `abort` in release, never an unchecked dereference. VDPM's two disagreeing invertibility
+   decisions became one, with its `|det| > 1e-6·σ_max³` policy reproduced exactly rather than
+   inherited; `determinant()` returns `double` so a tiny reflection's sign survives instead of
+   underflowing to `-0.0f` and inverting the cone facing.
+3. **Equality is exact, not bitwise** (finding 5). `bitwiseEqual` was `return self() == rhs` — it
+   duplicated `operator==` and misdescribed it in both directions (`-0.0f` equals `+0.0f` with
+   different bits; a NaN equals nothing with identical bits). Deleted, comments corrected on all
+   four types, and the tests now assert those two IEEE cases plus the `q` vs `-q` seam that phase 2
+   must close.
+4. **Robust norms** (finding 4), and the shape of this one is the finding worth keeping.
+   `sqrt(dot(v, v))` is computed FIRST and trusted only when the sum is finite and **normal**; the
+   scaled form runs otherwise. That ordering keeps ordinary vectors bit-identical to the previous
+   arithmetic — **neither physics golden moved** — while covering both failure regions. Requiring a
+   normal sum rather than merely a positive one matters: `(3e-23, 3e-23, 0)` sums to `2.8e-45`,
+   which is finite, positive and carries about two significant bits, and answered 24.8% high. A
+   finite subnormal sum does reach the scaled fallback in `normalise` as well, but its magnitude is
+   necessarily below `float_normalise_cutoff`, so normalisation still returns the configured
+   degenerate value. `normalise` divides ONCE per component wherever the length is representable:
+   the first attempt divided twice, and that single extra ulp per component delayed a settling box
+   stack from step 169 to 425 on macOS and 167 to 1309 on Linux.
+5. **A settle-time tripwire** (no finding — it exists because of how (4) was caught). Every endpoint
+   assertion in the suite passed on macOS while the broken version tripled the settle time; only
+   Linux failed, and only because its trajectory was slower still. `Demos.Sleep` now records the
+   first post-impact step at which the whole island sleeps and bounds it at 260 — measured from
+   healthy runs of 167 (macOS/arm64) and 172 (Linux/x86_64), decisively below the 425 a real
+   regression produced — then steps a further 120 to separate "crossed the threshold once" from
+   stable rest.
+
+The lesson worth carrying into phases 2 and 3: a green suite plus a dutifully re-baselined golden
+looked exactly like success while the change was a regression. What separated them was measuring a
+QUANTITY (settle steps) rather than asserting an endpoint, and treating a golden move as a question
+rather than a chore.
+
 ### Recommended implementation sequence
 
 #### Phase 1: correctness foundation

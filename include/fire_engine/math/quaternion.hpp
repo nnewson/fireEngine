@@ -148,9 +148,11 @@ public:
     }
 
     [[nodiscard]]
-    // Fast path first — see `VecBase::magnitude`. While the sum of squares is finite and positive
-    // this is the arithmetic the engine always did, bit for bit; the scaled form below runs only
-    // when that sum came back zero, infinite or NaN, which is precisely when it had no answer.
+    // Fast path first — see `VecBase::magnitude`. While the sum of squares is finite and NORMAL
+    // this is the arithmetic the engine always did, bit for bit; the scaled form below runs
+    // whenever it is not — zero, subnormal, infinite or NaN — which is precisely when it had no
+    // accurate answer. Subnormal is in that list because such a sum is finite and positive and has
+    // already lost most of its precision, which is the trap a `> 0` guard falls into.
     float magnitude() const noexcept
     {
         const float sumOfSquares = magnitudeSquared();
@@ -434,7 +436,8 @@ public:
     }
 
 private:
-    // THE ROBUST PATH, reached only when the sum of squares was zero, infinite or NaN.
+    // THE ROBUST PATH, reached whenever the sum of squares was not finite and NORMAL — zero,
+    // subnormal, infinite or NaN.
     [[nodiscard]] float scaledMagnitude() const noexcept
     {
         const float components[4]{x_, y_, z_, w_};

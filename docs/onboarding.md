@@ -971,8 +971,11 @@ the same change — most have a test or guard that will catch you, but not all.
   rather than being reinterpreted as a policy.
 
   `magnitude()` and `normalise()` compute `sqrt(dot(v, v))` FIRST and fall back to a scaled form
-  only when that sum comes back zero, infinite or NaN — which is exactly when the naive computation
-  had no answer (components above ~1.8e19 square to infinity; below ~1e-22 they flush to zero). Two
+  whenever that sum is not finite and NORMAL — zero, SUBNORMAL, infinite or NaN — which is exactly
+  when the naive computation had no accurate answer (components above ~1.8e19 square to infinity;
+  below ~1e-22 they flush to zero; and in between, a subnormal sum is finite and positive while
+  carrying only a couple of significant bits, which is how `(3e-23, 3e-23, 0)` answered 24.8% high).
+  Two
   consequences to preserve if you touch this. Ordinary vectors take the arithmetic the engine always
   used, BIT FOR BIT, so the physics goldens do not move for a change about extreme values. And the
   fallback normalises through ONE division wherever the length is representable: dividing twice
