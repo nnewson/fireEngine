@@ -24,15 +24,26 @@ sync_source()
         /repo/ /work/fireEngine/
 }
 
+# The vcpkg TOOL commit, pinned to the same SHA as the manifest baseline in
+# vcpkg-configuration.json and as the GitHub jobs' checkout. The baseline pins port versions; this
+# pins everything else vcpkg brings (the tool itself, the triplets, the toolchain scripts). A
+# replica that tracked master would drift away from the CI it exists to reproduce. Move it with the
+# baseline, never on its own.
+VCPKG_COMMIT=a1cae005c39be7b18ba319fced856b68d7276271
+
 ensure_vcpkg()
 {
     if [ ! -d "${VCPKG_ROOT}/.git" ]; then
         rm -rf "${VCPKG_ROOT:?}"/*
         git clone https://github.com/microsoft/vcpkg "${VCPKG_ROOT}"
-    else
-        git -C "${VCPKG_ROOT}" fetch --depth=1 origin master
-        git -C "${VCPKG_ROOT}" checkout --detach FETCH_HEAD
     fi
+    # Fetched BY SHA rather than by branch: the volume persists between runs, so a checkout already
+    # holding the pinned commit does no network work at all, and one holding an older pin moves to
+    # exactly this commit rather than to whatever master is today.
+    if ! git -C "${VCPKG_ROOT}" cat-file -e "${VCPKG_COMMIT}^{commit}" 2>/dev/null; then
+        git -C "${VCPKG_ROOT}" fetch --depth=1 origin "${VCPKG_COMMIT}"
+    fi
+    git -C "${VCPKG_ROOT}" checkout --detach "${VCPKG_COMMIT}"
     "${VCPKG_ROOT}/bootstrap-vcpkg.sh" -disableMetrics
 }
 
