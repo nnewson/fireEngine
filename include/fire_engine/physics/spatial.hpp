@@ -1,11 +1,51 @@
 #pragma once
 
+#include <cassert>
+#include <cstdlib>
+#include <optional>
+
+#include <fire_engine/core/log.hpp>
 #include <fire_engine/math/mat3.hpp>
 #include <fire_engine/math/quaternion.hpp>
 #include <fire_engine/math/vec3.hpp>
 
 namespace fire_engine
 {
+
+namespace physics_detail
+{
+
+// Invert a matrix the CALLER'S INVARIANT says must be invertible, and fail loudly if it is not.
+//
+// `Mat3::tryInverse` hands back an optional precisely so nobody can ignore a singular matrix. Two
+// physics sites genuinely know better: an articulated-body inertia's `d` block is `m·1` plus
+// positive-definite folded terms, and a 3-DOF joint's `D = SᵀU` is positive definite by
+// construction. Neither can be singular unless the factorization upstream has already gone wrong.
+//
+// So the optional is checked, not assumed. An `assert` alone would leave `*inverse` dereferencing
+// an empty optional in release — undefined behaviour in exactly the situation where the simulation
+// state is already corrupt — so the release path is a defined stop: a logged reason, then
+// `std::abort`. A wrong answer propagated through a solver is worse than a halt, because it comes
+// back as a ragdoll that explodes three seconds later with nothing to point at.
+//
+// DELIBERATELY PHYSICS-LOCAL. Promoting this to `math/` would recreate the unconditional inversion
+// API being removed: callers without an invariant would reach for it, and the optional would stop
+// being the thing that makes them think.
+[[nodiscard]] inline Mat3 invertInvariant(const Mat3& m, const char* what)
+{
+    const std::optional<Mat3> inverse = m.tryInverse();
+    assert(inverse.has_value() && "a matrix the solver guarantees invertible was singular");
+    if (!inverse.has_value())
+    {
+        log::error(log::category::physics,
+                   "{} was singular or non-finite; the articulated-body factorization is corrupt",
+                   what);
+        std::abort();
+    }
+    return *inverse;
+}
+
+} // namespace physics_detail
 
 // Minimal rigid (proper) transform — a unit quaternion rotation plus a translation,
 // mapping a point p ↦ rotation·p + translation. Unlike scene::Transform it carries no
@@ -151,9 +191,10 @@ struct SpatialMatrix
     [[nodiscard]]
     SpatialMatrix inverse() const noexcept
     {
-        const Mat3 di = d.inverse();
+        const Mat3 di = physics_detail::invertInvariant(d, "spatial inertia D block");
         const Mat3 dic = di * c;
-        const Mat3 si = (a - b * dic).inverse();
+        const Mat3 si =
+            physics_detail::invertInvariant(a - b * dic, "spatial inertia Schur complement");
         const Mat3 bdi = b * di;
         const Mat3 negSiBdi = (si * bdi) * -1.0f;
         return SpatialMatrix{si, negSiBdi, (dic * si) * -1.0f, di - dic * negSiBdi};
