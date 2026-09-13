@@ -97,10 +97,21 @@ since a loader/ICD change can alter device capabilities. **Do it in the gap BETW
 before a perf item rather than after one** — measurements taken across a toolchain move cannot
 attribute a change to the work.
 
-Current pin: `ea1a7396` (Aug 2026) — `vulkan-headers`/`vulkan-loader` **1.4.357.0**, matching the
+Current pin: `a1cae005` (Sep 2026) — `vulkan-headers`/`vulkan-loader` **1.4.357.0**, matching the
 SDK installed here, which is what keeps the mixed-vulkan-hpp trap below out of reach; plus `glfw3
-3.5.1`, `glslang 16.4.0`, `spirv-tools 1.4.357.0`, `imgui 1.92.8#1`, `shaderc 2026.2`, `ktx 4.4.2`,
-`fastgltf 0.9.0`, `catch2 3.15.3`, `vulkan-memory-allocator 3.4.0`.
+3.5.1`, `glslang 16.4.0`, `spirv-tools 1.4.357.0`, `imgui 1.92.9`, `shaderc 2026.2`, `ktx 4.4.2`,
+`fastgltf 0.9.0`, `catch2 3.16.0`, `vulkan-memory-allocator 3.4.0`.
+
+**The vcpkg CHECKOUT is pinned to that same commit, and the two move together.** The baseline fixes
+port *versions*; the checkout fixes everything else vcpkg supplies — the tool, the triplets, the
+toolchain scripts — and an unpinned checkout means CI can break with no change in this repository
+and a green run says nothing about the next one. The SHA therefore appears in three places that must
+agree: `vcpkg-configuration.json`'s baseline, the `ref:` on all four `Checkout vcpkg` steps in
+`.github/workflows/ci.yml`, and `VCPKG_COMMIT` in `tools/ci/container-run.sh` (which fetches by SHA,
+so a persistent Docker volume already holding the pin does no network work). The native macOS
+replica is the exception: it uses whatever `VCPKG_ROOT` the machine has, so it is the one runner
+that can drift — treat a macOS-only failure that CI does not reproduce as a suspect local checkout
+first.
 
 **"Full rebuild" there means `--clean-first`, and that is not pedantry.** vcpkg preserves each
 port's *upstream* file timestamps, so an upgraded header can land with an mtime OLDER than the object

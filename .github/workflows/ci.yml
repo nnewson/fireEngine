@@ -51,6 +51,11 @@ jobs:
         with:
           repository: microsoft/vcpkg
           path: vcpkg
+          # PINNED to the same commit as the manifest baseline. The baseline fixes port VERSIONS;
+          # this fixes the TOOL, the triplets and the toolchain scripts, which are what an unpinned
+          # checkout would let drift. Without it a green run proves nothing about the next one, and
+          # a build can break with no change in this repository. Move both together, never one.
+          ref: a1cae005c39be7b18ba319fced856b68d7276271
 
       - name: Bootstrap vcpkg
         run: ./vcpkg/bootstrap-vcpkg.sh
@@ -109,6 +114,11 @@ jobs:
         with:
           repository: microsoft/vcpkg
           path: vcpkg
+          # PINNED to the same commit as the manifest baseline. The baseline fixes port VERSIONS;
+          # this fixes the TOOL, the triplets and the toolchain scripts, which are what an unpinned
+          # checkout would let drift. Without it a green run proves nothing about the next one, and
+          # a build can break with no change in this repository. Move both together, never one.
+          ref: a1cae005c39be7b18ba319fced856b68d7276271
 
       - name: Bootstrap vcpkg
         run: ./vcpkg/bootstrap-vcpkg.sh
@@ -157,6 +167,11 @@ jobs:
         with:
           repository: microsoft/vcpkg
           path: vcpkg
+          # PINNED to the same commit as the manifest baseline. The baseline fixes port VERSIONS;
+          # this fixes the TOOL, the triplets and the toolchain scripts, which are what an unpinned
+          # checkout would let drift. Without it a green run proves nothing about the next one, and
+          # a build can break with no change in this repository. Move both together, never one.
+          ref: a1cae005c39be7b18ba319fced856b68d7276271
 
       - name: Bootstrap vcpkg
         run: ./vcpkg/bootstrap-vcpkg.sh
@@ -201,6 +216,11 @@ jobs:
         with:
           repository: microsoft/vcpkg
           path: vcpkg
+          # PINNED to the same commit as the manifest baseline. The baseline fixes port VERSIONS;
+          # this fixes the TOOL, the triplets and the toolchain scripts, which are what an unpinned
+          # checkout would let drift. Without it a green run proves nothing about the next one, and
+          # a build can break with no change in this repository. Move both together, never one.
+          ref: a1cae005c39be7b18ba319fced856b68d7276271
 
       - name: Bootstrap vcpkg
         run: ./vcpkg/bootstrap-vcpkg.sh

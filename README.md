@@ -426,9 +426,10 @@ baseline is not comparable from frame one.
 ## Dependencies
 
 Managed via the vcpkg manifest (`vcpkg.json`); every version comes from the baseline pinned in
-`vcpkg-configuration.json`, currently `ea1a7396` (Aug 2026) — Vulkan headers + loader **1.4.357.0**,
-`glfw3 3.5.1`, `glslang 16.4.0`, `spirv-tools 1.4.357.0`, `imgui 1.92.8`, `shaderc 2026.2`,
-`ktx 4.4.2`, `fastgltf 0.9.0`, `catch2 3.15.3`, `vulkan-memory-allocator 3.4.0`:
+`vcpkg-configuration.json`, currently `a1cae005` (Sep 2026) — Vulkan headers + loader **1.4.357.0**,
+`glfw3 3.5.1`, `glslang 16.4.0`, `spirv-tools 1.4.357.0`, `imgui 1.92.9`, `shaderc 2026.2`,
+`ktx 4.4.2`, `fastgltf 0.9.0`, `catch2 3.16.0`, `vulkan-memory-allocator 3.4.0`. CI checks out vcpkg
+at that same commit, so the tool and the ports move together:
 
 - `vulkan-headers` — Vulkan API headers (the Vulkan **loader** + `glfw3` arrive transitively, so
   both come from vcpkg — no system Vulkan SDK / GLFW needed to build)
