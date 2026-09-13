@@ -822,3 +822,105 @@ TEST_CASE("Vec3Compound.PlusEqualsChained", "[Vec3Compound]")
     (a += {1.0f, 0.0f, 0.0f}) += {0.0f, 1.0f, 0.0f};
     expectNear(a, 2.0f, 2.0f, 1.0f);
 }
+
+TEST_CASE("Vec3.MagnitudeSurvivesScalesThatOverflowTheSquares", "[Vec3]")
+{
+    // `sqrt(dot(v, v))` fails at both ends of float's range, and a robust norm is the fix for both.
+    //
+    // TOO LARGE: (1e20, 1e20, 0) squares to 1e40 per component, which overflows float — so the
+    // naive form reports an infinite length for a vector whose true length (1.41e20) is perfectly
+    // representable. Everything downstream then normalises to zero.
+    const Vec3 huge{1.0e20f, 1.0e20f, 0.0f};
+    CHECK(huge.magnitudeSquared() == std::numeric_limits<float>::infinity()); // the honest squared
+    CHECK(std::isfinite(huge.magnitude()));
+    CHECK(huge.magnitude() == Catch::Approx(1.41421356e20f).epsilon(1e-5));
+
+    // TOO SMALL: (1e-25, 1e-25, 0) squares to 1e-50, which flushes to zero — so the naive form
+    // reports a length of zero for a vector that is small but entirely ordinary, and the direction
+    // is lost rather than merely imprecise.
+    const Vec3 tiny{1.0e-25f, 1.0e-25f, 0.0f};
+    CHECK(tiny.magnitudeSquared() == 0.0f); // again honest for a squared quantity
+    CHECK(tiny.magnitude() > 0.0f);
+    CHECK(tiny.magnitude() == Catch::Approx(1.41421356e-25f).epsilon(1e-5));
+}
+
+TEST_CASE("Vec3.MagnitudeIsAccurateWhereTheSumGoesSUBNORMAL", "[Vec3]")
+{
+    // The gap a "finite and positive" fast path leaves behind. (3e-23, 3e-23, 0) squares to 9e-46
+    // per component and sums to 2.8e-45 — not zero, so it looks like a usable sum, but subnormal
+    // and carrying about two significant bits. `sqrt` of that answers 5.29e-23 against a true
+    // 4.24e-23: a 24.8% error from a path that believed itself safe.
+    //
+    // The fast path therefore requires a NORMAL sum, and everything below it is rescaled before
+    // squaring, which loses nothing.
+    const Vec3 subnormalSum{3.0e-23f, 3.0e-23f, 0.0f};
+    REQUIRE(subnormalSum.magnitudeSquared() > 0.0f); // the sum survives...
+    REQUIRE(subnormalSum.magnitudeSquared() <
+            std::numeric_limits<float>::min()); // ...but subnormal
+    CHECK(subnormalSum.magnitude() == Catch::Approx(4.2426407e-23f).epsilon(1e-6));
+
+    // Either side of the switch, so the boundary itself is covered rather than one point near it.
+    // 1e-19 squares to a normal sum and takes the fast path; the rest go subnormal and do not.
+    for (const float component : {1.0e-19f, 1.0e-20f, 1.0e-22f, 1.0e-23f, 1.0e-25f})
+    {
+        const Vec3 v{component, component, 0.0f};
+        const float expected = component * std::sqrt(2.0f);
+        CHECK(v.magnitude() == Catch::Approx(expected).epsilon(1e-5));
+    }
+
+    // NORMALISE IS A DIFFERENT QUESTION, and the answer here is the cutoff's, not the norm's. A
+    // finite subnormal sum DOES take the scaled fallback in `normalise` — the control flow is the
+    // same — but its magnitude is necessarily below `float_normalise_cutoff` (1e-8), since a
+    // subnormal sum of squares implies a magnitude of about 1e-19 at most. So the fallback runs and
+    // then returns the configured degenerate value anyway. The subnormal fix therefore changes what
+    // `magnitude()` answers and never what `normalise()` answers: the two share a fast path, not a
+    // policy.
+    CHECK(Vec3::normalise(Vec3{3.0e-23f, 3.0e-23f, 0.0f}) == Vec3{});
+    CHECK(Vec3::normalise(Vec3{1.0e-19f, 1.0e-19f, 0.0f}) == Vec3{});
+}
+
+TEST_CASE("Vec3.MagnitudeDecidesItsSpecialValues", "[Vec3]")
+{
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    const float inf = std::numeric_limits<float>::infinity();
+
+    CHECK(std::isnan(Vec3{nan, 1.0f, 2.0f}.magnitude()));
+    CHECK(std::isinf(Vec3{inf, 1.0f, 2.0f}.magnitude()));
+    CHECK(Vec3{-inf, 0.0f, 0.0f}.magnitude() > 0.0f); // magnitude is unsigned
+    // A NaN OUTRANKS an infinity, whichever order they appear in — otherwise the answer would
+    // depend on which component the loop reached first.
+    CHECK(std::isnan(Vec3{inf, nan, 0.0f}.magnitude()));
+    CHECK(std::isnan(Vec3{nan, inf, 0.0f}.magnitude()));
+    CHECK(Vec3{}.magnitude() == 0.0f);
+}
+
+TEST_CASE("Vec3.NormaliseKeepsADirectionWhoseLengthIsUnrepresentable", "[Vec3]")
+{
+    // The reason normalisation works from the SCALED components rather than dividing by
+    // `magnitude()`: this vector's true length is about 5.2e38, past float's 3.4e38, so the length
+    // genuinely is infinity — while the direction is an ordinary diagonal. Dividing by that
+    // infinity yields the zero vector, silently turning a well-defined direction into nothing.
+    const Vec3 vast{3.0e38f, 3.0e38f, 3.0e38f};
+    CHECK(std::isinf(vast.magnitude())); // correctly infinite: the LENGTH is not representable
+    const Vec3 direction = Vec3::normalise(vast);
+    const float expected = 1.0f / std::sqrt(3.0f);
+    CHECK(direction.approxEqual(Vec3{expected, expected, expected}, 1e-6f));
+    CHECK(direction.magnitude() == Catch::Approx(1.0f).epsilon(1e-6));
+}
+
+TEST_CASE("Vec3.NormaliseReportsInvalidInputAsInvalid", "[Vec3]")
+{
+    // A non-finite input must NOT be laundered into a plausible value. Returning the zero vector
+    // here would look exactly like the documented degenerate answer for a zero-length vector, and
+    // the caller would carry a corrupt direction forward believing it was merely small.
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    const float inf = std::numeric_limits<float>::infinity();
+    const Vec3 fromNaN = Vec3::normalise(Vec3{nan, 1.0f, 0.0f});
+    CHECK(std::isnan(fromNaN.x()));
+    const Vec3 fromInf = Vec3::normalise(Vec3{inf, 1.0f, 0.0f});
+    CHECK(std::isnan(fromInf.x()));
+
+    // While a genuinely degenerate input keeps the documented answer.
+    CHECK(Vec3::normalise(Vec3{}) == Vec3{});
+    CHECK(Vec3::normalise(Vec3{1.0e-30f, 0.0f, 0.0f}) == Vec3{});
+}

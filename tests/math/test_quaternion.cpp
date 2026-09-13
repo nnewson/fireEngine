@@ -459,3 +459,56 @@ TEST_CASE("Quaternion.IntegrateAdvancesOrientation", "[Quaternion]")
     CHECK(stepped.rotate(Vec3{1.0f, 0.0f, 0.0f})
               .approxEqual(expected.rotate(Vec3{1.0f, 0.0f, 0.0f}), 1e-4f));
 }
+
+TEST_CASE("Quaternion.NormIsRobustAtBothEndsOfTheRange", "[Quaternion]")
+{
+    // The same scaled norm as VecBase, and it matters more here: every unit-quaternion assumption
+    // in the engine — rotate(), slerp(), toMat4() — rests on this one number.
+    const Quaternion huge{1.0e20f, 1.0e20f, 0.0f, 0.0f};
+    CHECK(huge.magnitudeSquared() == std::numeric_limits<float>::infinity());
+    CHECK(std::isfinite(huge.magnitude()));
+    CHECK(huge.magnitude() == Catch::Approx(1.41421356e20f).epsilon(1e-5));
+
+    const Quaternion tiny{1.0e-25f, 1.0e-25f, 0.0f, 0.0f};
+    CHECK(tiny.magnitudeSquared() == 0.0f);
+    CHECK(tiny.magnitude() > 0.0f);
+
+    // A quaternion whose length float cannot hold still has a direction, so normalisation works
+    // from the scaled components rather than dividing by an infinity.
+    const Quaternion vast{3.0e38f, 3.0e38f, 3.0e38f, 3.0e38f};
+    CHECK(std::isinf(vast.magnitude()));
+    const Quaternion unit = Quaternion::normalise(vast);
+    CHECK(unit.magnitude() == Catch::Approx(1.0f).epsilon(1e-6));
+    CHECK(unit.x() == Catch::Approx(0.5f).epsilon(1e-6));
+}
+
+TEST_CASE("Quaternion.NormIsAccurateWhereTheSumGoesSubnormal", "[Quaternion]")
+{
+    // The same hole as Vec3.MagnitudeIsAccurateWhereTheSumGoesSUBNORMAL: a sum that is positive and
+    // finite but SUBNORMAL has already lost most of its bits, so "finite and positive" is not a
+    // sufficient guard for the fast path.
+    const Quaternion tiny{3.0e-23f, 3.0e-23f, 0.0f, 0.0f};
+    REQUIRE(tiny.magnitudeSquared() > 0.0f);
+    REQUIRE(tiny.magnitudeSquared() < std::numeric_limits<float>::min());
+    CHECK(tiny.magnitude() == Catch::Approx(4.2426407e-23f).epsilon(1e-6));
+}
+
+TEST_CASE("Quaternion.NormaliseDistinguishesDegenerateFromInvalid", "[Quaternion]")
+{
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    const float inf = std::numeric_limits<float>::infinity();
+
+    // DEGENERATE keeps the documented answer: a quaternion with no length has no rotation, and the
+    // identity is the safe one to return.
+    CHECK(Quaternion::normalise(Quaternion{0.0f, 0.0f, 0.0f, 0.0f}) == Quaternion::identity());
+
+    // INVALID must stay visibly invalid. Returning the identity for a NaN input would turn a
+    // corrupt orientation into a confident "no rotation", which is exactly the kind of laundering
+    // that makes a physics bug surface three seconds later somewhere else.
+    const Quaternion fromNaN = Quaternion::normalise(Quaternion{nan, 0.0f, 0.0f, 1.0f});
+    CHECK(std::isnan(fromNaN.w()));
+    CHECK_FALSE(fromNaN == Quaternion::identity());
+    const Quaternion fromInf = Quaternion::normalise(Quaternion{0.0f, inf, 0.0f, 1.0f});
+    CHECK(std::isnan(fromInf.w()));
+    CHECK_FALSE(fromInf == Quaternion::identity());
+}

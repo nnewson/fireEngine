@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cmath>
+#include <limits>
 
 #include <fire_engine/math/constants.hpp>
 #include <fire_engine/math/mat4.hpp>
@@ -147,20 +148,49 @@ public:
     }
 
     [[nodiscard]]
+    // Fast path first — see `VecBase::magnitude`. While the sum of squares is finite and positive
+    // this is the arithmetic the engine always did, bit for bit; the scaled form below runs only
+    // when that sum came back zero, infinite or NaN, which is precisely when it had no answer.
     float magnitude() const noexcept
     {
-        return std::sqrt(magnitudeSquared());
+        const float sumOfSquares = magnitudeSquared();
+        // `isfinite` rather than a bare `< infinity` comparison: the two classify identically here
+        // (a NaN fails every comparison, an infinity fails the bound, zero fails the first test)
+        // and they measured identically too, so the one that says what it means wins.
+        // NORMAL, not merely positive. A sum that has gone SUBNORMAL has already lost most of its
+        // precision without reaching zero: (3e-23, 3e-23, 0) sums to 2.8e-45, which carries about
+        // two significant bits, and `sqrt` of it answers 5.29e-23 against a true 4.24e-23 — a 24.8%
+        // error from a fast path that thought it was fine because the sum was finite and positive.
+        // Requiring the sum to be at least `float`'s smallest NORMAL value routes that whole region
+        // to the scaled form, where the components are rescaled before they are squared and no
+        // precision is lost at all. `isfinite` then rules out the top end; a NaN fails both.
+        if (sumOfSquares >= std::numeric_limits<float>::min() && std::isfinite(sumOfSquares))
+        {
+            return std::sqrt(sumOfSquares);
+        }
+        return scaledMagnitude();
     }
 
+    // A rotation's norm is the number every unit-quaternion assumption rests on — rotate(),
+    // slerp(), toMat4() — so the same three answers as the vector types. A non-finite component
+    // yields a NaN quaternion (visibly invalid, never laundered into the identity), a magnitude
+    // below `float_normalise_cutoff` yields the identity rotation as it always has, and anything
+    // else is normalised.
     [[nodiscard]]
     static Quaternion normalise(const Quaternion& q) noexcept
     {
-        float len = q.magnitude();
-        if (len < float_epsilon)
+        const float sumOfSquares = q.magnitudeSquared();
+        // A NORMAL sum, for the subnormal-precision reason given on `magnitude`.
+        if (sumOfSquares >= std::numeric_limits<float>::min() && std::isfinite(sumOfSquares))
         {
-            return Quaternion::identity();
+            const float length = std::sqrt(sumOfSquares);
+            if (length < float_normalise_cutoff)
+            {
+                return Quaternion::identity();
+            }
+            return {q.x_ / length, q.y_ / length, q.z_ / length, q.w_ / length};
         }
-        return {q.x_ / len, q.y_ / len, q.z_ / len, q.w_ / len};
+        return scaledNormalise(q);
     }
 
     Quaternion& normalise() noexcept
@@ -404,6 +434,81 @@ public:
     }
 
 private:
+    // THE ROBUST PATH, reached only when the sum of squares was zero, infinite or NaN.
+    [[nodiscard]] float scaledMagnitude() const noexcept
+    {
+        const float components[4]{x_, y_, z_, w_};
+        float largest = 0.0f;
+        bool anyInfinite = false;
+        for (const float component : components)
+        {
+            if (std::isnan(component))
+            {
+                return component;
+            }
+            if (std::isinf(component))
+            {
+                anyInfinite = true;
+                continue;
+            }
+            const float componentMagnitude = std::fabs(component);
+            largest = componentMagnitude > largest ? componentMagnitude : largest;
+        }
+        if (anyInfinite)
+        {
+            return std::numeric_limits<float>::infinity();
+        }
+        if (largest == 0.0f)
+        {
+            return 0.0f;
+        }
+        float sumOfScaledSquares = 0.0f;
+        for (const float component : components)
+        {
+            const float scaled = component / largest;
+            sumOfScaledSquares += scaled * scaled;
+        }
+        return largest * std::sqrt(sumOfScaledSquares);
+    }
+
+    [[nodiscard]] static Quaternion scaledNormalise(const Quaternion& q) noexcept
+    {
+        const float components[4]{q.x_, q.y_, q.z_, q.w_};
+        float largest = 0.0f;
+        for (const float component : components)
+        {
+            if (!std::isfinite(component))
+            {
+                const float nan = std::numeric_limits<float>::quiet_NaN();
+                return {nan, nan, nan, nan};
+            }
+            const float componentMagnitude = std::fabs(component);
+            largest = componentMagnitude > largest ? componentMagnitude : largest;
+        }
+        if (largest == 0.0f)
+        {
+            return Quaternion::identity();
+        }
+        float sumOfScaledSquares = 0.0f;
+        for (const float component : components)
+        {
+            const float scaled = component / largest;
+            sumOfScaledSquares += scaled * scaled;
+        }
+        const float scaledNorm = std::sqrt(sumOfScaledSquares); // in [1, 2]
+        const float length = largest * scaledNorm;
+        if (length < float_normalise_cutoff)
+        {
+            return Quaternion::identity();
+        }
+        if (std::isfinite(length))
+        {
+            return {q.x_ / length, q.y_ / length, q.z_ / length, q.w_ / length};
+        }
+        return {(q.x_ / largest) / scaledNorm, (q.y_ / largest) / scaledNorm,
+                (q.z_ / largest) / scaledNorm, (q.w_ / largest) / scaledNorm};
+    }
+
     float x_{0.0f};
     float y_{0.0f};
     float z_{0.0f};
