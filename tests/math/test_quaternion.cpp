@@ -6,6 +6,8 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
+#include <limits>
+
 #include <fire_engine/math/constants.hpp>
 #include <fire_engine/math/mat4.hpp>
 #include <fire_engine/math/vec3.hpp>
@@ -96,13 +98,22 @@ TEST_CASE("QuaternionEquality.DifferentValuesNotEqual", "[QuaternionEquality]")
     CHECK_FALSE(a == b);
 }
 
-TEST_CASE("QuaternionEquality.BitwiseEqualMatchesOperator", "[QuaternionEquality]")
+TEST_CASE("QuaternionEquality.EqualityIsExactNotBitwise", "[QuaternionEquality]")
 {
     Quaternion a{0.1f, 0.2f, 0.3f, 0.4f};
     Quaternion b{0.1f, 0.2f, 0.3f, 0.4f};
     Quaternion c{0.1f, 0.2f, 0.3f, 0.5f};
-    CHECK(a.bitwiseEqual(b));
-    CHECK_FALSE(a.bitwiseEqual(c));
+    CHECK(a == b);
+    CHECK_FALSE(a == c);
+    // Exact component equality, not bitwise — see Vec3Equality.EqualityIsExactNotBitwise.
+    CHECK(Quaternion{0.0f, 0.0f, 0.0f, 1.0f} == Quaternion{-0.0f, -0.0f, -0.0f, 1.0f});
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    const Quaternion withNaN{nan, 0.0f, 0.0f, 1.0f};
+    CHECK_FALSE(withNaN == withNaN);
+
+    // And a COMPONENT comparison, so `q` and `-q` differ although they are the same rotation.
+    const Quaternion q{0.0f, 0.0f, 0.7071068f, 0.7071068f};
+    CHECK_FALSE(q == Quaternion{-q.x(), -q.y(), -q.z(), -q.w()});
 }
 
 TEST_CASE("QuaternionEquality.ApproxEqualWithinTolerance", "[QuaternionEquality]")

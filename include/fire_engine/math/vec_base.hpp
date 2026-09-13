@@ -138,8 +138,11 @@ public:
         return self();
     }
 
-    // Strict bit-for-bit equality. Two values that differ by a single ULP
-    // compare not-equal — use approxEqual when you want tolerance.
+    // EXACT component-wise IEEE equality — not bitwise, despite what this used to claim. Two
+    // differences matter and both are the float `==` operator's, not ours: `-0.0f` equals `+0.0f`
+    // though their bit patterns differ, and a NaN equals nothing at all though its bit pattern is
+    // identical to itself. Use `approxEqual` when you want tolerance; if a determinism diagnostic
+    // ever needs REAL bit comparison, it has to say so with `std::bit_cast`.
     [[nodiscard]]
     friend constexpr bool operator==(const Derived& lhs, const Derived& rhs) noexcept
     {
@@ -151,12 +154,6 @@ public:
             }
         }
         return true;
-    }
-
-    [[nodiscard]]
-    constexpr bool bitwiseEqual(const Derived& rhs) const noexcept
-    {
-        return self() == rhs;
     }
 
     // Approximate equality, component by component, through the ONE scalar authority

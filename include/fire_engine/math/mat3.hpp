@@ -313,7 +313,11 @@ public:
         return r;
     }
 
-    // Strict bit-for-bit equality — use approxEqual for tolerance.
+    // EXACT component-wise IEEE equality — not bitwise, despite what this used to claim. Two
+    // differences matter and both are the float `==` operator's, not ours: `-0.0f` equals `+0.0f`
+    // though their bit patterns differ, and a NaN equals nothing at all though its bit pattern is
+    // identical to itself. Use `approxEqual` when you want tolerance; if a determinism diagnostic
+    // ever needs REAL bit comparison, it has to say so with `std::bit_cast`.
     [[nodiscard]]
     constexpr bool operator==(const Mat3& rhs) const noexcept
     {

@@ -139,13 +139,26 @@ TEST_CASE("Vec3Equality.NegativeZeroEqualsPositiveZero", "[Vec3Equality]")
     CHECK(a == b);
 }
 
-TEST_CASE("Vec3Equality.BitwiseEqualMatchesOperator", "[Vec3Equality]")
+TEST_CASE("Vec3Equality.EqualityIsExactNotBitwise", "[Vec3Equality]")
 {
-    Vec3 a{1.0f, 2.0f, 3.0f};
-    Vec3 b{1.0f, 2.0f, 3.0f};
-    Vec3 c{1.0f, 2.0f, 3.5f};
-    CHECK(a.bitwiseEqual(b));
-    CHECK_FALSE(a.bitwiseEqual(c));
+    // `operator==` is EXACT COMPONENT-WISE IEEE equality. It was described as "bit-for-bit" and
+    // duplicated by a `bitwiseEqual()` that simply called it, which was wrong in both directions —
+    // so both the name and the duplicate are gone, and the two cases that make the distinction real
+    // are pinned here instead.
+    const Vec3 a{1.0f, 2.0f, 3.0f};
+    const Vec3 b{1.0f, 2.0f, 3.0f};
+    const Vec3 c{1.0f, 2.0f, 3.5f};
+    CHECK(a == b);
+    CHECK_FALSE(a == c);
+
+    // DIFFERENT BITS, EQUAL VALUES: -0.0f and +0.0f have different sign bits and are the same
+    // number, so a genuinely bitwise comparison would answer the opposite of this.
+    CHECK(Vec3{0.0f, 0.0f, 0.0f} == Vec3{-0.0f, -0.0f, -0.0f});
+
+    // IDENTICAL BITS, UNEQUAL VALUES: a NaN never equals itself, whatever its payload.
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    const Vec3 withNaN{nan, 2.0f, 3.0f};
+    CHECK_FALSE(withNaN == withNaN);
 }
 
 TEST_CASE("Vec3Equality.ApproxEqualWithinTolerance", "[Vec3Equality]")

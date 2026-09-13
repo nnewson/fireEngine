@@ -84,13 +84,17 @@ Start here because these classes are small, heavily tested, and used everywhere.
 - `Vec2`, `Vec3`, `Vec4`: numeric vector types with constexpr arithmetic and component
   accessors. `Vec3` also provides operations used by lighting, transforms, normals, and
   physics response. `magnitude()` / `normalise()` call `std::sqrt` and are intentionally
-  *not* `constexpr` (sqrt only became constexpr in C++26). `operator==` is strict bit
-  equality — use `approxEqual(rhs, eps)` for tolerance-based comparison (or `bitwiseEqual`
-  if you want to name the bit-identity intent explicitly). Vec3 ↔ Vec4 conversion is
-  `explicit` in both directions to prevent silent w-component loss/gain.
+  *not* `constexpr` (sqrt only became constexpr in C++26). `operator==` is **exact
+  component-wise IEEE equality — not bitwise**: `-0.0f` equals `+0.0f` though their bits
+  differ, and a NaN equals nothing though its bits are identical to itself. Use
+  `approxEqual(rhs, eps)` for tolerance-based comparison. (There was a `bitwiseEqual` that
+  simply called `operator==`; it claimed semantics it did not have and is gone. If you ever
+  need real bit identity, say so with `std::bit_cast` at the point that needs it.)
+  Vec3 ↔ Vec4 conversion is `explicit` in both directions to prevent silent w-component
+  loss/gain.
 - `Mat4`: column-major transform/projection matrix type. Look at translation, rotation,
   scale, perspective, and look-at helpers. Renderer, scene traversal, skinning, and physics
-  transforms all depend on this behaving predictably. Same `approxEqual` / `bitwiseEqual`
+  transforms all depend on this behaving predictably. Same `operator==` / `approxEqual`
   convention as the vector types.
 - `Quaternion`: runtime rotation representation for scene transforms. glTF rotations round
   trip better through quaternions than Euler angles. Animation uses SLERP for rotation

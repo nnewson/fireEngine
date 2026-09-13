@@ -86,20 +86,18 @@ public:
         return {-x_, -y_, -z_, -w_};
     }
 
-    // Strict bit-for-bit equality. Two quaternions that differ by a single ULP
-    // compare not-equal — use approxEqual when you want tolerance. Note: also
-    // strict in the sign of the imaginary parts, so q and -q (which represent
-    // the same rotation) compare not-equal.
+    // EXACT component-wise IEEE equality — not bitwise, despite what this used to claim. Two
+    // differences matter and both are the float `==` operator's, not ours: `-0.0f` equals `+0.0f`
+    // though their bit patterns differ, and a NaN equals nothing at all though its bit pattern is
+    // identical to itself. Use `approxEqual` when you want tolerance; if a determinism diagnostic
+    // ever needs REAL bit comparison, it has to say so with `std::bit_cast`.
+    //
+    // Note this is a COMPONENT comparison, so `q` and `-q` are unequal here although they are the
+    // same rotation: the rotation-aware question belongs to a rotation type, not to this one.
     [[nodiscard]]
     constexpr bool operator==(const Quaternion& rhs) const noexcept
     {
         return x_ == rhs.x_ && y_ == rhs.y_ && z_ == rhs.z_ && w_ == rhs.w_;
-    }
-
-    [[nodiscard]]
-    constexpr bool bitwiseEqual(const Quaternion& rhs) const noexcept
-    {
-        return *this == rhs;
     }
 
     // Approximate equality, component by component, through the ONE scalar authority
