@@ -110,6 +110,7 @@ add_library(fireengine SHARED
     src/graphics/shadow_caster_deformation.cpp
     src/graphics/shadow_render_view.cpp
     src/graphics/shadow_view_disposition.cpp
+    src/math/rotation3.cpp
     src/graphics/shadow_diagnostics.cpp
     src/graphics/shadow_view.cpp
     src/graphics/vipm.cpp
@@ -410,6 +411,7 @@ add_executable(test_fire_engine
     tests/physics/test_physics_handle.cpp
     tests/physics/test_physics_determinism.cpp
     tests/physics/test_demos.cpp
+    tests/math/test_rotation3.cpp
     tests/math/test_scalar.cpp
     tests/math/test_mat3.cpp
     tests/math/test_singular_value.cpp
